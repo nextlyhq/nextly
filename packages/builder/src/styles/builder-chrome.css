@@ -1201,6 +1201,27 @@
 }
 
 /*
+ * A chip's menu, held to a readable width, so a held item's reason wraps
+ * under its label rather than stretching the menu across the canvas.
+ */
+.nx-editing-bar__menu {
+  max-width: 20rem;
+}
+
+.nx-editing-bar__item-words {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.nx-editing-bar__item-reason {
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/*
  * The "what you're editing" bar: line one the target chips, line two the
  * device and the state, from the canvas. A box set apart from the panel, so it
  * reads as the frame the controls below sit in. Kept at the top of the Style tab while its
@@ -8323,8 +8344,28 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * An on/off row's switch at the start of the control column, its own size,
  * rather than stretched across it.
  */
-.nx-inspector__field[data-content-control="checkbox"] > [role="switch"] {
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"],
+.nx-inspector__field[data-display="switch"] > [role="switch"] {
   justify-self: start;
+}
+
+/*
+ * A loop's sort on one row: the field menu takes the room, the direction
+ * toggle beside it keeps its own square.
+ */
+.nx-inspector__sort {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inspector__sort > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-inspector__sort-direction {
+  flex: none;
 }
 
 .nx-inspector__exposed [role="switch"] {
@@ -8673,4 +8714,24 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* A text icon for lines that run down the page, turned a quarter. */
 .nx-icon-choice__rotated {
   rotate: 90deg;
+}
+
+/*
+ * An image's alt text field: one line tall, growing with its words up to six
+ * lines and scrolling past them, so a short alt does not hold a tall box and
+ * a long one is never cut off.
+ */
+.nx-inspector textarea.nx-inspector__growing {
+  min-height: 0;
+  max-height: 9em;
+  overflow-y: auto;
+  resize: none;
+}
+
+/* A note with the action it offers beside it, wrapping when the rail is narrow. */
+.nx-inspector__note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
 }

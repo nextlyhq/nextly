@@ -337,6 +337,7 @@ function chipActions(
 ): {
   onRemove?: (id: string) => void;
   onDetach?: (id: string) => void;
+  detachHeld?: (id: string) => string | undefined;
 } {
   if (nodeId === null) return {};
   return {
@@ -348,23 +349,33 @@ function chipActions(
         report
       ),
     onDetach: id => {
-      const style = worn.find(row => row.id === id);
-      if (style === undefined) return;
+      const plan = detachPlan(id);
+      if (plan === undefined) return;
       applyPlan(
         editor,
-        planDetachSharedStyle(
-          editor.document,
-          nodeId,
-          style,
-          worn,
-          lockViewOf(editor),
-          breakpoints
-        ),
-        `${style.name} could not be detached from this block: the page could not take the change.`,
+        plan,
+        `${nameOf(worn, id)} could not be detached from this block: the page could not take the change.`,
         report
       );
     },
+    // The same plan, read before the click, so a refusal holds the item.
+    detachHeld: id => {
+      const plan = detachPlan(id);
+      return plan === undefined || plan.ok ? undefined : plan.reason;
+    },
   };
+  function detachPlan(id: string) {
+    const style = worn.find(row => row.id === id);
+    if (style === undefined || nodeId === null) return undefined;
+    return planDetachSharedStyle(
+      editor.document,
+      nodeId,
+      style,
+      worn,
+      lockViewOf(editor),
+      breakpoints
+    );
+  }
 }
 
 /** A worn style's name by its id, for words about it. */

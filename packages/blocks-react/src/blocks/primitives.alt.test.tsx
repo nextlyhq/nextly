@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createStandaloneContext } from "../context";
-import { renderImage } from "./image";
+import { image, renderImage } from "./image";
 
 function ctxWith(alt?: string) {
   return createStandaloneContext({
@@ -60,6 +60,37 @@ describe("core/image alt text", () => {
       args({ mediaId: "m", alt: "", decorative: true }, "A tabby cat")
     )) as { props: { alt: string } };
 
+    expect(el.props.alt).toBe("");
+  });
+});
+
+describe("a newly placed core/image", () => {
+  it("is placed with no alt of its own, by neither its defaults nor its example", () => {
+    // A block is placed with its defaults overlaid by its example. An alt in
+    // either is stored as the page's own words, and an empty one reads as
+    // decorative, so a library file picked next would never be described.
+    expect(Object.hasOwn(image.defaultProps ?? {}, "alt")).toBe(false);
+    expect(Object.hasOwn(image.example?.props ?? {}, "alt")).toBe(false);
+  });
+
+  it("takes its library file's alt text once a file is picked", async () => {
+    const placed = {
+      ...image.defaultProps,
+      ...image.example?.props,
+      mediaId: "m",
+    };
+    const el = (await renderImage(args(placed, "A tabby cat"))) as {
+      props: { alt: string };
+    };
+    expect(el.props.alt).toBe("A tabby cat");
+  });
+
+  it("still draws its example address with no alt text before a file is picked", async () => {
+    const placed = { ...image.defaultProps, ...image.example?.props };
+    const el = (await renderImage(args(placed))) as {
+      props: { alt: string; src: string };
+    };
+    expect(el.props.src).toBe("/example.jpg");
     expect(el.props.alt).toBe("");
   });
 });
