@@ -22,11 +22,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 import { and, count, eq } from "drizzle-orm";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
@@ -46,19 +43,22 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
+  openOrConnect,
   requireDatabaseEnv,
-  connectOrExit,
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  deletionChanges,
   readDataLossConsent,
   requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 export { registerPruneCommand } from "./prune.command";
 
@@ -74,6 +74,10 @@ export interface PruneResult {
   orphanedCompanions: string[];
   /** Companion tables actually dropped (empty unless the drop was approved). */
   droppedCompanions: string[];
+  /** Every table the prune drops, and what goes with each, as the consent lists them. */
+  planned: Deletion[];
+  /** Under `--dry-run`, why a real prune would refuse before its first drop. */
+  refusal?: string;
 }
 
 interface RunPruneArgs {
@@ -115,6 +119,12 @@ interface RunPruneArgs {
    * `approve` has answered so no lock is held while a person is asked.
    */
   lock: PruneLock;
+  /**
+   * `--dry-run`: plan the drops and check what depends on the orphans, as a
+   * real prune does before its first drop, then drop nothing, ask nothing and
+   * take no lock.
+   */
+  dryRun?: boolean;
 }
 
 /** Runs `work` while holding the schema lock, and returns what it returned. */
@@ -281,16 +291,37 @@ function plannedTables(plan: PrunePlan): string[] {
 export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   const consented = await planPrune(args);
   const slugs = consented.orphans.map(o => o.slug);
+  const nothingDropped: PruneResult = {
+    orphans: slugs,
+    dropped: [],
+    orphanedCompanions: consented.orphanedCompanions,
+    droppedCompanions: [],
+    planned: consented.deletions,
+  };
+  // A dry run asks the question a real prune asks before its first drop,
+  // without asking for consent first: its refusal is the real run's.
+  if (args.dryRun === true) {
+    if (consented.deletions.length === 0) return nothingDropped;
+    const compile = args.extensionSchema;
+    try {
+      await args.registry.assertNothingDependsOn(
+        slugs,
+        compile === undefined
+          ? {}
+          : { extensionSchema: () => compile(consented.orphans) }
+      );
+    } catch (error) {
+      // Something still depends on an orphan: the real prune's refusal.
+      if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;
+      return { ...nothingDropped, refusal: error.publicMessage };
+    }
+    return nothingDropped;
+  }
   if (
     consented.deletions.length === 0 ||
     !(await args.approve(consented.deletions))
   ) {
-    return {
-      orphans: slugs,
-      dropped: [],
-      orphanedCompanions: consented.orphanedCompanions,
-      droppedCompanions: [],
-    };
+    return nothingDropped;
   }
   return args.lock(async () => {
     const current = await planPrune(args);
@@ -367,7 +398,13 @@ async function dropPlanned(
     droppedCompanions.push(companion);
   }
 
-  return { orphans: slugs, dropped, orphanedCompanions, droppedCompanions };
+  return {
+    orphans: slugs,
+    dropped,
+    orphanedCompanions,
+    droppedCompanions,
+    planned: plan.deletions,
+  };
 }
 
 /** The select surface of a Drizzle handle the archive count reads through. */
@@ -418,6 +455,8 @@ interface PruneCommandOptions {
   acceptDataLoss?: AcceptDataLossOption;
   /** The earlier spelling of the consent, honoured with a deprecation notice. */
   force?: boolean;
+  /** `--dry-run`: name what would be dropped, drop and ask nothing. */
+  dryRun?: boolean;
   config?: string;
   cwd?: string;
   /**
@@ -492,13 +531,12 @@ export async function runPruneCommand(
   });
   const currentSlugs = (configResult.config.collections ?? []).map(c => c.slug);
 
-  const adapter = await connectOrExit(
-    {
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-    },
+  const adapter = await openOrConnect(
+    { dialect: dbValidation.dialect, databaseUrl: dbValidation.databaseUrl },
+    options.dryRun === true,
     logger
   );
+  if (adapter === undefined) return;
 
   try {
     // The ORM resolves tables through a SchemaRegistry, and this command creates none of
@@ -506,14 +544,7 @@ export async function runPruneCommand(
     // tables first, then every component's `comp_` table, which the sweep deletes rows from.
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
     const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    // Both spellings of the field-group registry: a database whose storage
-    // migration has run has no handle for its registry otherwise.
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    drizzleAdapter.setTableResolver(schemaRegistry);
+    const schemaRegistry = installRegistryResolver(drizzleAdapter);
     await registerComponentSchemas({
       adapter: drizzleAdapter,
       registry: schemaRegistry,
@@ -526,6 +557,7 @@ export async function runPruneCommand(
       logger
     );
     const result = await runPrune({
+      dryRun: options.dryRun === true,
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
@@ -564,6 +596,15 @@ export async function runPruneCommand(
       },
     });
 
+    // A dry run names what the real prune drops, in the consent's words.
+    if (options.dryRun === true) {
+      reportDryRun(logger, {
+        changes: result.refusal ? [] : deletionChanges(result.planned),
+        refusals: result.refusal ? [result.refusal] : [],
+      });
+      return;
+    }
+
     // The listing and the consent that drops it were printed by the
     // judgement; what remains is what was done.
     if (result.orphans.length === 0) {
@@ -596,7 +637,11 @@ export async function runPruneCommand(
 
 /** The action of `nextly prune`, loaded when it runs. */
 export async function pruneAction(
-  cmdOptions: { acceptDataLoss?: AcceptDataLossOption; force?: boolean },
+  cmdOptions: {
+    acceptDataLoss?: AcceptDataLossOption;
+    force?: boolean;
+    dryRun?: boolean;
+  },
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
