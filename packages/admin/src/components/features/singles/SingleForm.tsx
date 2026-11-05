@@ -1110,7 +1110,7 @@ export function SingleForm({
               .catch((error: unknown) => {
                 // A save made from an older version holds the edits on
                 // screen and opens the conflict; the failure is still told.
-                version.refused(error, payload);
+                version.refused(error, payload, data);
                 throw error;
               })
               .finally(() => {
@@ -1172,6 +1172,17 @@ export function SingleForm({
   const saveAnyway = useCallback(async (): Promise<void> => {
     const payload = version.overwrite();
     if (!payload || submissionLatch.current) return;
+    // Through the same gate as a save: someone else holding the Single now
+    // stores nothing over their work.
+    if (writesHeldNow.current) {
+      version.failed(
+        "Someone else is editing this document now, so nothing was saved."
+      );
+      return;
+    }
+    // The values the refused edits were typed as: a link the editor cannot
+    // see is a placeholder there, which the stored document leaves out.
+    const sent = version.refusedValues() ?? form.getValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
     const adopt = version.answerFor();
@@ -1184,7 +1195,9 @@ export function SingleForm({
       }
       version.release();
       form.reset(
-        stored ? singleFormDefaults(schema, stored) : form.getValues()
+        stored && !holdsPlaceholders(schema.fields, sent)
+          ? singleFormDefaults(schema, stored)
+          : sent
       );
     } catch (error) {
       version.failed(
@@ -1195,7 +1208,16 @@ export function SingleForm({
       ownSave.current.inFlight = false;
       submissionLatch.current = false;
     }
-  }, [version, submissionLatch, onSubmit, refusedForm, locale, form, schema]);
+  }, [
+    version,
+    submissionLatch,
+    writesHeldNow,
+    onSubmit,
+    refusedForm,
+    locale,
+    form,
+    schema,
+  ]);
 
   // Load the current version: the edits are first kept as a recovery point
   // that remembers the version they began from; only then does the form take

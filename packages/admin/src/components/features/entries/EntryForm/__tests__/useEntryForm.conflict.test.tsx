@@ -12,6 +12,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
+import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 
 const { update, saveAutosave, discard } = vi.hoisted(() => ({
   update: vi.fn(),
@@ -338,6 +339,79 @@ describe("a save refused because the document changed since", () => {
     expect(update).toHaveBeenLastCalledWith(
       expect.objectContaining({ _rev: "9" })
     );
+  });
+
+  it("save anyway keeps a link the editor cannot see", async () => {
+    // The stored row leaves out the link the editor may not read; taking it
+    // in would drop the link from the form, for the next save to remove.
+    const related = {
+      name: "posts",
+      label: "Posts",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        {
+          name: "related",
+          type: "relationship",
+          label: "Related",
+          relationTo: "articles",
+          hasMany: true,
+        },
+      ],
+    } as never;
+    const hidden = { id: "a2", [RESTRICTED_REFERENCE]: true };
+    const withHidden = {
+      ...stored,
+      related: [{ id: "a1", title: "Seen" }, hidden],
+    };
+    update.mockRejectedValueOnce(staleVersion());
+    update.mockImplementationOnce((sent: Record<string, unknown>) =>
+      Promise.resolve(
+        answered({
+          ...withHidden,
+          ...sent,
+          related: [{ id: "a1", title: "Seen" }],
+          _rev: "5",
+        })
+      )
+    );
+    const rendered = renderHook(() =>
+      useEntryForm({ collection: related, entry: withHidden, mode: "edit" })
+    );
+    await typeAndSave(rendered, "Mine");
+
+    await act(async () => {
+      await rendered.result.current.saveAnyway();
+    });
+
+    expect(rendered.result.current.form.getValues("related")).toEqual([
+      { id: "a1", title: "Seen" },
+      hidden,
+    ]);
+  });
+
+  it("save anyway writes nothing while someone else holds the document", async () => {
+    let held = false;
+    update.mockRejectedValueOnce(staleVersion());
+    const rendered = renderHook(() =>
+      useEntryForm({
+        collection,
+        entry: stored as never,
+        mode: "edit",
+        writesHeld: () => held,
+      })
+    );
+    await typeAndSave(rendered, "Mine");
+    // A colleague takes the document while the conflict is open.
+    held = true;
+
+    await act(async () => {
+      await rendered.result.current.saveAnyway().catch(() => {});
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(rendered.result.current.versionConflict).toMatchObject({
+      failure: expect.any(String),
+    });
   });
 
   it("load current replaces nothing when the edits could not be kept", async () => {

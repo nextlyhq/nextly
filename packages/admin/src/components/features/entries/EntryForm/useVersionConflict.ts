@@ -36,6 +36,12 @@ interface Pinned {
   stale: StaleVersion;
   /** The refused write, without its version. */
   payload: Record<string, unknown>;
+  /**
+   * The form values the refused write was made from, where the form keeps
+   * values the write does not carry as they are, such as a link the editor
+   * cannot see, held as a placeholder.
+   */
+  shown?: Record<string, unknown>;
   /** The version the refused edits began from. */
   startedFrom: string | undefined;
 }
@@ -67,12 +73,21 @@ export interface VersionConflictState {
    * Pin the form when `error` refuses `payload` because the document changed
    * since; answers whether it did.
    */
-  refused: (error: unknown, payload: Record<string, unknown>) => boolean;
+  refused: (
+    error: unknown,
+    payload: Record<string, unknown>,
+    shown?: Record<string, unknown>
+  ) => boolean;
   /**
    * A rejection handler for a write of `payload`: pins the form, as
    * `refused` does, then rejects with the same error.
    */
-  refusedThen: (payload: Record<string, unknown>) => (error: unknown) => never;
+  refusedThen: (
+    payload: Record<string, unknown>,
+    shown?: Record<string, unknown>
+  ) => (error: unknown) => never;
+  /** The form values the refused write was made from, while pinned. */
+  refusedValues: () => Record<string, unknown> | undefined;
   /** The refused write again, saving over the newer version on purpose. */
   overwrite: () => Record<string, unknown> | null;
   /**
@@ -139,12 +154,18 @@ function answerFor(tracked: Tracked): (item: unknown) => void {
 function pinRefusal(
   tracked: Tracked,
   error: unknown,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  shown?: Record<string, unknown>
 ): boolean {
   const stale = staleVersionOf(error);
   if (!stale) return false;
   const { [DOCUMENT_VERSION_KEY]: _sent, ...rest } = payload;
-  tracked.pin = { stale, payload: rest, startedFrom: tracked.startedFrom };
+  tracked.pin = {
+    stale,
+    payload: rest,
+    startedFrom: tracked.startedFrom,
+    ...(shown === undefined ? {} : { shown }),
+  };
   tracked.setConflict({ stale });
   return true;
 }
@@ -152,9 +173,10 @@ function pinRefusal(
 function pinThenReject(
   tracked: Tracked,
   payload: Record<string, unknown>,
+  shown: Record<string, unknown> | undefined,
   error: unknown
 ): never {
-  pinRefusal(tracked, error, payload);
+  pinRefusal(tracked, error, payload, shown);
   throw error;
 }
 
@@ -206,10 +228,11 @@ function actionsOver(tracked: Tracked): Omit<VersionConflictState, "conflict"> {
     answerFor: () => answerFor(tracked),
     adoptRecovered: (recovered: string | undefined) =>
       adoptRecovered(tracked, recovered),
-    refused: (error: unknown, payload: Record<string, unknown>) =>
-      pinRefusal(tracked, error, payload),
-    refusedThen: (payload: Record<string, unknown>) => (error: unknown) =>
-      pinThenReject(tracked, payload, error),
+    refused: (error, payload, shown) =>
+      pinRefusal(tracked, error, payload, shown),
+    refusedThen: (payload, shown) => (error: unknown) =>
+      pinThenReject(tracked, payload, shown, error),
+    refusedValues: () => tracked.pin?.shown,
     overwrite: () => overwriteOf(tracked),
     keepEdits: (scope, values, locale) =>
       keepEdits(tracked, scope, values, locale),
