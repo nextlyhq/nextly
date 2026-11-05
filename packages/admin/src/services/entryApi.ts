@@ -22,7 +22,10 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
-import { DOCUMENT_VERSION_KEY } from "../lib/document-version";
+import {
+  DOCUMENT_REVS_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../lib/document-version";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
@@ -770,11 +773,14 @@ export const entryApi = {
     params: {
       ids: string[];
       data: UpdateEntryPayload;
+      /** Each document's version by id; see `BulkUpdateVariables`. */
+      revs?: Record<string, string>;
     }
   ): Promise<BulkResponse<Entry>> => {
+    const { revs, ...rest } = params;
     return protectedApi.post<BulkResponse<Entry>>(
       `/collections/${collectionSlug}/entries/bulk-update`,
-      params
+      revs ? { ...rest, [DOCUMENT_REVS_KEY]: revs } : rest
     );
   },
 

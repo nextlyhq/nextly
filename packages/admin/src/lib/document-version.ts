@@ -156,3 +156,22 @@ export async function versionForLanguage(args: {
   }
   return versionOf(await args.readIn(args.wanted));
 }
+
+/**
+ * Each of `ids`' version, for a bulk update's `revs`: only where every one
+ * has a version, since the server refuses versions given for some documents
+ * and not others. Undefined otherwise, and for no documents.
+ */
+export function revsFor(
+  ids: readonly string[],
+  versions: Readonly<Record<string, string>>
+): Record<string, string> | undefined {
+  if (ids.length === 0) return undefined;
+  const revs: Record<string, string> = {};
+  for (const id of ids) {
+    const version = versions[id];
+    if (version === undefined) return undefined;
+    revs[id] = version;
+  }
+  return revs;
+}

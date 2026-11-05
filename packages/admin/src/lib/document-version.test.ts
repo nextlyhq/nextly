@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   STALE_VERSION_CODE,
   changerName,
+  revsFor,
   versionForLanguage,
   staleVersionOf,
   versionOf,
@@ -131,5 +132,19 @@ describe("versionForLanguage", () => {
       })
     ).resolves.toBe("9.es:2");
     expect(readIn).toHaveBeenCalledWith("es");
+  });
+});
+
+describe("revsFor", () => {
+  it("gives each document's version where every one has one", () => {
+    expect(revsFor(["a", "b"], { a: "3", b: "5", c: "9" })).toEqual({
+      a: "3",
+      b: "5",
+    });
+  });
+
+  it("gives none where any document has none, which the server would refuse", () => {
+    expect(revsFor(["a", "b"], { a: "3" })).toBeUndefined();
+    expect(revsFor([], {})).toBeUndefined();
   });
 });
