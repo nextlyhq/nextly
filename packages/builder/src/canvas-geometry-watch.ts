@@ -231,6 +231,8 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     // leaving and no focus changing.
     "pointerup",
     "pointercancel",
+    // A key release ends a keyboard-activated `:active` state (Space).
+    "keyup",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   root.addEventListener("scroll", settled, true);

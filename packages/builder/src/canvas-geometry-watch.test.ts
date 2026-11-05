@@ -88,11 +88,12 @@ describe("a block an authored state rule moves", () => {
     expect(moved).toHaveBeenCalledTimes(2);
     // And when a press ends, which ends an authored :active state with no
     // pointer leaving and no focus changing.
-    for (const type of ["pointerup", "pointercancel"]) {
+    // Space releases a keyboard-activated :active state on keyup.
+    for (const type of ["pointerup", "pointercancel", "keyup"]) {
       block.dispatchEvent(new Event(type, { bubbles: true }));
       for (const run of frames.splice(0)) run(0);
     }
-    expect(moved).toHaveBeenCalledTimes(4);
+    expect(moved).toHaveBeenCalledTimes(5);
     stop?.();
     vi.unstubAllGlobals();
   });
