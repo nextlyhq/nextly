@@ -298,8 +298,10 @@ async function groundBehind(
 /**
  * The page's colour beneath a mark's ring, as rendered: one pixel just inside
  * the block's edge, where the ring is drawn, captured with the editor's layer
- * hidden so the pixel is the page's own. A colour, an image or a gradient the
- * block paints is then the ground its ring is judged against.
+ * hidden and the page's text made transparent, so the pixel is what the block
+ * paints behind its content. A colour, an image or a gradient is then the
+ * ground its ring is judged against, and a glyph that happens to sit at that
+ * point is not.
  */
 async function groundUnder(page: Page, selector: string): Promise<string> {
   const mark = canvasLayer(page).locator(selector).first();
@@ -309,8 +311,19 @@ async function groundUnder(page: Page, selector: string): Promise<string> {
   await layer.evaluate(element => {
     (element as HTMLElement).style.visibility = "hidden";
   });
+  const frameBody = canvasFrame(page).locator("body");
+  await frameBody.evaluate(body => {
+    const style = body.ownerDocument.createElement("style");
+    style.id = "nx-e2e-no-text";
+    style.textContent =
+      "*, *::before, *::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }";
+    body.ownerDocument.head.append(style);
+  });
   const shot = await page.screenshot({
     clip: { x: box.x + 3, y: box.y + box.height / 2, width: 1, height: 1 },
+  });
+  await frameBody.evaluate(body => {
+    body.ownerDocument.getElementById("nx-e2e-no-text")?.remove();
   });
   await layer.evaluate(element => {
     (element as HTMLElement).style.visibility = "";
@@ -527,72 +540,77 @@ for (const theme of ["light", "dark"] as const) {
 test.describe("the empty section's prompt in a narrow box", () => {
   test.describe.configure({ timeout: 240_000 });
 
-  test("keeps its + on its plate, and the plate inside the box", async ({
-    page,
-  }) => {
-    const run = stamp();
-    const narrow = "00000000-0000-4000-8000-0000000c5a06";
-    const created = await page.request.post(PAGES, {
-      data: {
-        title: "Narrow empty box",
-        slug: `narrow-empty-${run}`,
-        content: {
-          formatVersion: 1,
-          kind: "page",
-          nodes: [
-            {
-              id: HEADING,
-              type: "core/heading",
-              version: 1,
-              props: { text: "A narrow box", level: "h2" },
-            },
-            {
-              id: narrow,
-              type: "core/section",
-              version: 1,
-              props: { as: "section", contained: false },
-              slots: { children: [] },
-              styles: { base: { base: { width: "40px", height: "80px" } } },
-            },
-          ],
+  for (const width of [24, 40]) {
+    test(`keeps its + on its plate, and the plate inside the box, ${width}px wide`, async ({
+      page,
+    }) => {
+      const run = stamp();
+      const narrow = "00000000-0000-4000-8000-0000000c5a06";
+      const created = await page.request.post(PAGES, {
+        data: {
+          title: "Narrow empty box",
+          slug: `narrow-empty-${run}`,
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: HEADING,
+                type: "core/heading",
+                version: 1,
+                props: { text: "A narrow box", level: "h2" },
+              },
+              {
+                id: narrow,
+                type: "core/section",
+                version: 1,
+                props: { as: "section", contained: false },
+                slots: { children: [] },
+                styles: {
+                  base: { base: { width: `${width}px`, height: "80px" } },
+                },
+              },
+            ],
+          },
         },
-      },
+      });
+      expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
+      const id = ((await created.json()) as { item: { id: string } }).item.id;
+      await open(page, id, "light");
+      const prompt = page.getByRole("button", {
+        name: /Drop a block here, or click to add one, in /,
+      });
+      await expect(prompt).toBeVisible();
+      const boxes = await prompt.evaluate(button => {
+        const plate = button.querySelector(
+          ".nx-empty-container-appenders__plate"
+        );
+        const icon = plate?.querySelector("svg");
+        const rect = (element: Element | null | undefined) => {
+          const r = element?.getBoundingClientRect();
+          return r === undefined
+            ? null
+            : { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        };
+        return { button: rect(button), plate: rect(plate), icon: rect(icon) };
+      });
+      const within = (
+        inner: typeof boxes.icon,
+        outer: typeof boxes.icon
+      ): boolean =>
+        inner !== null &&
+        outer !== null &&
+        inner.left >= outer.left - 0.5 &&
+        inner.right <= outer.right + 0.5 &&
+        inner.top >= outer.top - 0.5 &&
+        inner.bottom <= outer.bottom + 0.5;
+      expect(within(boxes.icon, boxes.plate), "the + on its plate").toBe(true);
+      expect(
+        within(boxes.plate, boxes.button),
+        "the plate inside the box"
+      ).toBe(true);
     });
-    expect(created.ok(), `seeding the page: ${created.status()}`).toBe(true);
-    const id = ((await created.json()) as { item: { id: string } }).item.id;
-    await open(page, id, "light");
-    const prompt = page.getByRole("button", {
-      name: /Drop a block here, or click to add one, in /,
-    });
-    await expect(prompt).toBeVisible();
-    const boxes = await prompt.evaluate(button => {
-      const plate = button.querySelector(
-        ".nx-empty-container-appenders__plate"
-      );
-      const icon = plate?.querySelector("svg");
-      const rect = (element: Element | null | undefined) => {
-        const r = element?.getBoundingClientRect();
-        return r === undefined
-          ? null
-          : { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
-      };
-      return { button: rect(button), plate: rect(plate), icon: rect(icon) };
-    });
-    const within = (
-      inner: typeof boxes.icon,
-      outer: typeof boxes.icon
-    ): boolean =>
-      inner !== null &&
-      outer !== null &&
-      inner.left >= outer.left - 0.5 &&
-      inner.right <= outer.right + 0.5 &&
-      inner.top >= outer.top - 0.5 &&
-      inner.bottom <= outer.bottom + 0.5;
-    expect(within(boxes.icon, boxes.plate), "the + on its plate").toBe(true);
-    expect(within(boxes.plate, boxes.button), "the plate inside the box").toBe(
-      true
-    );
-  });
+  }
 });
 
 test.describe("the canvas while an author works", () => {
