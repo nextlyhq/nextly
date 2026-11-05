@@ -134,6 +134,7 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useHeldDocumentChange, withHeldChange } from "./useHeldDocumentChange";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -414,6 +415,7 @@ export function EntryForm({
     loadCurrentVersion,
     versionStartedFrom,
     adoptRecoveredVersion,
+    holdForVersionChange,
   } = useEntryForm({
     collection,
     entry,
@@ -737,13 +739,32 @@ export function EntryForm({
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
+    // Every claim and beat names the copy's version, so the holder is told
+    // when someone else changes the entry.
+    version: versionStartedFrom,
+  });
+  // Load the current version with the edits kept as a recovery point, then
+  // offer it: one way, for a refused save's dialog and for someone else's
+  // change alike. The offer is made below, so this is filled in there.
+  const keepEditsAndLoad = useRef<() => Promise<void>>(loadCurrentVersion);
+  const heldChange = useHeldDocumentChange({
+    change: lockSurface.change,
+    settleChange: lockSurface.settleChange,
+    dirty: () => form.formState.isDirty,
+    hold: holdForVersionChange,
+    loadCurrent: () => keepEditsAndLoad.current(),
+    reload: () => latest?.reload() ?? Promise.resolve(),
   });
   // A gained entry's latest version starts the whole form again, whatever its
   // `updatedAt` says, and the lock holds until it has; the document views key
-  // on the count it carries.
-  const lock = heldWhileRecovering(
-    useResetOnReload(form, lockSurface, defaultValues),
-    recovering
+  // on the count it carries. Someone else's change is said over it, and
+  // withholds the form while the current version loads.
+  const lock = withHeldChange(
+    heldWhileRecovering(
+      useResetOnReload(form, lockSurface, defaultValues),
+      recovering
+    ),
+    heldChange
   );
 
   /*
@@ -879,6 +900,11 @@ export function EntryForm({
     }),
     recovering
   );
+  // The edits were just kept as a recovery point: offer it now.
+  keepEditsAndLoad.current = async () => {
+    await loadCurrentVersion();
+    recovery.recheck();
+  };
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -1093,11 +1119,7 @@ export function EntryForm({
             )
           : null
       }
-      onLoadCurrent={async () => {
-        await loadCurrentVersion();
-        // The edits were just kept as a recovery point: offer it now.
-        recovery.recheck();
-      }}
+      onLoadCurrent={() => keepEditsAndLoad.current()}
       onSaveAnyway={saveAnyway}
     />
   );
@@ -1140,6 +1162,7 @@ export function EntryForm({
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
               onRetry={lock.retryLoad}
+              onChoose={lock.answerChange}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}

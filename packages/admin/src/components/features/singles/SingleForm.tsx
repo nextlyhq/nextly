@@ -88,6 +88,10 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import {
+  useHeldDocumentChange,
+  withHeldChange,
+} from "@admin/components/features/entries/EntryForm/useHeldDocumentChange";
+import {
   heldLocaleChange,
   heldWhileRecovering,
   offerHeldWhileRecovering,
@@ -877,13 +881,32 @@ export function SingleForm({
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
+    // Every claim and beat names the copy's version, so the holder is told
+    // when someone else changes the Single.
+    version: version.startedFrom,
+  });
+  // Load the current version with the edits kept as a recovery point, then
+  // offer it: one way, for a refused save's dialog and for someone else's
+  // change alike. What it calls is made below, so it is filled in there.
+  const keepEditsAndLoad = useRef<() => Promise<void>>(async () => {});
+  const heldChange = useHeldDocumentChange({
+    change: lockSurface.change,
+    settleChange: lockSurface.settleChange,
+    dirty: () => form.formState.isDirty,
+    hold: version.holdForChange,
+    loadCurrent: () => keepEditsAndLoad.current(),
+    reload: () => latest?.reload() ?? Promise.resolve(),
   });
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
-  // key on the count it carries.
-  const lock = heldWhileRecovering(
-    useResetOnReload(form, lockSurface, defaultValues),
-    recovering
+  // key on the count it carries. Someone else's change is said over it, and
+  // withholds the form while the current version loads.
+  const lock = withHeldChange(
+    heldWhileRecovering(
+      useResetOnReload(form, lockSurface, defaultValues),
+      recovering
+    ),
+    heldChange
   );
 
   // System fields: title (drawn first in the editor) and slug (not drawn for a
@@ -1431,6 +1454,11 @@ export function SingleForm({
     }),
     recovering
   );
+  // The edits were just kept as a recovery point: offer it now.
+  keepEditsAndLoad.current = async () => {
+    await loadCurrentVersion();
+    recovery.recheck();
+  };
 
   /*
    * Throwing away this language's pending change, through the same gate as a
@@ -1822,11 +1850,7 @@ export function SingleForm({
                 )
               : null
           }
-          onLoadCurrent={async () => {
-            await loadCurrentVersion();
-            // The edits were just kept as a recovery point: offer it now.
-            recovery.recheck();
-          }}
+          onLoadCurrent={() => keepEditsAndLoad.current()}
           onSaveAnyway={saveAnyway}
         />
       </UnsavedWorkProvider>

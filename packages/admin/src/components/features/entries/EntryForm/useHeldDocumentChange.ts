@@ -126,7 +126,8 @@ export function useHeldDocumentChange({
   }, []);
 
   useEffect(() => {
-    if (change === null) return;
+    // Nothing told, or nothing a lock that knows no version could tell.
+    if (!change) return;
     settleChange();
     const { change: changed, whileAway } = change;
     const said = changedSentence(changed);
@@ -190,15 +191,17 @@ export function useHeldDocumentChange({
  * The lock's affordances with the change said over them: withheld while the
  * current version loads, and its notice where the lock says nothing that
  * withholds the form. A colleague's claim, which withholds it, keeps its
- * place with the takeover it offers.
+ * place with the takeover it offers. Carries the editor's answer, so every
+ * strip that shows the notice can take it.
  */
 export function withHeldChange<T extends DocumentLockAffordances>(
   lock: T,
   held: HeldDocumentChange
-): T {
-  if (lock.readOnly) return lock;
+): T & { readonly answerChange: (choice: HeldChangeChoice) => void } {
+  const answered = { ...lock, answerChange: held.choose };
+  if (lock.readOnly) return answered;
   return {
-    ...lock,
+    ...answered,
     ...(held.holding ? { readOnly: true, actionsDisabled: true } : {}),
     ...(held.notice ? { notice: held.notice } : {}),
   };

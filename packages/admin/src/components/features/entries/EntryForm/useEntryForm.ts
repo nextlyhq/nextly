@@ -54,7 +54,11 @@ import {
 } from "./submit-outcome";
 import type { DocumentActionOutcome } from "./useDocumentActionBindings";
 import { useRefusedForm } from "./useRefusedForm";
-import { useVersionConflict, type VersionConflict } from "./useVersionConflict";
+import {
+  useVersionConflict,
+  type VersionConflict,
+  type VersionConflictState,
+} from "./useVersionConflict";
 
 // ============================================================================
 // Types
@@ -385,6 +389,12 @@ export interface UseEntryFormReturn {
   versionStartedFrom: () => string | undefined;
   /** Edits restored from a recovery point began from this version. */
   adoptRecoveredVersion: (startedFrom: string | undefined) => void;
+  /**
+   * Hold the form on someone else's change the lock told of, so no read
+   * replaces the edits before the author chooses; `loadCurrentVersion` then
+   * keeps them as it does after a refused save.
+   */
+  holdForVersionChange: VersionConflictState["holdForChange"];
 }
 
 // ============================================================================
@@ -1134,5 +1144,6 @@ export function useEntryForm({
     loadCurrentVersion,
     versionStartedFrom: version.startedFrom,
     adoptRecoveredVersion: version.adoptRecovered,
+    holdForVersionChange: version.holdForChange,
   };
 }

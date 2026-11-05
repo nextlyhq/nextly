@@ -63,6 +63,14 @@ export interface VersionConflictState {
    * since; answers whether it did.
    */
   refused: (error: unknown, payload: Record<string, unknown>) => boolean;
+  /**
+   * Hold the form on someone else's change the lock told of, before any save
+   * was refused: no read resets the edits until the author chooses, and the
+   * dialog stays closed. Loading the current version keeps the edits as it
+   * does after a refusal; a save from them is refused and opens the dialog.
+   * A form already held keeps the hold it has.
+   */
+  holdForChange: (stale: StaleVersion) => void;
   /** The refused write again, saving over the newer version on purpose. */
   overwrite: () => Record<string, unknown> | null;
   /**
@@ -124,6 +132,12 @@ export function useVersionConflict(): VersionConflictState {
     },
     []
   );
+
+  const holdForChange = useCallback((stale: StaleVersion) => {
+    if (pin.current !== null) return;
+    // No refused write to replay: a save made later sends its own.
+    pin.current = { stale, payload: {}, startedFrom: startedFrom.current };
+  }, []);
 
   const overwrite = useCallback(() => {
     const held = pin.current;
@@ -189,6 +203,7 @@ export function useVersionConflict(): VersionConflictState {
       adoptAnswered,
       adoptRecovered,
       refused,
+      holdForChange,
       overwrite,
       keepEdits,
       refusedFrom,
@@ -204,6 +219,7 @@ export function useVersionConflict(): VersionConflictState {
       adoptRead,
       adoptAnswered,
       refused,
+      holdForChange,
       overwrite,
       keepEdits,
       refusedFrom,

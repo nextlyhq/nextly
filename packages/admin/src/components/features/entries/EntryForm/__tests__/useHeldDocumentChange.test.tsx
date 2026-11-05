@@ -219,6 +219,8 @@ describe("the lock's affordances with someone else's change", () => {
         accessRequest: null,
       },
     };
-    expect(withHeldChange(takenOver, change)).toEqual(takenOver);
+    const merged = withHeldChange(takenOver, change);
+    expect(merged).toMatchObject(takenOver);
+    expect(merged.notice).toBe(takenOver.notice);
   });
 });
