@@ -107,6 +107,8 @@ test.describe(
         const conflict = page.getByRole("alertdialog", { name: CONFLICT });
         await expect(conflict).toBeVisible({ timeout: 30_000 });
         await expect(conflict).toContainText(`Other ${tag}`);
+        // Kept on screen once the editor goes on editing.
+        await conflict.getByRole("button", { name: "Keep editing" }).click();
         await expect(excerpt(page)).toHaveValue(mine);
       } finally {
         await other.dispose();
@@ -159,6 +161,7 @@ test.describe(
         const conflict = page.getByRole("alertdialog", { name: CONFLICT });
         await expect(conflict).toBeVisible({ timeout: 30_000 });
         await expect(conflict).toContainText(SECOND_EDITOR);
+        await conflict.getByRole("button", { name: "Keep editing" }).click();
         await expect(excerpt(page)).toHaveValue(mine);
       } finally {
         await second.context.close();

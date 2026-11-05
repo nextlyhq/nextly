@@ -122,12 +122,10 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .click();
     await sent;
 
-    // An unpublish.
+    // An unpublish, from the document's own menu.
     sent = nextWrite(page, toThis);
     await page
-      .getByRole("button", {
-        name: /^More (ways to publish|document actions)$/,
-      })
+      .getByRole("button", { name: "More actions", exact: true })
       .first()
       .click();
     await page.getByRole("menuitem", { name: "Unpublish" }).click();
@@ -202,8 +200,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       kind: "page",
       nodes: ["First", "Second"].map((text, at) => ({
         id: `sends-${at}`,
-        type: "heading",
-        props: { text, level: 2 },
+        type: "core/heading",
+        version: 1,
+        props: { text, level: "h2" },
       })),
     };
     const stored = await page.request.patch(HOMEPAGE, { data: { layout } });
