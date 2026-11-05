@@ -23,7 +23,7 @@ import type {
 } from "../../schemas/email-templates/types";
 
 import { parseLiquid } from "./services/liquid-engine";
-import { declarationSubstance } from "./template-variables";
+import { declarationSubstance, pluginDeclarations } from "./template-variables";
 import type { EmailConfig } from "./types";
 
 /** An owner as the registry records it: a plugin there is always running. */
@@ -269,7 +269,10 @@ function owned(
 }
 
 /** A plugin's contribution, in the shape core inserts. */
-function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
+function pluginDefaults(
+  template: PluginEmailTemplate,
+  variables: EmailTemplateVariable[] | null
+): OwnerTemplate {
   return {
     name: template.name,
     slug: template.slug,
@@ -277,7 +280,7 @@ function pluginDefaults(template: PluginEmailTemplate): OwnerTemplate {
     subject: template.subject,
     htmlContent: template.htmlContent,
     plainTextContent: template.plainTextContent ?? null,
-    variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
+    variables,
     useLayout: template.useLayout ?? true,
     description: template.description ?? null,
     replyTo: template.replyTo ?? null,
@@ -400,6 +403,17 @@ export interface RegistryConflict {
  * A contribution refused for its engine: it names one there is none of, or
  * declares Liquid and Liquid can't read it, which would fail every send.
  */
+/**
+ * A plugin template whose declared variables don't parse: kept as names,
+ * descriptions and whether each is required, without their presentation.
+ */
+export interface UnreadDeclarations {
+  slug: string;
+  plugin: string;
+  /** Why, in a sentence the log shows. */
+  reason: string;
+}
+
 export interface RefusedEngine {
   slug: string;
   plugin: string;
@@ -444,10 +458,12 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   registry: TemplateOwnerRegistry;
   conflicts: RegistryConflict[];
   refused: RefusedEngine[];
+  unread: UnreadDeclarations[];
 } {
   const map = new Map<string, OwnedTemplate>();
   const conflicts: RegistryConflict[] = [];
   const refused: RefusedEngine[] = [];
+  const unread: UnreadDeclarations[] = [];
 
   for (const template of input.builtIns) {
     map.set(
@@ -481,11 +497,21 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
         });
         continue;
       }
+      const declared = pluginDeclarations(template.variables);
+      if (declared.problem) {
+        unread.push({
+          slug: template.slug,
+          plugin: plugin.name,
+          reason: declared.problem,
+        });
+      }
       map.set(
         template.slug,
-        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template), {
-          engine: template.engine,
-        })
+        owned(
+          { kind: "plugin", name: plugin.name },
+          pluginDefaults(template, declared.variables),
+          { engine: template.engine }
+        )
       );
     }
   }
@@ -498,6 +524,7 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   return {
     registry: { owned: map, setInCode, complete: input.complete },
     conflicts,
+    unread,
     refused,
   };
 }

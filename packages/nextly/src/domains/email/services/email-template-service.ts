@@ -540,7 +540,8 @@ export class EmailTemplateService extends BaseService {
       codeTemplates: input.codeTemplates,
       complete: true,
     };
-    const { registry, conflicts, refused } = buildTemplateOwnerRegistry(built);
+    const { registry, conflicts, refused, unread } =
+      buildTemplateOwnerRegistry(built);
     this.registry = registry;
     for (const refusal of refused) {
       this.logger.error(
@@ -549,6 +550,16 @@ export class EmailTemplateService extends BaseService {
           slug: refusal.slug,
           plugin: refusal.plugin,
           engine: String(refusal.engine),
+        }
+      );
+    }
+    for (const declarations of unread) {
+      this.logger.warn(
+        "Read a plugin's email template variables without their type, label and example: they don't parse",
+        {
+          slug: declarations.slug,
+          plugin: declarations.plugin,
+          reason: declarations.reason,
         }
       );
     }
