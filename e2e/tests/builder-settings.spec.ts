@@ -29,7 +29,8 @@ import {
 } from "@playwright/test";
 
 import { block, clickBlock, pressSave } from "./canvas/editor-driver";
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, type Theme } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { storeSiteBreakpoints } from "./support/site-breakpoints";
@@ -69,9 +70,17 @@ async function createPage(
   return { id, slug };
 }
 
-async function openEditor(page: Page, id: string): Promise<void> {
+async function openEditor(
+  page: Page,
+  id: string,
+  theme: Theme = "light"
+): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await gotoAdmin(
+    page,
+    `/collections/pages/${id}/builder?field=content`,
+    theme
+  );
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
@@ -841,6 +850,32 @@ test.describe("Removing a breakpoint in Settings", () => {
       await storeSiteBreakpoints(page.request, null);
     }
   });
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`draws the confirmation to WCAG AA in the ${theme} theme`, async ({
+      page,
+    }) => {
+      const small = `small-axe-${theme}`;
+      await storeSiteBreakpoints(page.request, setWith(small));
+      try {
+        const { id } = await createStyledPage(page.request, small);
+        await openEditor(page, id, theme);
+        const dialog = await editBreakpoints(page);
+        await dialog.getByRole("button", { name: "Remove Small" }).click();
+        await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+        await expect(
+          dialog.getByRole("button", { name: "Remove Small and its styles" })
+        ).toBeVisible();
+        // The destructive button's label on its fill among the rest.
+        await expectNoAxeViolations(page, {
+          include: '[data-breakpoint-removal="confirm"]',
+        });
+        await dialog.getByRole("button", { name: "Back" }).click();
+      } finally {
+        await storeSiteBreakpoints(page.request, null);
+      }
+    });
+  }
 
   // Last: its removal keeps holding the page it left until the draft is
   // resolved, which the finally starts by publishing it.

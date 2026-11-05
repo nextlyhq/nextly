@@ -207,6 +207,10 @@ export function RemovalStepPanel({
           <Button
             type="button"
             variant="destructive"
+            // A deeper red under the white label in the light theme, where the solid
+            // red holds under 4.5:1; the dark theme's dark label on its solid red
+            // holds already.
+            className="bg-destructive-700 hover:bg-destructive-800 dark:bg-destructive-solid dark:hover:bg-destructive-600"
             disabled={step.sending}
             onClick={removal.remove}
           >
