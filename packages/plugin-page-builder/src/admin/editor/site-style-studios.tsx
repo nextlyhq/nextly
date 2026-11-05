@@ -71,6 +71,7 @@ import {
 } from "../site-style-client";
 import { useShown } from "../use-shown";
 
+import { rebasedOnCode } from "./class-override-rebase";
 import { useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 import { PLUGIN_SOURCE } from "./stored-document";
@@ -733,6 +734,9 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
  */
 function classChangeOn(
   held: unknown,
+  /** The site's code as it was when the step was recorded. */
+  recorded: readonly NamedClass[] | undefined,
+  /** The site's code as it is now, when the step is replayed. */
   configured: readonly NamedClass[] | undefined,
   classId: string,
   change: SharedStyleChange
@@ -741,11 +745,32 @@ function classChangeOn(
     (entry): entry is NamedClass => typeof entry === "object" && entry !== null
   );
   const at = entries.findIndex(entry => entry.id === classId);
+  const code = configured?.find(each => each.id === classId);
   // A style the site's code supplies is stored only while it differs from
   // the code's, so after an undo the stored tier may not hold it: its
-  // styles are then the code's.
-  const entry = entries[at] ?? configured?.find(each => each.id === classId);
-  if (entry === undefined) return { kind: "gone" };
+  // styles are then the code's. Stored, it is first moved onto the code as
+  // it now is, so the code's old values in it don't mask the new.
+  const stored = entries[at];
+  const entry =
+    stored === undefined
+      ? code
+      : rebasedOnCode(
+          stored,
+          recorded?.find(each => each.id === classId),
+          code
+        );
+  if (entry === undefined) {
+    // The code no longer supplies it and nothing of the site's own is left.
+    return stored === undefined
+      ? { kind: "gone" }
+      : {
+          kind: "write",
+          value: classOverrideOf(
+            configured,
+            entries.filter((_, index) => index !== at)
+          ),
+        };
+  }
   const out = change(entry.styles);
   if (out.kind === "refused") return { kind: "gone" };
   if (out.kind === "unchanged") return { kind: "unchanged" };
@@ -894,9 +919,21 @@ function useWriteClassStyles(
         const undo = change.invert(entry.styles);
         const result = await slot.save(classOverrideOf(configured, next), {
           undo: held =>
-            classChangeOn(held, configuredNow.current, classId, undo),
+            classChangeOn(
+              held,
+              configured,
+              configuredNow.current,
+              classId,
+              undo
+            ),
           redo: held =>
-            classChangeOn(held, configuredNow.current, classId, change),
+            classChangeOn(
+              held,
+              configured,
+              configuredNow.current,
+              classId,
+              change
+            ),
         });
         const refused = refusalOf(
           result,

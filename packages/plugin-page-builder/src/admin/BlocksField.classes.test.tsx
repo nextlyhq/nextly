@@ -786,6 +786,56 @@ describe("replaying an edit to a code-supplied style after the code changed", ()
   });
 });
 
+describe("undoing an edit to a code-supplied style after the code changed", () => {
+  it("undoes onto the code as it now is, and redoes the edit over it", async () => {
+    const before = {
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111" } } },
+    };
+    const after = {
+      ...before,
+      styles: { base: { base: { color: "#111111", opacity: 0.5 } } },
+    };
+    clientConfig = { siteStyle: { classes: [before] } };
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    // The override is stored; then the code gains an opacity.
+    const edited = saved.at(-1)?.classes;
+    storedRead = { data: { classes: edited }, isPending: false, error: null };
+    clientConfig = { siteStyle: { classes: [after] } };
+    rerender(<Host />);
+
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    // Nothing of the author's is left: the code's own style shows.
+    expect(saved.at(-1)).toEqual({ classes: [] });
+
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    rerender(<Host />);
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({
+      classes: [
+        {
+          ...after,
+          styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+});
+
 describe("undoing a shared style's edit after the library changed elsewhere", () => {
   const card = {
     id: "c-card",
