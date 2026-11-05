@@ -14,6 +14,7 @@ import {
   isLook,
   isPlainRecord,
   isTokenRef,
+  resolveSiteTokens,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -98,7 +99,7 @@ function tokenValue(
     each => (each.id ?? each.name) === ref.$token || each.name === ref.$token
   );
   const value = token?.values[mode] ?? token?.values.light;
-  return value === undefined ? (ref as StyleValue) : (value as StyleValue);
+  return value === undefined ? ref : value;
 }
 
 /** A value with every token it names resolved for one mode. */
@@ -107,7 +108,7 @@ function resolved(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
 ): unknown {
-  if (isTokenRef(value as StyleValue)) {
+  if (isTokenRef(value)) {
     return tokenValue(value as { $token: string }, tokens, mode);
   }
   if (!isPlainRecord(value)) return value;
@@ -119,32 +120,30 @@ function resolved(
   );
 }
 
-/** The CSS properties a tile draws, as React spells them. */
-const TILE_PROPERTIES: Readonly<Record<string, string>> = {
-  color: "color",
-  "background-color": "backgroundColor",
-  "border-top-width": "borderTopWidth",
-  "border-right-width": "borderRightWidth",
-  "border-bottom-width": "borderBottomWidth",
-  "border-left-width": "borderLeftWidth",
-  "border-top-style": "borderTopStyle",
-  "border-right-style": "borderRightStyle",
-  "border-bottom-style": "borderBottomStyle",
-  "border-left-style": "borderLeftStyle",
-  "border-top-color": "borderTopColor",
-  "border-right-color": "borderRightColor",
-  "border-bottom-color": "borderBottomColor",
-  "border-left-color": "borderLeftColor",
-  "border-radius": "borderRadius",
-  "border-top-left-radius": "borderTopLeftRadius",
-  "border-top-right-radius": "borderTopRightRadius",
-  "border-bottom-right-radius": "borderBottomRightRadius",
-  "border-bottom-left-radius": "borderBottomLeftRadius",
-  "text-decoration-line": "textDecorationLine",
-  "text-decoration": "textDecoration",
-  "aspect-ratio": "aspectRatio",
-  "font-weight": "fontWeight",
-};
+/**
+ * Whether a tile draws this CSS property: what a small specimen can show
+ * (colour, border, corners, decoration, proportion). The engine writes
+ * logical properties (`border-block-start-width`), so borders are matched by
+ * family rather than listed; sizes stay the tile's own.
+ */
+function drawnOnTile(property: string): boolean {
+  return (
+    property === "color" ||
+    property === "background-color" ||
+    property === "aspect-ratio" ||
+    property === "object-fit" ||
+    property === "font-weight" ||
+    property.startsWith("border") ||
+    property.startsWith("text-decoration")
+  );
+}
+
+/** A CSS property as React spells it: `border-block-start-width` → `borderBlockStartWidth`. */
+function reactProperty(property: string): string {
+  return property.replace(/-([a-z])/g, (_, letter: string) =>
+    letter.toUpperCase()
+  );
+}
 
 /**
  * How a tile draws a look: the block's base with the look laid over, its
@@ -159,17 +158,18 @@ export function lookTileStyle(
   mode: TokenMode
 ): Record<string, string> {
   const style: Record<string, string> = {};
+  // The site's tokens over the defaults, as the canvas compiles with them.
+  const set = resolveSiteTokens(tokens);
   for (const source of [base, look]) {
     if (source === undefined) continue;
-    const literal = resolved(source, tokens, mode) as NodeStyles;
+    const literal = resolved(source, set, mode) as NodeStyles;
     for (const entry of classDeclarations(literal).shown) {
-      const key = Object.hasOwn(TILE_PROPERTIES, entry.property)
-        ? TILE_PROPERTIES[entry.property]
-        : undefined;
-      if (key === undefined || entry.descendant !== undefined) continue;
+      if (!drawnOnTile(entry.property) || entry.descendant !== undefined) {
+        continue;
+      }
       // A value still naming a variable has nothing to resolve against here.
       if (/\b(?:var|url)\(/i.test(entry.value)) continue;
-      style[key] = entry.value;
+      style[reactProperty(entry.property)] = entry.value;
     }
   }
   return style;

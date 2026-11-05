@@ -1320,9 +1320,10 @@
 
 .nx-look-tile__name {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.25rem;
+  column-gap: 0.25rem;
   padding: 0.375rem 0.5rem;
   font-size: var(--text-xs);
   min-inline-size: 0;

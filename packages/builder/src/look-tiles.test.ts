@@ -93,3 +93,37 @@ describe("how a tile draws a look", () => {
     );
   });
 });
+
+describe("a token-built look's tile", () => {
+  it("draws its border and colour from the default tokens", () => {
+    // Shaped as the core Outline look: a token-coloured hairline.
+    const side = "1px";
+    const outlineLook = values({
+      backgroundColor: "transparent",
+      color: { $token: "color.primary" },
+      border: {
+        width: {
+          blockStart: side,
+          blockEnd: side,
+          inlineStart: side,
+          inlineEnd: side,
+        },
+        style: "solid",
+        color: { $token: "color.primary" },
+      },
+    });
+    const tile = lookTileStyle(
+      values({ backgroundColor: { $token: "color.primary" } }),
+      outlineLook,
+      undefined,
+      "light"
+    );
+    expect(tile).toMatchObject({
+      backgroundColor: "transparent",
+      color: "#2563eb",
+      borderStyle: "solid",
+      borderBlockStartWidth: "1px",
+      borderColor: "#2563eb",
+    });
+  });
+});
