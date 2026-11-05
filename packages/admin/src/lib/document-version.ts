@@ -75,6 +75,13 @@ export function versionOf(doc: unknown): string | undefined {
  * only when it has the shape the server gives it, so a malformed one is left
  * out rather than shown.
  */
+/**
+ * What a discard refused because the document changed since says, once the
+ * document is read again.
+ */
+export const DISCARD_CHANGED_SINCE =
+  "This document changed since you opened it. It now shows the current version; discard again if you still want to.";
+
 export function staleVersionOf(error: unknown): StaleVersion | undefined {
   if (!isApiError(error)) return undefined;
   if (

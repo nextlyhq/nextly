@@ -21,6 +21,10 @@ import {
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import {
+  DISCARD_CHANGED_SINCE,
+  staleVersionOf,
+} from "@admin/lib/document-version";
 import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
@@ -127,12 +131,21 @@ export function useDiscardWorkingDraft({
 
     onError: (error: Error) => {
       refreshRemovedFromCodeSchema(queryClient, error);
+      // Refused because the document changed since: it is read again, so the
+      // editor shows the version a second discard starts from.
+      const stale = staleVersionOf(error) !== undefined;
+      if (stale)
+        void queryClient.invalidateQueries({
+          queryKey: entryKeys.detail(collectionSlug, entryId),
+        });
       if (showToast) {
         // The refusal for an entity removed from code is a whole sentence of
         // its own, so nothing goes in front of it.
         toast.error(
           removedFromCodeRefusal(error) ??
-            `Failed to discard working draft: ${error.message}`
+            (stale
+              ? DISCARD_CHANGED_SINCE
+              : `Failed to discard working draft: ${error.message}`)
         );
       }
 

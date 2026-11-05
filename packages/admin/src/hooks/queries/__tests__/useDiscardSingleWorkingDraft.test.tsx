@@ -144,6 +144,32 @@ describe("useDiscardSingleWorkingDraft", () => {
     });
   });
 
+  it("reads the Single again and says so when it changed since", async () => {
+    const client = makeClient();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    discardSpy.mockRejectedValue(
+      Object.assign(
+        new Error("This document changed since the version you gave."),
+        { status: 409, code: "STALE_VERSION", data: { currentVersion: "5" } }
+      )
+    );
+
+    const { result } = renderHook(
+      () =>
+        useDiscardSingleWorkingDraft({ slug: "homepage", documentId: "s1" }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await expect(result.current.mutateAsync("3")).rejects.toThrow();
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: singleDocumentKeys.detail("homepage"),
+    });
+    expect(toastErrorSpy).toHaveBeenCalledWith(
+      "This document changed since you opened it. It now shows the current version; discard again if you still want to."
+    );
+  });
+
   it("toasts the error and leaves the cache alone on failure", async () => {
     const client = makeClient();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");
