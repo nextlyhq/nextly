@@ -836,6 +836,59 @@ describe("undoing an edit to a code-supplied style after the code changed", () =
   });
 });
 
+describe("redoing an edit the code has since made itself", () => {
+  it("still stores the rebase, so the code's value isn't masked", async () => {
+    const code = {
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111" } } },
+    };
+    // The site renamed the style, so an override is stored whatever else.
+    const renamed = { ...code, label: "Mine" };
+    clientConfig = { siteStyle: { classes: [code] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    // The rename keeps the override, at the colour the code had.
+    expect(saved.at(-1)).toEqual({ classes: [renamed] });
+
+    // The code now sets the very colour the redo would.
+    const later = {
+      ...code,
+      styles: { base: { base: { color: "#222222" } } },
+    };
+    clientConfig = { siteStyle: { classes: [later] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+    const writes = saved.length;
+    let redone: boolean | undefined;
+    await act(async () => {
+      redone = await recorded[0]?.redo();
+    });
+    expect(redone).toBe(true);
+    expect(saved).toHaveLength(writes + 1);
+    expect(saved.at(-1)).toEqual({ classes: [{ ...later, label: "Mine" }] });
+  });
+});
+
 describe("undoing a shared style's edit after the library changed elsewhere", () => {
   const card = {
     id: "c-card",

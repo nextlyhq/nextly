@@ -773,8 +773,16 @@ function classChangeOn(
   }
   const out = change(entry.styles);
   if (out.kind === "refused") return { kind: "gone" };
-  if (out.kind === "unchanged") return { kind: "unchanged" };
-  const changed = { ...entry, styles: out.styles };
+  // Nothing for the change to do can still leave the rebase to store: the
+  // code may since have set the value the change sets, and the stored entry
+  // would go on masking it.
+  if (out.kind === "unchanged" && (stored === undefined || stored === entry)) {
+    return { kind: "unchanged" };
+  }
+  const changed = {
+    ...entry,
+    styles: out.kind === "write" ? out.styles : entry.styles,
+  };
   const next =
     at === -1
       ? [...entries, changed]

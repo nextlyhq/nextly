@@ -16,10 +16,11 @@
  * @module class-override-rebase
  */
 
-import type {
-  NamedClass,
-  NodeStyles,
-  StyleValue,
+import {
+  isTokenRef,
+  type NamedClass,
+  type NodeStyles,
+  type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
 /** A record's own entries, or none for anything that isn't a plain record. */
@@ -66,11 +67,36 @@ function recordOf<T>(entries: readonly [string, T][]): Record<string, T> {
   return out;
 }
 
+/** A composite value (a padding's sides), not a token reference or a scalar. */
+function isComposite(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !isTokenRef(value)
+  );
+}
+
 /**
- * One breakpoint's values rebased: a property the stored entry holds as the
- * old code did follows the new code; the site's own values are kept, and a
- * property the site cleared stays cleared.
+ * One value rebased: a composite side by side, so the site owning one side
+ * of a padding doesn't keep the code's old value for another; anything else
+ * whole. A value the stored entry holds as the old code did follows the new
+ * code; the site's own value is kept, and one it cleared stays cleared.
  */
+function rebasedValue(mine: unknown, before: unknown, code: unknown): unknown {
+  const sides = [mine, before, code].filter(value => value !== undefined);
+  if (sides.length > 0 && sides.every(isComposite)) {
+    const out: [string, unknown][] = [];
+    for (const key of keysOf(mine, before, code)) {
+      const value = rebasedValue(at(mine, key), at(before, key), at(code, key));
+      if (value !== undefined) out.push([key, value]);
+    }
+    return out.length > 0 ? recordOf(out) : undefined;
+  }
+  return same(mine, before) ? code : mine;
+}
+
+/** One breakpoint's values rebased, property by property. */
 function rebasedValues(
   stored: unknown,
   was: unknown,
@@ -78,12 +104,11 @@ function rebasedValues(
 ): Record<string, StyleValue> {
   const out: [string, StyleValue][] = [];
   for (const property of keysOf(stored, was, now)) {
-    const mine = at(stored, property);
-    const before = at(was, property);
-    const code = at(now, property);
-    // The site's own: a value it set or changed, or one it cleared.
-    const own = !same(mine, before);
-    const value = own ? mine : code;
+    const value = rebasedValue(
+      at(stored, property),
+      at(was, property),
+      at(now, property)
+    );
     if (value !== undefined) out.push([property, value as StyleValue]);
   }
   return recordOf(out);
@@ -130,21 +155,25 @@ export function rebasedOnCode(
 ): NamedClass | undefined {
   if (was === undefined) return stored;
   const styles = rebasedStyles(stored.styles, was.styles, now?.styles);
-  // The entry's other fields follow the same rule: the site's own if it
-  // changed them, else the code's as it now is.
-  const field = <K extends keyof NamedClass>(key: K): NamedClass[K] =>
-    same(stored[key], was[key]) && now !== undefined ? now[key] : stored[key];
-  if (now === undefined && same(styles, {}) && same(stored.slug, was.slug)) {
+  // Gone only when nothing of the site's own is left in ANY field: a rename,
+  // a lock or a moved position is the site's as much as a value is.
+  const ownFields = keysOf(stored, was).filter(
+    key => key !== "styles" && !same(at(stored, key), at(was, key))
+  );
+  if (now === undefined && same(styles, {}) && ownFields.length === 0) {
     return undefined;
   }
-  const rebased: NamedClass = {
-    ...stored,
-    slug: field("slug"),
-    orderIndex: field("orderIndex"),
-    styles,
-  };
-  const label = field("label");
-  if (label === undefined) delete rebased.label;
-  else rebased.label = label;
-  return rebased;
+  // Every other field by the same rule, the lock and the label among them:
+  // the site's own if it changed it, else the code's as it now is (absent
+  // where the code now has none).
+  const fields: [string, unknown][] = [];
+  for (const key of keysOf(stored, was, now)) {
+    if (key === "styles") continue;
+    const value =
+      key !== "id" && now !== undefined && same(at(stored, key), at(was, key))
+        ? at(now, key)
+        : at(stored, key);
+    if (value !== undefined) fields.push([key, value]);
+  }
+  return { ...recordOf(fields), styles } as NamedClass;
 }

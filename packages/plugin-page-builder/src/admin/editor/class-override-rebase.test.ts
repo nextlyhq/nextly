@@ -55,6 +55,48 @@ describe("a stored override moved onto the code as it now is", () => {
     ).toEqual({ base: { base: { color: "#222222" } } });
   });
 
+  it("decides each side of a composite value on its own", () => {
+    // The site changed the top padding; the code then changed the bottom.
+    const was = entry({ padding: { blockStart: "4px", blockEnd: "4px" } });
+    const now = entry({ padding: { blockStart: "4px", blockEnd: "12px" } });
+    const stored = entry({ padding: { blockStart: "20px", blockEnd: "4px" } });
+    expect(rebasedOnCode(stored, was, now)).toEqual(
+      entry({ padding: { blockStart: "20px", blockEnd: "12px" } })
+    );
+  });
+
+  it("keeps a removed code style the site renamed or locked", () => {
+    const was = entry({ color: "#111111" });
+    // Only the label, or only the lock, is the site's own.
+    expect(
+      rebasedOnCode(entry({ color: "#111111" }, "CODE"), was, undefined)?.label
+    ).toBe("CODE");
+    expect(
+      rebasedOnCode(
+        { ...entry({ color: "#111111" }), locked: true },
+        was,
+        undefined
+      )?.locked
+    ).toBe(true);
+  });
+
+  it("follows the code's lock unless the site changed the lock itself", () => {
+    const was = entry({ color: "#111111" });
+    const now = { ...entry({ color: "#111111" }), locked: true as const };
+    // The site changed only the colour: the code's new lock holds.
+    expect(rebasedOnCode(entry({ color: "#222222" }), was, now)?.locked).toBe(
+      true
+    );
+    // The code unlocks a style the site had not locked: no lock is kept.
+    expect(
+      rebasedOnCode(
+        { ...entry({ color: "#222222" }), locked: true },
+        { ...was, locked: true },
+        entry({ color: "#111111" })
+      )?.locked
+    ).toBe(undefined);
+  });
+
   it("leaves a style the code never supplied as it is", () => {
     const stored = entry({ color: "#222222" });
     expect(rebasedOnCode(stored, undefined, undefined)).toBe(stored);
