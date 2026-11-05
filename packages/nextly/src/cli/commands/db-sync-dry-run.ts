@@ -111,7 +111,9 @@ export async function planDbSync(
             ? {}
             : { refusals: [`${refusal.what} ${refusal.why}`] }),
           notes: [
-            "NODE_ENV is production: a real run applies no schema change (use nextly migrate:create and nextly migrate).",
+            // Only collection changes are refused there: the Single and field-group steps still
+            // create and update their tables, so the note must not promise an unchanged schema.
+            "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections).",
             SYNC_DRY_RUN_NOTE,
           ],
         };

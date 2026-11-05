@@ -456,6 +456,12 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
         "A real run would refuse: Cannot auto-sync schema in production mode. `NODE_ENV` is `production`, and 2 collections would change: dsd_moved, dsd_posts."
       );
       expect(out).not.toMatch(/^ℹ Would run /m);
+      // A real production run still creates and updates Single and field-group tables, so the
+      // note must not claim it changes no schema.
+      expect(out).toContain(
+        "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections)."
+      );
+      expect(out).not.toContain("a real run applies no schema change");
       expect(await databaseState(adapter, dialect)).toEqual(before);
     },
     2 * NEXTLY_RUN_TIMEOUT
