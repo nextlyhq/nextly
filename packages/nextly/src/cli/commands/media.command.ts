@@ -7,6 +7,7 @@
  */
 import { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -50,13 +51,15 @@ export function createMediaCommand(): Command {
     .action(
       lazyAction(async () => (await import("./media")).mediaRemoveSizesAction)
     );
-  media
-    .command("reindex-usage")
-    .description(
-      "Rebuild the record of where each media item is used, from the stored content"
-    )
-    .action(
-      lazyAction(async () => (await import("./media")).mediaReindexUsageAction)
-    );
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    media
+      .command("reindex-usage")
+      .description(
+        "Rebuild the record of where each media item is used, from the stored content"
+      )
+  ).action(
+    lazyAction(async () => (await import("./media")).mediaReindexUsageAction)
+  );
   return media;
 }
