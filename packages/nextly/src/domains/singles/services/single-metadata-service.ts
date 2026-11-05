@@ -70,7 +70,10 @@ import {
   withoutLeavingConstraints,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -2251,7 +2254,9 @@ export class SingleMetadataService {
         wasLocalized: false,
         // A single being created has no prior state at all.
         wasStatus: false,
-        status: hasStatus,
+        // A `_status` of each language only where each language publishes on its own: an
+        // untranslated Single kept per language under the setting publishes as a document.
+        status: publishesPerLanguage(input),
         adapter,
       });
     } catch (error) {

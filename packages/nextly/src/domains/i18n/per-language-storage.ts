@@ -79,6 +79,77 @@ export function publishesPerLanguage(
   return entity?.localized === true && entity?.status === true;
 }
 
+/** What a save changes about where an entity's translatable values live and how it publishes. */
+export interface TranslationLayoutChange {
+  /** Whether its translatable values were, and will be, kept in its per-language table. */
+  wasStored: boolean;
+  isStored: boolean;
+  /** Whether its per-language table carried, and will carry, a `_status` of each language. */
+  wasPublishedPerLanguage: boolean;
+  isPublishedPerLanguage: boolean;
+  /**
+   * Whether a `_status` the save adds takes the entry's state in EVERY language: translation turned
+   * on for values already kept per language, every language of which was live with the entry.
+   */
+  statusFromEntryInEveryLanguage: boolean;
+  /**
+   * Whether the save drops each language's own publish state for the entry's, which must first be
+   * the same (`assertLanguageStatesAgreeWithEntry`): translation turned off for values that stay
+   * per language, on a Draft/Published entity.
+   */
+  languagesMustAgreeWithEntry: boolean;
+}
+
+/**
+ * A save's change to an entity's translation layout, from its `localized` and Draft/Published flags
+ * before and after. The one derivation every Builder save asks, so they cannot disagree.
+ *
+ * Without the setting a toggle moves the values: on, from the main table into the per-language
+ * table; off, back. Under `experimental.perLanguageStorage` they stay per language either way, so
+ * turning translation on or off moves no value; on a Draft/Published entity it gives each language
+ * a publish state of its own, or takes it away. Without the setting the per-language `_status`
+ * follows the entity's Draft/Published flag as it always has, since every per-language table then
+ * belongs to a translated entity.
+ */
+export function translationLayoutChange(flags: {
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  wasStatus: boolean;
+  hasStatus: boolean;
+}): TranslationLayoutChange {
+  const { wasLocalized, isLocalized, wasStatus, hasStatus } = flags;
+  if (!state.enabled) {
+    return {
+      wasStored: wasLocalized,
+      isStored: isLocalized,
+      wasPublishedPerLanguage: wasStatus,
+      isPublishedPerLanguage: hasStatus,
+      statusFromEntryInEveryLanguage: false,
+      languagesMustAgreeWithEntry: false,
+    };
+  }
+  const wasPublishedPerLanguage = publishesPerLanguage({
+    localized: wasLocalized,
+    status: wasStatus,
+  });
+  const isPublishedPerLanguage = publishesPerLanguage({
+    localized: isLocalized,
+    status: hasStatus,
+  });
+  return {
+    wasStored: true,
+    isStored: true,
+    wasPublishedPerLanguage,
+    isPublishedPerLanguage,
+    statusFromEntryInEveryLanguage:
+      !wasLocalized && isLocalized && isPublishedPerLanguage,
+    // Translation turned off, the entry keeping Draft/Published: turning Draft/Published itself off
+    // drops every publish state by design, the entry's included.
+    languagesMustAgreeWithEntry:
+      wasPublishedPerLanguage && wasLocalized && !isLocalized && hasStatus,
+  };
+}
+
 /**
  * Refuses a reloaded config that turns per-language storage on or off: the tables the running
  * site reads and writes were laid out for the choice it started with.
