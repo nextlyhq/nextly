@@ -723,12 +723,32 @@ function blockPartsParts(
         structural(type, reading),
         Object.keys(parts)
           .sort()
-          .map(name => [
-            structural(name, reading),
-            styleEnvelope(parts[name]?.baseStyles, reading),
-          ]),
+          .map(name => partEntry(name, parts[name], reading)),
       ];
     });
+}
+
+/**
+ * One part as the stamp reads it: its name, its defaults, and what it takes
+ * from a wrapping root, which decides the element its routed declarations land
+ * on. The route is read only when declared, so a part declaring none stamps as
+ * it did before routing existed.
+ */
+function partEntry(
+  name: string,
+  part: SharedStyleInputs["blockParts"] extends
+    | Readonly<Record<string, Readonly<Record<string, infer P>>>>
+    | undefined
+    ? P | undefined
+    : never,
+  reading: Reading
+): unknown[] {
+  const takes: unknown = part?.takesFromRoot;
+  return [
+    structural(name, reading),
+    styleEnvelope(part?.baseStyles, reading),
+    ...(takes === undefined ? [] : [structural(takes, reading)]),
+  ];
 }
 
 /** Each container type's child gap, in a fixed key order, read structurally. */
