@@ -597,6 +597,49 @@ export interface SiteBreakpointsRequest {
 }
 
 /**
+ * Where a breakpoint removal that did not finish within its save is carried
+ * on: `POST` with the run's id ({@link SiteBreakpointRemovalRequest}), under
+ * the same permission as the save.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_REMOVAL_ROUTE_PATH = "/site/breakpoints/removal";
+
+/**
+ * What continuing a removal sends: the run the save answered with.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRequest {
+  readonly runId: string;
+}
+
+/**
+ * Where a removal stands after a save or a call to carry it on: every value
+ * under the removed breakpoints is stripped once `finished`; until then the
+ * removal route is called again with `runId`. `left` counts the documents
+ * this call had to leave as they are (a published page with a pending draft,
+ * say), which keep their values until they can be stripped.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemoval {
+  readonly runId: string;
+  readonly finished: boolean;
+  readonly left: number;
+}
+
+/**
+ * What saving the site's breakpoints answers: the set stored, and, when it
+ * removed breakpoints, where the removal of their values stands.
+ */
+export interface SiteBreakpointsSaved {
+  readonly breakpoints: BreakpointSet | null;
+  /** @experimental */
+  readonly removal?: SiteBreakpointRemoval;
+}
+
+/**
  * Where the editor reads the stored site style: the one read the canvas, the
  * inspector and Design's studios draw from.
  *

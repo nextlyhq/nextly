@@ -23,19 +23,35 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+import {
+  REMOVAL_PLACES,
+  type PlaceCount,
+  type RemovalDryRun,
+  type RemovalPlace,
+  type RemovedBreakpoint,
+} from "./breakpoint-removal/dry-run";
+import type { BreakpointRun } from "./breakpoint-removal/run-store";
+import type { BreakpointRemovalService } from "./breakpoint-removal/service";
+import { stripClasses } from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import type { RewriteReport } from "./host-rewrite/contract";
+import { runStarterOf } from "./host-rewrite/service";
 import {
+  SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   SITE_BREAKPOINTS_ROUTE_PATH,
   SITE_SETTINGS_ROUTE_PATH,
+  type SiteBreakpointRemoval,
+  type SiteBreakpointRemovalRequest,
   type SiteBreakpointsRequest,
+  type SiteBreakpointsSaved,
   type SiteLayoutOption,
   type SiteSettingsRead,
+  type StoredSiteStyle,
 } from "./library-contract";
 import { walkPages } from "./paged-walk";
 import {
@@ -43,12 +59,16 @@ import {
   siteBreakpoints,
   type SiteStyleData,
 } from "./site-style";
-import { checkStoredBreakpoints } from "./site-style-record";
+import {
+  checkStoredBreakpoints,
+  readSiteStyleRecord,
+} from "./site-style-record";
 import {
   loadSiteStyle,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
+import { readStoredJson } from "./stored-json";
 
 /** The permission a role needs to change the site's settings, in its parts. */
 const MANAGE_SITE = {
@@ -143,10 +163,14 @@ export function removedBreakpoints(
   return removed;
 }
 
-/** How the installed plugin counts what a removal would drop. */
+/** How the installed plugin counts, and carries out, a removal. */
 export interface BreakpointRemoval {
-  /** The site's style as it is now, the configured defaults under it. */
-  readonly current: (ctx: SiteSettingsRouteContext) => Promise<SiteStyleData>;
+  /**
+   * The site style's Single as stored: what a removal records as the set it
+   * replaced, and the shared styles it strips. The site's style as it is now
+   * is derived from it ({@link currentStyle}).
+   */
+  readonly stored: (ctx: SiteSettingsRouteContext) => Promise<StoredSiteStyle>;
   /** The configured site style, which a stored `null` gives back. */
   readonly defaults?: SiteStyleData;
   /** Walk the site for what removing each of these would drop. */
@@ -155,11 +179,49 @@ export interface BreakpointRemoval {
     classes: readonly NamedClass[],
     ctx: BreakpointsRouteContext
   ) => Promise<RemovalDryRun>;
+  /**
+   * Carrying a removal out: its run, and the walk stripping the site. Absent,
+   * a save that removes breakpoints stores the set and strips nothing.
+   */
+  readonly cascade?: BreakpointCascade;
 }
 
-/** What the breakpoints route is handed: the settings context, and who asks. */
+/** What carrying a removal out needs of the installed plugin. */
+export interface BreakpointCascade {
+  readonly service: () => BreakpointRemovalService;
+  /** How long one request walks the site before answering with the run. */
+  readonly walkMs: number;
+}
+
+/**
+ * What the breakpoints routes are handed: the settings context, who asks, and
+ * the audit trail a removal is recorded in.
+ */
 export type BreakpointsRouteContext = SiteSettingsRouteContext &
-  Pick<PluginRouteContext, "caller">;
+  Pick<PluginRouteContext, "caller" | "audit">;
+
+/** The site's style as it is now: the stored record over the configured defaults. */
+function currentStyle(
+  removal: BreakpointRemoval,
+  stored: StoredSiteStyle
+): SiteStyleData {
+  return resolveSiteStyle(removal.defaults, readSiteStyleRecord(stored));
+}
+
+/**
+ * The breakpoints the site emits once `breakpoints` is stored: a stored
+ * `null` gives the configured defaults back, as the resolved style reads it.
+ */
+function breakpointsAfter(
+  removal: BreakpointRemoval,
+  breakpoints: SiteBreakpointsRequest["breakpoints"]
+): BreakpointSet | undefined {
+  return siteBreakpoints(
+    resolveSiteStyle(removal.defaults, {
+      breakpoints: breakpoints ?? undefined,
+    })
+  );
+}
 
 /** What a dry run answers with. */
 interface SiteBreakpointsDryRun extends RemovalDryRun {
@@ -177,15 +239,11 @@ async function dryRunBreakpoints(
   ctx: BreakpointsRouteContext,
   removal: BreakpointRemoval
 ): Promise<Response> {
-  const current = await removal.current(ctx);
-  // The set saving this would leave: a stored `null` gives the configured
-  // defaults back, as the resolved style reads it.
-  const after = siteBreakpoints(
-    resolveSiteStyle(removal.defaults, {
-      breakpoints: breakpoints ?? undefined,
-    })
+  const current = currentStyle(removal, await removal.stored(ctx));
+  const removed = removedBreakpoints(
+    siteBreakpoints(current),
+    breakpointsAfter(removal, breakpoints)
   );
-  const removed = removedBreakpoints(siteBreakpoints(current), after);
   const counted = await removal.count(removed, current.classes ?? [], ctx);
   return respondMutation<SiteBreakpointsDryRun>(
     "Nothing was saved: this is what saving these breakpoints would drop.",
@@ -194,12 +252,280 @@ async function dryRunBreakpoints(
 }
 
 /**
+ * The one write of the site style's Single that changes its breakpoints:
+ * marked, so the Single's hook knows which door it came through, and made past
+ * the Single's own permission, because the site permission the route asked
+ * for is what lets a role redefine its devices.
+ */
+async function writeSiteStyle(
+  nextly: SiteSettingsDirectApi,
+  ctx: SiteSettingsRouteContext,
+  data: Record<string, unknown>
+): Promise<void> {
+  await nextly.updateSingle({
+    slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+    data,
+    overrideAccess: true,
+    context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+    ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
+  });
+}
+
+/** What a save that removes a breakpoint while its removal is open is told. */
+const READDED_WHILE_REMOVING =
+  "A breakpoint in this set is still being removed. Try again when its removal has finished.";
+
+/**
+ * Refuse a set that defines a breakpoint the open removal is stripping: the
+ * walk would go on stripping values the site now emits again.
+ */
+function refuseReadding(
+  open: BreakpointRun | null,
+  after: BreakpointSet | undefined
+): void {
+  if (open === null) return;
+  const removing = new Set(open.removedIds);
+  const readded = breakpointContexts(after)
+    .map(context => context.id)
+    .filter(id => removing.has(id));
+  if (readded.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: READDED_WHILE_REMOVING,
+    logContext: { reason: "breakpoint-readded-while-removing", readded },
+  });
+}
+
+/**
+ * The stored shared styles without their values under `ids`, or `undefined`
+ * when none holds any, so a removal that strips no shared style writes none.
+ */
+function strippedStoredClasses(
+  stored: unknown,
+  ids: ReadonlySet<string>
+): readonly unknown[] | undefined {
+  const list = readStoredJson(stored);
+  if (!Array.isArray(list)) return undefined;
+  const stripped = stripClasses(list, ids);
+  return stripped === list ? undefined : stripped;
+}
+
+/** The audit kind each removed breakpoint is recorded under. */
+export const BREAKPOINT_REMOVED_AUDIT =
+  "nextlyhq-plugin-page-builder.breakpoint-removed";
+
+/** One key of a removal's audit row. */
+type RemovalAuditKey =
+  | "runId"
+  | "breakpointId"
+  | "breakpointLabel"
+  | "documents"
+  | "drafts"
+  | "styles"
+  | "hides"
+  | RemovalPlace
+  | "sharedStyles"
+  | "sharedStyleValues"
+  | "lockedDocuments"
+  | "unaddressable"
+  | "unreadable"
+  | "complete";
+
+/** The counts a removal's audit row carries, every one present. */
+export const BREAKPOINT_REMOVED_METADATA: readonly RemovalAuditKey[] = [
+  "runId",
+  "breakpointId",
+  "breakpointLabel",
+  "documents",
+  "drafts",
+  "styles",
+  "hides",
+  ...REMOVAL_PLACES,
+  "sharedStyles",
+  "sharedStyleValues",
+  "lockedDocuments",
+  "unaddressable",
+  "unreadable",
+  "complete",
+];
+
+/** One removed breakpoint's audit metadata: what it dropped, zeros included. */
+function auditMetadataOf(
+  runId: string,
+  entry: RemovedBreakpoint,
+  counted: RemovalDryRun
+): Record<RemovalAuditKey, string | number | boolean> {
+  const places = REMOVAL_PLACES.map(place => entry.places[place]);
+  const sum = (pick: (count: PlaceCount) => number) =>
+    places.reduce((total, count) => total + pick(count), 0);
+  return {
+    runId,
+    breakpointId: entry.id,
+    breakpointLabel: entry.label,
+    documents: sum(count => count.documents),
+    drafts: sum(count => count.drafts),
+    styles: sum(count => count.styles),
+    hides: sum(count => count.hides),
+    ...placeDocuments(entry),
+    sharedStyles: entry.sharedStyles.classes,
+    sharedStyleValues: entry.sharedStyles.styles,
+    lockedDocuments: entry.locked.named.length + entry.locked.unnamed,
+    unaddressable: entry.unaddressable,
+    unreadable: counted.unreadable,
+    complete: counted.complete,
+  };
+}
+
+/** How many documents in each place held something under the breakpoint. */
+function placeDocuments(
+  entry: RemovedBreakpoint
+): Record<RemovalPlace, number> {
+  return Object.fromEntries(
+    REMOVAL_PLACES.map(place => [place, entry.places[place].documents])
+  ) as Record<RemovalPlace, number>;
+}
+
+/**
+ * One audit row per removed breakpoint, with what removing it dropped as
+ * counted before anything was stripped. The writer never throws.
+ */
+async function auditRemoval(
+  ctx: BreakpointsRouteContext,
+  req: Request,
+  runId: string,
+  counted: RemovalDryRun
+): Promise<void> {
+  for (const entry of counted.removed) {
+    await ctx.audit?.write({
+      kind: BREAKPOINT_REMOVED_AUDIT,
+      actorUserId: ctx.user?.id ?? null,
+      request: req,
+      metadata: auditMetadataOf(runId, entry, counted),
+    });
+  }
+}
+
+/**
+ * The answer to a save or a call carrying a removal on: 202 while the walk is
+ * not finished, so the caller knows to call the removal route again.
+ */
+function removalAnswer<T extends object>(
+  message: { readonly finished: string; readonly going: string },
+  item: T,
+  runId: string,
+  report: RewriteReport
+): Response {
+  const removal: SiteBreakpointRemoval = {
+    runId,
+    finished: report.finished,
+    left: report.left.length,
+  };
+  return respondMutation(
+    report.finished ? message.finished : message.going,
+    { ...item, removal },
+    report.finished ? undefined : { status: 202 }
+  );
+}
+
+/**
+ * Open a removal, count what it drops, and store the set with the shared
+ * styles stripped in the same write. The removal is dropped again when either
+ * fails, since nothing was removed.
+ */
+async function beginRemoval(args: {
+  breakpoints: SiteBreakpointsRequest["breakpoints"];
+  ctx: BreakpointsRouteContext;
+  nextly: SiteSettingsDirectApi;
+  removal: BreakpointRemoval;
+  service: BreakpointRemovalService;
+  stored: StoredSiteStyle;
+  removed: ReadonlyMap<string, string>;
+}): Promise<{ run: BreakpointRun; counted: RemovalDryRun }> {
+  const { ctx, removal, service, stored, removed } = args;
+  const run = await service.begin(
+    [...removed.keys()],
+    stored.breakpoints ?? null,
+    runStarterOf(ctx)
+  );
+  try {
+    // Counted before anything is stripped, for the audit trail.
+    const counted = await removal.count(
+      removed,
+      currentStyle(removal, stored).classes ?? [],
+      ctx
+    );
+    const classes = strippedStoredClasses(
+      stored.classes,
+      new Set(removed.keys())
+    );
+    await writeSiteStyle(args.nextly, ctx, {
+      breakpoints: args.breakpoints,
+      ...(classes === undefined ? {} : { classes }),
+    });
+    return { run, counted };
+  } catch (error) {
+    await service.abandon(run.id);
+    throw error;
+  }
+}
+
+/** What a save answers once its set is stored. */
+const SAVED = {
+  finished: "The site's breakpoints were saved.",
+  going:
+    "The site's breakpoints were saved. The styles under the removed breakpoints are still being removed.",
+};
+
+/**
+ * Store a set that removes breakpoints, and strip what they held from the
+ * whole site: the shared styles in the same write as the set, then every
+ * document holding blocks, as far as the time allows. Only one removal is
+ * open at a time, and a set defining a breakpoint it is still removing is
+ * refused.
+ */
+async function saveBreakpoints(
+  req: Request,
+  breakpoints: SiteBreakpointsRequest["breakpoints"],
+  ctx: BreakpointsRouteContext,
+  nextly: SiteSettingsDirectApi,
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
+): Promise<Response> {
+  const service = removal.cascade.service();
+  const stored = await removal.stored(ctx);
+  const after = breakpointsAfter(removal, breakpoints);
+  refuseReadding(await service.openRun(), after);
+  const removed = removedBreakpoints(
+    siteBreakpoints(currentStyle(removal, stored)),
+    after
+  );
+  if (removed.size === 0) {
+    await writeSiteStyle(nextly, ctx, { breakpoints });
+    return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
+      breakpoints,
+    });
+  }
+  const { run, counted } = await beginRemoval({
+    breakpoints,
+    ctx,
+    nextly,
+    removal,
+    service,
+    stored,
+    removed,
+  });
+  await auditRemoval(ctx, req, run.id, counted);
+  const report = await service.walk(run.id, {
+    deadline: new Date(Date.now() + removal.cascade.walkMs),
+  });
+  return removalAnswer(SAVED, { breakpoints }, run.id, report);
+}
+
+/**
  * Store the site's breakpoints: the one write that may change them.
  *
- * Authorized by the route's declared permission before this runs; the write
- * itself goes past the Single's own permission, because the site permission
- * alone is what lets a role redefine its devices. Marked, so the Single's hook
- * knows which door it came through.
+ * Authorized by the route's declared permission before this runs. A set that
+ * removes breakpoints strips what they held from the site, where the
+ * installed plugin can (`saveBreakpoints`).
  */
 export async function writeSiteBreakpoints(
   req: Request,
@@ -217,17 +543,17 @@ export async function writeSiteBreakpoints(
     }
     return dryRunBreakpoints(breakpoints, ctx, removal);
   }
-  await nextly.updateSingle({
-    slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    data: { breakpoints },
-    overrideAccess: true,
-    context: { ...SITE_SETTINGS_WRITE_CONTEXT },
-    ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
+  const cascade = removal?.cascade;
+  if (removal !== undefined && cascade !== undefined) {
+    return saveBreakpoints(req, breakpoints, ctx, nextly, {
+      ...removal,
+      cascade,
+    });
+  }
+  await writeSiteStyle(nextly, ctx, { breakpoints });
+  return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
+    breakpoints,
   });
-  return respondMutation<SiteBreakpointsRequest>(
-    "The site's breakpoints were saved.",
-    { breakpoints }
-  );
 }
 
 /**
@@ -246,6 +572,92 @@ export function siteBreakpointsRoute(removal?: BreakpointRemoval): {
     requiredPermission: MANAGE_SITE_PERMISSION,
     handler: async (req, ctx) =>
       writeSiteBreakpoints(req, ctx, await getCachedNextly(), removal),
+  };
+}
+
+const RemovalBody = z.strictObject({ runId: z.string().min(1).max(64) });
+
+/** What carrying a removal on answers. */
+const CARRIED = {
+  finished: "The styles under the removed breakpoints were removed.",
+  going: "The styles under the removed breakpoints are still being removed.",
+};
+
+/**
+ * Carry on a removal its save did not finish, from where it stopped. Any
+ * site manager may: the walk writes as the system, so whose request carries
+ * it on changes nothing it does.
+ *
+ * A run whose breakpoints the site still defines is one whose set was never
+ * stored (its save failed after opening it), so it is dropped rather than
+ * walked: walking it would strip values the site still emits.
+ */
+async function carryOnRemoval(
+  req: Request,
+  ctx: BreakpointsRouteContext,
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
+): Promise<Response> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await req.text()) as unknown;
+  } catch {
+    raw = undefined;
+  }
+  const parsed = RemovalBody.safeParse(raw);
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "runId",
+          code: "INVALID_VALUE",
+          message: "The request does not name a breakpoint removal.",
+        },
+      ],
+    });
+  }
+  const { runId }: SiteBreakpointRemovalRequest = parsed.data;
+  const service = removal.cascade.service();
+  const run = await service.runById(runId);
+  if (run === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "breakpoint-removal-no-run", runId },
+    });
+  }
+  const defined = new Set(
+    breakpointContexts(
+      siteBreakpoints(currentStyle(removal, await removal.stored(ctx)))
+    ).map(context => context.id)
+  );
+  if (run.open && run.removedIds.some(id => defined.has(id))) {
+    await service.abandon(run.id);
+    return respondMutation<SiteBreakpointRemoval>(
+      "Nothing was removed: the site still has these breakpoints.",
+      { runId, finished: true, left: 0 }
+    );
+  }
+  const report = await service.walk(runId, {
+    deadline: new Date(Date.now() + removal.cascade.walkMs),
+  });
+  return removalAnswer(CARRIED, {}, runId, report);
+}
+
+/**
+ * The route a removal its save did not finish is carried on through, under
+ * the permission the save asked for.
+ */
+export function siteBreakpointRemovalRoute(
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
+): {
+  method: "POST";
+  path: string;
+  requiredPermission: string;
+  handler: (req: Request, ctx: BreakpointsRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "POST",
+    path: SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
+    requiredPermission: MANAGE_SITE_PERMISSION,
+    handler: async (req, ctx) => carryOnRemoval(req, ctx, removal),
   };
 }
 
