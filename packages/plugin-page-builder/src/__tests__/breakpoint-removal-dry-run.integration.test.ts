@@ -22,6 +22,7 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import {
@@ -49,7 +50,7 @@ const atMobile: Node = {
   },
 };
 
-const doc = (kind: "page" | "component", nodes: Node[]) => ({
+const doc = (kind: "page" | "component" | "pattern", nodes: Node[]) => ({
   formatVersion: DOCUMENT_FORMAT_VERSION,
   kind,
   nodes,
@@ -73,6 +74,23 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [pageBuilder()],
         seedPublic: true,
+        // An entry collection and a Single of the site's own holding blocks,
+        // beside the plugin's pages, components and patterns.
+        collections: [
+          {
+            slug: "notes",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "content", type: BLOCKS_TYPE },
+            ],
+          } as never,
+        ],
+        singles: [
+          {
+            slug: "frontpage",
+            fields: [{ name: "content", type: BLOCKS_TYPE }],
+          } as never,
+        ],
       });
       // The site's first user is its owner, granted everything. Made first, so
       // the person below holds only what the test gives them.
@@ -206,6 +224,27 @@ describe.each(getConfiguredTestDialects())(
         },
         overrideAccess: true,
       });
+      await t.nextly.create({
+        collection: "patterns",
+        data: {
+          title: "Hero",
+          slug: "hero",
+          granularity: "section",
+          content: doc("pattern", [heading("p", atMobile)]),
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: "notes",
+        data: { title: "Note", content: doc("page", [heading("n", atMobile)]) },
+        overrideAccess: true,
+      });
+      await t.nextly.updateSingle({
+        slug: "frontpage",
+        data: { content: doc("page", [heading("f", atMobile)]) },
+        overrideAccess: true,
+      });
       // May manage the site and open pages; may not open components.
       const designer = await holding(
         t,
@@ -231,7 +270,9 @@ describe.each(getConfiguredTestDialects())(
         label: "Mobile",
         unaddressable: 0,
         sharedStyles: { classes: 1, styles: 1, locked: ["Card"] },
-        documents: { named: ["Home"], unnamed: 1 },
+        // Home is named; the component, pattern, note and Single, which this
+        // person may not open, are counted.
+        documents: { named: ["Home"], unnamed: 4 },
         locked: { named: ["Home"], unnamed: 0 },
       });
       const places = mobile?.places as Record<string, unknown>;
@@ -242,6 +283,11 @@ describe.each(getConfiguredTestDialects())(
         hides: 1,
       });
       expect(places.components).toMatchObject({ documents: 1, styles: 2 });
+      expect(places.patterns).toMatchObject({ documents: 1, styles: 2 });
+      expect(places.entries).toMatchObject({ documents: 1, styles: 2 });
+      expect(places.singles).toMatchObject({ documents: 1, styles: 2 });
+      // A Layout holds no blocks of its own (its areas place components), so
+      // no Layout is walked and the place is always empty.
       expect(places.layouts).toMatchObject({ documents: 0 });
 
       // Nothing was saved.

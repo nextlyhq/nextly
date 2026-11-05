@@ -25,6 +25,7 @@ import type {
   ReadValue,
 } from "../host-rewrite/rewrite";
 import { scannedOutcomes } from "../host-rewrite/scan";
+import { storedHash } from "../host-rewrite/stored-hash";
 
 import {
   breakpointUsesIn,
@@ -246,6 +247,7 @@ async function documentUses(
   deps: DryRunDeps
 ): Promise<Map<string, DocumentTally> | null> {
   const tallies = new Map<string, DocumentTally>();
+  const counted = new Set<string>();
   for (const candidate of document.hosts) {
     let read: HostRead;
     try {
@@ -253,18 +255,49 @@ async function documentUses(
     } catch {
       return null;
     }
-    const forms: ReadForm[] = [
-      { value: valueOf(read.published), draft: false },
-      { value: valueOf(read.draft), draft: true },
-    ];
-    for (const form of forms) {
-      if (form.value === undefined) continue;
-      if (!(await addForm(tallies, candidate, form, ids, deps.limits))) {
-        return null;
-      }
+    if (!(await addHost(tallies, counted, candidate, read, ids, deps))) {
+      return null;
     }
   }
   return tallies;
+}
+
+/**
+ * Add one host's stored forms to the document's tallies; false when one could
+ * not be read to the end.
+ *
+ * `counted` holds the values already counted, by field, form and content. A
+ * field whose languages are unknown is read once per language, and where it is
+ * stored once each read answers the same value: counted once, not once per
+ * language. The count is of distinct values, so a translated field holding the
+ * same value in two languages is counted once as well.
+ */
+async function addHost(
+  tallies: Map<string, DocumentTally>,
+  counted: Set<string>,
+  candidate: HostDocument["hosts"][number],
+  read: HostRead,
+  ids: ReadonlySet<string>,
+  deps: DryRunDeps
+): Promise<boolean> {
+  const forms: ReadForm[] = [
+    { value: valueOf(read.published), draft: false },
+    { value: valueOf(read.draft), draft: true },
+  ];
+  for (const form of forms) {
+    if (form.value === undefined) continue;
+    const key = [
+      candidate.host.path.join("."),
+      form.draft ? "draft" : "published",
+      await storedHash(form.value),
+    ].join("\u001F");
+    if (counted.has(key)) continue;
+    counted.add(key);
+    if (!(await addForm(tallies, candidate, form, ids, deps.limits))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** A list being named as it fills, past the cap only counted. */

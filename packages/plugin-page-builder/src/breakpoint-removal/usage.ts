@@ -16,6 +16,7 @@
  */
 import {
   DEFAULT_LIMITS,
+  documentRefusal,
   isPlainRecord,
   MAX_SCANNED_KEYS,
   selectNodes,
@@ -162,6 +163,10 @@ export function breakpointUsesIn(
   if ((asked !== "every" && asked.size === 0) || !isPlainRecord(document)) {
     return { uses, complete: true };
   }
+  // A document this version cannot interpret (an unknown format or kind, or
+  // a broken envelope) may keep values in a shape nothing here reads, so
+  // whatever is counted from it is not the whole of it.
+  const readable = documentRefusal(document) === undefined;
   const selection = selectNodes(document, limits);
   // Level order puts a block's parent before it, so its lock is known.
   const lockedAt: boolean[] = [];
@@ -188,7 +193,7 @@ export function breakpointUsesIn(
   if (isPlainRecord(settings)) {
     countEnvelope(settings.styles, asked, uses, false);
   }
-  return { uses, complete: selection.stopped === undefined };
+  return { uses, complete: readable && selection.stopped === undefined };
 }
 
 /** What the shared styles keep under one breakpoint. */
