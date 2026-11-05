@@ -43,6 +43,7 @@ import { BaseService } from "../../../shared/base-service";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
+import { rowLockServer } from "../../audit/audit-log-writer";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { warnQuietly } from "../../retention/safe-log";
 import {
@@ -66,6 +67,7 @@ import {
   type QueuedEmailState,
   type QueuedMessage,
   queuedEmailState,
+  type StoredQueuedEmail,
   storeQueuedEmail,
 } from "../queued-send";
 import {
@@ -426,6 +428,12 @@ export class EmailService extends BaseService {
   /** Who sends through this instance: a keyed send is scoped to them. */
   private keyScope: string = CORE_KEY_SCOPE;
 
+  /**
+   * The copies a template send adds in place of the template's own, when
+   * set (`withTemplateCopies`).
+   */
+  private frozenCopies?: { cc: string[]; bcc: string[] };
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -494,6 +502,17 @@ export class EmailService extends BaseService {
   scopedTo(scope: string): EmailService {
     const view = Object.create(this) as EmailService;
     view.keyScope = scope;
+    return view;
+  }
+
+  /**
+   * @internal This service, sending a template with `copies` in place of the
+   * copies the template has now: a queued template email is sent with the
+   * copies it was queued with, which are the ones its erasure can find.
+   */
+  withTemplateCopies(copies: { cc: string[]; bcc: string[] }): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.frozenCopies = copies;
     return view;
   }
 
@@ -1660,11 +1679,13 @@ export class EmailService extends BaseService {
    * and the recipients as the caller gave them. A staff person is read in
    * `tx` when the email is queued in a transaction, so a user that
    * transaction wrote is seen, as the queued email will be.
+   *
+   * @returns The person as the send records them, when it names one
    */
   private async assertQueueable(
     checks: QueueChecks,
     tx?: TransactionContext
-  ): Promise<void> {
+  ): Promise<PrincipalRef | null> {
     if (checks.idempotencyKey !== undefined) {
       assertIdempotencyKey(checks.idempotencyKey);
     }
@@ -1672,6 +1693,7 @@ export class EmailService extends BaseService {
     assertSendable(toAddressList(checks.to), {
       namesPerson: recorded !== null,
     });
+    return recorded;
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
@@ -1681,33 +1703,51 @@ export class EmailService extends BaseService {
     tx: TxOption["tx"],
     operation: string
   ): Promise<QueuedEmail> {
-    const input = {
+    // Refused before anything is read: a lookup on the pool from inside an
+    // open transaction can wait on that transaction's own connection.
+    if (tx === undefined) assertNoOpenTransaction(this.adapter, operation);
+    const sealed: QueuedMessage =
+      message.kind === "template"
+        ? {
+            ...message,
+            templateCopies: await this.queuedTemplateCopies(message.slug),
+          }
+        : message;
+    const input = (person: PrincipalRef | null) => ({
       scope: this.keyScope,
-      message,
+      message: sealed,
+      person,
       secrets: pluginSettingsSecrets(env),
+      lockServer: rowLockServer(this.adapter, this.dialect),
       dialect: this.dialect,
       now: new Date(),
-    };
+    });
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
-      const { id, jobId } = await link.run(async adapterTx => {
-        await this.assertQueueable(checks, adapterTx);
-        return storeQueuedEmail(adapterTx, input);
+      const stored = await link.run(async adapterTx => {
+        const person = await this.assertQueueable(checks, adapterTx);
+        return storeQueuedEmail(adapterTx, input(person));
       });
-      link.afterCommit(() => this.firstAttempt(jobId));
-      return { id, state: "waiting" };
+      if (stored.state === "waiting") {
+        link.afterCommit(() => this.firstAttempt(stored.jobId));
+      }
+      return { id: stored.id, state: stored.state };
     }
-    assertNoOpenTransaction(this.adapter, operation);
-    await this.assertQueueable(checks);
-    const { id, jobId } = await runAdapterTransaction<
-      { id: string; jobId: string },
+    const person = await this.assertQueueable(checks);
+    const stored = await runAdapterTransaction<
+      StoredQueuedEmail,
       TransactionContext
     >(
       run => this.adapter.transaction(ctx => run(ctx)),
-      ctx => storeQueuedEmail(ctx, input)
+      ctx => storeQueuedEmail(ctx, input(person))
     );
-    await this.firstAttempt(jobId);
-    return { id, state: await this.stateAfterFirstAttempt(id) };
+    // Stored cancelled: its person was deleted first, and nothing is sent.
+    if (stored.state === "cancelled") return stored;
+    await this.firstAttempt(stored.jobId);
+    return {
+      id: stored.id,
+      state: await this.stateAfterFirstAttempt(stored.id),
+    };
   }
 
   /**
@@ -1993,24 +2033,61 @@ export class EmailService extends BaseService {
       (template?.replyTo != null
         ? renderTemplateReplyTo(template.replyTo, variables, slug)
         : undefined);
-    let copies = given.templateCopies
-      ? { cc: template?.cc ?? null, bcc: template?.bcc ?? null }
-      : { cc: null, bcc: null };
-    if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
-      this.logger.warn(
-        "Left out an email template's copies: the template carries a secret",
-        { slug }
-      );
-      copies = { cc: null, bcc: null };
-    }
     return {
       from,
       replyTo,
       ...withTemplateCopies(
         { to: given.to, cc: given.cc, bcc: given.bcc },
-        copies
+        given.templateCopies
+          ? this.templateCopies(template, slug, this.frozenCopies)
+          : { cc: null, bcc: null }
       ),
     };
+  }
+
+  /**
+   * The copies a template adds to every send: its stored `cc` and `bcc`, or
+   * `frozen` in their place when given, and none either way on a template
+   * that carries a secret now. Checked on the template as it is at the send,
+   * so copies frozen when an email was queued are left out once its owner
+   * marks it as carrying a secret.
+   */
+  private templateCopies(
+    template: EmailTemplateRecord | null,
+    slug: string,
+    frozen?: { cc: string[]; bcc: string[] }
+  ): { cc: string[] | null; bcc: string[] | null } {
+    const copies = frozen ?? {
+      cc: template?.cc ?? null,
+      bcc: template?.bcc ?? null,
+    };
+    if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
+      this.logger.warn(
+        "Left out an email template's copies: the template carries a secret",
+        { slug }
+      );
+      return { cc: null, bcc: null };
+    }
+    return copies;
+  }
+
+  /**
+   * The copies a queued template email will be sent with, as the template
+   * has them now, so erasing a copied address finds the email. None when the
+   * template cannot be read, as a send falls back to the site's code version
+   * then too.
+   */
+  private async queuedTemplateCopies(
+    slug: string
+  ): Promise<{ cc: string[]; bcc: string[] }> {
+    let template: EmailTemplateRecord | null = null;
+    try {
+      ({ template } = await this.templateService.resolveForSend(slug));
+    } catch {
+      return { cc: [], bcc: [] };
+    }
+    const copies = this.templateCopies(template, slug);
+    return { cc: copies.cc ?? [], bcc: copies.bcc ?? [] };
   }
 
   /** The site's code version of a template, from `email.templates`, if it sets one. */

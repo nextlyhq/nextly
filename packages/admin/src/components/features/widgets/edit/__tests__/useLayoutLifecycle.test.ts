@@ -67,7 +67,8 @@ describe("saving a customised dashboard", () => {
       (_, i) => ({
         id: `p${i}`,
         widgetId: `w/${i}`,
-        width: "full",
+        w: 12,
+        h: 3,
         removed: i % 2 === 0,
         ...(i % 2 === 0 ? { config: big } : {}),
       })
@@ -86,9 +87,59 @@ describe("saving a customised dashboard", () => {
 
   it("sends a save that fits exactly as the draft holds it", async () => {
     const placements: WidgetPlacement[] = [
-      { id: "a", widgetId: "w/a", width: "half", removed: false },
-      { id: "b", widgetId: "w/b", width: "half", removed: true },
+      { id: "a", widgetId: "w/a", w: 6, h: 3, removed: false },
+      { id: "b", widgetId: "w/b", w: 6, h: 3, removed: true },
     ];
     expect((await saveDraft(placements)).placements).toEqual(placements);
+  });
+});
+
+describe("staging a reset", () => {
+  const card = (widgetId: string): WidgetPlacement => ({
+    id: widgetId,
+    widgetId,
+    w: 12,
+    h: 3,
+    removed: false,
+  });
+  const draft: LayoutDraft = {
+    placements: [card("core/team")],
+    version: 7,
+    scope: "user",
+    stagedReset: null,
+  };
+  function staging(read: Record<string, unknown>) {
+    let staged: LayoutDraft | null = draft;
+    const setDraft = vi.fn(
+      (
+        next:
+          | LayoutDraft
+          | null
+          | ((c: LayoutDraft | null) => LayoutDraft | null)
+      ) => {
+        staged = typeof next === "function" ? next(staged) : next;
+      }
+    );
+    const layout = { layout: read } as unknown as UseDashboardLayoutResult;
+    const { result } = renderHook(() =>
+      useLayoutLifecycle(layout, draft, setDraft)
+    );
+    return {
+      stage: () => result.current.stageReset(),
+      staged: () => staged,
+    };
+  }
+
+  it("stages this read's default at once, asking for nothing more", () => {
+    // The setup card is placed or left out by its own rules in the default
+    // the read answers, so the reset lands on exactly that default.
+    const { stage, staged } = staging({
+      defaultPlacements: [card("core/setup"), card("core/team")],
+    });
+    act(() => stage());
+    expect(staged()?.stagedReset?.map(p => p.widgetId)).toEqual([
+      "core/setup",
+      "core/team",
+    ]);
   });
 });

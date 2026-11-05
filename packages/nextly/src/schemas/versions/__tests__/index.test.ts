@@ -1,10 +1,17 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import { versionsTables } from "../index";
 import { nextlyVersionsMysql } from "../mysql";
 import { nextlyVersionsPg } from "../postgres";
 import { nextlyVersionsSqlite } from "../sqlite";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 describe("versionsTables", () => {
   // Assert each dialect returns its OWN table object (identity), so a mis-wired

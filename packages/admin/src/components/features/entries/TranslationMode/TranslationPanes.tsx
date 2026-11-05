@@ -118,13 +118,19 @@ function ActivePanes({
   // `documentSidebar` is deliberately absent: this asks for the admin's
   // furniture, and the editor's own rail is the document's, collapsed through
   // the form's own control rather than taken away from underneath it.
+  // `header` is absent too: the top bar carries the trail to the document,
+  // which says what is being translated and is the way back to its list.
   useSuppressAdminChrome({
-    layers: ["primaryRail", "subSidebar", "header", "pageFrame"],
+    layers: ["primaryRail", "subSidebar", "pageFrame"],
     canExit: true,
   });
 
   return (
-    <div className="flex h-dvh flex-col">
+    // The window less the top bar (4rem), and below `lg` less the phone's
+    // menu bar above it as well (3.5rem), so the panes fill the content area
+    // exactly and each scrolls on its own rather than the page around them.
+    // Named, so the target pane can say how tall its own scroll area is.
+    <div className="flex h-(--translation-mode-height) flex-col [--translation-mode-height:calc(100dvh-4rem)] max-lg:[--translation-mode-height:calc(100dvh-7.5rem)]">
       <ModeBar source={source} onExit={onExit} control={control} />
       {/* Sizes are PERCENTAGE STRINGS, and that is load-bearing rather than a
           style choice: this library reads a bare number as PIXELS, so
@@ -150,7 +156,11 @@ function ActivePanes({
               the editor responds exactly as it already does at a narrow window:
               the rail hides and its language panel takes over inline. No
               translation-mode branch anywhere in the form. */}
-          <div className="@container/content h-full overflow-y-auto">
+          {/* Its scroll area is the mode's height less the mode's bar
+              (3rem, see `ModeBar`), which the editor's sticky panel sizes
+              itself to: the page's default, the window less the top bar,
+              would leave the panel's foot below this pane's. */}
+          <div className="@container/content h-full overflow-y-auto [--editor-scrollport:calc(var(--translation-mode-height)-3rem)]">
             {/* The pane stands in for `PageContainer`, so it owes the same
                 horizontal inset — and stops owing it at the same width. The
                 editor's two columns go edge-to-edge from `@4xl`, so the padding
@@ -203,7 +213,9 @@ function ModeBar({
   control?: Control<FieldValues> | undefined;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-2">
+    // A fixed height (3rem, border included), which the target pane's scroll
+    // area subtracts.
+    <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-4">
       <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Translating
       </span>

@@ -11,12 +11,15 @@
  * @module domains/widgets/team-gate
  */
 
-import type { WidgetPermissionGate } from "./gate";
+import type { WidgetAccessGate } from "./declaration/define-widget";
 
-/** The Team card's gate, in the `allOf` form: every entry, each satisfied by any of its slugs. */
+/**
+ * The Team card's gate, in the declaration's `allOf` form: every entry, each
+ * one permission or `{ anyOf }` of several, as the card's `access` states it.
+ */
 export const TEAM_GATE = {
-  allOf: ["read-users", ["create-users", "update-users"]],
-} as const satisfies WidgetPermissionGate;
+  allOf: ["read-users", { anyOf: ["create-users", "update-users"] }],
+} as const satisfies WidgetAccessGate;
 
 /** What a Team reader must also hold to be shown the number of roles beside the number of people. */
 export const TEAM_ROLES_PERMISSION = "read-roles";

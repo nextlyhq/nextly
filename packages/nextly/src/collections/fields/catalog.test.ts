@@ -1,3 +1,4 @@
+import * as engine from "@nextlyhq/blocks-engine/format";
 import { describe, expect, it } from "vitest";
 
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -9,6 +10,7 @@ import {
   FIELD_TYPE_BINDING_KIND,
   FIELD_TYPE_CATALOG,
   FORM_FIELD_TYPE_CATALOG,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
   USER_FIELD_TYPE_CATALOG,
   bindingKindOf,
   canBindFieldToProp,
@@ -16,6 +18,7 @@ import {
   isBindablePropType,
   isBlockFieldType,
   narrowFieldTypeCatalog,
+  type FieldStoragePrimitive,
 } from "./catalog";
 import { ALL_FIELD_TYPES } from "./types";
 
@@ -177,6 +180,73 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
   });
 });
 
+// The catalog publishes the page-builder engine's binding vocabulary, so a
+// field the picker offers for a prop is one the renderer fills it from. Held
+// by identity, not by equal values: a copy agrees on the day it is made. This
+// holds the source; `scripts/postbuild.cjs` holds the built entry to the same
+// identity, which only an engine left external keeps.
+describe("one binding vocabulary with the engine", () => {
+  it("publishes the engine's functions themselves", () => {
+    expect(bindingKindOf).toBe(engine.bindingKindOf);
+    expect(canBindFieldToProp).toBe(engine.canBindFieldToProp);
+    expect(STORAGE_PRIMITIVE_AS_FIELD_TYPE).toBe(
+      engine.STORAGE_PRIMITIVE_AS_FIELD_TYPE
+    );
+  });
+
+  it("reads each prop type's accepted kinds from the engine's own list", () => {
+    expect(Object.keys(BINDABLE_KINDS).sort()).toEqual(
+      [...BLOCK_FIELD_TYPES].sort()
+    );
+    for (const type of BLOCK_FIELD_TYPES) {
+      expect(BINDABLE_KINDS[type], type).toBe(engine.BINDABLE_KINDS[type]);
+    }
+  });
+
+  it("gives each canonical field type the engine's kind", () => {
+    expect(Object.keys(FIELD_TYPE_BINDING_KIND).sort()).toEqual(
+      [...ALL_FIELD_TYPES].sort()
+    );
+    for (const type of ALL_FIELD_TYPES) {
+      expect(FIELD_TYPE_BINDING_KIND[type], type).toBe(
+        engine.FIELD_TYPE_BINDING_KIND[type]
+      );
+    }
+  });
+
+  it("calls a prop bindable exactly when some field can be bound into it", () => {
+    // Every prop type either side names, a plugin type by its primitive, and
+    // one nobody knows. Bindable means a field of some type fits it.
+    const props = [
+      ...Object.keys(engine.BINDABLE_KINDS),
+      ...ALL_FIELD_TYPES,
+      "nope",
+    ].flatMap(type => [
+      { type },
+      ...Object.keys(STORAGE_PRIMITIVE_AS_FIELD_TYPE).map(storage => ({
+        type: `plugin/${type}`,
+        storage: storage as FieldStoragePrimitive,
+      })),
+    ]);
+    const sources = Object.keys(engine.FIELD_TYPE_BINDING_KIND);
+    for (const prop of props) {
+      const fits = sources.some(type =>
+        engine.canBindFieldToProp({ type }, prop)
+      );
+      expect(isBindablePropType(prop), JSON.stringify(prop)).toBe(fits);
+    }
+  });
+
+  it("fills a text, image or link prop from a URL field, as the renderer does", () => {
+    // A URL is an address: text to a text prop, and the one text an image or
+    // a link prop may be filled from.
+    expect(bindingKindOf({ type: "url" })).toBe("url");
+    expect(canBindFieldToProp({ type: "url" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "url" }, { type: "upload" })).toBe(true);
+    expect(isBindablePropType({ type: "link" })).toBe(true);
+  });
+});
+
 describe("binding kinds", () => {
   it("assigns a source kind to every canonical field type", () => {
     for (const type of ALL_FIELD_TYPES) {
@@ -191,8 +261,13 @@ describe("binding kinds", () => {
   });
 
   it("never accepts a kind no field type can produce", () => {
+    // Judged over every field type the vocabulary knows, surface-only ones
+    // included: a URL field is how a link or an image prop is filled, and it
+    // is not a canonical type.
     const producible = new Set(
-      Object.values(FIELD_TYPE_BINDING_KIND).filter(kind => kind !== null)
+      Object.values(engine.FIELD_TYPE_BINDING_KIND).filter(
+        kind => kind !== null
+      )
     );
     for (const accepted of Object.values(BINDABLE_KINDS)) {
       for (const kind of accepted) {
@@ -373,7 +448,7 @@ describe("binding kinds", () => {
 // This pins them apart. A sweep that renames the label and takes the value with it would pass every
 // other test in the suite while silently making existing content unreadable.
 describe("field group entry: display name vs stored value", () => {
-  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field Group");
+  const entry = FIELD_TYPE_CATALOG.find(f => f.label === "Field group");
 
   it("presents itself as a field group", () => {
     expect(entry).toBeDefined();

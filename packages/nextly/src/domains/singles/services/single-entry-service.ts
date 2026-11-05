@@ -47,6 +47,7 @@ import type {
 import { SingleMutationService } from "./single-mutation-service";
 import {
   SinglePublishAllService,
+  type PublishAllSinglePreview,
   type PublishAllSingleResult,
 } from "./single-publish-all";
 import { SingleQueryService } from "./single-query-service";
@@ -139,7 +140,11 @@ export class SingleEntryService extends BaseService {
       fieldGroupDataService,
       rbacAccessControlService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when a read shows a pending change to
+      // a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
 
     this.mutationService = new SingleMutationService(
@@ -229,6 +234,16 @@ export class SingleEntryService extends BaseService {
     params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
   ): Promise<void> {
     await this.discardWorkingDraftCounted(params);
+  }
+
+  /**
+   * Rebuild the record of which media items a Single uses, for
+   * `nextly media reindex-usage`. Returns whether it had a document to read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(slug: string): Promise<boolean> {
+    return this.mutationService.rebuildMediaUsage(slug);
   }
 
   /**
@@ -322,6 +337,20 @@ export class SingleEntryService extends BaseService {
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
+  }
+
+  /**
+   * What publishing every language of a Single would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(
+    slug: string,
+    options?: PublishAllSingleLocalesOptions
+  ): Promise<SingleResult<PublishAllSinglePreview>> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.publishAllService.previewPublishAllLocales(slug, options)
+    );
   }
 
   /**

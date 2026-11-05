@@ -15,17 +15,32 @@
  */
 import {
   Button,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useId } from "react";
+import { useId, useState } from "react";
 
-import { AlertCircle, Check, Cloud, Loader2 } from "@admin/components/icons";
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  Cloud,
+  Loader2,
+  RotateCcw,
+} from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { OLDER_VERSION_WARNING } from "./AutosaveRecoveryBanner";
+import {
+  useClaimRecoveryOffer,
+  type HostedRecoveryOffer,
+} from "./RecoveryOfferContext";
 import { formatTimeAgo } from "./time-ago";
 import type { DocumentSaveState } from "./useDocumentActionBindings";
 
@@ -41,6 +56,15 @@ export interface RecoveryPointState {
    * is not saved with them, whatever the form says.
    */
   pendingOfferAt: Date | null;
+}
+
+/**
+ * How the opened document stands in storage, for a surface that reports it
+ * saved from the moment it opens: when it was stored, or null when the time
+ * isn't known (a working draft, whose row keeps the published time).
+ */
+export interface StoredDocument {
+  at: Date | null;
 }
 
 /** What the indicator draws: one of the four states, or nothing to say. */
@@ -70,7 +94,13 @@ function recoveryLine(recovery: RecoveryPointState): string | null {
  */
 export function saveIndicatorView(
   saveState: DocumentSaveState,
-  recovery: RecoveryPointState
+  recovery: RecoveryPointState,
+  /**
+   * How the opened document stands in storage, for a surface that reports it
+   * as saved from the moment it opens. Absent, an opened document says nothing
+   * until it is saved.
+   */
+  stored: StoredDocument | null = null
 ): SaveIndicatorView {
   switch (saveState.kind) {
     case "failed":
@@ -88,7 +118,7 @@ export function saveIndicatorView(
         label: "Unsaved changes",
         detail: recoveryLine(recovery),
       };
-    case "saved":
+    case "saved": {
       // Never "Saved" over edits that live only in a recovery point.
       if (recovery.pendingOfferAt !== null) {
         return {
@@ -97,14 +127,26 @@ export function saveIndicatorView(
           detail: `Recovery point stored ${formatTimeAgo(recovery.pendingOfferAt)}`,
         };
       }
-      // Nothing stored this session and nothing pending: an opened document
+      // Nothing stored this session and nothing pending: an opened document is
+      // saved as of its stored time where the surface knows it, and otherwise
       // has nothing to report yet.
-      if (saveState.at === null) return null;
+      const savedAt = saveState.at ?? stored?.at ?? null;
+      if (savedAt !== null) {
+        return {
+          tone: "saved",
+          label: "Saved",
+          detail: `Saved ${formatTimeAgo(savedAt)}`,
+        };
+      }
+      // Stored, at a time nothing here can tell: said without an age rather
+      // than with the wrong one.
+      if (stored === null) return null;
       return {
         tone: "saved",
         label: "Saved",
-        detail: `Saved ${formatTimeAgo(saveState.at)}`,
+        detail: "Changes saved as a draft",
       };
+    }
   }
 }
 
@@ -121,7 +163,7 @@ function FailedSaveState({
         className="h-4 w-4 shrink-0 text-destructive"
         aria-hidden="true"
       />
-      <span className="text-destructive">{view.label}</span>
+      <span className="whitespace-nowrap text-destructive">{view.label}</span>
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
@@ -187,7 +229,8 @@ function SettledSaveState({
         <TooltipTrigger asChild>
           <div className="flex items-center gap-1.5">
             {SETTLED_ICON[view.tone]}
-            <span>{view.label}</span>
+            {/* One line at every width: a label that wraps grows the bar. */}
+            <span className="whitespace-nowrap">{view.label}</span>
           </div>
         </TooltipTrigger>
         {detail === null ? null : (
@@ -200,18 +243,89 @@ function SettledSaveState({
   );
 }
 
+/**
+ * The recovery offer, made in the chip: while it waits, "Unsaved changes" is
+ * itself the control, with the restore mark and an arrow, and its popover says
+ * when the work is from and asks. One save state, so no banner above the
+ * editor says the same thing in a second place; and no button beside it, so
+ * the top bar is no wider than it is for unsaved work alone.
+ */
+function RecoveryOfferChip({
+  label,
+  offer,
+}: {
+  label: string;
+  offer: HostedRecoveryOffer;
+}): JSX.Element {
+  // Made here, so the banner a document view would draw stands down.
+  useClaimRecoveryOffer();
+  const [open, setOpen] = useState(false);
+  const answer = (choice: () => void) => () => {
+    setOpen(false);
+    choice();
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${label}: restore options`}
+          className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="whitespace-nowrap">{label}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 text-sm">
+        <p className="text-foreground">
+          You have unsaved changes from{" "}
+          <span className="font-medium">{formatTimeAgo(offer.savedAt)}</span>.
+        </p>
+        {offer.olderVersion === true ? (
+          <p className="mt-1 text-muted-foreground">{OLDER_VERSION_WARNING}</p>
+        ) : null}
+        <div className="mt-3 flex justify-end gap-2">
+          {/* "Not now", not "Discard": the recovery point is kept, and
+              offered again the next time the document opens. */}
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={answer(offer.dismiss)}
+          >
+            Not now
+          </Button>
+          <Button type="button" size="sm" onClick={answer(offer.restore)}>
+            Restore
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export interface SaveStateIndicatorProps {
   saveState: DocumentSaveState;
   recovery: RecoveryPointState;
+  /**
+   * A recovery point on offer, made here rather than in a banner, by a
+   * surface that shows the save state in its own bar.
+   */
+  offer?: HostedRecoveryOffer | null;
+  /** How the opened document stands in storage; see `saveIndicatorView`. */
+  stored?: StoredDocument | null;
   className?: string;
 }
 
 export function SaveStateIndicator({
   saveState,
   recovery,
+  stored = null,
+  offer = null,
   className,
 }: SaveStateIndicatorProps): JSX.Element {
-  const view = saveIndicatorView(saveState, recovery);
+  const view = saveIndicatorView(saveState, recovery, stored);
 
   return (
     // The reserved width: the widest state, "Not saved" with its Retry, fits
@@ -228,6 +342,10 @@ export function SaveStateIndicator({
     >
       {view === null ? null : view.tone === "failed" ? (
         <FailedSaveState view={view} />
+      ) : offer !== null && view.tone === "unsaved" ? (
+        // Only for unsaved work: the offer's edits are what keep it unsaved,
+        // and a save or a failure says something else first.
+        <RecoveryOfferChip label={view.label} offer={offer} />
       ) : (
         <SettledSaveState view={view} />
       )}

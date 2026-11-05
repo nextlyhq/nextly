@@ -15,6 +15,12 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
+
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
@@ -55,6 +61,9 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding, which makes the Public role `checked`, a caller
+        // with no user, is judged by.
+        seedPublic: true,
         // No fallback: a language shows only its own values, so a value held
         // in one language is not seen from another.
         localization: {
@@ -187,6 +196,19 @@ describe.each(getConfiguredTestDialects())(
         process.env.NEXTLY_SECRET!
       );
       writerCookie = `nextly_session=${token}`;
+      // A code rule only narrows the permission, so the allowed person holds
+      // read and update on lwrap, and its rules decide what they may change.
+      await userWhoMay(t, "allowed-user", "update", ["lwrap"]);
+      await grantTo(t, "allowed-user", "read", ["lwrap"]);
+      // Each collection's rule only narrows the update permission, so Public
+      // holds it, as a site admin would grant it: `checked` then writes and
+      // the field rules alone decide what it may change.
+      await grantPublic(t, [
+        "update-lpages",
+        "update-lwrap",
+        "update-lcoll",
+        "update-ldrafted",
+      ]);
     }, 180_000);
 
     afterAll(async () => {

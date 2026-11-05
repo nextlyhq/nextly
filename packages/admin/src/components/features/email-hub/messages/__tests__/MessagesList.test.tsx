@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { MessagesList } from "../MessagesList";
 
@@ -29,7 +30,8 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks it.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
     error: null,
@@ -101,7 +103,12 @@ const EMAILS = [
   email({ slug: "default-layout", name: "Default layout", kind: "layout" }),
 ];
 
-const MANAGER = ["manage-email-templates"];
+const MANAGER = [
+  "read-email-templates",
+  "create-email-templates",
+  "update-email-templates",
+  "delete-email-templates",
+];
 
 /** The table view, which is what a desktop reader sees. */
 function table() {

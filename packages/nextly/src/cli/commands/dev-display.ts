@@ -12,7 +12,7 @@ import type { CollectionSyncResultWithValidation } from "../../services/collecti
 import type { SyncComponentResult } from "../../services/field-groups/field-group-registry-service";
 import type { SyncSingleResult } from "../../services/singles/single-registry-service";
 import type { CommandContext } from "../program";
-import { formatCount, formatDuration } from "../utils/logger";
+import { formatCount, formatDuration, logWarnings } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
 
@@ -281,13 +281,7 @@ export function displaySyncResults(
   }
 
   // Show warnings
-  if (result.warnings.length > 0 && options.verbose) {
-    logger.newline();
-    logger.warn(`${result.warnings.length} warning(s):`);
-    for (const warning of result.warnings) {
-      logger.item(warning, 1);
-    }
-  }
+  if (options.verbose) logWarnings(logger, result.warnings);
 
   // Show duration
   logger.debug(`Sync completed in ${formatDuration(result.durationMs)}`);

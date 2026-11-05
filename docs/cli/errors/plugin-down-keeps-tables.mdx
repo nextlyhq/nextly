@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOWN_KEEPS_TABLES
+description: "A plugin's DOWN migrations, as written, do not drop every table it owns, so a full uninstall would leave some."
+---
+
+## Cause
+
+A plugin's DOWN migrations, as written, do not drop every table it owns, so a full uninstall would leave some.
+
+Before running a full uninstall, Nextly reads the plugin's DOWN statements and checks they drop every table the plugin owns. Those named on the What line would be left, so the uninstall did not start. Nothing was changed.
+
+## Fix
+
+- As the plugin's author, make the DOWN drop each table named.
+- Or run the uninstall with `--keep-data` to leave the tables in place.
+
+## Example
+
+```text
+✗ @acme/seo's DOWN migrations do not drop seo_redirects, which it owns.
+  Why:  A full uninstall drops every table the plugin owns, and its DOWN statements are read for that before any of them runs. Nothing was changed.
+  Next: Fix the plugin's DOWN, or use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-keeps-tables  (PLUGIN_DOWN_KEEPS_TABLES)
+```

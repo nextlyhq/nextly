@@ -234,7 +234,12 @@ function withGrants(
     ...access,
     grants:
       access.grants ??
-      callerAccessGrants(access.user, access.authenticatedScope, executor),
+      callerAccessGrants(
+        access.user,
+        access.authenticatedScope,
+        executor,
+        access.visitor
+      ),
   };
 }
 

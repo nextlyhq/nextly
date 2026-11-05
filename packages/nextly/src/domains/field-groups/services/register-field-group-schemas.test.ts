@@ -8,6 +8,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { MIGRATION_TARGET } from "../migration/manifest";
 import {
   forgetFieldGroupStorageNames,
@@ -110,6 +114,27 @@ describe("registerComponentSchemas", () => {
 
     const registered = registry.registerDynamicSchema.mock.calls.map(c => c[0]);
     expect(registered).toContain("comp_hero");
+    expect(registered).toContain("comp_hero_locales");
+  });
+
+  it("registers the companion table for every component when the site keeps translatable values per language", async () => {
+    // A reload re-registers what boot registered, so it must lay a component out as boot did:
+    // with the setting on, one not marked translatable keeps its translatable values per language.
+    const adapter = makeAdapter([componentRow({ localized: 0 })]);
+    const registry = { registerDynamicSchema: vi.fn() };
+    setPerLanguageStorage(true);
+    try {
+      await registerComponentSchemas({
+        adapter: adapter as never,
+        registry: registry as never,
+        dialect: "postgresql",
+        logger: silentLogger as never,
+      });
+    } finally {
+      _resetPerLanguageStorage();
+    }
+
+    const registered = registry.registerDynamicSchema.mock.calls.map(c => c[0]);
     expect(registered).toContain("comp_hero_locales");
   });
 

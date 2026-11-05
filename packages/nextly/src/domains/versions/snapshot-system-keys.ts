@@ -9,9 +9,22 @@
  * @module domains/versions/snapshot-system-keys
  */
 
-import type { SystemColumnEntity } from "../../lib/system-columns";
+import {
+  DOCUMENT_VERSION_KEY,
+  MIGRATE_STEP_COLUMN_NAMES,
+  type SystemColumnEntity,
+} from "../../lib/system-columns";
 
-const SHARED_KEYS = ["id", "createdAt", "updatedAt", "status"];
+// The version and the last changer move on every save, so a comparison that
+// counted them would report every pair of versions as changed.
+const SHARED_KEYS = [
+  "id",
+  "createdAt",
+  "updatedAt",
+  "status",
+  DOCUMENT_VERSION_KEY,
+  ...MIGRATE_STEP_COLUMN_NAMES,
+];
 
 const KEYS_BY_ENTITY: Readonly<
   Record<SystemColumnEntity, ReadonlySet<string>>

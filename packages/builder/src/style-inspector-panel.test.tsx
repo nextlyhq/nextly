@@ -23,6 +23,7 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -34,12 +35,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
+import { NoticeSinkProvider } from "./builder-notices";
+import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
+  describedWithUnit,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
+import { keywordLabel } from "./style-keyword-labels";
+import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
 
 afterEach(() => {
@@ -64,7 +70,8 @@ beforeAll(() => {
 });
 
 function register(
-  supports: Record<string, boolean | Record<string, boolean>>
+  supports: Record<string, boolean | Record<string, boolean>>,
+  variations?: readonly { name: string; label?: string; isDefault?: boolean }[]
 ): void {
   registerBlocks(
     [
@@ -73,7 +80,10 @@ function register(
         version: 1,
         description: "A box.",
         example: { props: {} },
-        editor: { label: "Box" },
+        editor: {
+          label: "Box",
+          ...(variations === undefined ? {} : { variations }),
+        },
         props: { text: { type: "text" } },
         supports,
         render: () => null,
@@ -123,6 +133,8 @@ function editorFor(
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
+    lockRefusalFor: () => undefined,
+    composed: () => undefined,
   } as unknown as EditorState & { applyAll: ReturnType<typeof vi.fn> };
 }
 
@@ -140,6 +152,20 @@ function mount(
     />
   );
   return editor;
+}
+
+/**
+ * Bring a property out from its section's "+ More", as an author does.
+ *
+ * Opened from the keyboard because that is a route Radix's menu takes in
+ * jsdom without pointer capture, and the item is chosen by its name.
+ */
+function reveal(section: string, label: string): void {
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: `More ${section} properties` }),
+    { key: "Enter" }
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
 }
 
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
@@ -214,21 +240,45 @@ describe("when there is nothing to style", () => {
   });
 });
 
-describe("the class selector, mounted above the style sections", () => {
-  const LIBRARY = [
-    { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
-    { id: "id-card", slug: "card", orderIndex: 1, styles: {} },
-  ];
+describe("the shared style target", () => {
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 1,
+    styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
+  };
+  const hero = { id: "c-hero", slug: "hero", orderIndex: 0, styles: {} };
+  const promo = { id: "c-promo", slug: "promo", orderIndex: 2, styles: {} };
 
-  /** The panel with a node carrying classes, and a host that opted in. */
-  function mountWithClasses(
+  /** The inspector's Style tab, a block wearing `classes`, and a host. */
+  function mountTarget(
     options: {
-      classIds?: string[];
-      library?: typeof LIBRARY | undefined;
-      optIn?: boolean;
+      classes?: string[];
+      styles?: NodeStyles;
+      library?: (typeof card | typeof hero)[];
+      mayChange?: boolean;
+      /** The block locked, which holds its design as contentOnly does. */
+      locked?: boolean;
+      writeStyles?: (
+        classId: string,
+        change: never
+      ) => Promise<string | undefined>;
+      usage?: NonNullable<SharedStylesHost["usage"]>;
+      supports?: Record<string, boolean>;
+      /** Where a refusal that outlives its field is raised. */
+      raise?: (message: string) => void;
+      /** The site's breakpoints, which Detach weighs. */
+      breakpoints?: BreakpointSet;
+      /** The block's variations, its own look among them. */
+      variations?: readonly {
+        name: string;
+        label?: string;
+        isDefault?: boolean;
+      }[];
     } = {}
   ) {
-    register({ spacing: true });
+    register(options.supports ?? { effects: true }, options.variations);
     const document = {
       formatVersion: 1,
       kind: "page",
@@ -238,227 +288,835 @@ describe("the class selector, mounted above the style sections", () => {
           type: "acme/box",
           version: 1,
           props: {},
-          ...(options.classIds === undefined
+          ...(options.classes === undefined
             ? {}
-            : { classes: options.classIds }),
+            : { classes: options.classes }),
+          ...(options.styles === undefined ? {} : { styles: options.styles }),
+          ...(options.locked === true ? { locked: true } : {}),
         },
       ] as BlockNode[],
     } as BlockDocument;
     const editor = editorFor(document);
-    const onCreateClass = vi.fn(async () => ({
-      ok: true as const,
-      classId: "id-new",
-    }));
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        {...(options.optIn === false ? {} : { onCreateClass })}
-        {...(options.library === undefined
+    const writeStyles = vi.fn(
+      options.writeStyles ?? (async () => undefined as string | undefined)
+    );
+    const panelFor = (current: EditorState) => (
+      <InspectorPanel
+        editor={current}
+        {...(options.breakpoints === undefined
           ? {}
-          : { classLibrary: options.library })}
+          : { breakpoints: options.breakpoints })}
+        classLibrary={options.library ?? [hero, card, promo]}
+        sharedStyles={{
+          mayChange: options.mayChange ?? true,
+          writeStyles:
+            writeStyles as unknown as SharedStylesHost["writeStyles"],
+          pageBlocks: { counts: new Map([["c-card", 3]]), complete: true },
+          ...(options.usage === undefined ? {} : { usage: options.usage }),
+        }}
       />
     );
-    return { editor, onCreateClass };
+    const tree = (current: EditorState) =>
+      options.raise === undefined ? (
+        panelFor(current)
+      ) : (
+        <NoticeSinkProvider raise={options.raise}>
+          {panelFor(current)}
+        </NoticeSinkProvider>
+      );
+    const view = render(tree(editor));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    /** The block as an edit made meanwhile leaves it, drawn again. */
+    const withStyles = (styles: NodeStyles) => {
+      const next = editorFor({
+        ...document,
+        nodes: [{ ...document.nodes[0], styles } as BlockNode],
+      });
+      view.rerender(tree(next));
+      return next;
+    };
+    return { editor, writeStyles, withStyles };
   }
 
-  it("is absent entirely when the host never opted in", () => {
-    /*
-     * `onCreateClass` is what opts in, NOT the library. A host that cannot
-     * write the site style has no way to create a class, and a selector that
-     * offered to would report an intent nobody acts on.
-     */
-    mountWithClasses({ optIn: false, library: LIBRARY });
-    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  /**
+   * What the first write to Card stores, over the styles it started from: a
+   * change applied to them, or a whole envelope.
+   */
+  function writtenTo(
+    writeStyles: ReturnType<typeof vi.fn>,
+    from: NodeStyles
+  ): unknown {
+    const [id, change] = writeStyles.mock.calls[0] ?? [];
+    expect(id).toBe("c-card");
+    if (typeof change !== "function") return change;
+    const out = (
+      change as (styles: NodeStyles) => { kind: string; styles?: NodeStyles }
+    )(from);
+    return out.kind === "write" ? out.styles : from;
+  }
+
+  /**
+   * A host that stores Card's styles as the site does: one write at a time,
+   * each answered when the test says, each applied to what the last one left.
+   */
+  function queuedHost() {
+    let stored: NodeStyles = card.styles;
+    const pending: (() => void)[] = [];
+    const writeStyles = (_id: string, change: unknown) =>
+      new Promise<string | undefined>(resolve => {
+        pending.push(() => {
+          if (typeof change === "function") {
+            const out = (
+              change as (styles: NodeStyles) => {
+                kind: string;
+                styles?: NodeStyles;
+              }
+            )(stored);
+            if (out.kind === "write" && out.styles !== undefined)
+              stored = out.styles;
+          } else {
+            stored = change as NodeStyles;
+          }
+          resolve(undefined);
+        });
+      });
+    return {
+      writeStyles,
+      stored: () => stored,
+      settle: async () => {
+        while (pending.length > 0) {
+          await act(async () => {
+            pending.shift()?.();
+          });
+        }
+      },
+    };
+  }
+
+  const bar = () => screen.getByRole("region", { name: "What you're editing" });
+  const chip = (name: string) =>
+    within(bar()).getByRole("button", { name, pressed: undefined });
+
+  it("lists every shared style a block wears, in library order, after This block", () => {
+    mountTarget({ classes: ["c-promo", "c-card", "c-hero"] });
+    const chips = within(bar())
+      .getAllByRole("button")
+      .filter(button => button.hasAttribute("aria-pressed"));
+    expect(chips.map(button => button.textContent)).toEqual([
+      "This block",
+      "hero",
+      "Card",
+      "promo",
+    ]);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Each chip's tooltip names the class the page carries.
+    expect(chip("Card").title).toBe("Edit shared style Card, .nx-c-card");
   });
 
-  it("shows the loading state when the host opted in but is still reading", () => {
-    // The distinction that would otherwise collapse: an absent library means
-    // "in flight" only BECAUSE opting in is signalled separately. Drawn the
-    // same way, a host mid-load and a host with no class surface at all would
-    // be indistinguishable, and only one of them has a field about to fill.
-    mountWithClasses({ library: undefined });
-    expect(screen.getByText(/loading classes/i)).toBeDefined();
+  it("makes a chip the target: pressed, named with its reach, and announced", async () => {
+    const usage = vi.fn(async () => ({
+      whole: false,
+      mayLock: false,
+      styles: new Map([
+        [
+          "c-card",
+          {
+            documents: 5,
+            byKind: { pages: 4, components: 1, patterns: 0, layouts: 0 },
+            complete: false,
+          },
+        ],
+      ]),
+    }));
+    mountTarget({ classes: ["c-card"], usage });
+    const device = bar().querySelector("[data-edit-device]")?.textContent;
+    fireEvent.click(chip("Card"));
+
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("false");
+    expect(bar().textContent).toContain(
+      "Editing shared style Card · .nx-c-card"
+    );
+    expect(
+      await within(bar()).findByText(
+        "3 blocks on this page · on at least 4 pages and 1 component"
+      )
+    ).toBeDefined();
+    expect(within(bar()).getByRole("status").textContent).toBe(
+      "Now editing shared style Card"
+    );
+    // The device and the state stay the canvas's own.
+    expect(bar().querySelector("[data-edit-device]")?.textContent).toBe(device);
+    expect(bar().querySelector("[data-edit-state]")?.textContent).toBe(
+      "Normal"
+    );
   });
 
-  it("shows the classes the selected node carries", () => {
-    mountWithClasses({ classIds: ["id-card"], library: LIBRARY });
-    expect(screen.getByRole("button", { name: /remove card/i })).toBeDefined();
+  it("holds the shared style chips while the block's design is held, and every field with them", async () => {
+    // A locked or contentOnly block's design is fixed on this page. Editing
+    // the shared style it wears from here would change that design all the
+    // same, so the chip says why it is held and the target stays the block.
+    mountTarget({ classes: ["c-card"], locked: true });
+    const card = chip("Card");
+    expect(card.getAttribute("aria-disabled")).toBe("true");
+    // Why, as its description, heard without opening anything.
+    const why = document.getElementById(
+      card.getAttribute("aria-describedby") ?? ""
+    );
+    expect(why?.textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    // And shown: the editor's tooltip on focus, as on hover, not a native
+    // title, which focus never shows.
+    expect(card.getAttribute("title")).toBeNull();
+    fireEvent.focus(card);
+    expect((await screen.findByRole("tooltip")).textContent).toMatch(
+      /Locked: it can't be moved, deleted or edited/
+    );
+    fireEvent.blur(card);
+
+    fireEvent.click(card);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    expect(card.getAttribute("aria-pressed")).toBe("false");
+    expect(bar().textContent).not.toContain("Editing shared style");
+    expect(
+      (screen.getByLabelText("Opacity") as HTMLInputElement).matches(
+        ":disabled"
+      )
+    ).toBe(true);
+    // No write the bar offers: no Save as, no Move to.
+    expect(screen.queryByText(/Save as shared style/)).toBeNull();
+    expect(screen.queryByText(/Move to/)).toBeNull();
   });
 
-  it("writes an applied class through the editor, with no host callback", () => {
-    // Applying an EXISTING class is a node edit, which this panel already
-    // knows how to write. Requiring a callback for it would make the host
-    // rebuild an op the panel is holding all the parts of.
-    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
-    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
-      target: { value: "hero" },
-    });
-    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
-      key: "Enter",
-    });
+  it("lets the shared style chip be chosen on a block nothing holds", () => {
+    // The positive control for the hold above.
+    mountTarget({ classes: ["c-card"] });
+    expect(chip("Card").getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(chip("Card"));
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+  });
 
-    expect(onCreateClass).not.toHaveBeenCalled();
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
-      kind: "update",
-      id: "a",
-      patch: { classes: ["id-hero"] },
+  it("returns to This block on Escape, and with Edit this block only", () => {
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    fireEvent.keyDown(chip("Card"), { key: "Escape" });
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    expect(within(bar()).getByRole("status").textContent).toBe(
+      "Now editing this block"
+    );
+
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Edit this block only" })
+    );
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("takes Escape only when it switches back, so the editor's own Escape stands down", () => {
+    // The editor's Escape (select the parent block) skips a key already
+    // answered, so the bar marks the one it answers and leaves the rest.
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    expect(fireEvent.keyDown(chip("Card"), { key: "Escape" })).toBe(false);
+    expect(chip("This block").getAttribute("aria-pressed")).toBe("true");
+    // Already on this block: nothing to answer, so the editor's Escape runs.
+    expect(fireEvent.keyDown(chip("This block"), { key: "Escape" })).toBe(true);
+  });
+
+  it("lets the chip's menu take Escape without leaving the shared target", async () => {
+    mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    const menu = within(bar()).getByRole("button", {
+      name: "Actions for shared style Card",
+    });
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    const item = await screen.findByRole("menuitem", { name: /^Detach/ });
+    fireEvent.keyDown(item, { key: "Escape" });
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    // The menu closed; the target is still the shared style.
+    expect(chip("Card").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("moves between the chips with the arrow keys, one tab stop for the group", () => {
+    mountTarget({ classes: ["c-card", "c-hero"] });
+    expect(chip("This block").tabIndex).toBe(0);
+    expect(chip("Card").tabIndex).toBe(-1);
+    chip("This block").focus();
+    fireEvent.keyDown(chip("This block"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(chip("hero"));
+    fireEvent.keyDown(chip("hero"), { key: "End" });
+    expect(document.activeElement).toBe(chip("Card"));
+    fireEvent.keyDown(chip("Card"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(chip("This block"));
+  });
+
+  it("shows the style's value and writes the style, never the block", async () => {
+    const { editor, writeStyles } = mountTarget({ classes: ["c-card"] });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", {
+      name: "Opacity",
+    }) as HTMLInputElement;
+    expect(field.value).toBe("50");
+
+    fireEvent.change(field, { target: { value: "80" } });
+    fireEvent.blur(field);
+
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.8 } },
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps both of two quick edits to the style, the second built on the first", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      writeStyles: host.writeStyles as never,
+    });
+    fireEvent.click(chip("Card"));
+    const side = fieldsOf("padding").getByLabelText("Block start");
+    fireEvent.change(side, { target: { value: "12px" } });
+    fireEvent.blur(side);
+    // The second edit is made before the first has been stored and read back.
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    const opacity = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(opacity, { target: { value: "80" } });
+    fireEvent.blur(opacity);
+
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.8, padding: { blockStart: "12px" } },
+      },
     });
   });
 
-  it("UNSETS the field when the last class is removed", () => {
-    /*
-     * Not `classes: []`. The field is optional and the two mean the same to
-     * every reader, so writing the empty array leaves a key that says nothing
-     * — and an inverse built from it would restore that key on undo.
-     */
-    const { editor } = mountWithClasses({
-      classIds: ["id-hero"],
-      library: LIBRARY,
+  it("stores a value changed and changed back before the first is read back", async () => {
+    const host = queuedHost();
+    mountTarget({
+      classes: ["c-card"],
+      writeStyles: host.writeStyles as never,
     });
-    fireEvent.click(screen.getByRole("button", { name: /remove hero/i }));
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "80" } });
+    fireEvent.blur(field);
+    // Back to the value the last read shows, before 0.8 has been stored.
+    fireEvent.change(field, { target: { value: "50" } });
+    fireEvent.blur(field);
 
+    await host.settle();
+
+    expect(host.stored()).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    });
+  });
+
+  it("clears only the moved value from the block, as it stands once the style has it", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      supports: { effects: true, spacing: true },
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // A local edit lands on another address while Card's write is in flight.
+    const later = withStyles({
+      base: {
+        [BASE_BREAKPOINT]: { opacity: 0.2, padding: { blockStart: "12px" } },
+      },
+    });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    expect(later.applyAll).toHaveBeenCalledWith([
+      {
+        kind: "update",
+        id: "a",
+        patch: {
+          styles: {
+            base: { [BASE_BREAKPOINT]: { padding: { blockStart: "12px" } } },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("keeps a new value the author gives the same control while Move to is on its way", async () => {
+    let store: (refused: string | undefined) => void = () => {};
+    const { withStyles } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          store = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    // The author sets the same control again on the block meanwhile.
+    const later = withStyles({ base: { [BASE_BREAKPOINT]: { opacity: 0.7 } } });
+
+    await act(async () => {
+      store(undefined);
+    });
+
+    // 0.2 went to Card; 0.7 is the block's new value and is not cleared.
+    expect(later.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("says through the shell when Detach could not be applied to the page", () => {
+    const raise = vi.fn();
+    const { editor } = mountTarget({ classes: ["c-card"], raise });
+    editor.applyAll.mockReturnValue(null);
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Detach: keep the look/ })
+    );
+    expect(raise).toHaveBeenCalledWith(
+      "Card could not be detached from this block: the page could not take the change."
+    );
+  });
+
+  it("holds Detach, saying why, when the look can't be kept on the block exactly", () => {
+    // Card's small-container value shows only where Promo's tablet value
+    // does not: a combined query the block's own rules can't say.
+    const early = {
+      ...card,
+      orderIndex: 0,
+      styles: { base: { "cq-sm": { color: "#aaaa00" } } } as NodeStyles,
+    };
+    const late = {
+      ...promo,
+      label: "Promo",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const { editor } = mountTarget({
+      classes: ["c-card", "c-promo"],
+      library: [early, late],
+      breakpoints: {
+        viewport: [
+          { id: BASE_BREAKPOINT, label: "Desktop" },
+          { id: "md", label: "Tablet", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      } as BreakpointSet,
+    });
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    const item = screen.getByRole("menuitem", {
+      name: /^Detach: keep the look/,
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "This look depends on screen and container width together, so it can't be detached yet."
+    );
+    fireEvent.click(item);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  describe("the Look row", () => {
+    const outline = {
+      id: "look:acme/box:outline",
+      slug: "box-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "acme/box",
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
+    };
+    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+
+    it("offers the block's own look and its type's looks, its own chosen", () => {
+      mountTarget({ library: [card, outline] });
+      const radios = within(looks()).getAllByRole("radio");
+      // A type with no named own look calls it Default, said once.
+      expect(
+        radios.map(
+          radio => radio.querySelector(".nx-look-tile__name")?.textContent
+        )
+      ).toEqual(["Default", "Outline"]);
+      expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("wears the chosen look and keeps the block's shared style", () => {
+      const { editor } = mountTarget({
+        classes: ["c-card"],
+        library: [card, outline],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        {
+          kind: "update",
+          id: "a",
+          patch: { classes: [outline.id, "c-card"] },
+        },
+      ]);
+    });
+
+    it("says through the shell when the page refuses the chosen look", () => {
+      const raise = vi.fn();
+      const { editor } = mountTarget({ library: [card, outline], raise });
+      editor.applyAll.mockReturnValue(null);
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(raise).toHaveBeenCalledWith(
+        "Outline could not be applied to this block: the page could not take the change."
+      );
+    });
+
+    const filled = {
+      ...outline,
+      id: "look:acme/box:filled",
+      slug: "box-filled",
+      label: "Filled",
+      orderIndex: 1,
+    };
+
+    it("names the look the canvas applies when the block lists two", () => {
+      // Written in library order, Filled is the one drawn, so the bar's line
+      // and its action are about Filled, whatever order the block lists them.
+      mountTarget({
+        classes: [filled.id, outline.id],
+        library: [card, outline, filled],
+      });
+      expect(
+        within(bar()).getByRole("button", {
+          name: "Edit Filled for every box that uses it",
+        })
+      ).toBeDefined();
+    });
+
+    it("takes a look the library hides off when another is chosen", () => {
+      // A site's own style holds Outline's name, so Outline is not offered;
+      // the block still lists it, and choosing Filled must leave it behind.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Filled/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: { classes: [filled.id] } },
+      ]);
+    });
+
+    it("clears a look the library hides when the block's own look is chosen", () => {
+      // Default reads as chosen while Outline is hidden, and choosing it still
+      // takes Outline off, so it cannot return when the style holding its
+      // name goes.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Default/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: {}, unset: ["classes"] },
+      ]);
+    });
+
+    it("names the block's own look by its variation's name when it has no label", () => {
+      mountTarget({
+        library: [card, outline],
+        variations: [{ name: "plain", isDefault: true }],
+      });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual([
+        // Its own name, then the tag that says it is the block's own look.
+        "plainDefault",
+        "Outline",
+      ]);
+    });
+
+    it("keeps Apply on offer while the block wears only a look", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(
+        within(bar()).getByRole("button", { name: "Apply shared style" })
+      ).toBeDefined();
+    });
+
+    it("marks the chosen tile with a check, not by its ring alone", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      const chosen = within(looks()).getByRole("radio", { checked: true });
+      expect(chosen.textContent).toContain("Outline");
+      expect(chosen.querySelector(".nx-look-tile__check")).not.toBeNull();
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .filter(radio => radio.querySelector(".nx-look-tile__check") !== null)
+      ).toHaveLength(1);
+    });
+
+    it("says an edit changes this block only, and switches to the look everywhere", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(bar().textContent).toContain("Changes this box only");
+      fireEvent.click(
+        within(bar()).getByRole("button", {
+          name: "Edit Outline for every box that uses it",
+        })
+      );
+      expect(bar().textContent).toMatch(/Editing shared style Outline/);
+    });
+
+    it("draws no row for a type with no looks", () => {
+      mountTarget({ library: [card] });
+      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+    });
+  });
+
+  it("raises a refusal through the shell once the author has switched target", async () => {
+    let refuse: (reason: string) => void = () => {};
+    const raise = vi.fn();
+    mountTarget({
+      classes: ["c-card"],
+      raise,
+      writeStyles: () =>
+        new Promise<string | undefined>(resolve => {
+          refuse = resolve;
+        }),
+    });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    // The author goes back to this block while Card's write is on its way.
+    fireEvent.click(chip("This block"));
+
+    await act(async () => {
+      refuse("Card is locked.");
+    });
+
+    // Not beside a field that now edits the block, which never asked.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(raise).toHaveBeenCalledWith("Card is locked.");
+  });
+
+  it("says a later refusal of the style's write beside the field", async () => {
+    const writeStyles = vi.fn(async () => "Card is locked.");
+    mountTarget({ classes: ["c-card"], writeStyles });
+    fireEvent.click(chip("Card"));
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.8" } });
+    fireEvent.blur(field);
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Card is locked."
+    );
+  });
+
+  it("holds a locked style's values read-only, and says why", () => {
+    mountTarget({
+      classes: ["c-card"],
+      library: [{ ...card, locked: true } as typeof card],
+    });
+    // The chip carries a lock, named in words.
+    fireEvent.click(chip("Card, locked"));
+    expect(bar().textContent).toContain(
+      "Card is locked. Its properties can't be changed."
+    );
+    // Said once, in the bar, not again above the sections.
+    expect(
+      screen.getAllByText("Card is locked. Its properties can't be changed.")
+    ).toHaveLength(1);
+    expect(
+      (
+        screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement
+      ).closest("fieldset")?.disabled ??
+        (screen.getByRole("textbox", { name: "Opacity" }) as HTMLInputElement)
+          .readOnly
+    ).toBe(true);
+    // The slider beside it is held with it, though not a form control.
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .hasAttribute("data-disabled")
+    ).toBe(true);
+  });
+
+  it("holds a shared target read-only for an author who may not change design", () => {
+    const { writeStyles } = mountTarget({
+      classes: ["c-card"],
+      mayChange: false,
+    });
+    fireEvent.click(chip("Card"));
+    expect(bar().textContent).toContain("You can't change this site's design.");
+    expect(
+      screen.getAllByText("You can't change this site's design.")
+    ).toHaveLength(1);
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "0.9" } });
+    fireEvent.blur(field);
+    expect(writeStyles).not.toHaveBeenCalled();
+  });
+
+  it("says the block overrides its style, and Reset shows the style's value again", () => {
+    const { editor } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+    });
+    expect(
+      screen.getByText(/Set on this block · overrides Card/)
+    ).toBeDefined();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Reset Opacity on this block, showing Card's value/,
+      })
+    );
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
       patch: {},
-      unset: ["classes"],
+      unset: ["styles"],
     });
   });
 
-  it("appears for a block that offers no style properties at all", () => {
-    /*
-     * Named classes compile independently of a block's own style support, so
-     * such a block can still carry one. Exiting early on an empty section list
-     * left the only surface that can apply a class unreachable for exactly the
-     * blocks whose styling has to come from classes.
-     */
-    register({});
-    const editor = editorFor(documentOf());
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
+  it("never ends a line of the shared-style words on a separator", () => {
+    mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+    });
+    const line = document.querySelector('[data-shared-line="override"]');
+    const words = line?.querySelector("[data-shared-line-text]");
+    // The separator is held to the words on both sides, so a wrap falls
+    // between other words; the action sits on its own line, after them.
+    // The style's name is held to "overrides" too, so it never wraps alone.
+    expect(words?.textContent).toBe(
+      "Set on this block\u00a0·\u00a0overrides\u00a0Card"
     );
+    const reset = within(line as HTMLElement).getByRole("button", {
+      name: /^Reset Opacity on this block/,
+    });
+    expect(words?.contains(reset)).toBe(false);
 
+    fireEvent.click(chip("Card"));
+    const move = document.querySelector('[data-shared-line="move"]');
+    expect(move?.querySelector("[data-shared-line-text]")?.textContent).toBe(
+      "Set on this block"
+    );
     expect(
-      screen.getByRole("combobox", { name: /add a class/i })
-    ).toBeDefined();
-    // And it still says the block has no style controls, rather than pretending.
-    expect(screen.getByText(/does not offer style properties/i)).toBeDefined();
+      move
+        ?.querySelector("[data-shared-line-text]")
+        ?.contains(within(move as HTMLElement).getByRole("button"))
+    ).toBe(false);
   });
 
-  it("forgets a typed query when the selection moves to another block", () => {
-    /*
-     * The query and the highlighted row are state about the node in hand.
-     * Unkeyed, React reuses the component across a selection change while the
-     * write callback switches to the new node — so Enter applies the PREVIOUS
-     * block's pending choice to the block now selected.
-     */
-    register({ spacing: true });
-    const first = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        { id: "a", type: "acme/box", version: 1, props: {} },
-        { id: "b", type: "acme/box", version: 1, props: {} },
-      ] as BlockNode[],
-    } as BlockDocument;
-
-    const view = render(
-      <StyleInspectorPanel
-        editor={editorFor(first, "a")}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    const field = () => screen.getByRole("combobox", { name: /add a class/i });
-    fireEvent.change(field(), { target: { value: "hero" } });
-    expect((field() as HTMLInputElement).value).toBe("hero");
-
-    view.rerender(
-      <StyleInspectorPanel
-        editor={editorFor(first, "b")}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    expect((field() as HTMLInputElement).value).toBe("");
+  it("quiets a field's provenance caption once a value is committed, until it is focused again", () => {
+    mountTarget({});
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    const row = field.closest(".nx-inspector__field");
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: "0.4" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    // Typing put focus there, so the caption would linger over the row above.
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(true);
+    fireEvent.blur(field);
+    fireEvent.focus(field);
+    expect(row?.hasAttribute("data-provenance-quiet")).toBe(false);
   });
 
-  it("tells the selector when the document refused the write", () => {
-    /*
-     * `applyAll` answers null when the store refuses — a page at its byte limit
-     * rejects an edit the class rules found valid. Discarded, the selector
-     * clears the query and resets as though the class had been applied, so the
-     * author loses the typed choice and is told nothing.
-     */
-    register({ spacing: true });
-    const document = {
-      formatVersion: 1,
-      kind: "page",
-      nodes: [
-        { id: "a", type: "acme/box", version: 1, props: {} },
-      ] as BlockNode[],
-    } as BlockDocument;
-    const editor = editorFor(document);
-    editor.applyAll.mockReturnValue(null);
-
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
-        classLibrary={LIBRARY}
-      />
-    );
-    const field = () => screen.getByRole("combobox", { name: /add a class/i });
-    fireEvent.change(field(), { target: { value: "hero" } });
-    fireEvent.keyDown(field(), { key: "Enter" });
-
-    expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect((field() as HTMLInputElement).value).toBe("hero");
-    expect(screen.getByRole("alert").textContent).toMatch(
-      /could not be applied/i
-    );
-  });
-
-  it("reports a creation to the host, then writes the id it answers with", async () => {
-    /*
-     * Asserting only that no write happened YET is satisfied by the promise not
-     * having settled, and would hold for a panel that never applies the class.
-     * The write has to be observed after the microtask runs.
-     */
-    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
-    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
-      target: { value: "call-to-action" },
+  it("moves a block's value into its style, then clears it from the block", async () => {
+    const { editor, writeStyles } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
     });
-    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
-      key: "Enter",
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    expect(writtenTo(writeStyles, card.styles)).toEqual({
+      base: { [BASE_BREAKPOINT]: { opacity: 0.2 } },
     });
-
-    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
-    expect(editor.applyAll).not.toHaveBeenCalled();
-
-    await React.act(async () => {});
-
+    await vi.waitFor(() => expect(editor.applyAll).toHaveBeenCalledTimes(1));
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
       kind: "update",
       id: "a",
-      patch: { classes: ["id-new"] },
+      patch: {},
+      unset: ["styles"],
+    });
+  });
+
+  it("leaves the block as it was when the style refuses the moved value", async () => {
+    const writeStyles = vi.fn(async () => "Refused.");
+    const { editor } = mountTarget({
+      classes: ["c-card"],
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.2 } } },
+      writeStyles,
+    });
+    fireEvent.click(chip("Card"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Move Opacity to Card" })
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe("Refused.");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("applies an existing style to a block that wears none, and offers no new empty one", () => {
+    const { editor } = mountTarget({});
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Apply shared style" })
+    );
+    const search = screen.getByRole("combobox", {
+      name: "Search shared styles",
+    });
+    fireEvent.change(search, { target: { value: "brand-new" } });
+    expect(screen.getByText("No shared style matches.")).toBeDefined();
+    fireEvent.change(search, { target: { value: "ca" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["c-card"] },
+    });
+  });
+
+  it("offers no second style while the block wears one", () => {
+    mountTarget({ classes: ["c-card"] });
+    expect(
+      within(bar()).queryByRole("button", { name: "Apply shared style" })
+    ).toBeNull();
+  });
+
+  it("takes a style off the block, or detaches it, from the chip's menu", () => {
+    const { editor } = mountTarget({ classes: ["c-card"] });
+    const menu = within(bar()).getByRole("button", {
+      name: "Actions for shared style Card",
+    });
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: /Detach: keep the look on this block only/,
+      })
+    );
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } },
+      unset: ["classes"],
     });
   });
 });
@@ -481,15 +1139,61 @@ describe("sections", () => {
     expect(effects.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("counts the properties this node sets in each section", () => {
+  it("marks each section that holds values, in words as well as a dot", () => {
     const styles = {
-      base: { [BASE_BREAKPOINT]: { margin: "8px", opacity: 0.5 } },
+      base: { [BASE_BREAKPOINT]: { margin: "8px" } },
     } as NodeStyles;
     mount({ spacing: true, effects: true }, styles);
 
-    // One of two in spacing, one of five in effects — so an author can see
+    // Spacing holds a margin and Effects holds nothing, so an author can see
     // which sections they have touched without opening each one.
-    expect(screen.getAllByLabelText("1 set")).toHaveLength(2);
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    const effects = screen.getByRole("button", { name: /Effects/ });
+    expect(spacing.textContent).toContain("has values");
+    expect(effects.textContent).not.toContain("has values");
+  });
+
+  it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
+    // The dot belongs to the name, as the design sets it, not beside the
+    // chevron at the far end; and the trigger carries the panel's own class,
+    // which is what sets its height and the chevron's direction.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: "8px" } },
+    } as NodeStyles;
+    mount({ spacing: true }, styles);
+
+    const spacing = screen.getByRole("button", { name: /Spacing/ });
+    expect(
+      spacing.classList.contains("nx-style-inspector__section-trigger")
+    ).toBe(true);
+    const label = spacing.querySelector(".nx-style-inspector__section-label");
+    expect(
+      label?.querySelector(".nx-style-inspector__section-dot")
+    ).toBeTruthy();
+  });
+
+  it("shows a section's common properties and lists the rest under More", () => {
+    mount({ effects: true });
+
+    expect(document.querySelector('[data-property="opacity"]')).not.toBeNull();
+    expect(document.querySelector('[data-property="mixBlendMode"]')).toBeNull();
+
+    reveal("effects", "Mix blend mode");
+
+    expect(
+      document.querySelector('[data-property="mixBlendMode"]')
+    ).not.toBeNull();
+  });
+
+  it("always shows a property that holds a value, whatever its tier", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
+    } as NodeStyles;
+    mount({ effects: true }, styles);
+
+    expect(
+      document.querySelector('[data-property="mixBlendMode"]')
+    ).not.toBeNull();
   });
 
   it("keeps a section collapsed when the author closes it", () => {
@@ -529,7 +1233,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("12px");
+    ).toBe("12");
     // The same side of a DIFFERENT property is empty, which is what says the
     // read is addressed rather than by leaf name.
     expect(
@@ -540,13 +1244,14 @@ describe("controls", () => {
 
   it("draws a keyword leaf as a select over the catalog's own vocabulary", () => {
     mount({ effects: true });
+    reveal("effects", "Mix blend mode");
 
     const trigger = screen.getByLabelText("Mix blend mode");
     fireEvent.click(trigger);
 
     // `multiply` is the catalog's, not a list written here — a value absent
     // from `mix-blend-mode` would fail to appear.
-    expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Multiply" })).toBeDefined();
   });
 
   it("writes on Enter, and stops the entry form from submitting", () => {
@@ -624,7 +1329,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "0.5" } });
+    fireEvent.change(field, { target: { value: "50" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -685,7 +1390,7 @@ describe("controls", () => {
     expect(
       (fieldsOf("padding").getByLabelText("Block start") as HTMLInputElement)
         .value
-    ).toBe("4px");
+    ).toBe("4");
   });
 
   it("offers every form the catalog declares, so an unset union is authorable", () => {
@@ -693,12 +1398,20 @@ describe("controls", () => {
     // engine answers with the catalog's first arm when nothing is stored.
     mount({ border: { radius: true } });
 
-    const trigger = screen.getByLabelText("Border radius form");
-    fireEvent.click(trigger);
-    // Named from the arms' own shape kinds rather than numbered.
-    expect(screen.getByRole("option", { name: "Per corner" })).toBeDefined();
+    // A toggle on the property's own row, its forms named in plain words.
+    const forms = screen.getByRole("radiogroup", { name: "Border radius" });
+    expect(
+      within(forms)
+        .getAllByRole("radio")
+        .map(radio => radio.textContent)
+    ).toEqual(["All", "Corners"]);
+    expect(
+      within(forms)
+        .getByRole("radio", { name: "All" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
 
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(within(forms).getByRole("radio", { name: "Corners" }));
 
     expect(
       fieldsOf("borderRadius").getByLabelText("Start start")
@@ -714,8 +1427,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ border: { radius: true } }, styles);
 
-    fireEvent.click(screen.getByLabelText("Border radius form"));
-    fireEvent.click(screen.getByRole("option", { name: "Per corner" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Corners" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
@@ -737,8 +1449,9 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ position: true }, styles);
 
-    fireEvent.click(screen.getByLabelText("Z index form"));
-    fireEvent.click(screen.getByRole("option", { name: "Keyword" }));
+    // A form of one keyword is named by it: "Auto", not "Keyword".
+    const forms = screen.getByRole("radiogroup", { name: "Z index" });
+    fireEvent.click(within(forms).getByRole("radio", { name: "Auto" }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
@@ -750,15 +1463,16 @@ describe("controls", () => {
     });
   });
 
-  it("lets a keyword selection be cleared, which a select cannot offer as an item", () => {
+  it("lets a keyword selection be reset, which a select cannot offer as an item", () => {
     const styles = {
       base: { [BASE_BREAKPOINT]: { mixBlendMode: "multiply" } },
     } as NodeStyles;
     const editor = mount({ effects: true }, styles);
 
+    // From the row's reset: a select cannot offer "unset" as an item.
     fireEvent.click(
       fieldsOf("mixBlendMode").getByRole("button", {
-        name: "Clear Mix blend mode",
+        name: /^Reset Mix blend mode/,
       })
     );
 
@@ -780,7 +1494,8 @@ describe("controls", () => {
     } as NodeStyles;
     mount({ effects: true }, styles);
 
-    expect(fieldsOf("mixBlendMode").getByText("inherit")).toBeDefined();
+    // In words, like every keyword; its CSS spelling is the tooltip.
+    expect(fieldsOf("mixBlendMode").getByText("Inherit")).toBeDefined();
   });
 
   it("reports an edit the op store refused, which the validator cannot anticipate", () => {
@@ -855,16 +1570,210 @@ describe("controls", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("names every ROOT form selector for its own property", () => {
+  it("names a ROOT form toggle for its own property, without the word form", () => {
     // A property whose shape is a union at the top draws one control and so no
-    // heading. `fontWeight`, `lineHeight` and `fontStyle` are all such unions,
-    // and a selector called "Form" three times over tells a screen-reader user
-    // nothing about which property it changes.
-    mount({ typography: true });
+    // heading, so a toggle called "Form" would tell a screen-reader user
+    // nothing about which property it changes. "Border radius form" was an
+    // internal word in front of authors. Typography's unions draw no form
+    // choice at all: their one control takes either form.
+    mount({ border: { radius: true } });
 
-    expect(screen.getByLabelText("Font weight form")).toBeDefined();
-    expect(screen.getByLabelText("Line height form")).toBeDefined();
-    expect(screen.getByLabelText("Font style form")).toBeDefined();
+    expect(
+      screen.getByRole("radiogroup", { name: "Border radius" })
+    ).toBeDefined();
+    expect(screen.queryByText(/ form$/)).toBeNull();
+  });
+
+  it("moves between forms with the arrow keys, the chosen one the tab stop", () => {
+    mount({ border: { radius: true } });
+    const all = screen.getByRole("radio", { name: "All" });
+    expect(all.tabIndex).toBe(0);
+    expect(screen.getByRole("radio", { name: "Corners" }).tabIndex).toBe(-1);
+
+    fireEvent.keyDown(all, { key: "ArrowRight" });
+
+    expect(
+      fieldsOf("borderRadius").getByLabelText("Start start")
+    ).toBeDefined();
+  });
+
+  it("draws a nested form's toggle just above its own control", () => {
+    // Position's z-index is the last of its controls: a toggle drawn above
+    // them all left the number field at the bottom with no visible name.
+    mount({ position: true });
+    const toggleRow = screen
+      .getByRole("radiogroup", { name: "Z index" })
+      .closest("[data-form-choice]");
+    const next = toggleRow?.nextElementSibling;
+    const label = next?.querySelector("label");
+    expect(label?.textContent).toContain("Z index");
+    expect(label?.hasAttribute("data-named-above")).toBe(true);
+  });
+
+  it("says the property's name once, on the toggle's row", () => {
+    // The one control under the toggle keeps its label for assistive
+    // technology and drops the visible copy, which said "Border radius" twice.
+    mount({ border: { radius: true } });
+    const below = document.querySelector(
+      '[data-property="borderRadius"] .nx-inspector__field:not([data-form-choice]) label'
+    );
+    expect(below?.hasAttribute("data-named-above")).toBe(true);
+  });
+
+  it("offers font weight as ONE list of named weights, with no form to choose first", () => {
+    // "Font weight form: Keyword" asked the author which kind of value they
+    // meant before letting them pick one. One list holds both kinds.
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Font weight form")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Font weight"));
+    expect(screen.getByRole("option", { name: "Thin 100" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Black 900" })).toBeDefined();
+    expect(screen.getByRole("option", { name: "Lighter" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("option", { name: "Bold 700" }));
+    // Stored as the number, the numeric arm of the union.
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"fontWeight":700'
+    );
+  });
+
+  it("keeps a stored keyword weight visible in the list", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { fontWeight: "bold" } },
+    } as NodeStyles;
+    mount({ typography: true }, styles);
+
+    expect(screen.getByLabelText("Font weight").textContent).toContain("Bold");
+  });
+
+  it("takes a line height as typed, a number or a length, with no form to choose", () => {
+    const editor = mount({ typography: true });
+
+    expect(screen.queryByLabelText("Line height form")).toBeNull();
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "1.5" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":1.5'
+    );
+  });
+
+  it("steps a line height with the arrow keys, as a number or as a length", () => {
+    // The same affordance as every other numeric field: the step follows the
+    // kind of value in the field.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { lineHeight: 1.5 } },
+    } as NodeStyles;
+    const editor = mount({ typography: true }, styles);
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":2.5'
+    );
+
+    fireEvent.change(field, { target: { value: "24px" } });
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(JSON.stringify(editor.applyAll.mock.calls.at(-1)?.[0])).toContain(
+      '"lineHeight":"25px"'
+    );
+  });
+
+  it("stores a line height typed with a unit as that length", () => {
+    const editor = mount({ typography: true });
+
+    const field = screen.getByLabelText("Line height") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "24px" } });
+    fireEvent.blur(field);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"lineHeight":"24px"'
+    );
+  });
+
+  it("hints at a value in words short enough to read inside the field", () => {
+    // A hint cut off mid-word ("16px or 50%, or xx-sm…") tells the author
+    // less than a short one. Keywords stay valid to type; the hint shows the
+    // form a value takes, not every value it may take. A length shows its
+    // unit beside the field, so its hint is the number alone.
+    mount({ typography: true, color: true });
+
+    expect(
+      (screen.getByLabelText("Font size") as HTMLInputElement).placeholder
+    ).toBe("16");
+    expect(fieldsOf("color").getByPlaceholderText("Name or hex")).toBeDefined();
+  });
+
+  it("sets alignment with icons that follow the container's direction", () => {
+    // A column's main axis runs down the page, so "start" points up, not left.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { display: "flex", flexDirection: "column" },
+      },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    // "Justify", its CSS name in the label's tooltip: "Justify content" was cut
+    // short in the 7rem label column.
+    const group = screen.getByRole("radiogroup", { name: "Justify" });
+    expect(screen.getByText("Justify").closest("label")?.title).toMatch(
+      /^Justify content/
+    );
+    const start = within(group).getByRole("radio", { name: "Start" });
+    expect(start.getAttribute("data-icon")).toBe("AlignVerticalJustifyStart");
+
+    fireEvent.click(within(group).getByRole("radio", { name: "Center" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"justifyContent":"center"'
+    );
+  });
+
+  it("focuses an icon group from its label without choosing anything", () => {
+    // A label's `for` would CLICK a radio button, choosing or clearing a value;
+    // this label only moves focus to the group's tab stop.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex", justifyContent: "end" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    fireEvent.click(screen.getByText("Justify"));
+
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("End");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("resets a value set here from one icon at the row's end, even with no cascade", () => {
+    // One way to reset a row, whatever its control: no Clear beside a list
+    // and a Reset line under it besides, and none at all where the panel was
+    // mounted without a cascade to say where values come from.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const field = document.querySelector(
+      '[data-property="display"]'
+    ) as HTMLElement;
+    expect(
+      within(field).queryByRole("button", { name: "Clear Display" })
+    ).toBeNull();
+    const reset = within(field).getByRole("button", { name: /^Reset Display/ });
+    expect(reset.textContent).toBe("");
+    fireEvent.click(reset);
+    // The only value goes, and with it the node's styles.
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
+  });
+
+  it("offers no reset for a value that is not set here", () => {
+    mount({ layout: true });
+
+    expect(
+      document.querySelector('[data-property="display"] [data-action="reset"]')
+    ).toBeNull();
   });
 
   it("leaves a trailing decimal point for the catalog, rather than reading it as a number", () => {
@@ -919,14 +1828,18 @@ describe("controls", () => {
     // `margin` both have a block start, so a name built from the side alone
     // says the same thing twice.
     expect(
-      screen.getByRole("button", { name: "Clear Padding block start" })
+      screen.getByRole("button", {
+        name: "Clear Padding block start",
+      })
     ).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Clear Margin block start" })
+      screen.getByRole("button", {
+        name: "Clear Margin block start",
+      })
     ).toBeDefined();
   });
 
-  it("names every keyword clear action for its own property", () => {
+  it("names every reset for its own property", () => {
     // Two keyword properties set at once would otherwise offer two buttons
     // both called "Clear", and a screen-reader user cannot tell which
     // declaration each removes.
@@ -939,8 +1852,9 @@ describe("controls", () => {
     mount({ effects: true }, styles);
 
     expect(
-      screen.getByRole("button", { name: "Clear Mix blend mode" })
+      screen.getByRole("button", { name: /^Reset Mix blend mode/ })
     ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Reset Filter/ })).toBeDefined();
   });
 
   it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
@@ -967,7 +1881,7 @@ describe("controls", () => {
     const editor = mount({ effects: true });
     const field = screen.getByLabelText("Opacity");
 
-    fireEvent.change(field, { target: { value: "\u00a00.5" } });
+    fireEvent.change(field, { target: { value: "\u00a050" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -1030,7 +1944,9 @@ describe("controls", () => {
     expect(padding.queryByDisplayValue("space.4")).toBeNull();
 
     fireEvent.click(
-      padding.getByRole("button", { name: "Clear Padding block start" })
+      padding.getByRole("button", {
+        name: "Clear Padding block start",
+      })
     );
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -1201,6 +2117,20 @@ describe("a value the panel shows and could not remove", () => {
     ).toBeNull();
   });
 
+  it("says a stored value the block does not offer still applies, without claiming it once did", () => {
+    // "No longer offers" read as a capability taken away, for a value written
+    // through the API on a block that never had it, and left the author
+    // guessing whether clearing it would change anything.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { borderRadius: "4px" } },
+    } as NodeStyles;
+    mount({ border: { line: true } }, styles);
+    const notice = document.querySelector('[data-not-offered="borderRadius"]');
+    expect(notice?.textContent).toBe(
+      "This block doesn't offer Border radius. The value set here still applies; clearing it removes it."
+    );
+  });
+
   it("offers the form selector while the property IS still supported", () => {
     // The positive control for the test above. Without it, a panel that had
     // simply stopped rendering form selectors altogether would pass.
@@ -1212,7 +2142,7 @@ describe("a value the panel shows and could not remove", () => {
   });
 
   it("puts back what the document holds when a draft only RE-SPELLS it", () => {
-    // `01` commits as the `1` already stored, so `styleWriteOp` answers with no
+    // `0100` commits as the `100` (1) already stored, so `styleWriteOp` answers with no
     // op and the stored value never moves — which means the effect that syncs
     // the field cannot fire. The typed text stayed on screen, showing something
     // the document does not contain, until the panel remounted.
@@ -1222,11 +2152,11 @@ describe("a value the panel shows and could not remove", () => {
     const editor = mount({ effects: true }, styles);
     const field = screen.getByRole("textbox", { name: "Opacity" });
 
-    fireEvent.change(field, { target: { value: "01" } });
+    fireEvent.change(field, { target: { value: "0100" } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
-    expect((field as HTMLInputElement).value).toBe("1");
+    expect((field as HTMLInputElement).value).toBe("100");
   });
 
   it("KEEPS a refused draft, so the author can correct it", () => {
@@ -1284,7 +2214,7 @@ describe("a free-form value the panel must let an author repair", () => {
 
     expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
     expect(
-      fieldsOf("fontStyle").getByRole("button", { name: "italic" })
+      fieldsOf("fontStyle").getByRole("button", { name: "Italic" })
     ).toBeDefined();
   });
 });
@@ -1383,7 +2313,7 @@ describe("the numeric affordances a simple measurement earns", () => {
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(field).toHaveProperty("value", "0px");
+    expect(field).toHaveProperty("value", "0");
   });
 
   it("offers a unit menu only where the value is one measurement", () => {
@@ -1450,6 +2380,268 @@ describe("the numeric affordances a simple measurement earns", () => {
   });
 });
 
+describe("dragging a number field's label", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  /** A pointer event carrying the fields the gesture and React read. */
+  function pointer(
+    type: string,
+    init: {
+      clientX?: number;
+      pointerType?: string;
+      shiftKey?: boolean;
+      altKey?: boolean;
+    } = {}
+  ): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 1,
+      button: 0,
+      clientX: init.clientX ?? 0,
+      clientY: 0,
+      pointerType: init.pointerType ?? "mouse",
+      shiftKey: init.shiftKey ?? false,
+      altKey: init.altKey ?? false,
+    });
+    return event;
+  }
+
+  /** The label naming one of padding's sides, and its field. */
+  function side(name: string): { label: HTMLElement; field: HTMLInputElement } {
+    const field = fieldsOf("padding").getByLabelText(name) as HTMLInputElement;
+    const label = document.querySelector(`label[for="${field.id}"]`);
+    if (!(label instanceof HTMLElement))
+      throw new Error(`no label for ${name}`);
+    return { label, field };
+  }
+
+  /** Press on the label, move through `xs`, and optionally release. */
+  function drag(
+    label: HTMLElement,
+    xs: readonly number[],
+    modifiers: { shiftKey?: boolean; altKey?: boolean } = {},
+    release = true
+  ): void {
+    act(() => {
+      label.dispatchEvent(pointer("pointerdown", { clientX: 100 }));
+    });
+    for (const x of xs) {
+      act(() => {
+        document.dispatchEvent(
+          pointer("pointermove", { clientX: 100 + x, ...modifiers })
+        );
+      });
+    }
+    if (!release) return;
+    act(() => {
+      document.dispatchEvent(
+        pointer("pointerup", { clientX: 100 + (xs.at(-1) ?? 0) })
+      );
+    });
+  }
+
+  const written = (editor: ReturnType<typeof mount>) =>
+    editor.applyAll.mock.calls.map(
+      call => JSON.stringify(call[0]).match(/"blockStart":("[^"]*")/)?.[1]
+    );
+
+  it("marks the label as draggable on a field holding one measurement", () => {
+    mount({ spacing: true }, withPadding("12px"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(true);
+  });
+
+  it("does not mark a label whose value is not one measurement", () => {
+    mount({ spacing: true }, withPadding("clamp(1rem, 2vw, 3rem)"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(false);
+  });
+
+  it("shows the value live while dragging and writes it ONCE, on release", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [6, 10, 20], {}, false);
+    // Live in the field, and nothing in the document yet.
+    expect(field.value).toBe("32");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
+  it("treats a press that stays inside the dead zone as a click, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [2, 3]);
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(field.value).toBe("12");
+  });
+
+  it("steps by ten with Shift and by a tenth with Alt", () => {
+    const shifted = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { shiftKey: true });
+    expect(written(shifted)).toEqual(['"62px"']);
+
+    cleanup();
+    clearBlocks();
+    const fine = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { altKey: true });
+    expect(written(fine)).toEqual(['"12.5px"']);
+  });
+
+  it("keeps the field's unit, and rests at what the property takes", () => {
+    const editor = mount({ spacing: true }, withPadding("2rem"));
+    // Padding takes no negative length: dragged far left it rests at zero.
+    drag(side("Block start").label, [-40]);
+    expect(written(editor)).toEqual(['"0rem"']);
+  });
+
+  it("restores the value on Escape and writes nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+      );
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("writes the value at the release, where the last move fell short of it", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [10], {}, false);
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 125 }));
+    });
+    expect(written(editor)).toEqual(['"37px"']);
+  });
+
+  it("puts the value back when the pointer is cancelled mid-drag, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(pointer("pointercancel", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing from the focused field while the drag owns its value", () => {
+    // Focus stays in the field through the press, so its blur can come
+    // mid-drag: it must not write the preview, leaving the release to write
+    // once.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+    field.focus();
+
+    drag(label, [20], {}, false);
+    act(() => {
+      field.blur();
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
+  it("ends a drag unwritten when another block is selected under it", () => {
+    // The drag's value came from the old block, so neither block is
+    // written and the field shows the new one's, whether the row is drawn
+    // afresh for it (sections are keyed by block) or reused.
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("12px"),
+        },
+        {
+          id: "b",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("40px"),
+        },
+      ],
+    } as unknown as BlockDocument;
+    const first = editorFor(document, "a");
+    const { rerender } = render(<StyleInspectorPanel editor={first} />);
+    drag(side("Block start").label, [10], {}, false);
+    expect(side("Block start").field.value).toBe("22");
+
+    const second = editorFor(document, "b");
+    rerender(<StyleInspectorPanel editor={second} />);
+    act(() => {
+      window.document.dispatchEvent(pointer("pointerup", { clientX: 110 }));
+    });
+
+    expect(first.applyAll).not.toHaveBeenCalled();
+    expect(second.applyAll).not.toHaveBeenCalled();
+    expect(side("Block start").field.value).toBe("40");
+  });
+
+  it("does not scrub on touch, so a tap still reaches the field", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label } = side("Block start");
+
+    const press = pointer("pointerdown", {
+      clientX: 100,
+      pointerType: "touch",
+    });
+    act(() => {
+      label.dispatchEvent(press);
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", { clientX: 140 }));
+      document.dispatchEvent(pointer("pointerup", { clientX: 140 }));
+    });
+
+    // Not prevented, so the browser's tap and scroll go on as they would.
+    expect(press.defaultPrevented).toBe(false);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("starts an empty field from zero in the field's unit", () => {
+    const editor = mount({ spacing: true });
+    drag(side("Block start").label, [8]);
+    expect(written(editor)).toEqual(['"8px"']);
+  });
+
+  it("steps by a tenth with Alt on the arrow keys too", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    fireEvent.keyDown(side("Block start").field, {
+      key: "ArrowUp",
+      altKey: true,
+    });
+    expect(written(editor)).toEqual(['"12.1px"']);
+  });
+});
+
 describe("what the arrow keys do and do not claim", () => {
   const withPadding = (value: string): NodeStyles =>
     ({
@@ -1476,7 +2668,7 @@ describe("what the arrow keys do and do not claim", () => {
     });
     // One op, not a commit of the draft followed by a step of the result.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(field).toHaveProperty("value", "21px");
+    expect(field).toHaveProperty("value", "21");
   });
 
   it("leaves an arrow to the IME while a composition is in progress", () => {
@@ -1491,12 +2683,13 @@ describe("what the arrow keys do and do not claim", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it.each(["altKey", "ctrlKey", "metaKey"])(
+  it.each(["ctrlKey", "metaKey"])(
     "leaves %s+Arrow to the platform",
     modifier => {
       // These chords are OS, browser and assistive-navigation shortcuts.
       // Claiming one mutates a style and adds an undo entry from a keystroke
-      // the author aimed somewhere else entirely.
+      // the author aimed somewhere else entirely. Alt is a field's fine step,
+      // as on a label drag: see "dragging a number field's label".
       const editor = mount({ spacing: true }, withPadding("12px"));
       const field = fieldsOf("padding").getByLabelText("Block start");
 
@@ -1572,6 +2765,411 @@ describe("what the arrow keys do and do not claim", () => {
   });
 });
 
+describe("a length field's unit", () => {
+  /** Width inherited from a class `.card`, nothing stored on the box. */
+  function mountCardedWidth(value: string): void {
+    register({ dimensions: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              {
+                origin: { kind: "class", id: "cls-1", slug: "card" },
+                property: "width",
+                value,
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+          } as never
+        }
+      />
+    );
+  }
+
+  it("commits a bare number in the unit beside it, px unless another is chosen", () => {
+    // "24" was refused as "not a length".
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "24" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"24px"'
+    );
+  });
+
+  it("shows the unit menu while the field is empty, on px", () => {
+    mount({ dimensions: true });
+    const unit = fieldsOf("width").getByLabelText("Unit for Width");
+    expect(unit.textContent).toBe("px");
+  });
+
+  it("takes a unit chosen before a number is typed", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    // Nothing to write yet: the field is empty.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: "2" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2rem"'
+    );
+  });
+
+  it("shows a stored length's number in the field and its unit in the suffix", () => {
+    // "240px" in the field beside "px" said the unit twice.
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "2rem" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("2");
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    // A new number keeps the stored unit, not px.
+    fireEvent.change(width, { target: { value: "3" } });
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"3rem"'
+    );
+  });
+
+  it("steps the number with the arrow keys in the unit shown", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "10px" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.keyDown(fieldsOf("width").getByLabelText("Width"), {
+      key: "ArrowUp",
+    });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"11px"'
+    );
+  });
+
+  it("hints at what an unset size is, Auto or None, not a number that reads like a default", () => {
+    // "16" beside Width read as a real default; unset, a width is auto and a
+    // max width none.
+    mount({ dimensions: true });
+    const hint = (label: string, property: string) =>
+      (fieldsOf(property).getByLabelText(label) as HTMLInputElement)
+        .placeholder;
+    expect(hint("Width", "width")).toBe("Auto");
+    expect(hint("Height", "height")).toBe("Auto");
+    expect(hint("Max width", "maxWidth")).toBe("None");
+  });
+
+  it("hints at a number alone for a length whose unset value is not a word", () => {
+    // Margin allows `auto` but starts at 0, so its hint stays a number.
+    mount({ spacing: true });
+    const top = fieldsOf("padding").getByLabelText(
+      "Block start"
+    ) as HTMLInputElement;
+    expect(top.placeholder).not.toBe("Auto");
+  });
+
+  it("shows a stored keyword once, in the suffix, not again in the field", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    mount({ dimensions: true }, styles);
+    const width = fieldsOf("width").getByLabelText("Width") as HTMLInputElement;
+    expect(width.value).toBe("");
+    expect(width.placeholder).toBe("");
+    // In words, as every keyword is offered.
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      keywordLabel("width", "auto")
+    );
+  });
+
+  it("keeps the suffix for every bare number the commit will take", () => {
+    // ".5" is committed with the unit shown, so the unit stays shown.
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText("Width");
+    fireEvent.change(width, { target: { value: ".5" } });
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).not.toBeNull();
+  });
+
+  it("draws no unit beside an inherited value that is not a measurement", () => {
+    // An inherited "auto" or "clamp(…)" beside "px" read "auto px".
+    mountCardedWidth("clamp(1rem, 2vw, 3rem)");
+    expect(fieldsOf("width").queryByLabelText("Unit for Width")).toBeNull();
+  });
+
+  it("shows a unit chosen over a stored keyword, writing nothing until a number", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { width: "auto" } },
+    } as NodeStyles;
+    const editor = mount({ dimensions: true }, styles);
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(fieldsOf("width").getByLabelText("Unit for Width").textContent).toBe(
+      "rem"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("never shows an inherited length beside a different pending unit", () => {
+    // "2px" beside "rem" read as one value it is not.
+    mountCardedWidth("2px");
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    expect(width.placeholder).not.toContain("px");
+  });
+
+  /** Type into Width, then move focus to its unit menu, as a click does. */
+  function typeThenFocusUnit(text: string) {
+    const width = fieldsOf("width").getByLabelText(/^Width/);
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: text } });
+    fireEvent.blur(width, { relatedTarget: trigger });
+    return trigger;
+  }
+
+  it("writes one step when a number is typed and then a unit chosen", () => {
+    // Committing on the way to the menu wrote "20px" and then "20rem": two
+    // undo steps for one gesture, the first a value nobody asked for.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: "rem" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20rem"'
+    );
+  });
+
+  it("still writes the typed number when the menu closes with no choice", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("still writes the typed number when focus moves past the menu", () => {
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("keeps a unit while it is being typed", () => {
+    // "2c" on the way to "2ch" was cut to "2", so no letter unit could be
+    // typed at all.
+    const editor = mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2c" } });
+    expect(width.value).toBe("2c");
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    fireEvent.blur(width);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"2ch"'
+    );
+  });
+
+  it("shows a unit being typed once, in the field, not again beside it", () => {
+    // "2ch" in the field beside a "ch" suffix read as "2ch ch".
+    mount({ dimensions: true });
+    const width = fieldsOf("width").getByLabelText(
+      /^Width/
+    ) as HTMLInputElement;
+    const trigger = fieldsOf("width").getByLabelText("Unit for Width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "2ch" } });
+    expect(width.value).toBe("2ch");
+    expect(trigger.textContent).toBe("");
+    fireEvent.blur(width);
+    expect(width.value).toBe("2");
+    expect(trigger.textContent).toBe("ch");
+  });
+
+  it("writes a held number when the field goes away with its menu open", () => {
+    // Selecting another block unmounts the field with no close from the menu.
+    const editor = mount({ dimensions: true });
+    const trigger = typeThenFocusUnit("20");
+    fireEvent.click(trigger);
+    cleanup();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"20px"'
+    );
+  });
+
+  it("drops a held number once the stored value moves under it", () => {
+    // An undo while the menu is open must not be reversed when it closes.
+    register({ dimensions: true });
+    const before = editorFor(documentOf());
+    const view = render(<StyleInspectorPanel editor={before} />);
+    const trigger = typeThenFocusUnit("20");
+    const after = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { width: "50px" } },
+      } as NodeStyles)
+    );
+    view.rerender(<StyleInspectorPanel editor={after} />);
+    fireEvent.blur(trigger, { relatedTarget: document.body });
+    expect(before.applyAll).not.toHaveBeenCalled();
+    expect(after.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("offers the property's keywords after its units", () => {
+    const editor = mount({ dimensions: true });
+    fireEvent.click(fieldsOf("width").getByLabelText("Unit for Width"));
+    fireEvent.click(screen.getByRole("option", { name: "Auto" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"width":"auto"'
+    );
+  });
+});
+
+describe("a side or a corner, in plain words", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" };
+  /** The visible names of one property's controls, on an element whose axes are known or not. */
+  function sideLabels(
+    property: string,
+    supports: Record<string, boolean | Record<string, boolean>>,
+    orientation: { writingMode: string; direction: string } | undefined,
+    styles?: NodeStyles
+  ): (string | null)[] {
+    register(supports);
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return Array.from(
+      document.querySelectorAll(
+        `[data-property="${property}"] .nx-style-inspector__field-label-text`
+      )
+    ).map(label => label.textContent);
+  }
+
+  it("names a border's sides Top, Bottom, Left and Right", () => {
+    // "Top" and "Right" are CSS's logical words, not an
+    // author's. Named for a left-to-right horizontal element unless the
+    // canvas says otherwise.
+    const labels = sideLabels("border", { border: true }, LTR);
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Left", "Right"]);
+  });
+
+  it("names them from the element's direction, Right first on a right-to-left page", () => {
+    const labels = sideLabels(
+      "border",
+      { border: true },
+      {
+        writingMode: "horizontal-tb",
+        direction: "rtl",
+      }
+    );
+    expect(labels.slice(0, 4)).toEqual(["Top", "Bottom", "Right", "Left"]);
+  });
+
+  it("keeps the logical words until the canvas has said which way the element runs", () => {
+    // A guessed "Left" is wrong on a right-to-left or vertical page; the
+    // logical word is true on every page.
+    const labels = sideLabels("border", { border: true }, undefined);
+    expect(labels.slice(0, 4)).toEqual([
+      "Block start",
+      "Block end",
+      "Inline start",
+      "Inline end",
+    ]);
+  });
+
+  it("hints at a border's width as a border is drawn, not as a length in general", () => {
+    // "16px" read as a heavy frame where a border is usually a hairline.
+    mount({ border: true });
+    const top = document.querySelector<HTMLInputElement>(
+      '[data-property="border"] input'
+    );
+    expect(top?.placeholder).toBe("1");
+  });
+
+  it("names a radius's corners Top left and the rest", () => {
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          borderRadius: {
+            startStart: "1px",
+            startEnd: "2px",
+            endStart: "3px",
+            endEnd: "4px",
+          },
+        },
+      },
+    } as NodeStyles;
+    const labels = sideLabels(
+      "borderRadius",
+      { border: { radius: true } },
+      LTR,
+      styles
+    );
+    expect(labels).toEqual([
+      "Top left",
+      "Top right",
+      "Bottom left",
+      "Bottom right",
+    ]);
+  });
+});
+
+describe("a property named like its section", () => {
+  it("draws no heading of its own, which would repeat the section's", () => {
+    // "Border" over the border's sides, inside the section titled Border,
+    // said the same word twice in a row.
+    mount({ border: true });
+    const heading = document.querySelector(
+      '[data-property="border"] .nx-style-inspector__property-label'
+    );
+    expect(document.querySelector('[data-property="border"]')).not.toBeNull();
+    expect(heading).toBeNull();
+  });
+
+  it("keeps the heading of a property its section does not name", () => {
+    mount({ spacing: true });
+    // Padding's four sides, in the section titled Spacing.
+    const heading = document.querySelector(
+      '[data-property="padding"] .nx-style-inspector__property-label'
+    );
+    expect(heading?.textContent).toBe("Padding");
+  });
+});
+
 describe("where a control's value came from", () => {
   /** The dot for one property's single control. */
   const dotIn = (property: string) =>
@@ -1623,6 +3221,425 @@ describe("where a control's value came from", () => {
     return editor;
   }
 
+  /** A box carrying `.card` and nothing stored, so every value it shows is inherited. */
+  function mountCarded(
+    entries: readonly unknown[],
+    supports: Record<string, boolean | Record<string, boolean>>
+  ): void {
+    register(supports);
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={{ nodes: editor.document.nodes, entries } as never}
+      />
+    );
+  }
+  const fromCard = (over: Record<string, unknown>) =>
+    entry({ origin: { kind: "class", id: "cls-1", slug: "card" }, ...over });
+  const sourceIn = (property: string) =>
+    document.querySelector(
+      `[data-property="${property}"] .nx-style-inspector__provenance-source`
+    )?.textContent;
+
+  it("lays out a shared target's controls by its own display, not the block's", () => {
+    // Card stores `display: flex`; this block overrides it to `block`. While
+    // Card is the target, its flex controls are the ones being edited, so
+    // they show, though the block on the canvas is not a flex container.
+    register({ layout: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { [BASE_BREAKPOINT]: { display: "block" } } },
+        },
+      ],
+    } as never);
+    const cardStyles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: { id: "cls-1", name: "Card", styles: cardStyles } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "display", value: "flex" }),
+              entry({ property: "display", value: "block" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.queryByRole("radiogroup", { name: "Justify" })
+    ).not.toBeNull();
+  });
+
+  it("says a block's tablet value overrides its style's wider value", () => {
+    // Card sets opacity for every width; this block sets its own at tablet.
+    // At tablet the block's value covers Card's, so the line names Card,
+    // though Card stores nothing at the tablet address itself.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { tablet: { opacity: 0.2 } } },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      document.querySelector('[data-shared-line="override"]')?.textContent
+    ).toContain("overrides\u00a0Card");
+  });
+
+  it("keeps the canvas's viewport tier when weighing Reset at a container tier", () => {
+    // Editing the small-container tier while the canvas is at tablet width:
+    // Reset there shows the block's own tablet value, not Card's, so the
+    // line names no style.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: { tablet: { opacity: 0.3 }, "cq-sm": { opacity: 0.2 } },
+          },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+          } as never
+        }
+        breakpoint={"cq-sm" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.3",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.2", breakpoint: "cq-sm" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
+  it("names no style when the block's own wider value is what Reset would show", () => {
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: {
+              [BASE_BREAKPOINT]: { opacity: 0.4 },
+              tablet: { opacity: 0.2 },
+            },
+          },
+        },
+      ],
+    } as never);
+    // Card stores a tablet value too, which the exact address would find:
+    // the block's own base value sits between them in the cascade.
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { tablet: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({
+                property: "opacity",
+                value: "0.5",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.4" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    // Reset would show the block's own base value, so naming Card, with a
+    // Reset "showing Card's value", would say something untrue.
+    // The control is drawn, so the absence below is the line's own.
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
+  it("shows an inherited value in its field, and where it came from beside the label", () => {
+    // The value an author sees on the canvas, where a generic hint said
+    // nothing about it. Shown as the placeholder, so it reads as not set here
+    // and nothing is written by looking at it.
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-property="color"] input'
+    );
+    expect(input?.getAttribute("placeholder")).toBe("#123456");
+    expect(input?.value).toBe("");
+    expect(sourceIn("color")).toBe("From .card");
+  });
+
+  it("shows an inherited opacity in percent, however small its number is written", () => {
+    // `0.0000001` arrives as `1e-7`, which is a number CSS reads: shown in
+    // percent, unrounded.
+    mountCarded([fromCard({ property: "opacity", value: "1e-7" })], {
+      effects: true,
+    });
+    // By the label's start: the label also holds the source caption.
+    const field = screen.getByRole("textbox", { name: /^Opacity/ });
+    expect(field.getAttribute("placeholder")).toBe("0.00001");
+  });
+
+  it("leaves the swatch unpainted for an inherited colour it cannot resolve here", () => {
+    // A site variable or currentcolor resolves against the canvas, not this
+    // panel: painted raw, it showed the admin's colour or none.
+    mountCarded([fromCard({ value: "var(--site-color-primary)" })], {
+      color: true,
+    });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("");
+    expect(swatch?.hasAttribute("data-empty")).toBe(true);
+  });
+
+  it("opens the picker on the inherited colour it paints", () => {
+    // From the fallback, a small adjustment committed an unrelated colour.
+    mountCarded([fromCard({ value: "#336699" })], { color: true });
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Colour" }));
+    // The raw picker sits under Custom colour, after the site's variables.
+    fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
+    const picker = document.querySelector<HTMLElement>(
+      ".nx-style-inspector__picker"
+    );
+    const hex =
+      picker === null ? undefined : within(picker).getAllByRole("textbox")[0];
+    expect(
+      (hex as HTMLInputElement | undefined)?.value.toLowerCase()
+    ).toContain("336699");
+  });
+
+  it("paints an inherited colour in its swatch, marked as inherited", () => {
+    mountCarded([fromCard({ value: "#123456" })], { color: true });
+    const swatch = document.querySelector<HTMLElement>(
+      '[data-property="color"] .nx-style-inspector__swatch'
+    );
+    expect(swatch?.style.getPropertyValue("--nx-swatch")).toBe("#123456");
+    expect(swatch?.hasAttribute("data-inherited")).toBe(true);
+    expect(swatch?.hasAttribute("data-empty")).toBe(false);
+  });
+
+  it("marks an inherited Display's icon, without choosing it", () => {
+    mountCarded([fromCard({ property: "display", value: "flex" })], {
+      layout: true,
+    });
+    const flex = screen.getByRole("radio", { name: "Flex, inherited" });
+    expect(flex.getAttribute("aria-checked")).toBe("false");
+    expect(sourceIn("display")).toBe("From .card");
+  });
+
+  it("shows an inherited weight by its name, not Not set", () => {
+    // The audit's case: a bold heading read its weight as "Not set".
+    mountCarded([fromCard({ property: "font-weight", value: "700" })], {
+      typography: true,
+    });
+    expect(screen.getByLabelText(/^Font weight/).textContent).toBe("Bold 700");
+    expect(sourceIn("fontWeight")).toBe("From .card");
+  });
+
+  it("names the enclosing block an inherited colour comes from, as Layers does", () => {
+    // CSS inheritance: the box inside a "Hero" with a colour of its own takes
+    // the Hero's colour, and says so by the name the Layers panel shows.
+    register({ color: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "outer",
+          type: "acme/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          styles: { base: { [BASE_BREAKPOINT]: { color: "#123456" } } },
+          slots: {
+            children: [{ id: "a", type: "acme/box", version: 1, props: {} }],
+          },
+        },
+      ],
+    } as never);
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              entry({
+                origin: { kind: "node", id: "outer" },
+                value: "#123456",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(sourceIn("color")).toBe("From Hero");
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
+      "Inherited from Hero"
+    );
+    expect(
+      document
+        .querySelector('[data-property="color"] input')
+        ?.getAttribute("placeholder")
+    ).toBe("#123456");
+  });
+
+  it("draws no source beside a value set here", () => {
+    mountWithTrace([entry()]);
+    expect(sourceIn("color")).toBeUndefined();
+  });
+
   it("marks a value the author set on THIS block as set here", () => {
     mountWithTrace([entry()]);
     const dot = dotIn("color");
@@ -1669,7 +3686,7 @@ describe("where a control's value came from", () => {
     );
     const dot = dotIn("color");
     expect(dot?.getAttribute("data-provenance")).toBe("inherited");
-    expect(dot?.getAttribute("aria-label")).toBe("Inherited from .card");
+    expect(dot?.getAttribute("aria-label")).toBe("From .card");
   });
 
   it("refuses to style a block whose id another block also uses", () => {
@@ -1761,9 +3778,7 @@ describe("where a control's value came from", () => {
       />
     );
 
-    expect(dotIn("color")?.getAttribute("aria-label")).toBe(
-      "Inherited from .card"
-    );
+    expect(dotIn("color")?.getAttribute("aria-label")).toBe("From .card");
   });
 
   it("puts the same sentence in TEXT, for someone who tabs rather than points", () => {
@@ -1812,17 +3827,39 @@ describe("where a control's value came from", () => {
       />
     );
 
-    const text = document.querySelector(
-      '[data-property="color"] .nx-style-inspector__provenance-text'
+    // An inherited value's source is shown without focus, in brief, with the
+    // dot's whole sentence on the caption for a pointer.
+    const source = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-source'
     );
 
     // The POPULATION first. Both sides of the comparison below read through
     // `?.`, so a query that found nothing would compare `undefined` with
     // `undefined` and pass while nothing was rendered at all.
     expect(dotIn("color")).not.toBeNull();
-    expect(text).not.toBeNull();
+    expect(source).not.toBeNull();
+    expect(source?.getAttribute("title")).toBe(
+      dotIn("color")?.getAttribute("aria-label")
+    );
+    expect(source?.textContent).toBe("From .card");
+    expect(source?.getAttribute("aria-hidden")).toBe("true");
+    // And the whole sentence in text for a keyboard user, as for "Set here":
+    // the caption is brief and may be cut short.
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
     expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
-    expect(text?.textContent).not.toBe("");
+    expect(text?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("puts 'Set here' in TEXT too, revealed when the field has focus", () => {
+    mountWithTrace([entry()]);
+    const text = document.querySelector(
+      '[data-property="color"] .nx-style-inspector__provenance-text'
+    );
+    expect(dotIn("color")).not.toBeNull();
+    expect(text?.textContent).toBe(dotIn("color")?.getAttribute("aria-label"));
+    expect(text?.textContent).toBe("Set here");
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -2046,7 +4083,7 @@ describe("where a control's value came from", () => {
      */
     mountWithTrace(undefined);
     expect(dotIn("color")).toBeNull();
-    expect(fieldsOf("color").getByLabelText("Color")).toBeTruthy();
+    expect(fieldsOf("color").getByLabelText("Colour")).toBeTruthy();
   });
 
   it("draws nothing when the trace cannot say WHICH control wrote it", () => {
@@ -2176,8 +4213,22 @@ describe("naming the place a value came from", () => {
     // The id is storage and must not reach anything rendered or queried; the
     // slug is what the author typed and what the canvas shows.
     expect(nameFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
-      "Inherited from .card"
+      "From .card"
     );
+  });
+
+  it("names a shared style by its name where the panel knows it", () => {
+    // "From Card": the style the author chose for the block, by the name the
+    // Shared styles tab gives it, rather than its class name.
+    const named = describeProvenance(
+      {
+        kind: "inherited",
+        entry: at(),
+        from: { kind: "class", id: "cls-1", slug: "card" },
+      } as never,
+      { ...editing, sharedStyleName: () => "Card" } as never
+    )?.text;
+    expect(named).toBe("From Card");
   });
 
   it("names the block's own defaults and the page", () => {
@@ -2282,7 +4333,7 @@ describe("naming the place a value came from", () => {
     );
 
     expect(label).toContain("at Medium");
-    expect(label).toBe("Inherited from .card at Medium");
+    expect(label).toBe("From .card at Medium");
   });
 
   it("says which control a non-node rule came THROUGH, without moving the place", () => {
@@ -2297,7 +4348,7 @@ describe("naming the place a value came from", () => {
       at({ property: "color", descendant: " a" })
     );
 
-    expect(label).toContain(".card");
+    expect(label).toMatch(/^From \.card /);
     expect(label).toContain("via");
   });
 
@@ -2345,7 +4396,7 @@ describe("naming the place a value came from", () => {
         editing as never,
         "a:hover"
       )?.text
-    ).toBe("Inherited from the Link color control");
+    ).toBe("Inherited from the Link colour control");
   });
 
   it("still says 'this block' when the control's OWN rule won", () => {
@@ -2379,6 +4430,92 @@ describe("naming the place a value came from", () => {
       )
     ).toBeNull();
     expect(describeProvenance(undefined, editing as never)).toBeNull();
+  });
+
+  describe("in brief, as the caption shown beside an inherited value", () => {
+    const sourceFor = (
+      origin: unknown,
+      entry = at(),
+      descendant?: string
+    ): string | undefined => {
+      const described = describeProvenance(
+        { kind: "inherited", entry, from: origin } as never,
+        editing as never,
+        descendant
+      );
+      return described?.kind === "inherited" ? described.source : undefined;
+    };
+
+    it("names only what differs when the value is this block's own", () => {
+      // "From this block at Medium" spends the row on the one part the author
+      // already knows: they selected this block.
+      expect(
+        sourceFor({ kind: "node", id: "a" }, at({ breakpoint: "md" }))
+      ).toBe("From Medium");
+      expect(sourceFor({ kind: "node", id: "a" }, at({ state: "hover" }))).toBe(
+        "From Hover"
+      );
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ breakpoint: "md", state: "hover" })
+        )
+      ).toBe("From Medium · Hover");
+    });
+
+    it("names the tier it came from, with what differs after it", () => {
+      expect(sourceFor({ kind: "class", id: "cls-1", slug: "card" })).toBe(
+        "From .card"
+      );
+      expect(
+        sourceFor(
+          { kind: "class", id: "cls-1", slug: "card" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From .card · Medium");
+      expect(sourceFor({ kind: "page" })).toBe("From the page");
+      expect(sourceFor({ kind: "node", id: "outer" })).toBe(
+        "From an enclosing block"
+      );
+    });
+
+    it("calls a block's defaults and the typography baseline defaults", () => {
+      expect(sourceFor({ kind: "blockType", type: "acme/box" })).toBe(
+        "From block defaults"
+      );
+      expect(sourceFor({ kind: "blockType", type: "acme/section" })).toBe(
+        "From enclosing block defaults"
+      );
+      // A heading's weight from the h2 baseline: the element an author sees
+      // in the HTML tag control, not the tier's internal name.
+      expect(sourceFor({ kind: "element", tag: "h2" })).toBe(
+        "From H2 defaults"
+      );
+    });
+
+    it("names no breakpoint after defaults, which no breakpoint edits", () => {
+      // "From H2 defaults · Desktop" sends an author to a tier where the value
+      // is not, since defaults are no tier's to edit.
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ breakpoint: "md" }))
+      ).toBe("From H2 defaults");
+      expect(
+        sourceFor(
+          { kind: "blockType", type: "acme/box" },
+          at({ breakpoint: "md" })
+        )
+      ).toBe("From block defaults");
+    });
+
+    it("names the control a descendant rule came from by its label alone", () => {
+      expect(
+        sourceFor(
+          { kind: "node", id: "a" },
+          at({ property: "color", descendant: " a" }),
+          "a:hover"
+        )
+      ).toBe("From Link colour");
+    });
   });
 });
 
@@ -2460,7 +4597,10 @@ describe("the action a control's breakpoint provenance earns", () => {
      * rather than a load-bearing one, and this case does not pretend to cover
      * it.
      */
-    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+    // Stored at another tier and nowhere in the trace, so the address being
+    // edited holds nothing: a value stored HERE earns a reset however the
+    // cascade reads it.
+    mount({ stored: "tablet", entries: [], onJump: () => {} });
 
     expect(action("reset")).toBeNull();
     expect(action("jump")).toBeNull();
@@ -2498,15 +4638,63 @@ describe("the action a control's breakpoint provenance earns", () => {
      * Block start" and a screen-reader user could not tell which style each
      * removes — the same reason the panel computes an action name for `Clear`.
      */
-    expect(label).toContain("Color");
+    expect(label).toContain("Colour");
     /*
      * The tier a reset falls back to is NAMED, not left to be guessed. The
-     * unconditional tier has no authored definition to take a label from, so it
-     * is called by its id here — the same name every other sentence in this
-     * panel gives it, which is the point: one naming, not a second one invented
-     * for this button.
+     * unconditional tier is called what the device switcher calls it — the
+     * same name every other sentence in this panel gives it, which is the
+     * point: one naming, not a second one invented for this button.
      */
-    expect(label).toContain("from base");
+    expect(label).toContain("from Desktop");
+  });
+
+  it("keeps the reset for a value stored at a tier the canvas is not showing", () => {
+    /*
+     * The panel can edit a tier the preview is not at. The cascade then reads
+     * the control as unset, which is true of what is DISPLAYED, while a value
+     * is stored at the address being edited. A list has no Clear of its own,
+     * so this reset is the one way to remove that value.
+     */
+    register({ layout: true });
+    const editor = editorFor(
+      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "display",
+                value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const reset = document.querySelector<HTMLElement>(
+      '[data-property="display"] [data-action="reset"]'
+    );
+    expect(reset).not.toBeNull();
+    // Named without saying what shows through: the cascade did not rank this
+    // tier, so "leaving it unset" could be false.
+    expect(reset?.getAttribute("aria-label")).toBe("Reset Display at Tablet");
+    fireEvent.click(reset as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
+      "flex"
+    );
   });
 
   it("names the action by its PROPERTY, not by the leaf alone", () => {
@@ -2641,6 +4829,45 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(action("jump")).not.toBeNull();
   });
 
+  it("names the source on the jump itself, and once", () => {
+    // The jump says where the value comes from and goes there: a caption
+    // beside the label saying "From Tablet" as well said it twice.
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")?.textContent).toBe("From Tablet");
+    expect(action("jump")?.getAttribute("aria-label")).toMatch(
+      /^Edit Colour at Tablet/
+    );
+    expect(
+      document.querySelector(
+        '[data-property="color"] .nx-style-inspector__provenance-source'
+      )
+    ).toBeNull();
+  });
+
+  it("keeps the reset beside the jump when a value stored here is shadowed", () => {
+    /*
+     * Editing base while a live tablet declaration wins: the row's value
+     * comes from tablet, so it earns the jump, and base still stores a value
+     * the author can only remove from here. A list or an icon group has no
+     * Clear of its own, so without this reset that value is stuck.
+     */
+    const editor = mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+    expect(action("reset")).not.toBeNull();
+    fireEvent.click(action("reset") as HTMLElement);
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
   it("withholds the jump for a tier the canvas cannot be taken to", () => {
     /*
      * Two ids can carry one bound, and only the winner is offered as a choice —
@@ -2734,8 +4961,12 @@ describe("the action a control's breakpoint provenance earns", () => {
  */
 describe("a segmented keyword control behaves as a toggle", () => {
   /** The buttons of the `fontStyle` toggle, by their option name. */
-  const optionButton = (name: string) =>
-    fieldsOf("fontStyle").getByRole("button", { name });
+  // Found by its words, which name a keyword's button (its CSS spelling is the
+  // tooltip): the cases below speak in keywords, which is what is stored.
+  const optionButton = (keyword: string) =>
+    fieldsOf("fontStyle").getByRole("button", {
+      name: keywordLabel("font-style", keyword),
+    });
 
   /**
    * Every option button, found through the group BY ITS ACCESSIBLE NAME.
@@ -2778,13 +5009,17 @@ describe("a segmented keyword control behaves as a toggle", () => {
   };
 
   /** The panel with one `fontStyle` value already stored, or none. */
-  const mountWith = (stored?: string | undefined) =>
-    mount(
+  const mountWith = (stored?: string | undefined) => {
+    const editor = mount(
       { typography: true },
       stored === undefined
         ? undefined
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
+    // Behind Typography's More until it holds a value.
+    if (stored === undefined) reveal("typography", "Font style");
+    return editor;
+  };
 
   /*
    * Every case below is driven from MORE THAN ONE option, and that is the point
@@ -2801,8 +5036,9 @@ describe("a segmented keyword control behaves as a toggle", () => {
       mountWith(stored);
 
       for (const button of allOptions()) {
+        // The button's keyword is its tooltip; its words are its text.
         expect(button.getAttribute("aria-pressed")).toBe(
-          String(button.textContent?.trim() === stored)
+          String(button.getAttribute("title") === stored)
         );
       }
     }
@@ -2871,6 +5107,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
+    reveal("typography", "Font style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -2919,6 +5156,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
+    reveal("typography", "Font style");
 
     fireEvent.click(optionButton("italic"));
 
@@ -2938,7 +5176,10 @@ describe("a segmented keyword control behaves as a toggle", () => {
      */
     const editor = mountWith("italic");
 
-    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+    // The field's own label: the form toggle's row says the name as well.
+    fireEvent.click(
+      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+    );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
@@ -2980,6 +5221,78 @@ describe("a per-side property is drawn as a box", () => {
   /** The element carrying the box arrangement, which is INSIDE the property. */
   const frameOf = (box: HTMLElement | null) =>
     box?.querySelector(".nx-style-inspector__side-box") as HTMLElement | null;
+
+  /** The one spacing box, margin around padding, in the element's axes. */
+  function mountSpacingBox(orientation: {
+    writingMode: string;
+    direction: string;
+  }) {
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel editor={editor} sideOrientation={orientation} />
+    );
+    return {
+      editor,
+      box: document.querySelector(".nx-spacing-box") as HTMLElement | null,
+    };
+  }
+
+  it("draws margin and padding as ONE box, padding inside margin", () => {
+    // The design's box model: margin the outer ring, padding the inner, the
+    // element in the middle, rather than two separate crosses of fields.
+    const { box } = mountSpacingBox(LTR);
+
+    expect(document.querySelectorAll(".nx-spacing-box")).toHaveLength(1);
+    const margin = box?.querySelector('[data-ring="margin"]');
+    const padding = margin?.querySelector('[data-ring="padding"]');
+    expect(padding).toBeTruthy();
+    expect(margin?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+    expect(padding?.querySelectorAll(":scope > [data-side]")).toHaveLength(4);
+  });
+
+  it("names each side in plain words for the element's axes", () => {
+    // "Margin top" rather than "Top": the box is drawn because the
+    // element's axes are known, and in them the sides have physical names.
+    const { box } = mountSpacingBox(LTR);
+    const within_ = within(box as HTMLElement);
+
+    expect(within_.getByLabelText("Margin top")).toBeDefined();
+    expect(within_.getByLabelText("Margin left")).toBeDefined();
+    expect(within_.getByLabelText("Padding right")).toBeDefined();
+    expect(within_.getByLabelText("Padding bottom")).toBeDefined();
+  });
+
+  it("mirrors the inline names on a right-to-left element", () => {
+    const { box } = mountSpacingBox({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+    const field = within(box as HTMLElement).getByLabelText("Padding right");
+
+    expect(field.closest("[data-side]")?.getAttribute("data-side")).toBe(
+      "inlineStart"
+    );
+  });
+
+  it("commits a side typed with its unit, and keeps each side compact", () => {
+    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
+    // short dash says it is unset rather than a hint that cannot fit.
+    const { editor, box } = mountSpacingBox(LTR);
+    const field = within(box as HTMLElement).getByLabelText(
+      "Padding top"
+    ) as HTMLInputElement;
+
+    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
+    expect(field.placeholder).toBe("–");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    fireEvent.blur(field);
+
+    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
+    expect(ops).toContain("padding");
+    expect(ops).toContain('"blockStart":"12px"');
+  });
 
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
@@ -3048,6 +5361,24 @@ describe("a per-side property is drawn as a box", () => {
     ).toBeDefined();
   });
 
+  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
+    // A value wider than its cell was cut short with no way to read it.
+    register({ spacing: true });
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
+    } as NodeStyles;
+    render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf(styles))}
+        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
+      />
+    );
+    const side = document.querySelector(
+      '[data-property="padding"] [data-side="inlineStart"] input'
+    ) as HTMLInputElement;
+    expect(side.getAttribute("title")).toBe("12.375rem");
+  });
+
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
      * The forwarding hop, and the only test here that measures rather than is
@@ -3090,5 +5421,591 @@ describe("a per-side property is drawn as a box", () => {
     expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
       "rtl"
     );
+  });
+});
+
+describe("opacity in percent", () => {
+  it("shows a stored opacity in percent, in the field and on its slider", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    expect((field as HTMLInputElement).value).toBe("50");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-valuenow")
+    ).toBe("50");
+  });
+
+  it("stores a typed percent as the fraction CSS takes", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "80" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.8 } } } },
+    });
+  });
+
+  it("stores the slider's percent as the fraction once the drag settles", () => {
+    const editor = mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } }
+    );
+    const slider = screen.getByRole("slider", { name: "Opacity slider" });
+    fireEvent.keyDown(slider, { key: "ArrowLeft" });
+    expect(JSON.stringify(editor.applyAll.mock.calls)).toContain(
+      '"opacity":0.49'
+    );
+  });
+
+  it("points the slider at a refusal, as the number beside it is", () => {
+    mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "lots" } });
+    fireEvent.blur(field);
+    const alert = screen.getByRole("alert");
+    expect(
+      screen
+        .getByRole("slider", { name: "Opacity slider" })
+        .getAttribute("aria-describedby")
+    ).toBe(alert.id);
+  });
+
+  it("draws no slider over a keyword, which no position on it stands for", () => {
+    // A slider at 100% over `inherit` would show a value that is not there,
+    // and a nudge would replace the keyword with one built from it.
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(screen.queryByRole("slider", { name: "Opacity slider" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Opacity" })).toBeDefined();
+  });
+
+  it("keeps a typed percent's precision, dividing it by 100 and no more", () => {
+    // The number is the exact path; only the slider is whole percent.
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "12.345" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: { styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.12345 } } } },
+    });
+  });
+
+  it("commits a typed percent on Enter without submitting the entry", () => {
+    // The builder mounts inside the entry's form.
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    register({ effects: true });
+    const editor = editorFor(documentOf());
+    render(
+      <form onSubmit={submitted}>
+        <StyleInspectorPanel editor={editor} />
+      </form>
+    );
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "40" } });
+    expect(fireEvent.keyDown(field, { key: "Enter" })).toBe(false);
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
+  it("says in its label's tooltip that it is in percent", () => {
+    // The catalog's summary reads "0 to 1", which the field no longer takes.
+    mount({ effects: true });
+    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    expect(title).toMatch(/percent/);
+    expect(title).not.toMatch(/0 to 1/);
+  });
+
+  it("names its unit for a screen reader, which hears no % sign", () => {
+    mount({ effects: true });
+    expect(
+      screen.getByRole("textbox", { name: "Opacity", description: "percent" })
+    ).toBeDefined();
+  });
+
+  it("passes a CSS-wide keyword through, unscaled", () => {
+    const editor = mount({ effects: true });
+    const field = screen.getByRole("textbox", { name: "Opacity" });
+    fireEvent.change(field, { target: { value: "inherit" } });
+    fireEvent.blur(field);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toMatchObject({
+      patch: {
+        styles: { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } },
+      },
+    });
+  });
+});
+
+describe("an aspect ratio", () => {
+  it("is a menu of ratios by name where the stored ratio is one it can draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "16 / 9" } } }
+    );
+    expect(fieldsOf("aspectRatio").getByRole("combobox").textContent).toBe(
+      "16:9"
+    );
+  });
+
+  it("keeps the text field for a ratio the menu cannot draw", () => {
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { aspectRatio: "auto 4 / 3" } } }
+    );
+    expect(fieldsOf("aspectRatio").queryByRole("combobox")).toBeNull();
+    expect(fieldsOf("aspectRatio").getByRole("textbox")).toBeDefined();
+  });
+});
+
+describe("an image's focal point", () => {
+  /** An image with the given fit, drawn on the canvas as `img`. */
+  function mountImage(fit: string | undefined, picture?: string) {
+    register({ dimensions: true });
+    const styles =
+      fit === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { objectFit: fit } } } as NodeStyles);
+    const editor = editorFor(documentOf(styles));
+    render(
+      <FocalFrame.Provider value={{ picture }}>
+        <StyleInspectorPanel editor={editor} renderedTag="img" />
+      </FocalFrame.Provider>
+    );
+    return editor;
+  }
+
+  it("shows beside a fit that leaves a choice of where the picture sits", () => {
+    // Scale down is None or Contain, whichever is smaller: it sits too.
+    for (const fit of ["cover", "contain", "none", "scale-down"]) {
+      mountImage(fit);
+      expect(
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("waits behind More where the fit stretches the picture, or none is set", () => {
+    for (const fit of ["fill", undefined]) {
+      mountImage(fit);
+      expect(
+        screen.queryByRole("radiogroup", { name: "Focal point" })
+      ).toBeNull();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("is drawn over the block's own picture, and writes object-position", () => {
+    const editor = mountImage("cover", "/team.png");
+    expect(
+      document.querySelector(".nx-focal__picture")?.getAttribute("src")
+    ).toBe("/team.png");
+    expect(screen.getByText("Kept in view")).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Top" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"objectPosition":"center top"'
+    );
+  });
+
+  it("does not choose a point when its label is clicked", () => {
+    const editor = mountImage("cover");
+    fireEvent.click(screen.getByText("Focal point"));
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
+describe("an image's fit", () => {
+  it("is named Fit, its CSS name in the label's tooltip", () => {
+    // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
+    // a video, an embed or a canvas as well as an image.
+    mount(
+      { dimensions: true },
+      { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
+    );
+    expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
+    expect(screen.getByText("Fit").closest("label")?.title).toMatch(
+      /^Object fit/
+    );
+  });
+});
+
+describe("opacity's unit in words", () => {
+  /** The ids describing the opacity field. */
+  const described = () =>
+    (
+      screen
+        .getByRole("textbox", { name: /^Opacity/ })
+        .getAttribute("aria-describedby") ?? ""
+    )
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("says percent while the value is a number", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    expect(described()).toContain("percent");
+  });
+
+  it("decides from what the field shows, an inherited keyword included", () => {
+    // Unset here, the field shows what reaches it as its hint; a keyword
+    // there has no unit either, and a number there does.
+    expect(describedWithUnit(undefined, "unit", "", "inherit")).toBeUndefined();
+    expect(describedWithUnit("err", "unit", "", "50")).toBe("err unit");
+    expect(describedWithUnit(undefined, "unit", "", undefined)).toBe("unit");
+    expect(describedWithUnit(undefined, "unit", "40", "inherit")).toBe("unit");
+  });
+
+  it("says no unit for a keyword, which has none", () => {
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(described()).not.toContain("percent");
+  });
+});
+
+describe("text decoration", () => {
+  it("is drawn as icons where the stored value is one it can read", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(
+      row.getByRole("radio", { name: "Underline" }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(row.getByRole("button", { name: /style$/ })).toBeDefined();
+  });
+
+  it("keeps the text field for a value the icons cannot draw", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(row.queryByRole("radio")).toBeNull();
+    expect(row.getByRole("textbox")).toBeDefined();
+  });
+
+  it("focuses the icons from the label without choosing or clearing a line", () => {
+    // A label's `for` would CLICK the tab stop's radio, clearing the line
+    // chosen or writing the first.
+    const editor = mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe("");
+    fireEvent.click(label);
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Underline"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps the label's `for` on the text field the icons give way to", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe(
+      fieldsOf("textDecoration").getByRole("textbox").id
+    );
+  });
+});
+
+describe("letter case", () => {
+  it("is named in plain words, its CSS name in the label's tooltip", () => {
+    // "Text transform" says how CSS does it; "Letter case" says what it is.
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
+    );
+    const group = screen.getByRole("radiogroup", { name: "Letter case" });
+    expect(screen.getByText("Letter case").closest("label")?.title).toMatch(
+      /^Text transform/
+    );
+    expect(
+      within(group).getByRole("radio", { name: "Uppercase" })
+    ).toBeDefined();
+  });
+});
+
+describe("a font size's unit menu", () => {
+  it("leaves the absolute size keywords out, where they read as nothing", () => {
+    // "x-large" says no size an author can picture; the site's variables,
+    // offered beside the field, do.
+    register({ typography: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    fireEvent.click(screen.getByLabelText("Unit for Font size"));
+    const spelled = screen
+      .getAllByRole("option")
+      .map(option => option.getAttribute("title"));
+    for (const keyword of ["xx-small", "small", "medium", "x-large"]) {
+      expect(spelled).not.toContain(keyword);
+    }
+    // A relative keyword a size has no other way to say stays.
+    expect(spelled).toContain("smaller");
+  });
+});
+
+describe("the Baseline gate on the panel", () => {
+  it("offers no control for a withheld keyword", () => {
+    mount({ layout: true });
+
+    fireEvent.click(screen.getByLabelText("More Display values"));
+
+    expect(screen.getByRole("option", { name: "Inline flex" })).toBeDefined();
+    expect(screen.queryByRole("option", { name: "Contents only" })).toBeNull();
+  });
+
+  it("names a keyword in words, with its CSS spelling in the tooltip", () => {
+    // "inline-flex" read as code; the words are what an author picks from.
+    mount({ layout: true });
+    fireEvent.click(screen.getByLabelText("More Display values"));
+    const option = screen.getByRole("option", { name: "Inline flex" });
+    expect(option.getAttribute("title")).toBe("inline-flex");
+  });
+
+  it("offers a stored spelling once, in words, in the place of the keyword it spells", () => {
+    // The validator stores `DENSE ROW` as the row dense it is, so the menu
+    // names it once in words, in the place of both spellings of that value,
+    // rather than adding an item read as code.
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { display: "grid", gridAutoFlow: "DENSE ROW" },
+      },
+    } as NodeStyles;
+    mount({ layout: true }, styles);
+    fireEvent.click(screen.getByRole("combobox", { name: /^Grid auto flow/ }));
+    const options = screen.getAllByRole("option", { name: "Row, fill gaps" });
+    expect(options).toHaveLength(1);
+    expect(options[0]?.getAttribute("title")).toBe("DENSE ROW");
+    expect(screen.queryByRole("option", { name: "DENSE ROW" })).toBeNull();
+  });
+
+  it("offers a stored spelling once among the values beside the icons", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "INLINE-FLEX" } },
+    } as NodeStyles;
+    mount({ layout: true }, styles);
+    fireEvent.click(screen.getByLabelText("More Display values"));
+    const options = screen.getAllByRole("option", { name: "Inline flex" });
+    expect(options).toHaveLength(1);
+    expect(options[0]?.getAttribute("title")).toBe("INLINE-FLEX");
+  });
+
+  it("shows a stored withheld value clear-only, and says why", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { display: "contents" } },
+    } as NodeStyles;
+    const editor = mount({ layout: true }, styles);
+
+    const display = fieldsOf("display");
+    expect(display.queryByRole("combobox")).toBeNull();
+    expect(display.getByText("contents")).toBeDefined();
+    expect(
+      display.getByText(/not every major browser supports it yet/)
+    ).toBeDefined();
+
+    fireEvent.click(display.getByRole("button", { name: "Clear Display" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a read-only design", () => {
+  // Effects alone, so its section is the open one and its More is drawn
+  // whenever it is allowed: the locked case then cannot pass by absence.
+  const opacityInput = () =>
+    fieldsOf("opacity").getByLabelText("Opacity") as HTMLInputElement;
+
+  it("says why and disables every control, More included, while the block is locked", () => {
+    register({ effects: true });
+    const document = documentOf();
+    const locked = {
+      ...document,
+      nodes: [{ ...document.nodes[0], locked: true }],
+    } as BlockDocument;
+    render(<StyleInspectorPanel editor={editorFor(locked)} />);
+
+    expect(
+      screen.getByText(/Locked: it can't be moved, deleted or edited/)
+    ).toBeDefined();
+    expect(opacityInput().matches(":disabled")).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "More effects properties" })
+    ).toBeNull();
+  });
+
+  it("leaves the editor around the More menu in the accessibility tree", async () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "More effects properties" }),
+      { key: "Enter" }
+    );
+    await screen.findByRole("menu");
+
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+  });
+
+  it("leaves every control editable on a block nothing locks", () => {
+    // The positive control for the case above.
+    register({ effects: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+
+    expect(opacityInput().matches(":disabled")).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "More effects properties" })
+    ).toBeDefined();
+  });
+
+  it("refuses a write once a lock lands after the panel drew", () => {
+    // The guard is the write path's own, asked of the live document: a lock set
+    // in Layers after the panel drew still stops the next edit, though the
+    // field on screen was drawn editable.
+    register({ spacing: true });
+    const document = documentOf();
+    const editor = editorFor(document);
+    render(<StyleInspectorPanel editor={editor} />);
+    const input = fieldsOf("margin").getByLabelText("Block start");
+    fireEvent.change(input, { target: { value: "8px" } });
+
+    editor.document = {
+      ...document,
+      nodes: [{ ...document.nodes[0], locked: true }],
+    } as BlockDocument;
+    fireEvent.blur(input);
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/locked/);
+  });
+});
+
+describe("which elements count as media for the fit controls", () => {
+  const fitShown = (renderedTag: string) => {
+    register({ dimensions: true });
+    const { unmount } = render(
+      <StyleInspectorPanel
+        editor={editorFor(documentOf())}
+        renderedTag={renderedTag}
+      />
+    );
+    const shown =
+      document.querySelector('[data-property="objectFit"]') !== null;
+    unmount();
+    clearBlocks();
+    return shown;
+  };
+
+  it("shows them on an image and not on a picture wrapper", () => {
+    expect(fitShown("img")).toBe(true);
+    // A `<picture>` only chooses a source; the image inside it is what fits.
+    expect(fitShown("picture")).toBe(false);
+    expect(fitShown("div")).toBe(false);
+  });
+});
+
+describe("a colour that does not follow light and dark", () => {
+  it("is marked on the control holding it", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: "#1d2b6b" } } }
+    );
+    expect(
+      fieldsOf("color").getByText(/Not adapted to dark mode/)
+    ).toBeDefined();
+  });
+
+  it("is not marked once a variable holds the colour", () => {
+    mount(
+      { color: true },
+      { base: { [BASE_BREAKPOINT]: { color: { $token: "color.text" } } } }
+    );
+    expect(
+      fieldsOf("color").queryByText(/Not adapted to dark mode/)
+    ).toBeNull();
+  });
+});
+
+describe("the Font control", () => {
+  const INTER = {
+    family: "Inter",
+    src: [{ url: "/api/media/a/raw", format: "woff2" }],
+    weight: "100 900",
+    source: { kind: "google" as const, id: "inter", category: "sans-serif" },
+  };
+
+  function mountFonts(onManageFonts?: () => void) {
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [], onManageFonts }}
+      />
+    );
+    return editor;
+  }
+
+  it("removes a family the site does not have through the row's one reset", () => {
+    register({ typography: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { fontFamily: "Comic Sans MS, cursive" } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        fonts={{ faces: [INTER], fromCode: [] }}
+      />
+    );
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("button", { name: "Clear Font" })).toBeNull();
+    fireEvent.click(field.getByRole("button", { name: /^Reset Font/ }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a list of the site's fonts, with no box to type a family into", () => {
+    mountFonts();
+    const field = fieldsOf("fontFamily");
+    expect(field.queryByRole("textbox")).toBeNull();
+    const control = field.getByRole("button", { name: /^Font, / });
+    expect(control.getAttribute("aria-haspopup")).toBe("listbox");
+  });
+
+  it("writes the family picked, with its generic after it", () => {
+    const editor = mountFonts();
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Inter" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '\\"Inter\\", sans-serif'
+    );
+  });
+
+  it("hands Design's fonts to the author who asks", () => {
+    const onManageFonts = vi.fn();
+    mountFonts(onManageFonts);
+    fireEvent.click(
+      fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add or manage fonts…" })
+    );
+    expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 });

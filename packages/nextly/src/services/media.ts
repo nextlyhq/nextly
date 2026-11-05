@@ -5,7 +5,8 @@
  *
  * Features:
  * - Auto-detects storage (Vercel Blob, S3, R2, or local filesystem)
- * - Automatic thumbnail generation for images
+ * - Automatic thumbnail generation for images: the whole image, fitted
+ *   inside 480x480. No other size is made.
  * - Image optimization (compression, WebP conversion)
  * - Pagination, search, filtering, sorting
  * - File validation and error handling
@@ -27,40 +28,52 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, count, desc, asc, or, sql } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { count, desc, asc, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
   getImageProcessor,
   withRetry,
   isTransientError,
-  generateImageSizes,
 } from "@nextly/storage";
 
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
 import {
+  lockMediaFolders,
+  lockMediaItems,
+} from "../domains/media/lock-media-items";
+import type {
+  MediaLibraryCounts,
+  UnusedSources,
+} from "../domains/media/media-library-query";
+import type { DeleteClaim } from "../domains/media/pending-delete";
+import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
-  warnNotRemoved,
-  warnUnlocated,
+  storageReadingOf,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
+import { storedSizesOf } from "../domains/media/retired-image-sizes-store";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
-import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
+import {
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
 import { keysToSnakeCase } from "../lib/case-conversion";
+import { withoutStoredSizes } from "../lib/media-variant";
 import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import { refusesUpload } from "../storage/image-processor";
-import { siblingStoredPath } from "../storage/stored-path";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
   Media,
@@ -70,10 +83,10 @@ import type {
   DeleteMediaResponse,
   UploadMediaInput,
   UpdateMediaInput,
+  MediaView,
 } from "../types/media";
 
 import { BaseService } from "./base-service";
-import { ImageSizeService } from "./image-size";
 import type { Logger } from "./shared";
 
 /**
@@ -109,14 +122,11 @@ type BulkDeleteOutcome = BulkOutcome<{
 }>;
 
 /**
- * `sizes` as a write stores it: a JSON string, or null. The positional insert
- * and update bind values through the raw driver, which cannot bind a plain
- * object for the json/jsonb/text `sizes` column consistently across all three
- * dialects (SQLite refuses one outright), so every write serializes it here.
+ * A media row as the table holds it. One stored before image sizes were
+ * removed may still carry `sizes`, which only the removal of its files reads:
+ * every row this service hands back goes through `withoutStoredSizes`.
  */
-function sizesColumn(sizes: unknown): string | null {
-  return sizes == null ? null : JSON.stringify(sizes);
-}
+type StoredMediaRow = Media & { sizes?: unknown };
 
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
@@ -175,6 +185,21 @@ export class MediaService extends BaseService {
   }
 
   /** How this service reads the media rows that may share a file (filesKeptByOthers). */
+  /**
+   * The item's row, locked and re-read inside `tx` so a write sees the
+   * latest committed state, or undefined when a concurrent delete removed it.
+   */
+  private async lockedRow(
+    tx: TransactionContext,
+    mediaId: string
+  ): Promise<StoredMediaRow | undefined> {
+    await lockMediaItems(tx, [mediaId]);
+    const rows = await tx.select<StoredMediaRow>("media", {
+      where: this.whereEq("id", mediaId),
+    });
+    return rows[0];
+  }
+
   private get storedFileSearch(): StoredFileSearch {
     return new StoredFileSearchReader(this.adapter, this.logger).search;
   }
@@ -215,9 +240,105 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * What decides which items are unused: the usage table and the records
+   * outside content that keep an item by its address. `null` before
+   * `nextly migrate` has created the usage table. Asked on the pool: nothing
+   * here runs inside a caller's transaction.
+   */
+  private async unusedSources(): Promise<UnusedSources | null> {
+    // Loaded when the library is read, not with the service.
+    const [{ mediaUsagePresent }, { mediaAddressHolders }] = await Promise.all([
+      import("../domains/media/usage/media-usage-store"),
+      import("../domains/media/media-address-holders"),
+    ]);
+    if (!(await mediaUsagePresent(this.adapter, this.logger))) return null;
+    return {
+      usage: this.tables.nextlyMediaUsage,
+      holders: await mediaAddressHolders(this.adapter, this.tables),
+      dialect: this.adapter.getCapabilities().dialect,
+    };
+  }
+
+  /**
+   * How many records outside content keep `address`: users' avatars, the
+   * email brand's logo and the site's logos, asked as the `unused` view asks
+   * them (`mediaAddressHolders`). A Replace keeps the old file while any
+   * does, since each goes on naming that address. Asked on the pool.
+   */
+  async addressHolderCount(address: string): Promise<number> {
+    // Loaded when it is asked, not with the service.
+    const [{ mediaAddressHolders }, { holderKeeps }] = await Promise.all([
+      import("../domains/media/media-address-holders"),
+      import("../domains/media/media-library-query"),
+    ]);
+    const dialect = this.adapter.getCapabilities().dialect;
+    let held = 0;
+    for (const holder of await mediaAddressHolders(this.adapter, this.tables)) {
+      const [row] = await this.db
+        .select({ value: count() })
+        .from(holder.table)
+        .where(holderKeeps(holder, address, dialect));
+      held += Number(row?.value ?? 0);
+    }
+    return held;
+  }
+
+  /**
+   * The sidebar's counts, in one query: every folder's items (and the items
+   * in no folder), and each view's. Grouped by folder, with each view's
+   * condition summed inside the group, so the whole library is read once
+   * and nothing is counted in the application.
+   *
+   * `unused` is `null` before `nextly migrate` has created the usage table.
+   * `usageRecorded` says whether the record has been built for content
+   * written before it existed (`nextly media reindex-usage`): until then an
+   * item that content uses can read as unused.
+   */
+  async countLibrary(): Promise<MediaLibraryCounts> {
+    const { media } = this.tables;
+    const unused = await this.unusedSources();
+    // Loaded when the library is read, not with the service.
+    const [
+      { mediaLibraryCountsOf, missingAltText, notPendingDelete, unusedItem },
+      { readWithinOneBuild },
+    ] = await Promise.all([
+      import("../domains/media/media-library-query"),
+      import("../domains/media/usage/media-usage-store"),
+    ]);
+    // Counted within one build of the record (`readWithinOneBuild`): the
+    // counts are trusted as complete only when one build stood throughout,
+    // so a rebuild that starts or finishes meanwhile reads as unbuilt.
+    const present = unused !== null;
+    const countGroups = () =>
+      this.db
+        .select({
+          folderId: media.folderId,
+          items: count(),
+          missingAlt: sql<
+            number | string | null
+          >`SUM(CASE WHEN ${missingAltText(media)} THEN 1 ELSE 0 END)`,
+          unused: unused
+            ? sql<
+                number | string | null
+              >`SUM(CASE WHEN ${unusedItem(media, unused)} THEN 1 ELSE 0 END)`
+            : sql<number>`0`,
+        })
+        .from(media)
+        // Never an item deleted inside the Undo window, as every library read.
+        .where(notPendingDelete(media))
+        .groupBy(media.folderId);
+    const { value: groups, recorded } = present
+      ? await readWithinOneBuild(this.adapter, countGroups)
+      : { value: await countGroups(), recorded: false };
+    return mediaLibraryCountsOf(groups, { present, recorded });
+  }
+
+  /**
    * List media with pagination, search, filtering, and sorting
    */
-  async listMedia(params?: MediaParams): Promise<MediaListResponse> {
+  async listMedia(
+    params?: MediaParams & { view?: MediaView }
+  ): Promise<MediaListResponse> {
     try {
       const {
         page = 1,
@@ -225,63 +346,69 @@ export class MediaService extends BaseService {
         search,
         type,
         folderId,
+        view,
         sortBy = "uploadedAt",
         sortOrder = "desc",
       } = params || {};
 
       const { media } = this.tables;
 
-      const conditions = [];
-
-      if (folderId !== undefined) {
-        if (folderId === null || folderId === "root") {
-          conditions.push(sql`${media.folderId} IS NULL`);
-        } else {
-          conditions.push(sql`${media.folderId} = ${folderId}`);
-        }
-      }
-
-      // Using LOWER() for case-insensitive search across all databases
-      if (search) {
-        const searchLower = search.toLowerCase();
-        conditions.push(
-          or(
-            sql`LOWER(${media.filename}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.originalFilename}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.altText}) LIKE ${`%${searchLower}%`}`,
-            sql`LOWER(${media.caption}) LIKE ${`%${searchLower}%`}`
-          )
-        );
-      }
-
-      if (type) {
-        conditions.push(sql`${media.mimeType} LIKE ${`${type}/%`}`);
-      }
-
-      const whereClause =
-        conditions.length > 0 ? and(...conditions) : undefined;
+      // The same narrowing a folder's contents and the sidebar's counts use,
+      // loaded when the library is read, not with the service.
+      const { mediaQueryCondition } = await import(
+        "../domains/media/media-library-query"
+      );
+      const unused = view === "unused" ? await this.unusedSources() : null;
+      const whereClause = mediaQueryCondition(
+        media,
+        unused,
+        { folderId, search, type, view },
+        this.dialect
+      );
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);
 
       const offset = (page - 1) * limit;
 
-      const countResult = await this.db
-        .select({ value: count() })
-        .from(media)
-        .where(whereClause);
-      const total = Number(countResult[0]?.value ?? 0);
+      const readPage = async () => {
+        const countResult = await this.db
+          .select({ value: count() })
+          .from(media)
+          .where(whereClause);
+        let query = this.db.select().from(media);
+        if (whereClause) {
+          query = query.where(whereClause);
+        }
+        const rows = await query
+          .orderBy(orderByClause)
+          .limit(limit)
+          .offset(offset);
+        return { total: Number(countResult[0]?.value ?? 0), rows };
+      };
 
-      let query = this.db.select().from(media);
-
-      if (whereClause) {
-        query = query.where(whereClause);
+      // Unused answers for the usage record it read itself: its page and
+      // total are read within one build of the record (`readWithinOneBuild`),
+      // so a rebuild that starts or finishes meanwhile reads as unbuilt, and
+      // the admin lists the view on this answer's own word rather than on the
+      // counts', which another request read at another moment. No other list
+      // reads the record, so none says anything of it.
+      let usageRecorded: boolean | undefined;
+      let listed: Awaited<ReturnType<typeof readPage>>;
+      if (view !== "unused") {
+        listed = await readPage();
+      } else if (unused === null) {
+        listed = await readPage();
+        usageRecorded = false;
+      } else {
+        const { readWithinOneBuild } = await import(
+          "../domains/media/usage/media-usage-store"
+        );
+        const read = await readWithinOneBuild(this.adapter, readPage);
+        listed = read.value;
+        usageRecorded = read.recorded;
       }
-
-      const results = await query
-        .orderBy(orderByClause)
-        .limit(limit)
-        .offset(offset);
+      const { total, rows: results } = listed;
 
       const totalPages = Math.ceil(total / limit);
 
@@ -289,12 +416,13 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: `Found ${results.length} media file(s)`,
-        data: results as Media[],
+        data: (results as StoredMediaRow[]).map(row => withoutStoredSizes(row)),
         meta: {
           total,
           page,
           limit,
           totalPages,
+          ...(usageRecorded === undefined ? {} : { usageRecorded }),
         },
       };
     } catch (error) {
@@ -336,7 +464,7 @@ export class MediaService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Media retrieved successfully",
-        data: result[0] as Media,
+        data: withoutStoredSizes(result[0] as StoredMediaRow),
       };
     } catch (error) {
       this.logger.error("[MediaService] Get media error", { error: error });
@@ -364,6 +492,7 @@ export class MediaService extends BaseService {
         mimeType,
         uploadedBy,
         folderId,
+        altText,
         contentDisposition,
       } = input;
 
@@ -476,53 +605,6 @@ export class MediaService extends BaseService {
         }
       );
 
-      let sizesData: Record<string, unknown> | null = null;
-      if (isImage) {
-        try {
-          const imageSizeService = new ImageSizeService(
-            this.adapter,
-            this.logger
-          );
-          const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-
-          if (sizeConfigs.length > 0) {
-            const uploadFn = async (
-              buffer: Buffer,
-              opts: {
-                filename: string;
-                mimeType: string;
-                folder?: string;
-                collection?: string;
-              }
-            ) => {
-              return this.storage.upload(buffer, {
-                filename: opts.filename,
-                mimeType: opts.mimeType,
-                collection: "media",
-              });
-            };
-
-            sizesData = await generateImageSizes(
-              file,
-              filename,
-              sizeConfigs,
-              uploadFn
-            );
-
-            // Use the thumbnail from named sizes if available (backward compat)
-            if (sizesData && "thumbnail" in sizesData) {
-              const thumbVariant = sizesData.thumbnail as { url: string };
-              thumbnailUrl = thumbnailUrl ?? thumbVariant.url;
-            }
-          }
-        } catch (error) {
-          this.logger.warn("[MediaService] Image size generation failed", {
-            error: errorForLog(error),
-          });
-          // Continue without sizes - not a critical failure
-        }
-      }
-
       const now = new Date();
       const mediaId = crypto.randomUUID();
 
@@ -537,12 +619,14 @@ export class MediaService extends BaseService {
         duration: null,
         url: uploadResult.url,
         thumbnailUrl,
-        altText: null,
+        // The upload's own alt text: writing `null` here dropped what every
+        // caller gave.
+        altText: altText ?? null,
         caption: null,
         tags: null,
         focalX: null,
         focalY: null,
-        sizes: sizesData ?? null,
+        // No `sizes`: an upload stores the original and its thumbnail only.
         folderId: folderId ?? null,
         uploadedBy,
         uploadedAt: now,
@@ -553,12 +637,8 @@ export class MediaService extends BaseService {
       // event is durable exactly when the insert commits, and never for a write
       // that later rolls back. The positional adapter transaction is required
       // because recordMutationEvent writes through the adapter's
-      // TransactionContext, not the Drizzle fluent transaction. `sizes` is
-      // serialized up front (`sizesColumn`).
-      const insertRow = keysToSnakeCase({
-        ...mediaRecord,
-        sizes: sizesColumn(sizesData),
-      }) as Record<string, unknown>;
+      // TransactionContext, not the Drizzle fluent transaction.
+      const insertRow = keysToSnakeCase(mediaRecord) as Record<string, unknown>;
 
       let recorded = false;
       await this.adapter.transaction(async tx => {
@@ -606,214 +686,8 @@ export class MediaService extends BaseService {
   }
 
   /**
-   * Insert a random token before a filename's extension so any destination
-   * derived from it is unique: `photo.jpg` -> `photo-<token>.jpg` (a name with
-   * no extension gets the token appended). Used to guarantee regenerated
-   * focal-crop variants never reuse the item's existing storage keys, even on a
-   * storage adapter that maps a filename to a fixed path.
-   */
-  private uniqueVariantBaseName(filename: string): string {
-    const token = crypto.randomUUID();
-    const lastDot = filename.lastIndexOf(".");
-    if (lastDot > 0) {
-      return `${filename.slice(0, lastDot)}-${token}${filename.slice(lastDot)}`;
-    }
-    return `${filename}-${token}`;
-  }
-
-  /**
-   * Regenerate a media item's image size variants for a changed crop point,
-   * writing `sizes`/`thumbnailUrl` onto `updateData` and returning the newly
-   * generated sizes (or null when nothing was regenerated). No-op unless the
-   * crop actually changed and the item is an image on a readable storage
-   * adapter.
-   *
-   * The new variants are written to fresh storage keys — a random token is
-   * injected into the destination filename here so they can NEVER land on the
-   * item's existing variant keys, even on a storage adapter that derives a
-   * deterministic path from the filename rather than prefixing its own random
-   * id. This never overwrites the item's existing variant bytes and never
-   * deletes them: content-addressing plus a delete-after-commit in `updateMedia`
-   * is what makes this safe. Deleting the old paths here — before the row commits
-   * — was the previous bug: a rollback or a concurrent edit left the committed
-   * row pointing at bytes that were already gone. The old paths are now cleaned
-   * up by the caller only after the row durably points at the new ones. Kept
-   * OUTSIDE the write transaction on purpose: it must not hold the row lock (or a
-   * single-connection pool) across slow storage I/O.
-   *
-   * Best-effort: a regeneration failure is swallowed (the crop point is still
-   * saved against the existing variants) rather than failing the whole update.
-   */
-  private async regenerateFocalPointSizes(
-    media: Media,
-    changes: UpdateMediaInput,
-    updateData: Record<string, unknown>
-  ): Promise<Record<string, unknown> | null> {
-    const focalPointChanged =
-      changes.focalX !== undefined || changes.focalY !== undefined;
-    if (!focalPointChanged || !isImageMimeType(media.mimeType)) {
-      return null;
-    }
-
-    const adapter = this.storage.getAdapterForCollection("media");
-    if (!adapter.read) {
-      this.logger.info(
-        `[MediaService] Crop point saved for media ${media.id}. ` +
-          `Size regeneration requires local storage or adapter with read support.`
-      );
-      return null;
-    }
-
-    try {
-      const originalBuffer = await adapter.read(media.filename);
-      if (!originalBuffer) return null;
-
-      const imageSizeService = new ImageSizeService(this.adapter, this.logger);
-      const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-      if (sizeConfigs.length === 0) return null;
-
-      const uploadFn = async (
-        buffer: Buffer,
-        opts: { filename: string; mimeType: string }
-      ) => {
-        return this.storage.upload(buffer, {
-          filename: opts.filename,
-          mimeType: opts.mimeType,
-          collection: "media",
-        });
-      };
-      // Force a unique destination base so the regenerated variant keys cannot
-      // collide with the item's existing ones on a deterministic (filename ->
-      // fixed path) storage adapter. On a collision, an overwrite-disallowing
-      // adapter would fail the upload (saving the crop without new thumbnails)
-      // and an overwrite-allowing one would mutate the bytes the committed row
-      // still points at before this transaction commits — both break the
-      // content-addressed delete-after-commit contract updateMedia relies on.
-      const uniqueBase = this.uniqueVariantBaseName(
-        media.originalFilename || media.filename
-      );
-      const newSizes = await generateImageSizes(
-        originalBuffer,
-        uniqueBase,
-        sizeConfigs,
-        uploadFn,
-        { focalX: changes.focalX, focalY: changes.focalY }
-      );
-
-      updateData.sizes = newSizes;
-      if (newSizes && "thumbnail" in newSizes) {
-        updateData.thumbnailUrl = (
-          newSizes.thumbnail as unknown as { url: string }
-        ).url;
-      }
-
-      this.logger.info(
-        `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
-      );
-      return newSizes;
-    } catch (error) {
-      this.logger.warn("[MediaService] Crop point size regeneration failed", {
-        error: errorForLog(error),
-      });
-      // Continue without regeneration - crop point is still saved.
-      return null;
-    }
-  }
-
-  /**
-   * Best-effort deletion of a set of variant storage paths. Used to clean up
-   * either the superseded old variants (after a rotation commits) or the
-   * freshly-written new variants (when the commit did not happen), so neither a
-   * successful regeneration nor a failed one leaks storage. Never throws: a
-   * failed delete is logged, naming the file and its item so a leftover can be
-   * found, because the durable DB state is already correct and an orphaned file
-   * is not worth failing or reversing the write over.
-   */
-  private async deleteVariantPaths(
-    paths: string[],
-    mediaId: string
-  ): Promise<void> {
-    await Promise.all(
-      paths.map(async filePath => {
-        try {
-          await this.storage.delete(filePath, "media");
-        } catch (error) {
-          warnNotRemoved(filePath, mediaId, error);
-        }
-      })
-    );
-  }
-
-  /**
-   * Extract the storage paths from a `sizes` value (an object keyed by size name,
-   * each holding `{ path, ... }`), tolerating the DB's JSON-string form. Used to
-   * decide which variant files to delete after a rotation without touching any
-   * that the new set reuses.
-   */
-  /**
-   * Delete the variant paths in `candidateSizes` that are NOT among the paths
-   * `keepSizes` references. Used for every variant cleanup so a deterministic-key
-   * adapter (where a regenerated variant can reuse an existing path) never
-   * deletes a file the surviving row still points at: after commit `keepSizes`
-   * is the new sizes and `candidateSizes` the superseded old ones; on a failed or
-   * void write it is the reverse — the old sizes survive on the un-updated row,
-   * so only the genuinely-orphaned new uploads are removed.
-   */
-  private async deleteSupersededVariants(
-    candidateSizes: unknown,
-    keepSizes: unknown,
-    mediaId: string,
-    /** Other superseded files, such as a thumbnail the new sizes replaced. */
-    alsoSuperseded: readonly string[] = [],
-    /** Other files to keep, such as every one the surviving row refers to. */
-    alsoKept: readonly string[] = []
-  ): Promise<void> {
-    const keep = new Set([...this.collectVariantPaths(keepSizes), ...alsoKept]);
-    const candidates = [
-      ...new Set([
-        ...this.collectVariantPaths(candidateSizes),
-        ...alsoSuperseded,
-      ]),
-    ].filter(path => !keep.has(path));
-    if (candidates.length === 0) return;
-    // Nor any file another item refers to: on a content-addressed adapter a
-    // "new" variant can be a key another item already uses.
-    const others = await filesKeptByOthers(this.storedFileSearch, candidates, [
-      mediaId,
-    ]);
-    if (!others) return;
-    await this.deleteVariantPaths(
-      candidates.filter(path => !others.has(path)),
-      mediaId
-    );
-  }
-
-  /**
-   * The stored path of the thumbnail `current` has, when `updateData` gives the
-   * item another one. Undefined when it keeps its thumbnail, has none, or one
-   * whose location the record does not show, which is then named in the log.
-   */
-  private replacedThumbnailPath(
-    current: Media,
-    updateData: Record<string, unknown>
-  ): string | undefined {
-    const old = current.thumbnailUrl;
-    const next = updateData.thumbnailUrl;
-    if (!old || next === undefined || next === old) return undefined;
-    const found = siblingStoredPath(
-      { path: current.filename, url: current.url },
-      old
-    );
-    if (!found) warnUnlocated(old, current.id);
-    return found;
-  }
-
-  private collectVariantPaths(sizes: unknown): string[] {
-    return variantPaths(sizes);
-  }
-
-  /**
-   * Update media metadata (altText, caption, tags)
+   * Update media metadata: alt text, caption, tags, the focus point and the
+   * folder. Writes the row only; no stored file changes.
    */
   async updateMedia(
     mediaId: string,
@@ -839,19 +713,9 @@ export class MediaService extends BaseService {
       if (changes.folderId !== undefined)
         updateData.folderId = changes.folderId;
 
-      // Regenerate focal-point image variants when the crop changed, before the
-      // write transaction opens (storage I/O must not hold the row lock). The
-      // new variants go to fresh, unique keys and the OLD ones are left in place;
-      // the row is then committed pointing at the new keys and the superseded old
-      // ones are deleted only AFTER the commit. So a rollback or a lost update
-      // race never leaves the committed row referencing bytes that were already
-      // deleted — the previous, now-fixed dual-write bug. Returns the new sizes
-      // (or null) so a failed/void write can clean up its own orphaned uploads.
-      const regeneratedSizes = await this.regenerateFocalPointSizes(
-        existing.data!,
-        changes,
-        updateData
-      );
+      // A moved focus point is saved and nothing else: no image is cut
+      // around it, so no file is read or stored.
+      //
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
       // RE-READ inside the transaction (not reused from the pre-transaction
@@ -861,52 +725,43 @@ export class MediaService extends BaseService {
       // MySQL's repeatable read), and a field another request committed after
       // our first read is not shipped stale. The transaction returns the
       // post-update document (or null when the row is already gone).
-      //
-      // The superseded variant paths are captured from the locked row here, not
-      // from the pre-transaction read, so two concurrent focal edits each delete
-      // exactly the paths their own commit replaced rather than one clobbering
-      // the other's fresh variants.
-      let replacedSizes: unknown = null;
-      // The upload-time thumbnail the regenerated sizes replace, when they
-      // bring a `thumbnail` of their own: from then on nothing refers to it.
-      let replacedThumbnail: string | undefined;
-      let updatedRow: Media | null;
       let recorded = false;
-      try {
-        updatedRow = await this.adapter.transaction<Media | null>(async tx => {
-          await tx.lockRow("media", mediaId);
-          const currentRows = await tx.select<Media>("media", {
-            where: this.whereEq("id", mediaId),
-          });
-          const current = currentRows[0];
+      let folderGone = false;
+      const updatedRow = await this.adapter.transaction<Media | null>(
+        async tx => {
+          folderGone = false;
+          // A move into a folder locks the folder before the item, the one
+          // order (`lockMediaFolders`): the write's foreign-key check locks
+          // the folder too, and taken after the item it would deadlock with
+          // a folder delete holding the folder and waiting for the item. A
+          // folder gone meanwhile is not found.
+          const destination = updateData.folderId;
+          if (typeof destination === "string") {
+            await lockMediaFolders(tx, [destination]);
+            const [folder] = await tx.select("media_folders", {
+              columns: ["id"],
+              where: this.whereEq("id", destination),
+            });
+            if (!folder) {
+              folderGone = true;
+              return null;
+            }
+          }
+          const stored = await this.lockedRow(tx, mediaId);
           // Lost an update race: the row was deleted after our first read, so
           // record nothing and let the not-found result below stand.
-          if (!current) {
+          if (!stored) {
             return null;
           }
 
-          if (regeneratedSizes) {
-            replacedSizes = (current as unknown as Record<string, unknown>)
-              .sizes;
-            replacedThumbnail = this.replacedThumbnailPath(current, updateData);
-          }
-
-          // Regenerated sizes are serialized as the upload writes them
-          // (`sizesColumn`); `updateData` keeps the object for the event and
-          // the response below.
-          await tx.update(
-            "media",
-            "sizes" in updateData
-              ? { ...updateData, sizes: sizesColumn(updateData.sizes) }
-              : updateData,
-            this.whereEq("id", mediaId)
-          );
+          await tx.update("media", updateData, this.whereEq("id", mediaId));
 
           // The post-update document: the freshly-read committed row overlaid
           // with ONLY this write's columns (`updateData` holds each supplied
-          // change plus any regenerated sizes/thumbnail and the fresh
-          // updatedAt, keyed in the same camelCase as the read row). Reused as
-          // both the event `data` and the response body so they never drift.
+          // change and the fresh updatedAt, keyed in the same camelCase as the
+          // read row). Reused as both the event `data` and the response body
+          // so they never drift. Neither carries the row's stored `sizes`.
+          const current = withoutStoredSizes(stored);
           const nextRow: Media = { ...current, ...updateData };
 
           // `previous` is the freshly-read pre-write row; `data` is the new
@@ -921,89 +776,25 @@ export class MediaService extends BaseService {
           });
 
           return nextRow;
-        });
-      } catch (error) {
-        // The write failed after new variants were uploaded to fresh keys: those
-        // uploads are orphaned. Delete them — but keep any that the un-updated
-        // row still references (a deterministic adapter can reuse an old path),
-        // so a failed regeneration never removes a live variant. Prefer
-        // `replacedSizes` (read UNDER THE LOCK, so it reflects a variant set a
-        // concurrent update committed after our pre-transaction read); fall back
-        // to the pre-transaction read only when the transaction failed before it
-        // reached the locked row. Then propagate.
-        if (regeneratedSizes) {
-          await this.deleteSupersededVariants(
-            regeneratedSizes,
-            replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes,
-            mediaId
-          );
         }
-        throw error;
-      }
-
-      // Ahead of the variant cleanup below for the same reason the delete path
-      // invalidates ahead of its storage work: the row has changed, so a cached
-      // page is already wrong, and file cleanup can retry for a long time.
-      // Inside an enclosing SQLite transaction, once that commits.
-      if (updatedRow) {
-        await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
-      }
+      );
 
       if (!updatedRow) {
-        // Concurrent delete: the row was not updated, so the freshly-uploaded
-        // variants are orphaned. Same guard as the failure path — keep anything
-        // the surviving row still references — before returning not-found. Here
-        // the locked read found no row (so `replacedSizes` stayed null) and the
-        // fallback to the pre-transaction read supplies the paths to keep.
-        if (regeneratedSizes) {
-          await this.deleteSupersededVariants(
-            regeneratedSizes,
-            replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes,
-            mediaId
-          );
-        }
         // Mirror getMediaById's not-found shape so the domain layer maps this to
         // a 404 instead of treating the no-op write as a successful update.
         return {
           success: false,
           statusCode: 404,
           code: "NOT_FOUND",
-          message: "Media not found",
+          message: folderGone ? "Folder not found" : "Media not found",
           data: null,
         };
       }
 
-      // The row now references the new variants, so the superseded old ones
-      // can be deleted (keeping any path the new set reuses). An item stored
-      // with no sizes has none to replace, and may still have an upload-time
-      // thumbnail the new sizes replace.
-      if (regeneratedSizes && (replacedSizes || replacedThumbnail)) {
-        // Once the change is durable, as for a delete: inside an enclosing
-        // SQLite transaction, core's or a plugin's `ctx.db.transaction`, the
-        // update is a savepoint of it, and a rollback brings back the row
-        // that refers to the superseded variants. The deletion then waits for
-        // that transaction to commit, and is dropped if it rolls back.
-        //
-        // Every file the updated row still refers to is kept, whatever it
-        // replaced: an imported or older item can name its original as its
-        // thumbnail, and that original is not superseded with it.
-        const superseded = replacedSizes;
-        const thumbnail = replacedThumbnail;
-        // So is every one another item still refers to, asked once the
-        // change has committed (deleteSupersededVariants).
-        const stillReferenced = storedFilesOf(updatedRow).paths;
-        await this.afterCommit(() =>
-          this.deleteSupersededVariants(
-            superseded,
-            regeneratedSizes,
-            mediaId,
-            thumbnail ? [thumbnail] : [],
-            stillReferenced
-          )
-        );
-      }
+      // The row has changed, so a page cached with it is stale: invalidate once
+      // the change is durable, which inside an enclosing SQLite transaction
+      // means once that commits.
+      await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
       // The update committed a media.updated outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -1039,7 +830,15 @@ export class MediaService extends BaseService {
    */
   async deleteMedia(
     mediaId: string,
-    actor?: RequestActor
+    actor?: RequestActor,
+    /**
+     * Work run in the delete's own transaction once the row is locked and
+     * read, before it is removed: the end of an Undo window taking its mark.
+     * `false` refuses the delete, changing nothing. A delete it allows leaves
+     * the stored files to it ({@link removeFilesOfDeleted}), so a removal cut
+     * short can be finished from what it recorded.
+     */
+    claim?: DeleteClaim
   ): Promise<DeleteMediaResponse> {
     // A precondition, ahead of every read and write, so a refused delete
     // touches neither the row nor storage.
@@ -1063,6 +862,24 @@ export class MediaService extends BaseService {
         };
       }
 
+      // The image sizes an item stored before they were removed are in the
+      // retired `sizes` column, which the Drizzle definition no longer names.
+      // Read here, before the delete's transaction, while the database still
+      // has the column, so the delete removes those files too. Nothing writes
+      // sizes any more, so this read cannot go stale in a way that keeps a
+      // file: a run of `nextly media remove-sizes` meanwhile only removes
+      // files this delete would have removed.
+      const retiredSizes = await storedSizesOf(this.db, this.dialect, [
+        mediaId,
+      ]);
+      // The row as its files are removed from: with those sizes, which the
+      // row as read no longer carries. One record for both ways the files go,
+      // here after the commit or by a claimer from what it records.
+      const withRetiredSizes = (row: StoredMediaRow): StoredMediaRow => ({
+        ...row,
+        sizes: retiredSizes.get(mediaId) ?? null,
+      });
+
       // Remove the row and record the outbox event in one transaction FIRST,
       // before touching physical storage. The database is the source of truth,
       // so the row deletion and its durable event commit together; storage
@@ -1074,28 +891,48 @@ export class MediaService extends BaseService {
       // the latest committed state rather than the pre-transaction read. The
       // transaction returns the deleted row (or null when it was already gone).
       let recorded = false;
-      const deletedRow = await this.adapter.transaction<Media | null>(
+      let refused = false;
+      const deletedRow = await this.adapter.transaction<StoredMediaRow | null>(
         async tx => {
-          await tx.lockRow("media", mediaId);
-          const currentRows = await tx.select<Media>("media", {
-            where: this.whereEq("id", mediaId),
-          });
-          const current = currentRows[0];
+          refused = false;
+          const current = await this.lockedRow(tx, mediaId);
           // Lost a delete race: the row is already gone, so record nothing.
           // Only the request that actually removes the row emits media.deleted.
           if (!current) {
             return null;
           }
+          // Asked under the row's lock, so it commits with the row's removal
+          // or not at all. Handed the retired sizes too: the claimer records
+          // the files left to remove from this row.
+          if (claim && !(await claim(tx, withRetiredSizes(current)))) {
+            refused = true;
+            return null;
+          }
 
           await tx.delete("media", this.whereEq("id", mediaId));
+          // A delete that is not the end of an Undo window takes any mark
+          // an earlier delete left on the item, with its row, so an Undo
+          // still inside that window finds the item gone rather than
+          // reporting it restored.
+          if (!claim) {
+            const { pendingDeleteKey } = await import(
+              "../domains/media/pending-delete"
+            );
+            await tx.delete("nextly_meta", {
+              and: [
+                { column: "key", op: "=", value: pendingDeleteKey(mediaId) },
+              ],
+            });
+          }
 
-          // The removed row's final state ships as `data`; there is no
-          // post-delete state, so `previous` is null (mirroring create). Media
-          // has no field schema, so `fields` is empty (nothing to strip).
+          // The removed row's final state ships as `data`, without its stored
+          // `sizes`; there is no post-delete state, so `previous` is null
+          // (mirroring create). Media has no field schema, so `fields` is
+          // empty (nothing to strip).
           recorded = await recordMutationEvent(tx, {
             type: "media.deleted",
             resource: { kind: "media", id: mediaId },
-            data: current,
+            data: withoutStoredSizes(current),
             previous: null,
             fields: [],
             actor: actorForWrite(actor, null),
@@ -1108,6 +945,14 @@ export class MediaService extends BaseService {
       // The row was gone before we could delete it: report not-found and skip
       // physical cleanup (the winning request owns the file) rather than
       // returning a false success for a no-op delete.
+      if (refused) {
+        return {
+          success: false,
+          statusCode: 409,
+          code: "CONFLICT",
+          message: "Media is no longer waiting to be deleted.",
+        };
+      }
       if (!deletedRow) {
         return {
           success: false,
@@ -1116,7 +961,7 @@ export class MediaService extends BaseService {
           message: "Media not found",
         };
       }
-      const mediaData = deletedRow;
+      const mediaData = withRetiredSizes(deletedRow);
 
       // Invalidated here, not after the cleanup below. The row is already gone,
       // so a cached page is already wrong; deferring past storage deletes and
@@ -1128,24 +973,22 @@ export class MediaService extends BaseService {
 
       // Best-effort physical cleanup AFTER the row + event have committed:
       // a storage failure must not fail a delete whose authoritative row
-      // removal already succeeded. Every stored file is removed on its own,
+      // removal already succeeded. Read from the row as stored, so an item
+      // that still has image sizes from before they were removed loses those
+      // files too. Every stored file is removed on its own,
       // so one that fails leaves the others to go, and is named in the log
       // with its item, so the leftover can be found.
       //
       // Once the delete is durable: inside an enclosing SQLite transaction
       // this delete is a savepoint of it, and a rollback would bring the row
       // back pointing at files already gone.
-      await this.afterCommit(async () => {
-        // Every file except those another item still refers to, asked now
-        // that this delete has committed; none when that cannot be asked.
-        const kept = await filesKeptByOthers(
-          this.storedFileSearch,
-          storedFilesOf(mediaData).paths,
-          [mediaId]
-        );
-        if (kept)
-          await removeStoredFiles(this.storage, mediaData, mediaId, kept);
-      });
+      // A claimed delete's files are removed by its claimer, which recorded
+      // them in the same transaction.
+      if (!claim) {
+        await this.afterCommit(async () => {
+          await this.removeFilesOfDeleted(mediaId, mediaData);
+        });
+      }
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -1166,6 +1009,63 @@ export class MediaService extends BaseService {
         code: "INTERNAL_ERROR",
         message: "Failed to delete media",
       };
+    }
+  }
+
+  /**
+   * Remove every file stored for a deleted item, `record` being its row as
+   * it was: its own files, except those another item still refers to, asked
+   * now that the delete has committed, and the files a Replace kept for it.
+   * Removing a file already gone is no failure, so running this again
+   * finishes what an interrupted run left. Answers whether it could finish:
+   * `false` when what to keep, or what a Replace kept, could not be read,
+   * and nothing unasked was removed, or when a file could not be removed.
+   * Never throws: the delete has committed.
+   */
+  async removeFilesOfDeleted(
+    mediaId: string,
+    record: MediaFilesRecord
+  ): Promise<boolean> {
+    // The files the removal below takes, a size recorded by URL alone among
+    // them where this storage serves it, so each is asked about first, with
+    // every other item's record read against the same storage.
+    const reading = storageReadingOf(this.storage);
+    const kept = await filesKeptByOthers(
+      this.storedFileSearch,
+      storedFilesOf(record, reading.locator).paths,
+      [mediaId],
+      reading
+    );
+    const ownFilesGone = kept
+      ? await removeStoredFiles(this.storage, record, mediaId, kept)
+      : false;
+    const keptFilesGone = await this.removeKeptFilesOf(mediaId);
+    return ownFilesGone && keptFilesGone;
+  }
+
+  /**
+   * The files a Replace kept for pages naming a deleted item's old address,
+   * and the record of them. Here, in the delete every other one goes
+   * through (one item, a bulk delete, the end of an Undo window), so none of
+   * them leaves the kept files behind. Never fails the committed delete: a
+   * file that cannot go is named in the log, as the item's own files are.
+   * Answers whether the record could be read and acted on.
+   */
+  private async removeKeptFilesOf(mediaId: string): Promise<boolean> {
+    try {
+      // Loaded when an item is deleted, not with the service.
+      const { removeKeptFiles } = await import(
+        "../domains/media/usage/address-uses"
+      );
+      return await removeKeptFiles(this.adapter, this.storage, this.logger, [
+        mediaId,
+      ]);
+    } catch (error) {
+      this.logger.warn("[MediaService] Kept files not removed", {
+        mediaId,
+        error: errorForLog(error),
+      });
+      return false;
     }
   }
 

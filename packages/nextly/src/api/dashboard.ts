@@ -22,9 +22,6 @@
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
-import { conditionProbe } from "../domains/widgets/condition-probe";
-import { onboardingProgress } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import { readActivitySubjects } from "../services/dashboard/activity-subjects";
@@ -93,44 +90,6 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   // bound is satisfied without leaning on a typecast (named interfaces lack
   // an implicit index signature).
   return respondData({ ...stats }, { headers: PRIVATE_NO_STORE_HEADERS });
-});
-
-/**
- * GET /api/dashboard/onboarding
- *
- * Which setup steps this reader has finished, and whether setup could be
- * checked at all. The same answer the
- * `onboarding:incomplete` widget condition is derived from, so the card and the
- * rule that decides whether to offer it cannot disagree.
- *
- * The source registry is REFRESHED first -- both kinds, through the one
- * refresh the layout and query endpoints call before resolving anything. Boot
- * does not publish it, and the steps read it to learn which collections exist
- * -- without this an install with content would report every step
- * outstanding, which is the answer that keeps the card on screen forever.
- *
- * Caching: `private, no-store`. The answer is per reader, and a shared cache
- * serving one reader's progress to another would leak which collections exist.
- *
- * @deprecated The Get started steps travel in the layout read
- * (`GET /api/dashboard/layout`, `getStarted`), from the computation that
- * decides whether the card is drawn. Kept for one release for a client still
- * reading this one; it answers from the same step answer.
- */
-export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-
-  await refreshContentSources();
-  const caller = await readCaller(auth);
-  // The same probe the layout read builds, so this endpoint and the condition
-  // that decides whether the card is offered resolve the reader's collections
-  // by one path rather than two. `unknown` travels with the steps, because the
-  // condition holds the card while setup cannot be checked and the rows alone
-  // would then read as finished.
-  const { steps, unknown } = await onboardingProgress(conditionProbe(caller));
-
-  return respondData({ steps, unknown }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**

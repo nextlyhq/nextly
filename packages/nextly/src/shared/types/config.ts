@@ -44,6 +44,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import type { AdminDashboardConfig } from "../../domains/widgets/declaration/dashboard";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
@@ -66,6 +67,8 @@ import type { EmailConfig } from "../../services/email/types";
 import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
+
+import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
 // TypeScript Configuration
@@ -182,10 +185,12 @@ export interface DatabaseConfig {
   runMigrationsOnBoot?: boolean;
 
   /**
-   * Seconds a held migrate lock stays valid before another process may take it
-   * over (TTL). Tune up for unusually long migrations.
+   * The schema lock's lease, in seconds: how long the lock outlives a migration
+   * command that stopped without releasing it (killed, or its machine lost).
+   * A running holder renews the lock, so a migration of any length keeps it;
+   * this only bounds how long the next run waits on one that died.
    *
-   * @default 900
+   * @default 120
    */
   migrateLockTtlSeconds?: number;
 
@@ -573,6 +578,37 @@ export interface AdminBrandingColors {
 }
 
 /**
+ * Which deployment the admin is running in, as a badge beside the project's
+ * name on the dashboard, so nobody mistakes production for staging. Named by
+ * the site, never guessed from the process environment.
+ *
+ * @example
+ * // One config for every deployment: each sets its own label.
+ * admin: { environment: { label: process.env.NEXTLY_ENV_LABEL ?? "Production" } }
+ *
+ * @experimental While the dashboard's header is being built.
+ */
+export interface AdminEnvironmentConfig {
+  /** The badge's text, such as "Production" or "Staging": up to 24 characters. */
+  label: string;
+  /** How loudly the badge reads. Defaults to `"neutral"`. */
+  tone?: AdminEnvironmentTone;
+}
+
+/** The tones an environment badge may take. */
+export type AdminEnvironmentTone = "neutral" | "warning" | "critical";
+
+/** Every tone a badge may take, which the startup check holds a config to. */
+const ENVIRONMENT_TONES: readonly AdminEnvironmentTone[] = [
+  "neutral",
+  "warning",
+  "critical",
+];
+
+/** The most characters an environment label may hold: it is a badge. */
+const MAX_ENVIRONMENT_LABEL = 24;
+
+/**
  * Branding configuration for the Nextly admin UI.
  */
 export interface AdminBrandingConfig {
@@ -667,6 +703,24 @@ export interface PluginOverride {
 export interface AdminConfig {
   /** Branding customizations: logo, colors, favicon. */
   branding?: AdminBrandingConfig;
+
+  /**
+   * The deployment this admin runs in, shown as a badge beside the project's
+   * name. No badge without it.
+   *
+   * @experimental While the dashboard's header is being built.
+   */
+  environment?: AdminEnvironmentConfig;
+
+  /**
+   * How this site shapes its dashboard: its own widgets, widgets hidden for
+   * everyone, a widget's title, description, widths and starting settings,
+   * the default dashboard, and a plugin's alternative in a built-in's place.
+   * Checked at startup against every widget the install has.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  dashboard?: AdminDashboardConfig;
 
   /**
    * Per-plugin overrides for sidebar placement and appearance.
@@ -893,6 +947,32 @@ export interface NextlyConfig {
   webhooks?: WebhookConfig;
   /** Audit and activity trail policy. */
   audit?: AuditConfig;
+
+  /**
+   * Settings that are not stable yet: each may change or be removed in a later release.
+   *
+   * @experimental
+   */
+  experimental?: ExperimentalConfig;
+}
+
+/**
+ * Settings that are not stable yet.
+ *
+ * @experimental
+ */
+export interface ExperimentalConfig {
+  /**
+   * Keep every translatable field in its per-language table from the start, for every collection,
+   * Single and component, whether or not it is marked translatable and whether or not the site
+   * declares languages; a site that declares none has one implicit language. Adding a language is
+   * then data only. Chosen when the site starts: a running site refuses a change until it is
+   * restarted, and a database that still keeps translatable values on its main tables is refused
+   * while it is on. Off by default.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
 }
 
 /**
@@ -1046,19 +1126,23 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization; defaults to false.
    */
   webhookAuditEnabled: boolean;
+
+  /**
+   * Whether every translatable field is kept per language from the start
+   * (`experimental.perLanguageStorage`). Always present after sanitization; defaults to false.
+   *
+   * @experimental
+   */
+  perLanguageStorage: boolean;
 }
 
 // ============================================================
 // Default Values
 // ============================================================
 
-/**
- * Default TypeScript configuration values.
- */
-export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
-  outputFile: "./src/types/generated/nextly-types.ts",
-  declare: true,
-};
+// Default TypeScript configuration values, defined in a module that imports
+// nothing at run time so a command's help can name them cheaply.
+export { DEFAULT_TYPESCRIPT_CONFIG };
 
 /**
  * Default database configuration values.
@@ -1074,7 +1158,9 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
-  migrateLockTtlSeconds: 900,
+  // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
+  // migration; it bounds only how long a run that died keeps the lock.
+  migrateLockTtlSeconds: 120,
   rawSqlPlugins: [],
 };
 
@@ -1181,7 +1267,63 @@ function authMinPasswordLength(value: number | undefined): number {
   });
 }
 
+/**
+ * `admin.environment`, checked: a label of 1 to 24 characters with text in it,
+ * and a tone this version draws, or absent.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function checkedAdminEnvironment(environment: unknown): void {
+  if (environment === undefined) return;
+  const problems = adminEnvironmentProblems(environment);
+  if (problems.length === 0) return;
+  throw NextlyError.validation({ errors: problems });
+}
+
+/** Each fault in `admin.environment`, as a validation error naming its path. */
+function adminEnvironmentProblems(
+  environment: unknown
+): { path: string; code: "INVALID_VALUE"; message: string }[] {
+  const fault = (path: string, message: string) => ({
+    path,
+    code: "INVALID_VALUE" as const,
+    message,
+  });
+  if (
+    typeof environment !== "object" ||
+    environment === null ||
+    Array.isArray(environment)
+  ) {
+    return [fault("admin.environment", "Must be { label, tone? }.")];
+  }
+  const { label, tone } = environment as Record<string, unknown>;
+  return [
+    ...(typeof label === "string" && label.trim().length > 0
+      ? label.length > MAX_ENVIRONMENT_LABEL
+        ? [
+            fault(
+              "admin.environment.label",
+              `Must be at most ${MAX_ENVIRONMENT_LABEL} characters: it is drawn as a badge.`
+            ),
+          ]
+        : []
+      : [fault("admin.environment.label", "Must be text, not empty.")]),
+    ...(tone === undefined ||
+    ENVIRONMENT_TONES.includes(tone as AdminEnvironmentTone)
+      ? []
+      : [
+          fault(
+            "admin.environment.tone",
+            `Must be one of ${ENVIRONMENT_TONES.map(each => `"${each}"`).join(", ")}.`
+          ),
+        ]),
+  ];
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
+  // The environment badge's label and tone, refused at boot rather than drawn
+  // wrong on every dashboard.
+  checkedAdminEnvironment(config.admin?.environment);
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
     if (
@@ -1333,5 +1475,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,
+    // Only `true` turns it on, so a stray value never moves a site's storage. A config sanitized
+    // already, as the CLI sanitizes an export written with `defineConfig` again, carries the
+    // result instead of the `experimental` block, and keeps it.
+    perLanguageStorage:
+      config.experimental?.perLanguageStorage === true ||
+      (config as { perLanguageStorage?: unknown }).perLanguageStorage === true,
   };
 }

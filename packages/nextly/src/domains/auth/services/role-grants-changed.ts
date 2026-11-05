@@ -17,11 +17,19 @@
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import { stopReleasesHolding } from "../../releases/early-stop";
 
-/** Call once the change to `roleId`'s grants has committed. */
-export async function afterRoleGrantsChanged(roleId: string): Promise<void> {
+/**
+ * Call once the change to `roleId`'s grants has committed. A caller changing
+ * many roles in one pass may leave out the release check
+ * (`recheckReleases: false`) and run `afterGrantsChanged` once after the last,
+ * so scheduled releases are checked once rather than once a role.
+ */
+export async function afterRoleGrantsChanged(
+  roleId: string,
+  options: { recheckReleases?: boolean } = {}
+): Promise<void> {
   // The cache first, so the checks below judge the grants as they now are.
   await invalidatePermissionCache({ roleId });
-  await afterGrantsChanged();
+  if (options.recheckReleases !== false) await afterGrantsChanged();
 }
 
 /**

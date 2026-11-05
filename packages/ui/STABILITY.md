@@ -86,7 +86,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
-`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
+`TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
 `PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
@@ -97,6 +97,9 @@ fields, so the page cannot cap the two together — needs the same value as a CS
 The alternative is a second table naming the same tokens, which drifts silently because
 each copy reads correctly beside its own neighbours. Exported so there is one answer
 rather than two that happen to agree.
+
+`TREE_INDENT_PX` is exported for the same reason: an editor that reads a dragged row's
+depth from the pointer steps by the tree's own indent, and draws its drop line there.
 
 `Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,
@@ -304,4 +307,6 @@ of the same hue rather than a different one.
 from 1,000 compact ("1.2k", "3.4M"); a floor reads "N+"; the accessible name is always the full
 value ("1,248", "100 or more"). `formatChange` carries a change's direction in an arrow and a
 sign as well as in words. Every figure a card shows, in its body, chart, tooltip, table and text
-alternative, goes through these, so one value never reads two ways.
+alternative, goes through these, so one value never reads two ways. `chartColour(slot)` names the five shared
+chart colours as the `--nx-chart-N` token a mark is drawn in, beside the formatters, so a chart a
+server renders names its colours exactly as the admin's do.

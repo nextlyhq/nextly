@@ -212,8 +212,8 @@ function procStat(pid) {
 }
 
 /**
- * Every process's parent, state and start time from one `ps` call — the
- * portable way to read them where there is no /proc. `lstart` is a
+ * Every process's parent, group, state and start time from one `ps` call —
+ * the portable way to read them where there is no /proc. `lstart` is a
  * fixed-format date, so it is read as the rest of the line.
  *
  * 🔴 A `ps` that fails answers `undefined` — nothing known — never an empty
@@ -223,7 +223,7 @@ function procStat(pid) {
  */
 export function processTable() {
   try {
-    const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,state=,lstart="], { encoding: "utf8" });
+    const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,state=,lstart="], { encoding: "utf8" });
     return parseProcessTable(out);
   } catch {
     return undefined;
@@ -233,8 +233,10 @@ export function processTable() {
 export function parseProcessTable(out) {
   const table = new Map();
   for (const line of out.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
-    if (match) table.set(Number(match[1]), { ppid: Number(match[2]), state: match[3][0], start: match[4] });
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (match) {
+      table.set(Number(match[1]), { ppid: Number(match[2]), pgid: Number(match[3]), state: match[4][0], start: match[5] });
+    }
   }
   return table;
 }
@@ -646,8 +648,32 @@ function sendSignal(target, signal) {
   }
 }
 
-function signalGroup(pgid, signal) {
-  sendSignal(-pgid, signal);
+/**
+ * Sends a signal to a process group, ignoring one with nothing left to signal.
+ * macOS answers a group whose only members are zombies — killed, not yet
+ * reaped — with EPERM rather than ESRCH, and the sweep after a leader exits
+ * can meet exactly that group. `kill` and `table` are the system's, passed in
+ * so a test can give any platform macOS's answer.
+ */
+export function signalGroup(pgid, signal, { kill = (target, name) => process.kill(target, name), table = processTable } = {}) {
+  try {
+    kill(-pgid, signal);
+  } catch (error) {
+    if (error.code === "ESRCH") return;
+    // EPERM is not always a permission problem: for a group of zombies only it
+    // is macOS's "nothing to signal", and rethrowing it crashed the runner after
+    // the run had already stopped. A member that is alive but cannot be
+    // signalled, one that changed its credentials, is a real failure, and so is
+    // a group whose members cannot be read.
+    if (error.code === "EPERM" && onlyZombiesIn(pgid, table())) return;
+    throw error;
+  }
+}
+
+/** Whether every process left in a group is a zombie: true when none is left, false when the table cannot be read. */
+function onlyZombiesIn(pgid, table) {
+  if (!(table instanceof Map)) return false;
+  return [...table.values()].every(member => member.pgid !== pgid || member.state === "Z");
 }
 
 /** Runs a command in this process's group and returns its exit code. */

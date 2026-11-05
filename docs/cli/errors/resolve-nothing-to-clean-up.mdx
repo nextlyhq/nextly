@@ -1,0 +1,24 @@
+---
+title: RESOLVE_NOTHING_TO_CLEAN_UP
+description: "`nextly migrate:resolve --failed-cleanup` was given a migration with no failed or unfinished attempt."
+---
+
+## Cause
+
+`nextly migrate:resolve --failed-cleanup` was given a migration with no failed or unfinished attempt.
+
+`--failed-cleanup` clears the attempts of a file that failed or recorded no outcome, so it can run again. This file has no such attempt, so there is nothing to clear.
+
+## Fix
+
+- Run `nextly migrate:status` to see the file's state.
+- To run a pending file, use `nextly migrate`.
+
+## Example
+
+```text
+✗ No failed or unfinished attempt found for 20261020_120000_add_posts.sql.
+  Why:  `--failed-cleanup` clears the attempts that failed or recorded no outcome, and this file has none.
+  Next: Run `nextly migrate:status` to see the file's state; to run it again, use `nextly migrate`.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-nothing-to-clean-up  (RESOLVE_NOTHING_TO_CLEAN_UP)
+```

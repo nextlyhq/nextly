@@ -18,6 +18,8 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import { z } from "zod";
+
 import {
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
@@ -31,41 +33,27 @@ import {
   respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
-import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
-import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
+import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import {
-  companionHasStatusColumn,
-  liveCompanionShape,
-} from "../../domains/i18n/runtime/companion-io";
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import {
-  createApplyDesiredSchema,
-  movedOnto,
-} from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
-import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import {
+  applyCollectionSchemaChange,
+  recordedFieldsOf,
+} from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { NextlyError } from "../../errors";
 import {
   applyPluginAdminViews,
@@ -73,16 +61,18 @@ import {
 } from "../../plugins/admin-views";
 import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -95,7 +85,7 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
-  getMigrationJournalFromDI,
+  getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
@@ -115,6 +105,7 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -188,8 +179,8 @@ function formatToastSummary(summary: {
 /**
  * Both directions of the all-locales lifecycle, as one handler.
  *
- * i18n M7 publishes every language of an entry at once; the takedown is its
- * twin. They differ in exactly two things — the service method and the success
+ * Publishing every language of an entry at once has a twin, the takedown.
+ * They differ in exactly two things — the service method and the success
  * message — and everything else about them is the same identity forwarding and
  * the same attestation. Written twice, they were a 40-line clone whose halves
  * could drift in which credentials they passed, and the drift would show up as
@@ -197,19 +188,17 @@ function formatToastSummary(summary: {
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
- * `routeAuthorized` to attest that the route middleware already ran the
- * RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while field-level write access still runs — never inferred from a
- * userId; and `authenticatedScope` so a scoped API key's own
- * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
- * only as an `update`.
+ * `routeAuthorized` false, since the route admitted this POST on the
+ * `publish-`/`unpublish-` grant or on update, and attests no gate the service
+ * could skip; and `authenticatedScope` so a scoped API key's own grant and the
+ * rule are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
@@ -219,13 +208,48 @@ function allLocalesLifecycle(
         entryId,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        routeAuthorized: true,
+        routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
+        // The version the move was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
     },
   };
+}
+
+/**
+ * The `together` query parameter of a collection delete: slugs separated by
+ * commas, each spelled as a slug is. Absent or empty means none.
+ */
+const TogetherParam = z
+  .string()
+  .max(20_000)
+  .transform(value =>
+    value
+      .split(",")
+      .map(slug => slug.trim())
+      .filter(slug => slug !== "")
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .regex(SLUG_PATTERN, "Each collection must be named by its slug.")
+      )
+      .max(500)
+  );
+
+function parseTogetherParam(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  try {
+    return TogetherParam.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }
 
 /**
@@ -292,7 +316,7 @@ export const COLLECTION_VERSION_METHODS: Record<
     },
   },
   restoreEntryVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const result = await restoreVersionForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -304,6 +328,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -320,12 +346,15 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, from the query: a DELETE
+        // carries no body to read it from.
+        version: versionInputOfQuery(p),
       });
       return respondMutation("Working draft discarded.", item);
     },
   },
   takeLiveSharedValues: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, body) => {
       const item = await takeLiveSharedValuesForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -334,6 +363,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // `?locale=` names the language whose pending change takes the live
         // values. An empty value is the same as none: the default language.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, judged as a save of it.
+        version: versionInputOf(body),
       });
       return respondMutation("Live values taken.", item);
     },
@@ -508,8 +539,18 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // The rows and the meta now describe one set, because the allowlist was
-      // a condition on the query that produced both.
-      return respondList(items, toPaginationMeta(baseMeta));
+      // a condition on the query that produced both. A collection removed from
+      // code stays listed, marked, so the admin can say so and name the step
+      // that retires it.
+      // Loaded on first use rather than with the dispatcher, so a module that
+      // imports the dispatcher and never lists does not load the mark.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      return respondList(
+        await withRemovedFromCodeMarks("collection", items),
+        toPaginationMeta(baseMeta)
+      );
     },
   },
   getCollection: {
@@ -530,7 +571,15 @@ const COLLECTIONS_METHODS: Record<
         [collection as CollectionWithAdmin],
         config?.plugins ?? []
       );
-      return respondDoc(collectionWithViews as unknown);
+      // Marked as the listing marks it, so the entity's own screens show the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("collection", [
+        collectionWithViews as unknown as Record<string, unknown>,
+      ]);
+      return respondDoc(marked as unknown);
     },
   },
   updateCollection: {
@@ -557,12 +606,20 @@ const COLLECTIONS_METHODS: Record<
     },
   },
   deleteCollection: {
-    // The deleted record is the `item`.
+    // The deleted record is the `item`. `?together=a,b` names the collections
+    // a bulk delete removes with this one, in the same operation: the whole
+    // set is checked before anything is removed, so collections that point
+    // only at one another can go together where each alone is refused.
     execute: async (svc, p) => {
       requireParam(p, "collectionName");
-      const result = await svc.deleteCollection({
+      // A variable rather than an inline literal: `CollectionsHandler` types
+      // its parameter by the one key it reads and forwards the object, whole,
+      // to the metadata service, which reads `together` from it.
+      const request: { collectionName: string; together: string[] } = {
         collectionName: p.collectionName,
-      });
+        together: parseTogetherParam(p.together),
+      };
+      const result = await svc.deleteCollection(request);
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
       });
@@ -596,6 +653,13 @@ const COLLECTIONS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { kind: "collection" });
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug: p.collectionName },
+        fields,
+        collection.fields ?? []
+      );
       // collection comes from getCollectionBySlug typed as DynamicCollectionRecord,
       // which has tableName, fields: FieldConfig[], and schemaVersion: number.
       // FieldConfig is structurally compatible with FieldDefinition; cast
@@ -616,7 +680,13 @@ const COLLECTIONS_METHODS: Record<
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        fields: fields as DesiredCollection["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: collection,
+          requestedLocalized: previewLocalized,
+        }) as DesiredCollection["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
@@ -634,6 +704,7 @@ const COLLECTIONS_METHODS: Record<
           (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       return respondData(
@@ -674,9 +745,6 @@ const COLLECTIONS_METHODS: Record<
       if (!registry) {
         throw new Error("Collection registry not initialized");
       }
-      const collection = await registry.getCollectionBySlug(p.collectionName);
-      if (!collection) throw new Error("Collection not found");
-      refuseChangeDefinedInCode(collection, "collection", p.collectionName);
       const {
         fields,
         confirmed,
@@ -733,466 +801,278 @@ const COLLECTIONS_METHODS: Record<
         );
       }
 
-      // Default legacy rows (schema_version NULL) to 1 so a first save is not
-      // rejected as version-less. The registry types schemaVersion as `number`
-      // via a type assertion, but the DB column is nullable, so the value can
-      // be null at runtime; singles/components apply the same `?? 1` fallback.
-      const currentVersion = collection.schemaVersion ?? 1;
-      // Reject a stale or version-less UI save before any DDL runs. The shared
-      // guard gives all three entity kinds (collections, singles, components)
-      // one optimistic-lock behavior and one error surface.
-      assertSchemaVersionMatch(schemaVersion, currentVersion, p.collectionName);
-      const tableName = collection.tableName;
-
-      // i18n: prefer the request's localized flag over the persisted one, so a simultaneous
-      // toggle+field-change save applies with the NEW state (the persisted flag is only written
-      // after this apply). `wasLocalized` drives enable/disable detection for the companion.
-      const wasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      // Validated rather than coerced: `localized: "false"` would read as
-      // `false` under `=== true` and turn an ordinary save of a localized
-      // collection into a DISABLE transition, restoring the companion's
-      // columns onto the main table and archiving it.
-      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
-      // i18n: enabling Internationalization needs the app-level
-      // `localization` config — without it the companion reconcile below
-      // would move translatable columns into a table the runtime cannot
-      // address. Gate the false→true transition only.
-      if (!wasLocalized && isLocalized) {
-        assertLocalizationConfigured("collection", p.collectionName);
-      }
-
-      // Legacy per-field resolutions get translated to typed
-      // Resolution[] inside BrowserPromptDispatcher.dispatch() once the
-      // pipeline emits events. Until admin dialogs ship the new
-      // `eventResolutions` contract, this translator keeps existing UIs
-      // working end-to-end through the pipeline.
-      const legacyBundle = resolutions
-        ? { tableName, byFieldName: resolutions }
-        : undefined;
-
-      // Route through the PushSchemaPipeline. Build the FULL
-      // DesiredSchema (collections + singles + components) so
-      // drizzle-kit sees every managed table. Without this, tables
-      // of other entity types in the live DB are absent from the
-      // desired snapshot and drizzle-kit offers them as rename
-      // candidates for the new collection being saved.
-      const desired = await buildFullDesiredSchema();
-
-      // Splice in the user's changes for THIS collection (overwrites
-      // any registry entry for the same slug).
-      desired.collections[p.collectionName] = {
-        slug: p.collectionName,
-        tableName,
-        fields: fields as DesiredCollection["fields"],
-        // Mirror previewSchemaChanges so apply diffs against the same
-        // desired schema preview classified.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable
-        // columns from the main table (they live in the companion `_locales`
-        // table, provisioned separately below). Uses the request's flag so a
-        // toggle applies immediately; without this the apply re-adds translatable
-        // columns to the main table.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
-
-      // Resolve adapter for the pipeline construction.
-      const adapter = getAdapterFromDI();
-      if (!adapter) {
-        throw new Error("Database adapter not initialized");
-      }
-      // `dialect` is an abstract readonly property on DrizzleAdapter,
-      // not a method. Calling `.getDialect()` would crash at runtime.
-      const dialect = adapter.dialect;
-      const db = adapter.getDrizzle();
-      const databaseName =
-        dialect === "mysql"
-          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
-          : undefined;
-
-      // Per-call factory (not the DI-bound applyDesiredSchema in
-      // pipeline/index.ts) so we can thread MySQL databaseName plus the
-      // resolved adapter into the PushSchemaPipeline at this site.
-      //
-      // BrowserPromptDispatcher takes pre-attached rename resolutions
-      // from the request body (collected by the admin SchemaChangeDialog
-      // before save) and translates them into confirmedRenames inside
-      // the pipeline's Phase B. No SSE, no mid-apply prompts; the dialog
-      // is the prompt UX.
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
-      const apply = createApplyDesiredSchema({
-        applyPipeline: (desiredArg, sourceArg, channelArg) => {
-          // Real classifier and real pre-cleanup executor wired at the
-          // UI-first save path. Admin SchemaChangeDialog still sends the
-          // legacy `resolutions` map; the pipeline ALSO emits typed
-          // events that admin UIs can opt into via `eventResolutions`
-          // (Resolution[]) once the dialog is updated.
-          // Real journal from DI (with noop fallback so tests that
-          // bypass DI keep working).
-          const migrationJournal =
-            getMigrationJournalFromDI() ?? noopMigrationJournal;
-          const pipeline = new PushSchemaPipeline({
-            executor: new DrizzleStatementExecutor(dialect, db),
-            renameDetector: new RegexRenameDetector(),
-            classifier: new RealClassifier(),
-            promptDispatcher,
-            preRenameExecutor: noopPreRenameExecutor,
-            preCleanupExecutor: new RealPreCleanupExecutor(),
-            migrationJournal,
-            // Admin-save applies print a terminal box and write the
-            // NDJSON line. Same singleton across UI saves.
-            notifier: getProductionNotifier(),
-          });
-          return pipeline.apply({
-            desired: desiredArg,
-            db,
-            dialect,
-            source: sourceArg,
-            promptChannel: channelArg,
-            databaseName,
-            // Tag the journal row with the collection slug the user is
-            // editing so the admin NotificationCenter can render "Posts
-            // schema updated" instead of generic "global".
-            uiTargetSlug: p.collectionName,
-            // Stated rather than relying on the default, so the default stops being load-bearing.
-            uiTargetKind: "collection" as const,
-            // A field becoming translated keeps its value as this language's; the apply moves it
-            // after its prompts and refusals, before it drops the main column.
-            defaultLocale: appLocalization()?.defaultLocale ?? "en",
-          });
+      // Everything above reads the request alone, so no concurrent writer can change its answer
+      // and it is decided before the lock is taken: a malformed save is answered as one, not with
+      // a lock refusal or a lock table created on the way to rejecting it. Everything below reads
+      // or writes the database, from the registry row the save is checked against to the response,
+      // and runs holding the schema lock, refused at once while a migration holds it. The shared
+      // apply takes the lock too, re-entrantly; it is taken here so the registry read, the version
+      // check and the registry write sit inside the same claim as the DDL.
+      return withSchemaChangeExcluded(
+        {
+          adapter: getAdapterFromDI(),
+          // An app whose DI registered no logger still saves; the refusal's log line then goes to
+          // the console.
+          logger: getLoggerFromDI() ?? consoleLogger,
+          label: `apply schema changes to collection "${p.collectionName}"`,
+          // This road runs the push pipeline, so it issues DDL and may create the lock table.
+          issuesDdl: true,
         },
-        // The optimistic-lock check now runs up front via
-        // assertSchemaVersionMatch, so no schemaVersions are passed below and
-        // this callback is unused; it is retained to satisfy the deps contract.
-        readSchemaVersionForSlug: (slug: string) =>
-          Promise.resolve(slug === p.collectionName ? currentVersion : null),
-        // Read post-apply versions for the saved slug from the registry.
-        readNewSchemaVersionsForSlugs: async (slugs: string[]) => {
-          const out: Record<string, number> = {};
-          for (const slug of slugs) {
-            const r = await registry.getCollectionBySlug(slug);
-            const v = r?.schemaVersion;
-            if (typeof v === "number") out[slug] = v;
-          }
-          return out;
-        },
-      });
-
-      // The dialog's answer on a translated field's rename, refused when it does not say,
-      // before anything changes.
-      const companionRename = await resolveCompanionRename(renameResolutions, {
-        tableName,
-        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        dialect,
-        builtBy: "collection",
-      });
-
-      // A field leaving translation has preconditions of its own, asked before the push alters
-      // anything.
-      await archiveFieldsLeavingTranslation({
-        // This builder made the table, which decides the column bounds compared.
-        builtBy: "collection",
-        // The rename the admin chose, or that none was; when none was offered (a storage change,
-        // or no single candidate), the preflight finds it from the fields and refuses what it must.
-        renamed: companionRename,
-        tableName,
-        defaultLocale: appLocalization()?.defaultLocale ?? "en",
-        adapter,
-        entity: String(p.collectionName),
-        kind: "collection",
-        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        // This apply's push refuses a main-table column drop the admin did not confirm.
-        mainDropsConfirmed: true,
-      });
-
-      const result = await apply(desired, "ui", {
-        promptChannel: "auto",
-      });
-
-      if (!result.success) {
-        // The stale-version case is already rejected up front by
-        // assertSchemaVersionMatch, so any failure here is a real apply error.
-        throw new Error(result.error.message);
-      }
-
-      // i18n: the push pipeline deliberately EXCLUDES companion `_locales`
-      // tables from its diff (managed-tables `isCompanionTable`) — they are
-      // owned by the localization layer, not drizzle-kit. So we reconcile the
-      // companion out-of-band here for any localization change: enabling seeds
-      // the companion default locale from the existing main columns then drops
-      // them, disabling restores + archives them, and a field change ADD/DROPs
-      // localized columns. Without this, a localized collection edited in the
-      // builder has its translatable columns omitted from main (correct) but
-      // NOWHERE to store per-language values. Runs in-process (no migration file).
-      if (wasLocalized || isLocalized) {
-        try {
-          const oldFields = (collection.fields ??
-            []) as unknown as FieldDefinition[];
-          const newFields = fields as unknown as FieldDefinition[];
-          const defaultLocale = appLocalization()?.defaultLocale ?? "en";
-          const companionExists = await adapter.tableExists(
-            `${tableName}_locales`
+        async () => {
+          // Read once the lock is held, so the row every check below is asked against is the one
+          // the DDL and the registry write act on.
+          const collection = await registry.getCollectionBySlug(
+            p.collectionName
           );
-          const companionHasStatus =
-            companionExists && wasLocalized && isLocalized
-              ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
-              : undefined;
-          const renamed = companionRename ?? undefined;
-          const plan = buildCompanionTransitionStatements({
-            // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
-            builtBy: "collection" as const,
+          if (!collection) throw new Error("Collection not found");
+          refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A pair of sibling fields this save would create is refused before any statement or
+          // archive write; one the entity already holds keeps working. Asked here because this
+          // road reaches its DDL through no shared service that could ask it.
+          assertNoNewSiblingClashes(
+            { kind: "collection", slug: p.collectionName },
+            fields,
+            collection.fields ?? []
+          );
+
+          // Default legacy rows (schema_version NULL) to 1 so a first save is not
+          // rejected as version-less. The registry types schemaVersion as `number`
+          // via a type assertion, but the DB column is nullable, so the value can
+          // be null at runtime; singles/components apply the same `?? 1` fallback.
+          const currentVersion = collection.schemaVersion ?? 1;
+          // Reject a stale or version-less UI save before any DDL runs. The shared
+          // guard gives all three entity kinds (collections, singles, components)
+          // one optimistic-lock behavior and one error surface.
+          assertSchemaVersionMatch(
+            schemaVersion,
+            currentVersion,
+            p.collectionName
+          );
+          const tableName = collection.tableName;
+
+          // i18n: prefer the request's localized flag over the persisted one, so a simultaneous
+          // toggle+field-change save applies with the NEW state (the persisted flag is only written
+          // after this apply). `wasLocalized` drives enable/disable detection for the companion.
+          const wasLocalized =
+            (collection as { localized?: boolean }).localized === true;
+          // Validated rather than coerced: `localized: "false"` would read as
+          // `false` under `=== true` and turn an ordinary save of a localized
+          // collection into a DISABLE transition, restoring the companion's
+          // columns onto the main table and archiving it.
+          const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // Where its translatable values are stored once this apply runs, which the runtime
+          // tables registered below describe: per language when it is translated, or always under
+          // per-language storage. `isLocalized` stays the product's answer.
+          const isStoredPerLanguage = storesPerLanguage({
+            localized: isLocalized,
+          });
+          // i18n: enabling Internationalization needs the app-level
+          // `localization` config — without it the companion reconcile below
+          // would move translatable columns into a table the runtime cannot
+          // address. Gate the false→true transition only.
+          if (!wasLocalized && isLocalized) {
+            assertLocalizationConfigured("collection", p.collectionName);
+          }
+
+          const adapter = getAdapterFromDI();
+          if (!adapter) {
+            throw new Error("Database adapter not initialized");
+          }
+          // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
+          const dialect = adapter.dialect;
+
+          // One apply of the schema pipeline, with the admin's answers from the dialog, then the
+          // companion brought in step: the same path a Builder save of the collection takes. Legacy
+          // per-field answers are translated to typed resolutions inside the prompt dispatcher.
+          const result = await applyCollectionSchemaChange({
             slug: p.collectionName,
-            kind: "collection",
-            tableName,
-            dialect,
-            defaultLocale,
-            status: collection.status === true,
+            collection,
+            fields: fields as unknown as FieldDefinition[],
             wasLocalized,
             isLocalized,
-            // The PERSISTED status, which is what the disable restore needs: it decides whether
-            // main carried `status` and the companion `_status` before this apply. `collection`
-            // here is the registry record, so this is the prior state for the same reason
-            // `wasLocalized` above is.
-            wasStatus: collection.status === true,
-            oldFields,
-            newFields,
-            companionExists,
-            companionHasStatus,
-            // Added to the companion, with their values, by the apply before its drop.
-            joinedBefore: movedOnto(result, tableName),
-            // A translated field the admin renamed: the dialog's answer naming the companion.
-            renamed,
-            // What this database holds now, so a re-apply after a part-applied one finishes it.
-            ...(await liveCompanionShape(adapter, {
-              tableName,
-              oldFields,
-              newFields,
-              builtBy: "collection",
-              companionExists,
-            })),
-          });
-          // A disable archives non-default translations, so ensure the archive
-          // table exists first. Run each statement individually (executeQuery is
-          // single-statement on some drivers, e.g. sqlite).
-          if (plan.needsArchive) {
-            await ensureI18nArchive(adapter, dialect);
-          }
-          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
-          // would make a half-finished localization ENABLE look like success, because the planner
-          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
-          for (const stmt of plan.statements) {
-            await adapter.executeQuery(stmt);
-          }
-
-          // The transition record describes a companion that no longer exists, so it stops being true
-          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
-          // source locale — the check that protects a live transition would block a legitimate one.
-          if (plan.companionDropped) {
-            // The other half of "this companion is gone": readiness remembers only that one
-            // exists.
-            const { forgetCompanionReadiness } = await import(
-              "../../domains/i18n/runtime/companion-readiness"
-            );
-            forgetCompanionReadiness(adapter, `${tableName}_locales`);
-            const { resolveTransitionStore } = await import(
-              "../../domains/i18n/migration/transition-recorder"
-            );
-            const { forgetI18nTransition } = await import(
-              "../../domains/i18n/migration/transition-state"
-            );
-            await forgetI18nTransition(
-              await resolveTransitionStore(adapter),
-              "collection",
-              String(p.collectionName)
-            );
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // Fatal to correctness (translatable values have nowhere to live), but
-          // the main-table apply already committed — surface loudly rather than
-          // silently leaving the collection half-migrated.
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              op: "companionReconcile",
-              collection: p.collectionName,
-              detail: msg,
-              note: "main table updated but localized companion out of sync; re-apply to retry",
-            },
-          });
-        }
-      }
-
-      // pipeline.apply mutates the live DB (renamed/added/dropped
-      // columns) but does NOT persist the updated `fields` JSON on
-      // `dynamic_collections`. Without this post-apply write, subsequent
-      // admin queries (entry list, entry create form, etc.) build their
-      // column references from the STALE metadata and fail with `no
-      // such column: <oldName>`. End-user symptom: rename succeeds in
-      // the DB but the collection looks empty in the admin UI because
-      // every list query 500s.
-      //
-      // Use `adapter.update` directly (not `registry.updateCollection`)
-      // because the registry helper resets `migration_status` to `"pending"`
-      // on any `fields` change, which is wrong here (the migration is now
-      // `applied`). Advance `schema_version` in this same write so the
-      // optimistic-lock check above sees a new value on the next save;
-      // nothing else persists it, so without this bump the stored version
-      // never changes and a second stale save would pass the guard. The
-      // write is non-fatal (the DDL already succeeded), but track whether it
-      // landed so the response never reports a version the DB did not persist.
-      const newSchemaVersion = currentVersion + 1;
-      let versionPersisted = true;
-      try {
-        await adapter.update(
-          "dynamic_collections",
-          {
-            fields: JSON.stringify(fields),
-            schema_version: newSchemaVersion,
-            // i18n: persist the state this apply actually ran with (mirrors
-            // the singles apply). The DDL above already performed any
-            // false→true transition, so leaving the stored flag behind would
-            // make the settings write that follows read another false→true
-            // transition and reconcile the companion a second time.
-            localized: isLocalized,
-            updated_at: new Date(),
-          },
-          { and: [{ column: "slug", op: "=", value: p.collectionName }] }
-        );
-        // Written past the registry services, so the cached rows are cleared
-        // here: a read during the save may have cached the row from before it.
-        clearCollectionRowCache();
-      } catch (err) {
-        versionPersisted = false;
-        const msg = err instanceof Error ? err.message : String(err);
-        // A localization TRANSITION that reaches this point has already moved
-        // the translatable columns between the main table and the companion.
-        // The stored flag is what every later process reads to decide which
-        // of those two tables a translatable field lives in, so failing to
-        // store it does not leave a cosmetic gap — it leaves the registry
-        // describing a layout the database no longer has, and the next boot
-        // generates runtime schemas against the wrong table. That is the same
-        // half-migrated state the companion reconcile above refuses to return
-        // success for, so it is refused the same way.
-        if (wasLocalized !== isLocalized) {
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              op: "persistLocalizedFlag",
-              collection: p.collectionName,
-              detail: msg,
-              wasLocalized,
-              isLocalized,
-              note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
-            },
-          });
-        }
-        // Otherwise non-fatal: the schema apply itself already succeeded. If
-        // the metadata write fails, the actual DB column was already
-        // renamed and the collection is in a good state structurally;
-        // only the admin's view of the field name is stale, and the version
-        // was not advanced (the response reports the current version so a
-        // retry re-attempts the bump). Log so an operator can diagnose.
-        consoleLogger.warn(
-          `[applySchemaChanges] Post-apply metadata write failed for ` +
-            `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
-            `but admin UI may show stale field names until next reload.`
-        );
-      }
-
-      // After a schema apply (rename, add, drop) two independent in-memory
-      // caches hold Drizzle table objects that are now stale:
-      //
-      //   1. CollectionFileManager.schemaRegistry: used by query-service
-      //      SELECT / JOIN builders (loadDynamicSchema path).
-      //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
-      //      update / delete / select (getTableObject path).
-      //
-      // Both must be refreshed with the same freshly-generated table built
-      // from the apply payload's `fields`. Replacing in-place (rather than
-      // invalidate + lazy-rebuild) avoids the race where a concurrent
-      // request could arrive between the invalidation and the DB write of
-      // the new `dynamic_collections.fields`, picking up the stale schema.
-      try {
-        // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
-        // omits translatable columns (kept in lockstep with the desired snapshot
-        // above), then register the companion `_locales` runtime table too so
-        // per-language reads/writes resolve in THIS process without a restart.
-        const { table: freshTable } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
-          dialect,
-          { localized: isLocalized, status: collection.status === true }
-        );
-        getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-          tableName,
-          freshTable
-        );
-        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
-        if (isLocalized) {
-          const companion = buildCompanionRuntimeTable({
-            slug: p.collectionName,
-            tableName,
-            fields: fields as FieldDefinition[],
-            dialect,
-            localized: true,
+            // The dialog does not change Draft/Published: the persisted status, before and after.
             status: collection.status === true,
+            wasStatus: collection.status === true,
+            renameResolutions: renameResolutions ?? [],
+            eventResolutions: eventResolutions ?? [],
+            legacyResolutions: resolutions
+              ? { tableName, byFieldName: resolutions }
+              : undefined,
           });
-          if (companion) {
+
+          // pipeline.apply mutates the live DB (renamed/added/dropped
+          // columns) but does NOT persist the updated `fields` JSON on
+          // `dynamic_collections`. Without this post-apply write, subsequent
+          // admin queries (entry list, entry create form, etc.) build their
+          // column references from the STALE metadata and fail with `no
+          // such column: <oldName>`. End-user symptom: rename succeeds in
+          // the DB but the collection looks empty in the admin UI because
+          // every list query 500s.
+          //
+          // Use `adapter.update` directly (not `registry.updateCollection`)
+          // because the registry helper resets `migration_status` to `"pending"`
+          // on any `fields` change, which is wrong here (the migration is now
+          // `applied`). Advance `schema_version` in this same write so the
+          // optimistic-lock check above sees a new value on the next save;
+          // nothing else persists it, so without this bump the stored version
+          // never changes and a second stale save would pass the guard. The
+          // write is non-fatal (the DDL already succeeded), but track whether it
+          // landed so the response never reports a version the DB did not persist.
+          const newSchemaVersion = currentVersion + 1;
+          let versionPersisted = true;
+          try {
+            await adapter.update(
+              "dynamic_collections",
+              {
+                fields: JSON.stringify(fields),
+                schema_version: newSchemaVersion,
+                // i18n: persist the state this apply actually ran with (mirrors
+                // the singles apply). The DDL above already performed any
+                // false→true transition, so leaving the stored flag behind would
+                // make the settings write that follows read another false→true
+                // transition and reconcile the companion a second time.
+                localized: isLocalized,
+                updated_at: new Date(),
+              },
+              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            );
+            // Written past the registry services, so the cached rows are cleared
+            // here: a read during the save may have cached the row from before it.
+            clearRegistryRowCache();
+          } catch (err) {
+            versionPersisted = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            // A localization TRANSITION that reaches this point has already moved
+            // the translatable columns between the main table and the companion.
+            // The stored flag is what every later process reads to decide which
+            // of those two tables a translatable field lives in, so failing to
+            // store it does not leave a cosmetic gap — it leaves the registry
+            // describing a layout the database no longer has, and the next boot
+            // generates runtime schemas against the wrong table. That is the same
+            // half-migrated state the companion reconcile above refuses to return
+            // success for, so it is refused the same way.
+            if (wasLocalized !== isLocalized) {
+              throw NextlyError.internal({
+                cause: err instanceof Error ? err : undefined,
+                logContext: {
+                  op: "persistLocalizedFlag",
+                  collection: p.collectionName,
+                  detail: msg,
+                  wasLocalized,
+                  isLocalized,
+                  note: "columns moved but dynamic_collections.localized was not updated; re-apply to retry",
+                },
+              });
+            }
+            // Otherwise non-fatal: the schema apply itself already succeeded. If
+            // the metadata write fails, the actual DB column was already
+            // renamed and the collection is in a good state structurally;
+            // only the admin's view of the field name is stale, and the version
+            // was not advanced (the response reports the current version so a
+            // retry re-attempts the bump). Log so an operator can diagnose.
+            consoleLogger.warn(
+              `[applySchemaChanges] Post-apply metadata write failed for ` +
+                `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
+                `but admin UI may show stale field names until next reload.`
+            );
+          }
+
+          // After a schema apply (rename, add, drop) two independent in-memory
+          // caches hold Drizzle table objects that are now stale:
+          //
+          //   1. CollectionFileManager.schemaRegistry: used by query-service
+          //      SELECT / JOIN builders (loadDynamicSchema path).
+          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
+          //      update / delete / select (getTableObject path).
+          //
+          // Both must be refreshed with the same freshly-generated table built
+          // from the apply payload's `fields`. Replacing in-place (rather than
+          // invalidate + lazy-rebuild) avoids the race where a concurrent
+          // request could arrive between the invalidation and the DB write of
+          // the new `dynamic_collections.fields`, picking up the stale schema.
+          try {
+            // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+            // omits translatable columns (kept in lockstep with the desired snapshot
+            // above), then register the companion `_locales` runtime table too so
+            // per-language reads/writes resolve in THIS process without a restart.
+            const { table: freshTable } = generateRuntimeSchema(
+              tableName,
+              fields as FieldDefinition[],
+              dialect,
+              {
+                localized: isStoredPerLanguage,
+                status: collection.status === true,
+              }
+            );
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-              companion.companionTableName,
-              companion.table
+              tableName,
+              freshTable
             );
             getSchemaRegistryFromDI()?.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
+              tableName,
+              freshTable
+            );
+            if (isStoredPerLanguage) {
+              const companion = buildCompanionRuntimeTable({
+                slug: p.collectionName,
+                tableName,
+                fields: fields as FieldDefinition[],
+                dialect,
+                localized: true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published collection its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: (collection as { status?: unknown }).status,
+                }),
+              });
+              if (companion) {
+                getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                  companion.companionTableName,
+                  companion.table
+                );
+                getSchemaRegistryFromDI()?.registerDynamicSchema(
+                  companion.companionTableName,
+                  companion.table
+                );
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            consoleLogger.warn(
+              `[applySchemaChanges] In-memory schema refresh failed for ` +
+                `'${p.collectionName}': ${msg}. Entry queries may reference ` +
+                `old column names until next server restart.`
             );
           }
+
+          // The dispatcher fires bumpSchemaVersion directly after a
+          // successful pipeline apply. The bump only matters for UI-first
+          // applies (sets the X-Schema-Version response header so admin tabs
+          // know to refetch); HMR and boot paths don't need it.
+          try {
+            const { bumpSchemaVersion } = await import("../../routeHandler");
+            bumpSchemaVersion();
+          } catch {
+            // routeHandler may be unavailable in non-server contexts (tests).
+          }
+
+          // applySchemaChanges is a non-CRUD mutation: there's no "item" to
+          // surface. The action result carries the new schema version (so
+          // the admin can update its X-Schema-Version header probe) and a
+          // toast summary string. toastSummary may be undefined when the
+          // pipeline didn't emit diff counts; the conditional spread drops
+          // undefined fields silently.
+          return respondAction(`Schema applied for '${p.collectionName}'`, {
+            newSchemaVersion: versionPersisted
+              ? newSchemaVersion
+              : currentVersion,
+            ...(result.summary
+              ? { toastSummary: formatToastSummary(result.summary) }
+              : {}),
+          });
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        consoleLogger.warn(
-          `[applySchemaChanges] In-memory schema refresh failed for ` +
-            `'${p.collectionName}': ${msg}. Entry queries may reference ` +
-            `old column names until next server restart.`
-        );
-      }
-
-      // The dispatcher fires bumpSchemaVersion directly after a
-      // successful pipeline apply. The bump only matters for UI-first
-      // applies (sets the X-Schema-Version response header so admin tabs
-      // know to refetch); HMR and boot paths don't need it.
-      try {
-        const { bumpSchemaVersion } = await import("../../routeHandler");
-        bumpSchemaVersion();
-      } catch {
-        // routeHandler may be unavailable in non-server contexts (tests).
-      }
-
-      // applySchemaChanges is a non-CRUD mutation: there's no "item" to
-      // surface. The action result carries the new schema version (so
-      // the admin can update its X-Schema-Version header probe) and a
-      // toast summary string. toastSummary may be undefined when the
-      // pipeline didn't emit diff counts; the conditional spread drops
-      // undefined fields silently.
-      return respondAction(`Schema applied for '${p.collectionName}'`, {
-        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
-        ...(result.summary
-          ? { toastSummary: formatToastSummary(result.summary) }
-          : {}),
-      });
+      );
     },
   },
   listEntries: {
@@ -1327,10 +1207,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1414,10 +1296,11 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). A caller admitted on publish or unpublish
+          // alone is judged by the service. Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1439,6 +1322,34 @@ const COLLECTIONS_METHODS: Record<
     "unpublishAllLocales",
     "All languages unpublished."
   ),
+
+  previewPublishAllLocales: {
+    // What publishing every language would do, language by language, without
+    // doing it. Asked as the publish is: the service judges the publish
+    // permission and rule in each language it would put live, and names only
+    // the fields the caller may read.
+    execute: async (svc, p) => {
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      const result = await svc.previewPublishAllLocales({
+        collectionName,
+        entryId,
+        ...callerUser(),
+        // The route admitted this read on the `publish-{slug}` grant alone,
+        // so it attests no gate, as the publish's route attests none.
+        routeAuthorized: false,
+        authenticatedScope: readAuthenticatedScope(),
+      });
+      const preview = unwrapServiceResult<{
+        id: string;
+        languages: unknown[];
+        blockers: unknown[];
+      }>(result, { collectionName, entryId });
+      // One caller's answer: who may publish, and which fields they may read,
+      // decide it, so no shared cache may hand it to anyone else.
+      return withSessionCacheHeaders(respondData(preview));
+    },
+  },
   deleteEntry: {
     // The deleted record is the `item`.
     execute: async (svc, p, _body, request) => {
@@ -1454,10 +1365,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.
@@ -1518,7 +1431,7 @@ const COLLECTIONS_METHODS: Record<
   bulkUpdateEntries: {
     execute: async (svc, p, body, request) => {
       const b = body as
-        | { ids?: string[]; data?: Record<string, unknown> }
+        | { ids?: string[]; data?: Record<string, unknown>; revs?: unknown }
         | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -1535,12 +1448,14 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        // Each id's own version, where given: judged per document.
+        revs: b.revs,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Where the route admitted the caller on update, attest it so the
+        // handler skips only that redundant re-check (field-level write access
+        // still runs). Never inferred from userId.
+        routeAuthorized: routeAdmittedUpdate(),
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
         // judged on the key's OWN grants.
@@ -1567,6 +1482,7 @@ const COLLECTIONS_METHODS: Record<
             where?: Record<string, unknown>;
             data?: Record<string, unknown>;
             limit?: number;
+            revs?: unknown;
           }
         | undefined;
       if (!p.collectionName) {
@@ -1593,12 +1509,14 @@ const COLLECTIONS_METHODS: Record<
           // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
+          // Passed so it is refused, not ignored: a query names no ids.
+          revs: b.revs,
           actor: readAuthenticatedActor(),
           ...callerUser(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
           // each per-row transition are judged on the key's OWN grants.

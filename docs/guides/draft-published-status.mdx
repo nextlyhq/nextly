@@ -69,6 +69,35 @@ export const Homepage = defineSingle({
 
 In the Visual Schema Builder, the toggle lives in the same Settings → Advanced tab on the single's Builder page.
 
+## What a publish checks
+
+Moving a document to `published` validates it as it goes live, not only the
+fields the request sends. A status-only publish (`data: { status: "published" }`)
+judges the stored document with the request's values on top, so a value saved
+while the document was a draft is checked again before it goes live. That covers
+a first publication, a republish after an unpublish, a bulk publish, and
+publishing every language at once.
+
+On a collection entry, the document going live includes its field-group
+(component) values and its many-to-many relationships, read as they are stored.
+A required component that has no instance, or a required many-to-many
+relationship with no links, refuses the publish with a validation error on that
+field. Fix the field, then publish. The custom `validate` functions of top-level
+component and many-to-many fields run too, and so do the rules on each
+component's own fields: a component instance saved before one of its fields
+became required, or before a `validate` was tightened, refuses the publish with
+an error that names the field inside the component (`hero.code`). A password
+field inside a component is the exception: a stored password is never read
+back, so it is judged only when the instance is written.
+
+On a localized collection, and on one whose components hold translated values,
+a required component and the rules inside a component are enforced for the
+default language only, as a translated field's `required` is, so one finished
+language can go live while another is still incomplete.
+
+Sending `published` again to a document that is already live, with no pending
+draft, is not checked again.
+
 ## Localized documents: moving every language at once
 
 On a localized collection or single, the publication state lives per language:
@@ -80,12 +109,20 @@ That leaves a third thing to say — "move the whole document, every language" �
 and it is spelled with the wildcard locale:
 
 ```typescript
+// Read it in every language first: that read's `_rev` covers each
+// translation, so the takedown is refused if any of them changed since.
+const current = await nextly.findByID({
+  collection: "pages",
+  id: page.id,
+  locale: "*",
+});
+
 // Take the document down in every language it has.
 await nextly.update({
   collection: "pages",
   id: page.id,
   locale: "*",
-  data: { status: "draft" },
+  data: { status: "draft", _rev: current._rev },
 });
 ```
 

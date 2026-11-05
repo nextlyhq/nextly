@@ -79,6 +79,10 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // The ROOT entry only. `@nextlyhq/blocks-react/next` imports `nextly/runtime`,
   // and `/blocks` is the built-in catalogue, which nothing here needs yet.
   "@nextlyhq/blocks-react",
+  // The document and window the canvas hands the blocks it draws, which block
+  // code reads through `useBlockEnvironment`. A client entry of its own, and
+  // React alone: it reaches neither `next/*` nor the CMS.
+  "@nextlyhq/blocks-react/environment",
   "@nextlyhq/ui",
   // The `cn` helper only. A separate subpath because the root barrel carries a
   // `"use client"` banner and this one is plain string joining.
@@ -102,6 +106,11 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // the root today; when the editor needs SDK types, add a type-only route
   // deliberately rather than widening this entry back.
   "@nextlyhq/plugin-sdk/admin",
+  // The composition actions' schemas, which the server-safe `ops` subpath
+  // publishes so a route, a script and an agent judge an action alike. Plain
+  // data validation: it reaches neither React nor the CMS, and only the `ops`
+  // entry imports it.
+  "zod",
 ];
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */
@@ -109,8 +118,15 @@ const ALLOWED_IN_TESTS = [
   "@nextlyhq/module-specifiers",
   "@testing-library/react",
   "node:fs",
+  // `createRequire`, for `canvas-environment.test.tsx`: it loads a second copy
+  // of React in development, after giving the console the `timeStamp` a
+  // browser's has, so React describes changed props as it does in a browser.
+  "node:module",
   "node:path",
   "node:url",
+  // That same test renders on its own copy of React, so it creates the root
+  // itself rather than through the testing library, which holds the first.
+  "react-dom/client",
   // Server rendering, for the hydration assertions. A shell whose server and
   // first client render disagree is repaired by React discarding the subtree,
   // and `renderToString` is the only way to observe that from a test.
@@ -118,6 +134,10 @@ const ALLOWED_IN_TESTS = [
   "@nextlyhq/module-specifiers/parse-source",
   "oxc-parser",
   "vitest",
+  // The Baseline dataset, read by `style-baseline.test.ts` alone. Several
+  // megabytes the editor has no use for at run time: the gate ships only its
+  // answer, and listing the package here rather than above keeps it so.
+  "web-features",
 ];
 
 /**

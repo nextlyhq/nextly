@@ -1,0 +1,26 @@
+---
+title: SETTINGS_CHANGE_WITHOUT_MIGRATION
+description: "An entity's settings changed in the configuration, and no migration records the change."
+---
+
+## Cause
+
+An entity's settings changed in the configuration, and no migration records the change.
+
+Migrations also record each entity's settings, such as its labels, description and admin options. The configuration's settings differ from the newest migration's record of them.
+
+## Fix
+
+- Run `nextly migrate:create --name="<migration-name>"`.
+- Commit the migration and its snapshot.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 1 entity's settings changed with no migration.
+  Why:  ~ posts: labels.singular
+  Next: Run `nextly migrate:create --name="<migration-name>"` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/settings-change-without-migration  (SETTINGS_CHANGE_WITHOUT_MIGRATION)
+```

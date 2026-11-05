@@ -69,22 +69,19 @@ const CHECK_SAVED = ["email-providers", "p1", "check"];
 describe("checking a provider's settings at the route gate", () => {
   beforeEach(() => granted.clear());
 
-  it.each([
-    ["adds providers", "create-email-providers"],
-    ["manages providers", "manage-email-providers"],
-  ])("admits a person who %s to check new settings", async (_, grant) => {
-    expect(await admits(CHECK, "POST", [grant])).toBe(true);
+  it("admits a person who adds providers to check new settings", async () => {
+    // The route asks the plain create; `manage-email-providers` counts as it
+    // in the real check, which the fake above does not model.
+    expect(await admits(CHECK, "POST", ["create-email-providers"])).toBe(true);
   });
 
-  it.each([
-    ["edits providers", "update-email-providers"],
-    ["manages providers", "manage-email-providers"],
-  ])(
-    "admits a person who %s to check a saved provider's settings",
-    async (_, grant) => {
-      expect(await admits(CHECK_SAVED, "POST", [grant])).toBe(true);
-    }
-  );
+  it("admits a person who edits providers to check a saved provider's settings", async () => {
+    // The route asks the plain update; `manage-email-providers` counts as it
+    // in the real check, which the fake above does not model.
+    expect(await admits(CHECK_SAVED, "POST", ["update-email-providers"])).toBe(
+      true
+    );
+  });
 
   it("refuses a person who may only add providers a check of a saved one", async () => {
     // A saved provider's check tries its stored secrets, so only someone who

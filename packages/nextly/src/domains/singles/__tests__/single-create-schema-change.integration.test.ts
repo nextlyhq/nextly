@@ -339,6 +339,11 @@ for (const dialect of getConfiguredTestDialects()) {
      * reads existence, and the rebuilt impostor exists) and silently (the create reports applied).
      * Both directions are refused: a create landing on someone's companion, and a create whose own
      * companion would land on someone's main table.
+     *
+     * The first direction is now refused earlier, by the one address rule: an address whose
+     * snake_case form ends in `_locales` reads as a localization companion and is never new. Its
+     * refusal must still say why, so the reason is asserted, not just a rejection. The second
+     * direction meets a Single created before that rule, which keeps working under its address.
      */
     it("refuses a create whose table family collides with another single's", async () => {
       current = await createTestNextly({
@@ -372,24 +377,37 @@ for (const dialect of getConfiguredTestDialects()) {
             fields: [{ name: "body", type: "text" }],
           }
         )
-      ).rejects.toThrow(/already exists/);
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "slug",
+              code: "SLUG_RESERVED",
+              message: `Single address '${owner}-locales' cannot end in '_locales': that suffix names a localization table`,
+            },
+          ],
+        },
+      });
 
       // The companion is untouched — same columns, no impostor rebuild — and nothing claimed the
       // colliding slug.
       expect(await columnsOf(current, companion)).toEqual(before);
       expect(await registryRow(current, `${owner}-locales`)).toBeUndefined();
 
-      // The mirror direction: the new create's OWN companion name is an existing main table.
+      // The mirror direction: the new create's OWN companion name is an existing main table. No
+      // create takes a `-locales` address now, so the Single holding it is registered as one made
+      // before the rule was.
       const taken = `sc_${dialect.slice(0, 2)}_mir`;
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: `${taken}-locales`,
-          label: "Mir Locales",
-          fields: [{ name: "body", type: "text" }],
-        }
-      );
+      await current.getService("singleRegistryService").registerSingle({
+        slug: `${taken}-locales`,
+        label: "Mir Locales",
+        tableName: `single_${taken}_locales`,
+        fields: [{ name: "body", type: "text" }],
+        source: "ui",
+        locked: false,
+        schemaHash: "mir-locales",
+      });
       await expect(
         dispatchSingles(
           "createSingle",

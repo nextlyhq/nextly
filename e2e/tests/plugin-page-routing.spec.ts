@@ -10,7 +10,7 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("a deep link to a plugin page resolves and renders (not 404)", async ({
@@ -20,5 +20,7 @@ test("a deep link to a plugin page resolves and renders (not 404)", async ({
 
   // The plugin's component rendered — the route resolved to it, not the 404.
   await expect(page.getByTestId("sf-card")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText("Page Not Found")).toHaveCount(0);
+  await expect(includingHidden(page).getByText("Page Not Found")).toHaveCount(
+    0
+  );
 });

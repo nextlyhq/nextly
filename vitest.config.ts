@@ -1,5 +1,9 @@
 import { defineConfig } from "vitest/config";
 
+// The supported ranges, as create-nextly-app's build inlines them, for the
+// scripts tests that load its source.
+import { frameworkRanges } from "./scripts/framework-ranges.mjs";
+
 /*
  * The lane `pnpm test:scripts` runs, and the only vitest run rooted here.
  *
@@ -22,6 +26,9 @@ import { defineConfig } from "vitest/config";
  * and the next failure that is real gets the same treatment.
  */
 export default defineConfig({
+  define: {
+    __NEXTLY_FRAMEWORK_RANGES__: JSON.stringify(frameworkRanges()),
+  },
   test: {
     // What each file loaded on its last run, so `--changed` and `related` pick
     // tests from real dependencies rather than a static import graph.

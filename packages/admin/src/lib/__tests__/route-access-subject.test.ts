@@ -14,29 +14,31 @@ import { resolveRoute } from "@admin/lib/routing";
 
 describe("the subject a guarded route names", () => {
   it.each([
-    ["/admin/collections/posts", "read"],
-    ["/admin/collections/posts/create", "create"],
-    ["/admin/collections/posts/api", "read"],
-    ["/admin/collections/posts/entry-1", "update"],
-    ["/admin/collections/posts/entry-1/versions", "read"],
-  ])("names a collection for %s", (path, action) => {
+    ["/admin/collections/posts", "read", "read"],
+    ["/admin/collections/posts/create", "create", "create"],
+    ["/admin/collections/posts/api", "read", "read"],
+    ["/admin/collections/posts/entry-1", "read", "read"],
+    // The history is read in every language, as the server judges it: the
+    // route asks that, though the permission it names is the read.
+    ["/admin/collections/posts/entry-1/versions", "read", "readHistory"],
+  ])("names a collection for %s", (path, permission, action) => {
     const resolved = resolveRoute(path, "");
     expect(resolved.accessSubject).toBe("collection");
     // The permission and the entity access are asserted beside the subject
     // because all three come from one table: a subject attached to the wrong
     // row would still read "collection" here while gating on another action.
-    expect(resolved.requiredPermission).toBe(`${action}-posts`);
+    expect(resolved.requiredPermission).toBe(`${permission}-posts`);
     expect(resolved.entityAccess).toEqual({ slug: "posts", action });
   });
 
   it.each([
-    ["/admin/singles/site-settings", "update"],
-    ["/admin/singles/site-settings/api", "read"],
-    ["/admin/singles/site-settings/versions", "read"],
-  ])("names a Single for %s", (path, action) => {
+    ["/admin/singles/site-settings", "read", "read"],
+    ["/admin/singles/site-settings/api", "read", "read"],
+    ["/admin/singles/site-settings/versions", "read", "readHistory"],
+  ])("names a Single for %s", (path, permission, action) => {
     const resolved = resolveRoute(path, "");
     expect(resolved.accessSubject).toBe("single");
-    expect(resolved.requiredPermission).toBe(`${action}-site-settings`);
+    expect(resolved.requiredPermission).toBe(`${permission}-site-settings`);
     expect(resolved.entityAccess).toEqual({ slug: "site-settings", action });
   });
 

@@ -38,8 +38,8 @@ interface Direct {
     }) => Promise<{ item: { id: string } }>;
   };
   permissions: {
-    create: (a: { data: Record<string, unknown> }) => Promise<{
-      item: { id: string };
+    find: (a: { limit: number }) => Promise<{
+      items: { id: string; slug: string }[];
     }>;
   };
   roles: {
@@ -50,10 +50,9 @@ interface Direct {
 }
 
 /**
- * The permissions the defaults are judged against. The harness runs none of
- * boot's seeding, so they are written here under the slug the seeder composes,
- * `<action>-<resource>`. `read-forms` is what the role without any of the
- * others holds, since a role must hold at least one permission.
+ * The permissions the defaults are judged against, as boot's seeding stores
+ * them, `<action>-<resource>`. `read-forms` is what the role without any of
+ * the others holds, since a role must hold at least one permission.
  */
 const PERMISSIONS = [
   { action: "read", resource: "forms" },
@@ -66,17 +65,22 @@ async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
     plugins: [formBuilder().plugin],
+    // The boot's seeding, so the Public role a visitor is judged by holds what
+    // a real boot grants it: the read of a form, and the plugin's submission
+    // create.
+    seedPublic: true,
   });
   const { nextly } = current;
   const direct = nextly as unknown as Direct;
 
+  // Seeded by the boot, so each is looked up rather than written here.
+  const seeded = (await direct.permissions.find({ limit: 1000 })).items;
   const ids = new Map<string, string>();
   for (const { action, resource } of PERMISSIONS) {
     const slug = `${action}-${resource}`;
-    const created = await direct.permissions.create({
-      data: { name: slug, slug, action, resource },
-    });
-    ids.set(slug, created.item.id);
+    const found = seeded.find(permission => permission.slug === slug);
+    if (!found) throw new Error(`boot seeded no ${slug}`);
+    ids.set(slug, String(found.id));
   }
 
   // The install's first user holds super-admin, so it is made first and kept

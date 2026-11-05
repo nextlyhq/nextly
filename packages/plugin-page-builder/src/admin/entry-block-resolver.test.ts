@@ -9,7 +9,7 @@ import { entryBlockResolver } from "./entry-block-resolver";
  *
  * The registry is real, and in a fresh test module it is genuinely EMPTY —
  * which is the exact state the entry screen renders in, because
- * `ensureCoreBlocksRegistered()` runs inside `BlocksEditor` and nowhere else.
+ * `ensureEditorBlocksRegistered()` runs inside `BlocksEditor` and nowhere else.
  * A mock would have had to assert that emptiness rather than observe it, and
  * would then have gone on passing after the real registry stopped behaving that
  * way.

@@ -13,13 +13,10 @@
  *
  * @module components/features/widgets/edit/usePlacementMutations
  */
+import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
-import type {
-  WidgetPlacement,
-  WidgetWidth,
-  WidgetWidthFacts,
-} from "@admin/types/dashboard/widgets";
+import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 import {
   movePlacement,
@@ -27,7 +24,7 @@ import {
   removePlacement,
   restorePlacement,
   setPlacementConfig,
-  setPlacementWidth,
+  setPlacementSize,
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
@@ -42,13 +39,18 @@ export interface PlacementMutations {
    * it knows every setting it drew — and a per-field write could not express
    * clearing one, since an emptied field arrives as an absent key.
    */
-  setConfig: (placementId: string, config: Record<string, unknown>) => void;
+  /** Records a card's settings, and its own title where the change sets one (`setPlacementConfig`). */
+  setConfig: (
+    placementId: string,
+    config: Record<string, unknown>,
+    ownTitle?: string
+  ) => void;
   /** Move one card to an end, or one step past its drawn neighbour. */
   move: (placementId: string, direction: MoveDirection) => void;
   /** Move one card to `final` among the drawn cards: where a drag released it. */
   moveTo: (placementId: string, final: number) => void;
-  /** Set one card's width, when its widget allows that width. */
-  setWidth: (placementId: string, width: WidgetWidth) => void;
+  /** Set one card's size, when it lies within its widget's bounds. */
+  setSize: (placementId: string, size: GridSize) => void;
   /** Take one card off the dashboard, keeping it in the list. */
   remove: (placementId: string) => void;
   /** Put a removed card back where it was. */
@@ -58,7 +60,7 @@ export interface PlacementMutations {
 export function usePlacementMutations(
   setDraft: Dispatch<SetStateAction<LayoutDraft | null>>,
   isDrawn: IsDrawn,
-  factsFor: (widgetId: string) => WidgetWidthFacts | undefined
+  boundsFor: (widgetId: string) => WidgetSizeBounds | undefined
 ): PlacementMutations {
   /**
    * Apply a change to the draft's placements, or do nothing without a draft.
@@ -92,18 +94,16 @@ export function usePlacementMutations(
     [mutatePlacements, isDrawn]
   );
 
-  const setWidth = useCallback(
-    (placementId: string, width: WidgetWidth) =>
+  const setSize = useCallback(
+    (placementId: string, size: GridSize) =>
       mutatePlacements(placements => {
-        // The allowed widths of THIS card's widget, read from the draft's own
-        // placement so a stale id cannot borrow another widget's list.
+        // The bounds of THIS card's widget, read from the draft's own
+        // placement so a stale id cannot borrow another widget's bounds.
         const placement = placements.find(p => p.id === placementId);
-        const allowed = placement
-          ? factsFor(placement.widgetId)?.allowedWidths
-          : undefined;
-        return setPlacementWidth(placements, placementId, width, allowed);
+        const bounds = placement ? boundsFor(placement.widgetId) : undefined;
+        return setPlacementSize(placements, placementId, size, bounds);
       }),
-    [mutatePlacements, factsFor]
+    [mutatePlacements, boundsFor]
   );
 
   const remove = useCallback(
@@ -119,12 +119,12 @@ export function usePlacementMutations(
   );
 
   const setConfig = useCallback(
-    (placementId: string, config: Record<string, unknown>) =>
+    (placementId: string, config: Record<string, unknown>, ownTitle?: string) =>
       mutatePlacements(placements =>
-        setPlacementConfig(placements, placementId, config)
+        setPlacementConfig(placements, placementId, config, ownTitle)
       ),
     [mutatePlacements]
   );
 
-  return { move, moveTo, setWidth, remove, restore, setConfig };
+  return { move, moveTo, setSize, remove, restore, setConfig };
 }

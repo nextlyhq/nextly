@@ -41,9 +41,16 @@ import type {
   FieldGroupMigrationStatus as SchemaFieldGroupMigrationStatus,
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  addressRefusalError,
+  assertAddressAllowed,
+  findSameSnakeCaseAddress,
+} from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
@@ -198,11 +205,34 @@ export class FieldGroupMetadataService {
     // process-global field-type registry from inside this same exclusion. A declaration the old
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
+    await this.assertAddressAllowed(input.slug);
     await this.assertTableUnowned(input);
     const { assertValidPluginFieldOptions } = await import(
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(input.fields);
+    // A new field group holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "fieldGroup", slug: input.slug },
+      input.fields,
+      null
+    );
+    // A translated field marked unique needs an index this server may not be able to key. Refused
+    // here, before the main table: the companion is provisioned after it, and a failure there is
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      const { refuseUnindexableTranslatedUnique } = await import(
+        "../../i18n/migration/translated-unique-preconditions"
+      );
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "fieldGroup",
+        oldFields: [],
+        newFields: input.fields as unknown as FieldDefinition[],
+        wasLocalized: false,
+        isLocalized: storesPerLanguage(input),
+      });
+    }
 
     // 1. PLAN. The generator validates as well as renders, so a request it refuses leaves no table
     // and no row behind.
@@ -304,7 +334,9 @@ export class FieldGroupMetadataService {
     // Raises NOT_FOUND itself when the slug is gone, so there is no absence branch here. One that
     // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
     // while proving nothing.
-    const existing = await this.registry.getComponent(input.slug);
+    // As stored, past the registry row cache: a row cached before the lock was taken describes
+    // the state this read exists to re-establish.
+    const existing = await this.registry.getComponentForWrite(input.slug);
     // 🔴 A diverged field group is REFUSED for any edit that would move storage again.
     //
     // Recording the state is only half of it. Without this, an editor opened after the mark reads
@@ -351,6 +383,13 @@ export class FieldGroupMetadataService {
         "../../../api/fields-payload"
       );
       assertValidPluginFieldOptions(input.fields);
+      // Judged against the fields as stored now, so only a pair of sibling fields this save
+      // creates is refused, and one the field group already holds keeps working.
+      assertNoNewSiblingClashes(
+        { kind: "fieldGroup", slug: input.slug },
+        input.fields,
+        existing.fields ?? []
+      );
     }
 
     const localized = requestedLocalized ?? wasLocalized;
@@ -490,7 +529,8 @@ export class FieldGroupMetadataService {
     requestedLocalized: boolean | undefined
   ): Promise<DynamicFieldGroupRecord | null> {
     try {
-      const current = await this.registry.getComponent(input.slug);
+      // As stored: whether this save's own write landed.
+      const current = await this.registry.getComponentForWrite(input.slug);
       if (input.fields !== undefined) {
         if (current.schemaHash !== (await this.hashFields(input.fields)))
           return null;
@@ -961,7 +1001,7 @@ export class FieldGroupMetadataService {
       // own, which write this column. A table the storage migration had moved would carry the
       // migrated prefix and could not be addressed by this name at all.
       STORAGE_FORMAT.columns.type,
-      input.localized === true
+      storesPerLanguage(input)
     );
   }
 
@@ -995,7 +1035,7 @@ export class FieldGroupMetadataService {
     // companion's DDL is generated later and separately, so its name is the one identifier the scan
     // cannot see.
     const names = schema.identifiersIn(migrationSQL);
-    if (input.localized === true) {
+    if (storesPerLanguage(input)) {
       names.push(`${input.tableName}${STORAGE_FORMAT.companionSuffix}`);
     }
 
@@ -1015,6 +1055,23 @@ export class FieldGroupMetadataService {
         message: `Generated database identifier "${name}" is ${identifierBytes(name)} bytes once encoded as UTF-8; the limit is ${MAX_IDENTIFIER_LENGTH} (${MAX_IDENTIFIER_LENGTH} characters of plain ASCII). Shorten the field group's slug or the field name it derives from.`,
       })),
     });
+  }
+
+  /**
+   * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
+   * other field groups' addresses: one with the same snake_case form names the same table.
+   */
+  private async assertAddressAllowed(slug: string): Promise<void> {
+    assertAddressAllowed("fieldGroup", slug);
+    const twin = findSameSnakeCaseAddress(
+      "fieldGroup",
+      slug,
+      (await this.registry.getAllComponents()).map(existing => ({
+        kind: "fieldGroup" as const,
+        address: existing.slug,
+      }))
+    );
+    if (twin) throw addressRefusalError(twin, slug);
   }
 
   /**
@@ -1064,7 +1121,7 @@ export class FieldGroupMetadataService {
       input.fields,
       // i18n: translatable columns are omitted from the main comp_ table when localized; they live
       // in the companion `comp_<slug>_locales`, provisioned below.
-      { localized: input.localized === true }
+      { localized: storesPerLanguage(input) }
     );
   }
 
@@ -1086,7 +1143,7 @@ export class FieldGroupMetadataService {
       return "pending";
     }
 
-    const isLocalized = input.localized === true;
+    const isLocalized = storesPerLanguage(input);
     const fields = input.fields as unknown as FieldDefinition[];
 
     // The verification shares the statements' catch rather than following it. `tableExists`

@@ -12,7 +12,11 @@ import { describe, expect, it } from "vitest";
 import { componentUsageIndex } from "./component-usage";
 import type { GroupedUsageReader } from "./usage-index";
 import { backfillScopeKey } from "./usage-backfill-scope";
-import { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
+import {
+  indexIsWhole,
+  indexStillCounting,
+  readUsageIndexHealth,
+} from "./usage-index-health";
 
 function reader(markers: { bucketCount: number; truncated: boolean }) {
   // `bucketCount` stands for how many marker buckets exist; the reader now
@@ -29,6 +33,11 @@ function reader(markers: { bucketCount: number; truncated: boolean }) {
     };
   };
   return { read, asked };
+}
+
+/** The bookkeeping of a current run with no failed write, at `completed`. */
+function clean(completed: ReadonlySet<string>) {
+  return { current: true, dirty: false, completed };
 }
 
 describe("reading how much of the index is there", () => {
@@ -129,16 +138,18 @@ describe("reading how much of the index is there", () => {
       read,
       backfill: {
         scopes: async () => [scope],
-        state: {
-          completed: async () => new Set([backfillScopeKey(scope)]),
-          record: async () => undefined,
-        },
+        progress: async () => clean(new Set([backfillScopeKey(scope)])),
         unreachable: async () => false,
       },
     });
 
     expect({ health, whole: indexIsWhole(health) }).toEqual({
-      health: { coversExistingDocuments: true, anyUndetermined: false },
+      health: {
+        coversExistingDocuments: true,
+        anyUndetermined: false,
+        dirty: false,
+        backfillPending: false,
+      },
       whole: true,
     });
   });
@@ -160,15 +171,14 @@ describe("reading how much of the index is there", () => {
       read,
       backfill: {
         scopes: async () => [walked, outstanding],
-        state: {
-          completed: async () => new Set([backfillScopeKey(walked)]),
-          record: async () => undefined,
-        },
+        progress: async () => clean(new Set([backfillScopeKey(walked)])),
         unreachable: async () => false,
       },
     });
 
     expect(health.coversExistingDocuments).toBe(false);
+    // A scope is left to walk, so the backfill will move the answer.
+    expect(indexStillCounting(health)).toBe(true);
   });
 
   it("is NOT covered while content exists that the index cannot reach", async () => {
@@ -193,18 +203,22 @@ describe("reading how much of the index is there", () => {
       read,
       backfill: {
         scopes: async () => [scope],
-        state: {
-          completed: async () => new Set([backfillScopeKey(scope)]),
-          record: async () => undefined,
-        },
+        progress: async () => clean(new Set([backfillScopeKey(scope)])),
         unreachable: async () => true,
       },
     });
 
+    // Nothing left to walk, so nothing will make it whole: not counting.
     expect({ health, whole: indexIsWhole(health) }).toEqual({
-      health: { coversExistingDocuments: false, anyUndetermined: false },
+      health: {
+        coversExistingDocuments: false,
+        anyUndetermined: false,
+        dirty: false,
+        backfillPending: false,
+      },
       whole: false,
     });
+    expect(indexStillCounting(health)).toBe(false);
   });
 
   it("reads COMPLETION before probing markers, preserving the writer's order", async () => {
@@ -237,12 +251,9 @@ describe("reading how much of the index is there", () => {
           order.push("scopes");
           return [scope];
         },
-        state: {
-          completed: async () => {
-            order.push("completed");
-            return new Set([backfillScopeKey(scope)]);
-          },
-          record: async () => undefined,
+        progress: async () => {
+          order.push("completed");
+          return clean(new Set([backfillScopeKey(scope)]));
         },
         unreachable: async () => {
           order.push("unreachable");
@@ -252,5 +263,91 @@ describe("reading how much of the index is there", () => {
     });
 
     expect(order[order.length - 1]).toBe("markers");
+  });
+});
+
+describe("a failed maintenance write, and a derivation that moved", () => {
+  const scope = {
+    entity: "pages",
+    field: "content",
+    locale: "",
+    variant: "published",
+  } as const;
+
+  it("is NOT whole while the index is marked dirty, every scope walked", async () => {
+    // The fault this closes: a save whose index write failed left health
+    // reporting the index whole, so every count over it read as exact.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        progress: async () => ({
+          ...clean(new Set([backfillScopeKey(scope)])),
+          dirty: true,
+        }),
+        unreachable: async () => false,
+      },
+    });
+
+    expect({ dirty: health.dirty, whole: indexIsWhole(health) }).toEqual({
+      dirty: true,
+      whole: false,
+    });
+    // A run is owed to clear the mark, so it is still counting.
+    expect(indexStillCounting(health)).toBe(true);
+  });
+
+  it("is not counting when only an unreadable document keeps it from whole", async () => {
+    // A document past its walk bound stays a marker until it is saved again;
+    // no backfill run changes that, so a screen has nothing to wait for.
+    const { read } = reader({ bucketCount: 1, truncated: false });
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        progress: async () => clean(new Set([backfillScopeKey(scope)])),
+        unreachable: async () => false,
+      },
+    });
+    expect(indexIsWhole(health)).toBe(false);
+    expect(indexStillCounting(health)).toBe(false);
+  });
+
+  it("is NOT covered by progress recorded under another derivation", async () => {
+    // Progress is a claim about the index as one derivation built it. A run
+    // recorded under other bounds says nothing about this one's rows.
+    const { read } = reader({ bucketCount: 0, truncated: false });
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        progress: async () => ({
+          ...clean(new Set([backfillScopeKey(scope)])),
+          current: false,
+        }),
+        unreachable: async () => false,
+      },
+    });
+
+    expect(health.coversExistingDocuments).toBe(false);
+  });
+
+  it("CONTROL: treats a health value with no dirty field as clean", () => {
+    // A caller that built the value before the field existed keeps its
+    // answer; only a mark that says dirty withholds wholeness.
+    expect(
+      indexIsWhole({ coversExistingDocuments: true, anyUndetermined: false })
+    ).toBe(true);
+    expect(
+      indexIsWhole({
+        coversExistingDocuments: true,
+        anyUndetermined: false,
+        dirty: true,
+      })
+    ).toBe(false);
   });
 });

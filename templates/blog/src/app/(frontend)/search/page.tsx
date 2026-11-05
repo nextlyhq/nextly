@@ -19,13 +19,6 @@ export const metadata: Metadata = {
   robots: { index: false, follow: true },
 };
 
-/**
- * Render statically - the SearchInput component fetches the Pagefind
- * bundle at runtime and performs all queries client-side, so the
- * page itself doesn't need to re-render per request.
- */
-export const dynamic = "force-static";
-
 export default function SearchPage() {
   return (
     <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">

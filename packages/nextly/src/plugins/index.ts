@@ -48,6 +48,13 @@ export {
   type PluginHookRegistry,
   type PluginSettingsApi,
 } from "./plugin-context";
+export type {
+  PluginPinOptions,
+  PluginPinTransaction,
+  PluginVersionPin,
+  PluginVersionPinHolder,
+  PluginVersionPins,
+} from "./plugin-version-pins";
 export {
   PasswordTooLongError,
   type PasswordCheck,
@@ -106,24 +113,27 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
-  PluginAdminWidget,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminStatsWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
+  PluginAdminPlaceDeclaration,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";
+
+// The places on admin pages plugins add to, and the ids every surface takes.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./admin-places";
 
 // Plugin HTTP routes — `contributes.routes` surface.
 export type {
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteCanOptions,
   PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,

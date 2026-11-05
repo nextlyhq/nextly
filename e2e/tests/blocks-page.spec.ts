@@ -27,6 +27,7 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
+import { CACHE_COMPONENTS } from "./support/cache-components";
 import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial" });
@@ -67,6 +68,9 @@ const GATED_TEXT = "vip-only-marker-8f21";
  * `getComputedStyle` reports so the comparison needs no parsing.
  */
 const STYLED_HEADING_COLOR = "rgb(17, 85, 204)";
+
+/** A paragraph carrying a top margin its author set. */
+const AUTHOR_SPACED_TEXT = "Spaced by its author.";
 
 /** A node id. Stable per fixture so a failure names the same node every run. */
 const id = (suffix: string) => `00000000-0000-4000-8000-0000000000${suffix}`;
@@ -122,6 +126,14 @@ const DOCUMENT = {
             type: "core/button",
             version: 1,
             props: { label: BUTTON_LABEL, href: "/blocks" },
+          },
+          {
+            id: id("08"),
+            type: "core/text",
+            version: 1,
+            props: { text: AUTHOR_SPACED_TEXT },
+            // An author's own margin, which must beat the section's gap.
+            styles: { base: { base: { margin: { blockStart: "40px" } } } },
           },
           {
             id: id("07"),
@@ -254,6 +266,49 @@ test("an authored node style is compiled and applied", async ({ page }) => {
   await expect(heading).toHaveCSS("color", STYLED_HEADING_COLOR);
 });
 
+test("spacing comes from the section, and an author's own margin wins", async ({
+  page,
+}) => {
+  /** One computed length, in pixels, of the element holding `text`. */
+  const lengthOf = async (text: string, property: string): Promise<number> =>
+    Number.parseFloat(
+      await page
+        .getByText(text, { exact: true })
+        .evaluate(
+          (node, name) => getComputedStyle(node).getPropertyValue(name),
+          property
+        )
+    );
+
+  for (const [width, stack, sectionY] of [
+    [375, 16, 48],
+    [768, 18, 63],
+    [1280, 20, 80],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/blocks/${PUBLISHED_SLUG}`);
+
+    // The heading is flush: no outer margin of its own, above or below.
+    expect(await lengthOf(PAGE_HEADING, "margin-top")).toBe(0);
+    expect(await lengthOf(PAGE_HEADING, "margin-bottom")).toBe(0);
+    // The paragraph after it is spaced by the section's gap, which grows with
+    // the viewport.
+    expect(Math.round(await lengthOf(LEAD_PARAGRAPH, "margin-top"))).toBe(
+      stack
+    );
+    expect(await lengthOf(LEAD_PARAGRAPH, "margin-bottom")).toBe(0);
+    // An author's margin on a child beats the gap at every width.
+    expect(await lengthOf(AUTHOR_SPACED_TEXT, "margin-top")).toBe(40);
+
+    // The section pads its content above and below, per the viewport.
+    const padding = await page
+      .locator("section")
+      .first()
+      .evaluate(node => getComputedStyle(node).paddingTop);
+    expect(Math.abs(Number.parseFloat(padding) - sectionY)).toBeLessThan(1);
+  }
+});
+
 test("a condition-gated node is never sent to the client", async ({
   request,
 }) => {
@@ -272,8 +327,31 @@ test("a condition-gated node is never sent to the client", async ({
 });
 
 test("an unpublished entry is not served", async ({ page }) => {
-  const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
-  expect(response?.status()).toBe(404);
+  if (!CACHE_COMPONENTS) {
+    const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
+    expect(response?.status()).toBe(404);
+    return;
+  }
+  // Under Cache Components the public route renders an unlisted path on its
+  // first request and streams its static shell before it reads the entry, so
+  // that status is 200 by the time it knows the entry is not published. The
+  // route is public, so Next keeps the not-found render and answers later
+  // requests with a 404. Every request gets the not-found page marked
+  // `noindex`, and none of the draft's content.
+  for (const [request, status] of [
+    ["first", 200],
+    ["second", 404],
+  ] as const) {
+    const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
+    const html = await response.text();
+    expect(response.status(), `${request} request`).toBe(status);
+    expect(html, `${request} request`).toMatch(
+      /<meta[^>]+name="robots"[^>]+content="noindex"/
+    );
+    expect(html, `${request} request`).toMatch(/could not be found/);
+    expect(html, `${request} request`).not.toContain(PAGE_HEADING);
+    expect(html, `${request} request`).not.toContain("Dogfood draft");
+  }
 });
 
 test("block-declared metadata reaches the head", async ({ page }) => {

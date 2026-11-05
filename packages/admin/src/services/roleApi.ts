@@ -47,6 +47,8 @@ const transformRole = (
   subtitle: apiRole.isSystem ? "System role" : "Custom role",
   description: apiRole.description || `Role with level ${apiRole.level}`,
   type: apiRole.isSystem ? "System" : "Custom",
+  assignable: apiRole.assignable !== false,
+  ...(apiRole.builtIn ? { builtIn: apiRole.builtIn } : {}),
   permissions: normalizePermissions(
     apiRole.permissionIds ?? (apiRole as { permissions?: unknown }).permissions
   ),

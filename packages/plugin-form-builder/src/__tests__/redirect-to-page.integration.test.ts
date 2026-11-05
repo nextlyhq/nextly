@@ -422,6 +422,9 @@ describe("a public visitor and a translation that is not published yet", () => {
     slug: "pages",
     localized: true,
     status: true,
+    // The target is read as the visitor, so it is public: boot grants the
+    // Public role its read.
+    access: { read: () => true },
     fields: [text({ name: "title" }), text({ name: "slug", localized: true })],
   });
 
@@ -433,6 +436,9 @@ describe("a public visitor and a translation that is not published yet", () => {
       plugins: [plugin],
       collections: [lifecyclePages],
       localization: { locales: ["en", "fr"], defaultLocale: "en" },
+      // The boot's seeding, so the Public role a visitor is judged by holds
+      // what a real boot grants it.
+      seedPublic: true,
     });
     const page = await current.nextly.create({
       collection: "pages",

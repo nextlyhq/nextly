@@ -26,16 +26,24 @@ import {
   type DocumentViewProps,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock } = vi.hoisted(() => ({ useDocumentLock: vi.fn() }));
+const { useDocumentLock, autosaveAt } = vi.hoisted(() => ({
+  useDocumentLock: vi.fn(),
+  // When the recovery point was last stored, as the autosave reports it.
+  autosaveAt: { current: null as Date | null },
+}));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/hooks/useDocumentAutosave")
   >()),
-  useDocumentAutosave: () => ({ status: "idle", lastSavedAt: null }),
+  useDocumentAutosave: () => ({
+    status: "idle",
+    lastSavedAt: autosaveAt.current,
+  }),
 }));
 
+import { useHostedRecoveryPoint } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import {
   SingleForm,
   type SingleDocumentData,
@@ -109,9 +117,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   clearRegistry();
+  autosaveAt.current = null;
 });
 
 describe("SingleForm with a document view", () => {
+  it("hands the view the Single's recovery point, as the entry editor does", () => {
+    // A view drawing the save state without the header reads the recovery
+    // point from the host; a Single that kept it to its header would report
+    // none there while its edits sat only in one.
+    const RECOVERY_VIEW = "@acme/pb/admin#Recovery";
+    const storedAt = new Date("2026-11-02T18:00:00Z");
+    function RecoveryView(): ReactElement {
+      const point = useHostedRecoveryPoint();
+      return <p>{point.storedAt?.toISOString() ?? "none"}</p>;
+    }
+    registerComponent(RECOVERY_VIEW, RecoveryView);
+    autosaveAt.current = storedAt;
+    renderView(
+      vi.fn(async () => {}),
+      {
+        documentView: { component: RECOVERY_VIEW, onExit: vi.fn() },
+      }
+    );
+
+    expect(screen.getByText(storedAt.toISOString())).toBeInTheDocument();
+  });
+
   it("tells the view which Single it is of, and renders no entry form element", () => {
     renderView(vi.fn().mockResolvedValue(undefined));
 
@@ -147,7 +178,9 @@ describe("SingleForm with a document view", () => {
     );
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ heroTitle: "Welcome!" })
+      expect.objectContaining({ heroTitle: "Welcome!" }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
   });
 
@@ -178,7 +211,9 @@ describe("SingleForm with a document view", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ heroTitle: "Welcome!", status: "draft" })
+      expect.objectContaining({ heroTitle: "Welcome!", status: "draft" }),
+      // The form comes with the values, for a refused publish's way out.
+      expect.anything()
     );
   });
 

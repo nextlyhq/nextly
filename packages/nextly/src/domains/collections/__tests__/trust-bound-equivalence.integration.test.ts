@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, relationship, text } from "../../../config";
 import { clearServices } from "../../../di/register";
 import type { getService } from "../../../di/service-access";
@@ -32,6 +33,9 @@ afterEach(async () => {
   current = undefined;
   clearServices();
 });
+
+/** The id of the signed-in reader `boot` makes. */
+const READER = "reader";
 
 /** A published post pointing at an UNPUBLISHED author. */
 async function boot(): Promise<{
@@ -54,6 +58,10 @@ async function boot(): Promise<{
       }),
     ],
   });
+
+  // The signed-in reader of the checked reads below, holding read on both
+  // collections, since neither declares a rule that would admit it.
+  await userWhoMay(current, READER, "read", ["posts", "authors"]);
 
   const handler = current.getService("collectionsHandler");
   const author = await handler.createEntry(
@@ -96,12 +104,18 @@ describe("TRUSTS_EVERY_COLLECTION is the absent bound (integration)", () => {
     // would be a green that proves nothing. The difference is only observable
     // where the caller's own explicit `status: "all"` is the SOLE thing
     // carrying drafts into the expansion.
+    //
+    // The caller is a signed-in user, not a visitor: a visitor's read and its
+    // expansion see published rows only whatever `status` it asks, so its
+    // `"all"` carries no drafts, and both reads would withhold the author
+    // whichever way the bound is read.
     const omitted = await handler.getEntry({
       collectionName: "posts",
       entryId: postId,
       depth: 1,
       overrideAccess: false,
       status: "all",
+      user: { id: READER },
     });
 
     const stated = await handler.getEntry({
@@ -111,6 +125,7 @@ describe("TRUSTS_EVERY_COLLECTION is the absent bound (integration)", () => {
       overrideAccess: false,
       status: "all",
       trusted: TRUSTS_EVERY_COLLECTION,
+      user: { id: READER },
     });
 
     // The population control. Without it, `toBe(populated(...))` is satisfied by

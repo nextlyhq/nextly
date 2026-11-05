@@ -23,11 +23,18 @@ import { createContentRoute, createPublicContentRoute } from "../content-route";
 import { resolveContent } from "../resolve-content";
 import type { ContentEntry } from "../resolve-content";
 
+/**
+ * Content anyone may read: its read rule answers `true`, so boot seeding
+ * grants the Public role its read, which the published read a visitor gets
+ * outside a preview needs. What keeps a draft from that visitor is then the
+ * lifecycle, not a refusal.
+ */
 const pages = () =>
   defineCollection({
     slug: "pages",
     status: true,
     versions: { drafts: true },
+    access: { read: () => true },
     fields: [text({ name: "slug" }), text({ name: "title" })],
   });
 
@@ -80,7 +87,12 @@ function publicRoute(
 
 describe("createContentRoute + draft layers (integration)", () => {
   it("shows pending edits to a preview and live content to everyone else", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // A read outside a preview is a visitor's, judged by the Public role a
+    // real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     const created = await current.nextly.create({
       collection: "pages",
       data: { slug: "about", title: "Live", status: "published" },
@@ -111,7 +123,12 @@ describe("createContentRoute + draft layers (integration)", () => {
   it("shows a never-published entry to a preview and 404s it publicly", async () => {
     // The other layer. Widening `status` is what covers this one, and a
     // preview needs both — hence `draft` widening the scope with it.
-    current = await createTestNextly({ collections: [pages()] });
+    // A read outside a preview is a visitor's, judged by the Public role a
+    // real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await current.nextly.create({
       collection: "pages",
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },
@@ -132,7 +149,12 @@ describe("createContentRoute + draft layers (integration)", () => {
     // draft mode cannot express it — one boolean for the whole host — so a
     // route answering from `isEnabled` alone would hand a link for one page the
     // drafts of every other.
-    current = await createTestNextly({ collections: [pages()] });
+    // A read outside a preview is a visitor's, judged by the Public role a
+    // real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     for (const slug of ["granted", "other"]) {
       const created = await current.nextly.create({
         collection: "pages",
@@ -167,7 +189,13 @@ describe("createContentRoute + draft layers (integration)", () => {
     // Widening the lifecycle scope is gated by nothing per row, so it follows
     // trust rather than the draft flag. `resolveContent` called with `draft`
     // alone must not surface an entry that has never been published.
-    current = await createTestNextly({ collections: [pages()] });
+    // That untrusted read is a visitor's, judged by the Public role a real
+    // boot makes, which reads `pages` by its rule: so the entry is withheld
+    // by its lifecycle, not by a refusal.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await current.nextly.create({
       collection: "pages",
       data: { slug: "unreleased", title: "Unreleased", status: "draft" },
@@ -207,7 +235,12 @@ describe("createContentRoute + draft layers (integration)", () => {
   it("follows the decision from request to request", async () => {
     // The whole reason the decision is a function: one route object serves both
     // the visitor and the editor, and the answer changes between them.
-    current = await createTestNextly({ collections: [pages()] });
+    // A read outside a preview is a visitor's, judged by the Public role a
+    // real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     const created = await current.nextly.create({
       collection: "pages",
       data: { slug: "about", title: "Live", status: "published" },

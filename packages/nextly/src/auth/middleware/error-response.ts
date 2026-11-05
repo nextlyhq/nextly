@@ -46,6 +46,13 @@ export interface ErrorResponse {
    * answered, and never part of the answer.
    */
   reason?: string;
+  /**
+   * Authentication refused a request that carried no credential at all: no
+   * session cookie and no key. Only such a request is a visitor; one whose
+   * credential is not valid is asked to sign in again. Never part of the
+   * answer, which says the same to both.
+   */
+  noCredential?: true;
 }
 
 /**

@@ -33,6 +33,7 @@ import {
   type UseInfiniteQueryResult,
   type InfiniteData,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
@@ -137,6 +138,17 @@ export function useMedia(
     queryKey: ["media", params],
     queryFn: async () => {
       return await fetchMedia(params || defaultParams);
+    },
+    // A new page, sort or search keeps showing the current results until its
+    // own arrive, instead of dropping back to the loading skeleton. A new
+    // folder or view does not: its heading would sit over the old rows, and
+    // their edit and delete controls would act on files the reader just left.
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[1] as MediaParams | undefined;
+      return before?.folderId === params?.folderId &&
+        before?.view === params?.view
+        ? previous
+        : undefined;
     },
     ...options,
   });
@@ -268,6 +280,21 @@ export function useInfiniteMedia(
  */
 export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
   return useQuery<Media, Error>({
+    ...mediaItemQuery(mediaId ?? ""),
+    enabled: !!mediaId,
+  });
+}
+
+/**
+ * The one query a media item is read by, so every reader of an item shares its
+ * cache: {@link useMediaItem} and {@link useMediaResolver} ask for an id once
+ * between them.
+ */
+function mediaItemQuery(mediaId: string): {
+  queryKey: readonly ["media", string];
+  queryFn: () => Promise<Media>;
+} {
+  return {
     queryKey: ["media", mediaId],
     queryFn: async () => {
       if (!mediaId) {
@@ -275,8 +302,41 @@ export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
       }
       return await getMediaById(mediaId);
     },
-    enabled: !!mediaId,
-  });
+  };
+}
+
+/**
+ * How long a media item read for drawing stays fresh before it is read again.
+ * A page drawn in the editor asks for each of its images whenever a block is
+ * drawn afresh; within this time those asks are answered from the cache, and
+ * an edit to an item through the library invalidates it at once.
+ */
+const MEDIA_DRAWN_FRESH_MS = 60_000;
+
+/**
+ * Read a media item by id, outside a component's render: for code that draws
+ * a page and resolves its images as it goes.
+ *
+ * Through the same query as {@link useMediaItem}, so an item is fetched once
+ * however many images name it, and a read in flight is shared rather than
+ * repeated. Answers `null` for an item that cannot be read, so one missing
+ * image does not stop a page being drawn. The function is stable for the
+ * component's life.
+ *
+ * @experimental
+ */
+export function useMediaResolver(): (mediaId: string) => Promise<Media | null> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (mediaId: string) =>
+      queryClient
+        .fetchQuery<Media, Error, Media, readonly ["media", string]>({
+          ...mediaItemQuery(mediaId),
+          staleTime: MEDIA_DRAWN_FRESH_MS,
+        })
+        .catch(() => null),
+    [queryClient]
+  );
 }
 
 /**
@@ -463,9 +523,11 @@ export function useUpdateMedia(): UseMutationResult<
       return await updateMedia(mediaId, updates);
     },
     onSuccess: () => {
-      // Remove all cached media data so navigating to any folder refetches fresh data
-      queryClient.removeQueries({ queryKey: ["media"] });
-      queryClient.removeQueries({ queryKey: ["media-infinite"] });
+      // Mark every cached media list stale rather than removing it: each one
+      // refetches when it is next shown, and the one on screen keeps its rows
+      // while it does, instead of falling back to the loading skeleton.
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+      void queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
       void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
@@ -896,10 +958,13 @@ export function useFolderById(folderId?: string | null): UseQueryResult<
  * useSubfolders - Query hook for fetching subfolders within a parent folder
  *
  * @param parentId - Parent folder ID
+ * @param options.enabled - Ask only when true (default), so a tree can wait
+ *   until a folder is opened while keeping the answer cached under its id
  * @returns TanStack Query result with subfolders
  */
 export function useSubfolders(
-  parentId?: string
+  parentId?: string,
+  options?: { enabled?: boolean }
 ): UseQueryResult<MediaFolder[], Error> {
   return useQuery<MediaFolder[], Error>({
     queryKey: ["folders", "subfolders", parentId],
@@ -907,33 +972,30 @@ export function useSubfolders(
       if (!parentId) throw new Error("Parent ID is required");
       return await listSubfolders(parentId);
     },
-    enabled: !!parentId,
+    enabled: !!parentId && (options?.enabled ?? true),
   });
 }
 
 /**
- * useFolderContents - Query hook for fetching folder contents (subfolders + media)
+ * useFolderContents - Query hook for fetching a folder's contents (subfolders + media)
  *
- * @param folderId - Folder ID (null for root)
+ * Asks nothing for the root (`null`). The root has no folder record and no
+ * breadcrumbs, so a reader that only wants the folder's name or trail has
+ * nothing to ask it for. `files` is the folder's first page of files, and
+ * `meta.total` how many it holds in all.
+ *
+ * @param folderId - Folder ID, or null for the root
  * @returns TanStack Query result with folder contents
  */
-export function useFolderContents(folderId: string | null): UseQueryResult<
-  {
-    folder: MediaFolder | null;
-    subfolders: MediaFolder[];
-    mediaFiles: Media[];
-    breadcrumbs: Array<{
-      id: string;
-      name: string;
-    }>;
-  },
-  Error
-> {
+export function useFolderContents(
+  folderId: string | null
+): UseQueryResult<FolderContentsResponse["data"], Error> {
   return useQuery<FolderContentsResponse["data"], Error>({
     queryKey: ["folders", "contents", folderId],
     queryFn: async () => {
       return await getFolderContents(folderId);
     },
+    enabled: folderId !== null,
   });
 }
 
@@ -954,8 +1016,18 @@ export function useCreateFolder(): UseMutationResult<
     mutationFn: async (input: CreateFolderInput) => {
       return await createFolder(input);
     },
-    onSuccess: () => {
-      // Invalidate folder queries to refetch
+    onSuccess: (created, input) => {
+      // A closed folder's subfolder lookup is disabled, so invalidating it
+      // refetches nothing, and a parent found empty earlier would keep saying
+      // so: no expander to open it by. Adding the new folder to the parent's
+      // cached answer gives it one; opening it then refetches, since the
+      // invalidation below still marks the answer out of date.
+      if (input.parentId) {
+        queryClient.setQueryData<MediaFolder[]>(
+          ["folders", "subfolders", input.parentId],
+          previous => (previous ? [...previous, created] : previous)
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });

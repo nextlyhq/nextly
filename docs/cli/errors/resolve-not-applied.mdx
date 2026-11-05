@@ -1,0 +1,24 @@
+---
+title: RESOLVE_NOT_APPLIED
+description: "`nextly migrate:resolve --rolled-back` was given a migration with no applied run to roll back."
+---
+
+## Cause
+
+`nextly migrate:resolve --rolled-back` was given a migration with no applied run to roll back.
+
+`--rolled-back` records that an applied migration was undone, so the next `nextly migrate` runs it again. The ledger holds no applied run of this file, so there is nothing to mark rolled back.
+
+## Fix
+
+- Run `nextly migrate:status` to see the file's state.
+- A file that never ran needs no rollback recorded: `nextly migrate` runs it as pending.
+
+## Example
+
+```text
+✗ Cannot roll back 20261020_120000_add_posts.sql: no prior applied event exists.
+  Why:  `--rolled-back` records that an applied migration was undone, and the ledger holds no applied run of this file.
+  Next: Run `nextly migrate:status` to see the file's state: a file that never ran needs no rollback recorded.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-not-applied  (RESOLVE_NOT_APPLIED)
+```

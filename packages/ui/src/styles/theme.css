@@ -279,29 +279,8 @@
    * Perfect Fourth Scale (1.333 ratio) - WCAG 2.2 AA Compliant
    * ============================================ */
 
-  /* Font Families live in the non-inline @theme block below. */
-
-  /* Type Scale - Base Size: 16px (1rem) */
-  --text-xs: 0.75rem;
-  /* 12px */
-  --text-sm: 0.875rem;
-  /* 14px */
-  --text-base: 1rem;
-  /* 16px - body text (WCAG minimum) */
-  --text-lg: 1.125rem;
-  /* 18px */
-  --text-xl: 1.25rem;
-  /* 20px */
-  --text-2xl: 1.5rem;
-  /* 24px */
-  --text-3xl: 1.875rem;
-  /* 30px */
-  --text-4xl: 2.25rem;
-  /* 36px */
-  --text-5xl: 3rem;
-  /* 48px */
-  --text-6xl: 3.75rem;
-  /* 60px */
+  /* Font families, the type scale and the spacing scale live in the
+   * non-inline @theme blocks below. */
 
   /* Line Heights (Leading) */
   --leading-none: 1;
@@ -330,57 +309,6 @@
   /* +0.8px at 16px - for uppercase */
   --tracking-widest: 0.1em;
   /* +1.6px at 16px */
-
-  /* ============================================
-   * SPACING & LAYOUT (Tailwind v4.1)
-   * 8px Grid System - Industry Standard
-   * ============================================ */
-
-  /* Spacing Scale (8px base unit) */
-  --space-0: 0rem;
-  /* 0px */
-  --space-px: 0.0625rem;
-  /* 1px - for fine borders */
-  --space-0-5: 0.125rem;
-  /* 2px */
-  --space-1: 0.25rem;
-  /* 4px - icon padding, tiny gaps */
-  --space-1-5: 0.375rem;
-  /* 6px */
-  --space-2: 0.5rem;
-  /* 8px - tight spacing, inline elements */
-  --space-2-5: 0.625rem;
-  /* 10px */
-  --space-3: 0.75rem;
-  /* 12px - between related elements */
-  --space-3-5: 0.875rem;
-  /* 14px */
-  --space-4: 1rem;
-  /* 16px - standard element spacing */
-  --space-5: 1.25rem;
-  /* 20px */
-  --space-6: 1.5rem;
-  /* 24px - between form fields */
-  --space-7: 1.75rem;
-  /* 28px */
-  --space-8: 2rem;
-  /* 32px - between sections */
-  --space-9: 2.25rem;
-  /* 36px */
-  --space-10: 2.5rem;
-  /* 40px */
-  --space-11: 2.75rem;
-  /* 44px - minimum touch target */
-  --space-12: 3rem;
-  /* 48px - between major sections */
-  --space-14: 3.5rem;
-  /* 56px */
-  --space-16: 4rem;
-  /* 64px - page margins */
-  --space-20: 5rem;
-  /* 80px */
-  --space-24: 6rem;
-  /* 96px - large section breaks */
 
   /* ============================================
    * BORDER RADIUS (Tailwind v4.1)
@@ -562,20 +490,119 @@
 }
 
 /* ============================================
- * RESPONSIVE TYPOGRAPHY (Desktop)
- * Scale up larger text sizes on desktop screens
- * Must be outside @theme block due to Tailwind v4.1 restrictions
+ * TYPE SCALE & SPACING SCALE (Tailwind v4.1)
+ *
+ * Deliberately a STATIC, non-inline `@theme`: every token here is emitted as a
+ * real custom property on `:root` whether or not a Tailwind utility uses it.
+ * Stylesheets that are not compiled against this theme read these through
+ * `var()` -- the page-builder editor's (`@nextlyhq/builder/styles.css`, pulled
+ * in by `@nextlyhq/plugin-page-builder/styles/editor.css`) does, for
+ * `--text-xs`, `--text-sm`, `--text-lg` and `--space-*` -- and a `var()` in
+ * such a sheet makes Tailwind emit nothing. Under `@theme inline` a token is
+ * emitted only where CSS Tailwind compiles reads it with `var()`, and a plain
+ * `@theme` drops the ones no utility uses, so either way the admin's build
+ * left these out and the editor's text fell back to the browser's 16px and its
+ * spacing to nothing. `static` keeps them all.
+ *
+ * Non-inline also makes the `text-*` utilities read `var(--text-*)` rather
+ * than a copied value, so they follow a token redeclared on a scope, as the
+ * font utilities above do. `--space-*` is not a Tailwind namespace (spacing
+ * utilities use `--spacing`), so it adds no utilities; it exists for `var()`.
+ * `packages/admin/src/styles/__tests__/editor-token-emission.test.ts` holds
+ * the admin's built stylesheet to emitting every token the editor reads.
+ * ============================================ */
+@theme static {
+  /* Type Scale - Base Size: 16px (1rem) */
+  --text-xs: 0.75rem;
+  /* 12px */
+  --text-sm: 0.875rem;
+  /* 14px */
+  --text-base: 1rem;
+  /* 16px - body text (WCAG minimum) */
+  --text-lg: 1.125rem;
+  /* 18px */
+  --text-xl: 1.25rem;
+  /* 20px */
+  --text-2xl: 1.5rem;
+  /* 24px */
+  --text-3xl: 1.875rem;
+  /* 30px */
+  --text-4xl: 2.25rem;
+  /* 36px */
+  --text-5xl: 3rem;
+  /* 48px */
+  --text-6xl: 3.75rem;
+  /* 60px */
+
+  /* Spacing Scale (8px base unit) */
+  --space-0: 0rem;
+  /* 0px */
+  --space-px: 0.0625rem;
+  /* 1px - for fine borders */
+  --space-0-5: 0.125rem;
+  /* 2px */
+  --space-1: 0.25rem;
+  /* 4px - icon padding, tiny gaps */
+  --space-1-5: 0.375rem;
+  /* 6px */
+  --space-2: 0.5rem;
+  /* 8px - tight spacing, inline elements */
+  --space-2-5: 0.625rem;
+  /* 10px */
+  --space-3: 0.75rem;
+  /* 12px - between related elements */
+  --space-3-5: 0.875rem;
+  /* 14px */
+  --space-4: 1rem;
+  /* 16px - standard element spacing */
+  --space-5: 1.25rem;
+  /* 20px */
+  --space-6: 1.5rem;
+  /* 24px - between form fields */
+  --space-7: 1.75rem;
+  /* 28px */
+  --space-8: 2rem;
+  /* 32px - between sections */
+  --space-9: 2.25rem;
+  /* 36px */
+  --space-10: 2.5rem;
+  /* 40px */
+  --space-11: 2.75rem;
+  /* 44px - minimum touch target */
+  --space-12: 3rem;
+  /* 48px - between major sections */
+  --space-14: 3.5rem;
+  /* 56px */
+  --space-16: 4rem;
+  /* 64px - page margins */
+  --space-20: 5rem;
+  /* 80px */
+  --space-24: 6rem;
+  /* 96px - large section breaks */
+}
+
+/* ============================================
+ * LARGER HEADING SIZES
+ *
+ * Tailwind lifts an `@theme` out of an enclosing `@media`: these declarations
+ * are not limited to wide screens. They replace the `--text-2xl` to
+ * `--text-5xl` values of the type scale above at EVERY width, and the built
+ * stylesheet declares only these. Because that scale is non-inline, the
+ * `text-2xl` to `text-5xl` utilities read `var(--text-*)` and so render at
+ * these sizes. The block is `static` like the scale: a token's options come
+ * from its last declaration, and without it the sizes no utility uses would
+ * be dropped from the build again.
  * ============================================ */
 @media (min-width: 768px) {
-  @theme {
+  @theme static {
     --text-2xl: 1.75rem;
-    /* 28px on desktop (from 24px) */
+    /* 28px (the scale above says 24px) */
     --text-3xl: 2.25rem;
-    /* 36px on desktop (from 30px) */
+    /* 36px (the scale above says 30px) */
     --text-4xl: 3rem;
-    /* 48px on desktop (from 36px) */
+    /* 48px (the scale above says 36px) */
     --text-5xl: 4rem;
-    /* 64px on desktop (from 48px) */
+    /* 64px (the scale above says 48px) */
   }
 }
 
@@ -772,6 +799,12 @@
   --nx-success-solid: oklch(0.53 0.17 149.2);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
+  /* A success toast's surface and text, which the Toaster hands to its toasts.
+   * The surface is the toast library's own pale green; the text is darkened
+   * from the library's green, which read at 4.26:1 on it, to about 5.2:1. */
+  --nx-toast-success-bg: oklch(0.9788 0.0221 160.24);
+  --nx-toast-success-text: oklch(0.5048 0.1506 146.87);
+
   /* Darkened from amber-500 so it reads as text on white at WCAG 4.5:1 (was
    * 2.15:1); its light shades still tint badge/alert surfaces. */
   --nx-warning: oklch(0.529 0.1646 70.11);
@@ -869,25 +902,22 @@
   /* Chart colors for data visualization.
    *
    * Held to the 3:1 non-text minimum against --nx-card, the surface a widget
-   * draws on, because a chart mark is a graphical object required to read the
-   * chart. The light ramp sits on near-white, so the mid steps that serve dark
-   * mode do not reach it: slots 2 and 4 measured 2.21:1 and 2.15:1 at cyan-500
-   * and amber-500, and moved down the ramp rather than being re-hued. Dark mode
-   * keeps the lighter steps, where they measure 9.0:1 and 9.3:1 -- the two modes
-   * need different steps of the same ramp, not one shared value. A bar is drawn
-   * over its track (--nx-muted) and a tooltip on --nx-popover, both darker than
-   * the card, so every slot is held there too; slot 3 moved down a step for
-   * them, as 2 and 4 did for the card: at green-600 it measured 3.02:1 on the
-   * track. */
+   * draws on, and against a bar's track (--nx-muted) and the tooltip
+   * (--nx-popover), because a chart mark is a graphical object required to
+   * read the chart. Each pair of slots also stays apart for a reader with
+   * protanopia, deuteranopia or tritanopia: the slots step in LIGHTNESS as
+   * well as hue, since a lightness step survives every kind of colour-vision
+   * deficiency where a hue step alone does not. Slot 4 is the darkest for that
+   * reason, below the green and the red it would otherwise match. Solved as
+   * the nearest values to the cyan, green, amber and red they started from
+   * that pass both; `chart-palette-colour-vision.test.ts` holds the margins.
+   * The two modes need different values, since the light ones sit on
+   * near-white and the dark ones on near-black. */
   --nx-chart-1: var(--nx-primary);
-  --nx-chart-2: oklch(0.6089 0.1109 221.72);
-  /* cyan-600 */
-  --nx-chart-3: oklch(0.527 0.154 150.069);
-  /* green-700 */
-  --nx-chart-4: oklch(0.5553 0.1455 49);
-  /* amber-700 */
-  --nx-chart-5: oklch(0.6368 0.2078 25.33);
-  /* red-500 */
+  --nx-chart-2: oklch(0.6179 0.1124 221.32);
+  --nx-chart-3: oklch(0.5485 0.1626 143.34);
+  --nx-chart-4: oklch(0.4489 0.1281 44.12);
+  --nx-chart-5: oklch(0.6286 0.2113 21.48);
 
   /* Design tokens */
   /* The one corner knob. Every tier below derives from it, so this single
@@ -1066,6 +1096,9 @@
   --nx-success-solid: oklch(0.5225 0.1921 149.58);
   --nx-success-foreground: oklch(1 0 0);
   /* white */
+  /* The toast library's own dark success surface and text, kept: about 12.3:1. */
+  --nx-toast-success-bg: oklch(0.2107 0.0498 157.43);
+  --nx-toast-success-text: oklch(0.8635 0.1699 157.75);
   --nx-warning: oklch(0.7686 0.1646 70.11);
   /* amber-500 */
   --nx-warning-foreground: oklch(0.2079 0.0399 265.73);
@@ -1127,21 +1160,15 @@
 
   /* Chart colors for data visualization.
    *
-   * NOT the same as light mode, and slots 2 and 4 are where they differ: the
-   * light ramp sits on near-white and needs the deeper steps to stay legible,
-   * while here the lighter ones do that job. Slots 3 and 5 already differed or
-   * already cleared the minimum in both, so they carry one value each. */
+   * NOT the same as light mode: here the slots sit on near-black and need the
+   * lighter values to stay legible. Held to the same minimums as light mode,
+   * against the same three surfaces and the same three colour-vision
+   * deficiencies, by `chart-palette-colour-vision.test.ts`. */
   --nx-chart-1: var(--nx-primary);
-  /* A cyan of its own rather than a step of the Tailwind ramp -- deliberately
-     unnamed here, because naming a step it is not is the annotation this
-     file's own comment guard exists to refuse. */
-  --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  --nx-chart-3: oklch(0.7229 0.1921 149.58);
-  /* green-500 */
-  --nx-chart-4: oklch(0.7686 0.1646 70.11);
-  /* amber-500 */
-  --nx-chart-5: oklch(0.6368 0.2078 25.33);
-  /* red-500 */
+  --nx-chart-2: oklch(0.7717 0.1304 210.71);
+  --nx-chart-3: oklch(0.7031 0.1315 159.76);
+  --nx-chart-4: oklch(0.7676 0.1653 69.92);
+  --nx-chart-5: oklch(0.6348 0.2057 27.82);
 
   /* Sidebar specific colors - dark mode */
   --nx-sidebar-background: oklch(0.18 0 0);

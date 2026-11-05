@@ -28,6 +28,8 @@ import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import { toSnakeCase } from "./case-conversion";
 import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
   systemColumnNames,
@@ -48,8 +50,20 @@ export type WritableEntityKind = SystemColumnEntity;
 const IMMUTABLE_BY_ENTITY: Readonly<
   Record<WritableEntityKind, ReadonlySet<string>>
 > = {
-  collection: new Set(immutableSystemColumnNames("collection")),
-  single: new Set(immutableSystemColumnNames("single")),
+  // The published version is no column, but a client re-saving what it read sends it, and it is
+  // the server's to decide like every column here. The overwrite choice beside it says how the
+  // version is judged and is never stored either, so a body naming only the status beside them
+  // is still a status-only write ({@link isStatusOnlyWrite}).
+  collection: new Set([
+    ...immutableSystemColumnNames("collection"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
+  single: new Set([
+    ...immutableSystemColumnNames("single"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
 };
 
 /**
@@ -58,15 +72,70 @@ const IMMUTABLE_BY_ENTITY: Readonly<
  * For callers that protect both kinds at once rather than one at a time: a restore refuses to
  * carry the owner column back even for a single, where it is not a system column.
  */
-export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set(
-  immutableSystemColumnNamesAnyEntity()
-);
+export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set([
+  ...immutableSystemColumnNamesAnyEntity(),
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
 
 /** The names a client may not write for the given entity. */
 export function immutableSystemFieldsFor(
   entity: WritableEntityKind
 ): ReadonlySet<string> {
   return IMMUTABLE_BY_ENTITY[entity];
+}
+
+/**
+ * The gate a status-only write is judged by: `publish` for `"published"`, the
+ * one value that puts an entry live, and `unpublish` for any other, which can
+ * only take a published entry down.
+ */
+export function statusGate(status: unknown): "publish" | "unpublish" {
+  return status === "published" ? "publish" : "unpublish";
+}
+
+/**
+ * The gate a write is judged by: where its body changes only the status of an
+ * entry with a lifecycle ({@link isStatusOnlyWrite}), the `publish` or
+ * `unpublish` its status names ({@link statusGate}), whether or not the status
+ * moves; otherwise `update`. `hasLifecycle` is asked only for a status-only
+ * body, so an ordinary edit never reads it.
+ */
+export async function writeGateFor(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind,
+  hasLifecycle: () => boolean | Promise<boolean>
+): Promise<"update" | "publish" | "unpublish"> {
+  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
+    ? statusGate(body.status)
+    : "update";
+}
+
+/**
+ * Whether a write's body changes nothing but the entry's status: it names
+ * `status`, and every other key it names is a system column the write never
+ * stores from a body ({@link immutableSystemFieldsFor}). Such a write is a
+ * publish or an unpublish alone, judged by that permission and rule.
+ *
+ * Judged by the keys the body names, never their values: a body naming any
+ * other field, even at its stored value, edits the entry and needs update. A
+ * declared field with no column of its own counts as an edit too, since hooks
+ * may still read it.
+ */
+export function isStatusOnlyWrite(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind
+): boolean {
+  // Only a key the body owns: a `status` its prototype supplies is no key it
+  // names, and the write reads only its own keys.
+  if (!Object.prototype.hasOwnProperty.call(body, "status")) return false;
+  // A status left `undefined` names none: the write drops it as it drops any
+  // undefined status, so it is judged as the write it is.
+  if (body.status === undefined) return false;
+  const neverStored = immutableSystemFieldsFor(entity);
+  return Object.keys(body).every(
+    key => key === "status" || neverStored.has(key)
+  );
 }
 
 /**

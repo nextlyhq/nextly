@@ -12,6 +12,7 @@ import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schem
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -32,10 +33,10 @@ import {
   collectPrincipalKinds,
   publishPrincipalKinds,
 } from "./principals/registry";
+import { assertNoRemovedWidgetKeys } from "./removed-widget-keys";
 import { resolutionError } from "./resolution-error";
 import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
-import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
@@ -132,13 +133,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
-  // Beside it, and for the same reason one level up: a contributed widget rides
-  // in the SAME `/api/admin-meta/workspace` payload, through the same single
-  // `JSON.stringify`. A bigint under `query.where` is type-legal there, so the
-  // throw lands on the workspace response for every admin rather than on the
-  // one card -- which is a worse failure than a bad `clientConfig`, not a
-  // lesser one.
-  assertAdminWidgets(plugins);
+  // Beside it: a plugin still adding widgets or widget sources through a key
+  // Nextly no longer reads is refused here, by name, rather than having its
+  // cards silently absent.
+  assertNoRemovedWidgetKeys(plugins);
   // And the document views: two screens on one address would leave the admin
   // drawing whichever it reached first, and a transformer can add either.
   assertDocumentViews(plugins);
@@ -168,6 +166,13 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
+  collectAdminPlaces(plugins);
 }
 
 /**

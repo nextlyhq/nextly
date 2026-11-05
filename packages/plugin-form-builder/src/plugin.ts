@@ -12,6 +12,7 @@ import { createRequire } from "node:module";
 
 import {
   definePlugin,
+  type HookContext,
   NextlyError,
   type PluginDefinition,
   type PluginEmailService,
@@ -21,6 +22,7 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionsCollection } from "./collections/submissions";
+import { newSubmissionsWidget } from "./dashboard/widget";
 import {
   asFormDocument,
   asSubmissionDocument,
@@ -46,6 +48,10 @@ import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
+import {
+  SCHEMA_ONLY_CONTEXT,
+  SCHEMA_ONLY_READ,
+} from "./utils/schema-only-read";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -201,6 +207,17 @@ export function formBuilder(
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
 
+  // The submissions slug the admin links a card's rows to: the declared one
+  // until `init` reads the slug the site installed it under.
+  let installedSubmissionsSlug = resolvedConfig.formSubmissionOverrides.slug;
+  const newSubmissions = newSubmissionsWidget(
+    {
+      forms: resolvedConfig.formOverrides.slug,
+      submissions: resolvedConfig.formSubmissionOverrides.slug,
+    },
+    () => installedSubmissionsSlug
+  );
+
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
@@ -217,6 +234,19 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // New form submissions, the one plugin widget core's default dashboard
+      // names. Contributed, never suggested: where it goes is core's default's
+      // to say, and a site's own default may leave it out.
+      dashboard: { widgets: [newSubmissions] },
+      // A visitor submits a form without an account, so the Public role, the
+      // role visitors are judged by, may create submissions. Granted once;
+      // an owner who takes it away closes public submissions for good.
+      publicGrants: [
+        {
+          collection: resolvedConfig.formSubmissionOverrides.slug,
+          action: "create",
+        },
+      ],
       // Custom permission — gates submission export beyond CRUD. The
       // canonical example third-party plugin authors copy.
       permissions: [
@@ -430,6 +460,7 @@ export function formBuilder(
       const submissionSlug =
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
+      installedSubmissionsSlug = submissionSlug;
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old
@@ -1008,7 +1039,11 @@ export async function prepareSubmissionForWrite(
     });
   }
 
-  ctx.data = { ...submission, data: prepared.data };
+  ctx.data = {
+    ...submission,
+    data: prepared.data,
+    ...startingStatus(ctx, marks),
+  };
   if (spam) {
     // Flagged, never dropped: a false positive stays reviewable in the Spam
     // view and recoverable through "Not spam". Written here rather than trusted
@@ -1021,6 +1056,28 @@ export async function prepareSubmissionForWrite(
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
   return ctx.data;
+}
+
+/**
+ * The status a submission a request created starts with: `new`, whatever the
+ * request named, before the spam verdict may make it `spam`. The collection
+ * grants public create and nothing restricts `status`, so a visitor posting
+ * `read` or `archived` would otherwise file their submission where nobody
+ * looks for one that was never opened.
+ *
+ * A create no request produced (an import, a seed, a job) keeps the status it
+ * names, and so does this plugin's own handler storing content spam as
+ * evidence (`keepAsEvidence`), which chose that status itself. An update is
+ * left as it is.
+ */
+function startingStatus(
+  ctx: { operation?: string; req?: { http?: unknown } },
+  marks: SubmissionOriginMarks | undefined
+): { status?: "new" } {
+  const requestCreate = ctx.operation === "create" && ctx.req?.http;
+  return requestCreate && marks?.keepAsEvidence !== true
+    ? { status: "new" }
+    : {};
 }
 
 /**
@@ -1228,14 +1285,23 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: send the (possibly transformed) outgoing notifications.
-  await sendNotificationEmails({
-    emails: finalEmails,
-    emailService,
-    logger: nextly.logger,
-    formSlug: form.slug,
-    fileAttachments,
-  });
+  // -- Send phase: send the (possibly transformed) outgoing notifications,
+  // once the submission is durable. An email cannot be taken back, and a
+  // submission saved inside a caller's transaction runs this hook before that
+  // transaction commits: sent here, it would go out, and its delivery be
+  // recorded, for a submission a rollback then removes. The hook context's
+  // `afterCommit` holds the send until the outermost transaction commits and
+  // drops it on rollback; outside a transaction it sends at once, as before.
+  const send = () =>
+    sendNotificationEmails({
+      emails: finalEmails,
+      emailService,
+      logger: nextly.logger,
+      formSlug: form.slug,
+      fileAttachments,
+    });
+  const { afterCommit } = context as Pick<HookContext, "afterCommit">;
+  await (afterCommit ? afterCommit(send) : send());
 }
 
 /**
@@ -1370,12 +1436,6 @@ export async function injectSubmissionCount(
   );
 }
 
-/**
- * Tells the form's `afterRead` hook that this read wants the schema and nothing
- * else, so it can skip work whose only purpose is to be displayed.
- */
-const SCHEMA_ONLY_READ = "formBuilder.schemaOnlyRead";
-
 export async function fetchParentForm(
   formsSlug: string,
   formId: string,
@@ -1408,7 +1468,7 @@ export async function fetchParentForm(
     const form = await nextly.services.collections.findEntryById(
       formsSlug,
       formId,
-      { as: "system", context: { [SCHEMA_ONLY_READ]: true } }
+      { as: "system", context: { ...SCHEMA_ONLY_CONTEXT } }
     );
     return form;
   } catch (err) {

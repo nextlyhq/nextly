@@ -9,13 +9,51 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   executeTransaction,
   runMigrationStatements,
 } from "../migration-transaction";
+
+// The count of rows in a required column's way, real unless a test makes it fail: a database
+// that answers the table's shape but not the count is not one SQLite can be made into.
+const countFailure = vi.hoisted(() => ({
+  cause: undefined as Error | undefined,
+}));
+// The registries the guard reads its facts from, real unless a test makes the read fail.
+const registryFailure = vi.hoisted(() => ({
+  cause: undefined as Error | undefined,
+}));
+vi.mock("../../required-column-registries", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../required-column-registries")>();
+  return {
+    ...actual,
+    requiredColumnRegistries: (
+      ...args: Parameters<typeof actual.requiredColumnRegistries>
+    ) =>
+      registryFailure.cause === undefined
+        ? actual.requiredColumnRegistries(...args)
+        : Promise.reject(registryFailure.cause),
+  };
+});
+vi.mock("../../pipeline/classifier/count-helpers", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../pipeline/classifier/count-helpers")
+    >();
+  return {
+    ...actual,
+    countRowsBreakingNotNull: (
+      ...args: Parameters<typeof actual.countRowsBreakingNotNull>
+    ) =>
+      countFailure.cause === undefined
+        ? actual.countRowsBreakingNotNull(...args)
+        : Promise.reject(countFailure.cause),
+  };
+});
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
 let sqlite: Database.Database;
@@ -218,6 +256,144 @@ describe("a unit run outside a transaction that fails part-way", () => {
   });
 });
 
+describe("a unit run outside a transaction refused at a column made required", () => {
+  // The refusal says itself which statements ran and that they stayed applied, so it reaches the
+  // caller as it is, under its own code, rather than as a statement that failed part-way.
+  it("keeps the refusal, naming the column, its count and what stayed applied", async () => {
+    sqlite.exec(
+      `INSERT INTO parent VALUES ('p2', NULL); INSERT INTO parent VALUES ('p3', NULL)`
+    );
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    ).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.code).toBe("VALIDATION_ERROR");
+    expect(error.publicData).toEqual({
+      errors: [
+        {
+          path: "tables.parent.label",
+          code: "REQUIRED_COLUMN_HAS_NULLS",
+          message:
+            "Table 'parent': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+        },
+      ],
+    });
+    expect(error.publicMessage).toContain(
+      "They ran outside a transaction, and stayed applied."
+    );
+    // The fill before it stayed; the rebuild never started.
+    expect(
+      sqlite.prepare(`SELECT label FROM parent WHERE id = 'p2'`).get()
+    ).toEqual({ label: "two" });
+    expect(count("parent")).toBe(3);
+  });
+
+  // A count that fails at the statement comes after the write before it committed, so its
+  // refusal names what ran and that it stayed, as a counted one does; it never says nothing ran.
+  // Reading what to count (the registries, the catalog) comes after the write before it too, so a
+  // read that fails is refused as a failed count is there, never as a bare error.
+  it("a fact read that fails there is refused naming the statements that ran and that they stayed", async () => {
+    sqlite.exec(`INSERT INTO parent VALUES ('p2', NULL)`);
+    const cause = new Error("registry unreadable");
+    registryFailure.cause = cause;
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    )
+      .then(
+        () => undefined,
+        (caught: unknown) => caught
+      )
+      .finally(() => {
+        registryFailure.cause = undefined;
+      });
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.publicData).toMatchObject({
+      errors: [{ code: "REQUIRED_COLUMN_UNCOUNTED", path: "fields.label" }],
+    });
+    expect(error.publicMessage).toContain(
+      "0002_label.sql was refused at its statement 3."
+    );
+    expect(error.publicMessage).toContain(
+      "They ran outside a transaction, and stayed applied."
+    );
+    expect(error.logContext).toMatchObject({
+      phase: "at-statement",
+      statement: 3,
+    });
+    expect(error.cause).toBe(cause);
+  });
+
+  it("a count that fails there is refused naming the statements that ran and that they stayed", async () => {
+    sqlite.exec(`INSERT INTO parent VALUES ('p2', NULL)`);
+    const cause = new Error("connection lost");
+    countFailure.cause = cause;
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    )
+      .then(
+        () => undefined,
+        (caught: unknown) => caught
+      )
+      .finally(() => {
+        countFailure.cause = undefined;
+      });
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.publicData).toEqual({
+      errors: [
+        {
+          path: "fields.label",
+          code: "REQUIRED_COLUMN_UNCOUNTED",
+          message:
+            "Table 'parent': the rows that would break making 'label' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
+        },
+      ],
+    });
+    expect(error.publicMessage).toBe(
+      // A rebuild is counted at its copy, the statement that would fill the NOT NULL table.
+      "0002_label.sql was refused at its statement 3. INSERT INTO __new_parent (of 5): Table 'parent': the rows that would break making 'label' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again. The statements that ran before it: 1. UPDATE parent SET label =; 2. CREATE TABLE __new_parent. They ran outside a transaction, and stayed applied."
+    );
+    expect(error.logContext).toMatchObject({
+      source: "0002_label.sql",
+      phase: "at-statement",
+      statement: 3,
+    });
+    expect(error.cause).toBe(cause);
+    expect(
+      sqlite.prepare(`SELECT label FROM parent WHERE id = 'p2'`).get()
+    ).toEqual({ label: "two" });
+  });
+});
+
 describe("the runner's own writes after a unit's statements", () => {
   /**
    * An adapter that logs what its transaction runs, in order: the unit's
@@ -277,5 +453,93 @@ describe("the runner's own writes after a unit's statements", () => {
       log.push("after");
     });
     expect(log).toEqual([...statements, "after"]);
+  });
+});
+
+describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
+  /**
+   * An adapter that logs where each statement ran: through `withSession`,
+   * with the options it was given, or through `executeQuery` on the pool.
+   */
+  function sessionAdapter(dialect: "postgresql" | "mysql", failOn?: string) {
+    const log: string[] = [];
+    const run = async (where: string, statement: string) => {
+      if (statement === failOn) throw new Error(`refused: ${statement}`);
+      log.push(`${where}: ${statement}`);
+      return [];
+    };
+    const fake = {
+      getCapabilities: () => ({ dialect }),
+      getDrizzle: () => ({}),
+      executeQuery: (statement: string) => run("pool", statement),
+      withSession: async <T>(
+        work: (session: {
+          execute: (statement: string) => Promise<unknown[]>;
+        }) => Promise<T>,
+        options?: { strictSqlMode?: boolean }
+      ): Promise<T> => {
+        log.push(`session open ${JSON.stringify(options ?? {})}`);
+        try {
+          return await work({ execute: s => run("session", s) });
+        } finally {
+          log.push("session closed");
+        }
+      },
+    };
+    return { log, adapter: fake as unknown as DrizzleAdapter };
+  }
+
+  const statements = [
+    "ALTER TABLE t MODIFY COLUMN v varchar(5)",
+    "CREATE INDEX t_v ON t (v)",
+  ];
+  const unit = { source: "0001_x.sql", transaction: false };
+
+  it("runs every statement on one MySQL session in strict mode", async () => {
+    const { log, adapter: mysqlAdapter } = sessionAdapter("mysql");
+    await runMigrationStatements(mysqlAdapter, statements, unit, async () => {
+      log.push("after");
+    });
+    expect(log).toEqual([
+      'session open {"strictSqlMode":true}',
+      `session: ${statements[0]}`,
+      `session: ${statements[1]}`,
+      "session closed",
+      "after",
+    ]);
+  });
+
+  it("still reports a MySQL statement that failed part-way, with the session closed", async () => {
+    const { log, adapter: mysqlAdapter } = sessionAdapter(
+      "mysql",
+      statements[1]
+    );
+    const thrown = await runMigrationStatements(
+      mysqlAdapter,
+      statements,
+      unit
+    ).then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(thrown).toBeInstanceOf(NextlyError);
+    expect((thrown as NextlyError).code).toBe(
+      "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+    );
+    expect((thrown as NextlyError).logContext).toMatchObject({
+      failedStatement: 2,
+      statements: 2,
+    });
+    expect(log).toEqual([
+      'session open {"strictSqlMode":true}',
+      `session: ${statements[0]}`,
+      "session closed",
+    ]);
+  });
+
+  it("leaves PostgreSQL's statements on the pool, one by one, as before", async () => {
+    const { log, adapter: pgAdapter } = sessionAdapter("postgresql");
+    await runMigrationStatements(pgAdapter, statements, unit);
+    expect(log).toEqual(statements.map(s => `pool: ${s}`));
   });
 });

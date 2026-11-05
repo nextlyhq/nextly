@@ -30,10 +30,14 @@ import {
   contentEventsTables,
   type ContentEventActorKind,
   type ContentEventSubjectKind,
-  type my,
-  type pg,
-  type sl,
 } from "../../schemas/content-events";
+// Each dialect's table types, imported from its own file as types only, so
+// nothing is loaded at runtime. They are not re-exported from the feature
+// index as `export type * as`: the declaration bundler then gave a shared
+// chunk's value export of the same short name a `type` modifier.
+import type * as my from "../../schemas/content-events/mysql";
+import type * as pg from "../../schemas/content-events/postgres";
+import type * as sl from "../../schemas/content-events/sqlite";
 import { BaseService } from "../../shared/base-service";
 
 import type { ContentEventSubject } from "./record";

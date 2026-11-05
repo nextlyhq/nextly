@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { loadDialectTables } from "@nextly/database/dialect-tables";
 import { NextlyError } from "@nextly/errors";
 import { ServiceContainer } from "@nextly/services/index";
 
@@ -78,7 +79,12 @@ export async function seedSuperAdmin(
     );
   }
 
-  const container = new ServiceContainer(adapter as DrizzleAdapter);
+  // A seeder can be handed an adapter built directly from an adapter package
+  // rather than by createAdapter, which is where a dialect's tables are
+  // otherwise loaded, so it loads the adapter's dialect before reading tables.
+  const drizzleAdapter = adapter as DrizzleAdapter;
+  await loadDialectTables(drizzleAdapter.getCapabilities().dialect);
+  const container = new ServiceContainer(drizzleAdapter);
 
   const roleService = container.roles;
   const permissionService = container.permissions;

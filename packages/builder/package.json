@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/builder",
-  "version": "0.0.2-alpha.71",
+  "version": "0.0.2-alpha.73",
   "description": "The visual page-builder editor for Nextly: shell, canvas and op store.",
   "license": "MIT",
   "repository": {
@@ -65,14 +65,15 @@
   },
   "dependencies": {
     "@nextlyhq/blocks-engine": "workspace:*",
-    "@nextlyhq/blocks-react": "workspace:*"
+    "@nextlyhq/blocks-react": "workspace:*",
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:^",
     "lucide-react": ">=0.400.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@nextlyhq/module-specifiers": "workspace:*",
@@ -93,7 +94,8 @@
     "tailwindcss": "^4.3.2",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "web-features": "3.44.0"
   },
   "publishConfig": {
     "access": "public",

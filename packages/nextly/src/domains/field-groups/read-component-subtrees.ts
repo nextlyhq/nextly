@@ -20,6 +20,7 @@ import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupDataService } from "../../services/field-groups/field-group-data-service";
+import { EXACT_STORED_LANGUAGE } from "../i18n/locale-selector";
 
 export interface ReadComponentSubtreesArgs {
   /** Absent when no component service is registered; the result is then empty. */
@@ -35,6 +36,11 @@ export interface ReadComponentSubtreesArgs {
    * another standing in for it. Undefined reads the default resolution.
    */
   locale?: string | undefined;
+  /**
+   * Read `locale` exactly as stored, whether or not the site has it active:
+   * for a reader that must see a language Settings removed and keeps.
+   */
+  exactLanguage?: boolean;
   /** Distinguishes the call sites in the thrown error's log context. */
   reason: string;
   logContext?: Record<string, unknown>;
@@ -59,42 +65,84 @@ export interface ReadComponentSubtreesArgs {
  *   existing: one corrupts a changed-field diff, the other restores a document
  *   with subtrees blanked.
  */
-export async function readComponentSubtrees({
+export async function readComponentSubtrees(
+  args: ReadComponentSubtreesArgs
+): Promise<Record<string, unknown>> {
+  const { locale, ...rest } = args;
+  const read = await readComponentSubtreesByLocale({
+    ...rest,
+    locales: [locale],
+  });
+  return read.get(locale) ?? {};
+}
+
+/**
+ * {@link readComponentSubtrees} for several languages at once, keyed by the
+ * language asked (`undefined` for the default resolution): each component
+ * table is read ONCE for them all, and each localized one's translations once
+ * for every language (`_locale IN (…)`), and each language's subtrees are
+ * exactly what a read of that language alone returns. For a reader holding a
+ * lock while it reads, so the reads it makes do not multiply with the
+ * languages.
+ */
+export async function readComponentSubtreesByLocale({
   fieldGroupDataService,
   tx,
   entryId,
   parentTable,
   fieldConfigs,
-  locale,
+  locales,
+  exactLanguage = false,
   reason,
   logContext,
   onReadFailure,
-}: ReadComponentSubtreesArgs): Promise<Record<string, unknown>> {
-  const components: Record<string, unknown> = {};
-  if (!fieldGroupDataService) return components;
+}: Omit<ReadComponentSubtreesArgs, "locale"> & {
+  /** The languages to read; see `locale` on {@link ReadComponentSubtreesArgs}. */
+  locales: readonly (string | undefined)[];
+}): Promise<Map<string | undefined, Record<string, unknown>>> {
+  const asked = [...new Set(locales)];
+  const byLocale = new Map<string | undefined, Record<string, unknown>>(
+    asked.map(locale => [locale, {}])
+  );
+  if (!fieldGroupDataService || asked.length === 0) return byLocale;
 
   const componentFields = fieldConfigs.filter(
     (f): f is typeof f & { name: string } => isFieldGroupField(f) && !!f.name
   );
-  if (componentFields.length === 0) return components;
+  if (componentFields.length === 0) return byLocale;
 
   try {
-    const populated = await fieldGroupDataService.populateComponentData({
-      entry: { id: entryId },
-      parentTable,
-      fields: fieldConfigs,
-      executor: tx.getDrizzle(),
-      depth: 0,
-      strict: true,
-      ...(locale !== undefined
-        ? { locale, fallbackLocale: false as const }
-        : {}),
-    });
-    for (const f of componentFields) {
-      if (populated[f.name] !== undefined) {
-        components[f.name] = populated[f.name];
+    const populated =
+      await fieldGroupDataService.populateComponentDataByLanguage({
+        entry: { id: entryId },
+        parentTable,
+        fields: fieldConfigs,
+        executor: tx.getDrizzle(),
+        depth: 0,
+        strict: true,
+        // Each named language read with no fallback, so an embedded localized
+        // component reports that language's own text rather than another
+        // standing in for it; no language reads the default resolution.
+        languages: asked.map(locale =>
+          locale !== undefined
+            ? {
+                locale,
+                fallbackLocale: exactLanguage
+                  ? EXACT_STORED_LANGUAGE
+                  : (false as const),
+              }
+            : {}
+        ),
+      });
+    asked.forEach((locale, index) => {
+      const entry = populated[index];
+      const components: Record<string, unknown> = {};
+      for (const f of componentFields) {
+        const value = entry?.[f.name];
+        if (value !== undefined) components[f.name] = value;
       }
-    }
+      byLocale.set(locale, components);
+    });
   } catch (err) {
     onReadFailure?.(err);
     throw NextlyError.internal({
@@ -102,5 +150,5 @@ export async function readComponentSubtrees({
       logContext: { reason, ...logContext },
     });
   }
-  return components;
+  return byLocale;
 }

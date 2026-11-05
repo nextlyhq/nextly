@@ -1,6 +1,15 @@
 import { expectTypeOf } from "vitest";
+import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
+import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
+import type {
+  WidgetBarChartProps,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetSeriesChartProps,
+  WidgetTableProps,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Checkbox,
@@ -51,6 +60,12 @@ expectTypeOf(registerKnownPlugin).toBeFunction();
 
 // Contract types are re-exported on the admin entry.
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
+
+// The signed-in user's id, or null when none is known: a plugin keying
+// something per user must handle "nobody" rather than receive a placeholder.
+expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
+  string | null
+>();
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
@@ -165,3 +180,119 @@ expectTypeOf(drawsAnyValidationRule).toBeFunction();
 expectTypeOf(EDITABLE_VALIDATION_RULES).toMatchTypeOf<readonly string[]>();
 expectTypeOf<ValidationRulesEditorProps>().not.toBeNever();
 expectTypeOf<ValidationRuleValues>().not.toBeNever();
+
+// The widget kit: `Widget.*` holds the parts core's own cards are drawn with. Each part's props
+// are the published `Widget*Props` types, so a view written against them type-checks against the
+// part itself. The formatters and the colour accessor are the server-safe root's, not here.
+
+const { Widget } = adminEntry;
+expectTypeOf(Widget.Figure).parameter(0).toEqualTypeOf<WidgetFigureProps>();
+expectTypeOf(Widget.BarChart).parameter(0).toEqualTypeOf<WidgetBarChartProps>();
+expectTypeOf(Widget.SeriesChart)
+  .parameter(0)
+  .toEqualTypeOf<WidgetSeriesChartProps>();
+expectTypeOf(Widget.List<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetListProps<{ id: string }>>();
+expectTypeOf(Widget.Table<{ id: string }>)
+  .parameter(0)
+  .toEqualTypeOf<WidgetTableProps<{ id: string }>>();
+// The dashboard refresh is a hook answering a function of nothing.
+expectTypeOf(adminEntry.useRefreshDashboard).returns.toEqualTypeOf<
+  () => void
+>();
+// The title count is a hook of a count, a short phrase or none, with a floor flag, and answers
+// nothing.
+expectTypeOf(Widget.useTitleCount)
+  .parameter(0)
+  .toEqualTypeOf<number | string | undefined>();
+expectTypeOf(Widget.useTitleCount)
+  .parameter(1)
+  .toEqualTypeOf<boolean | undefined>();
+expectTypeOf(Widget.useTitleCount).returns.toBeVoid();
+// A chart's unit is part of both charts' props, as core's cards pass it.
+expectTypeOf<WidgetBarChartProps>().toHaveProperty("unit");
+expectTypeOf<WidgetSeriesChartProps>().toHaveProperty("unit");
+// A table takes at most three columns beside its title, what a narrow card's row holds.
+type Column = WidgetTableProps<{ id: string }>["columns"][number];
+expectTypeOf<readonly [Column, Column, Column]>().toMatchTypeOf<
+  WidgetTableProps<{ id: string }>["columns"]
+>();
+expectTypeOf<readonly [Column, Column, Column, Column]>().not.toMatchTypeOf<
+  WidgetTableProps<{ id: string }>["columns"]
+>();
+// A client module cannot be called from a Server Component, so the formatters are not here.
+expectTypeOf(adminEntry).not.toHaveProperty("formatWidgetNumber");
+expectTypeOf(adminEntry).not.toHaveProperty("formatWidgetChange");
+expectTypeOf(adminEntry).not.toHaveProperty("widgetChartColour");
+// The names the kit replaced are gone, with no alias.
+expectTypeOf(adminEntry).not.toHaveProperty("CardFigure");
+expectTypeOf(adminEntry).not.toHaveProperty("cardNumber");
+expectTypeOf(adminEntry).not.toHaveProperty("cardChange");
+expectTypeOf(adminEntry).not.toHaveProperty("GroupsChart");
+expectTypeOf(adminEntry).not.toHaveProperty("OverTimeChart");
+
+// ---------------------------------------------------------------------------
+// The shared field picker and the field-type description (@experimental).
+//
+// New names beside the field-UI kit, which `field-ui-compat.test-d.ts` keeps
+// pinned as it was. The props are asserted EXACTLY against a consumer's view
+// of them, so a prop renamed, dropped or widened to `any` fails here, and the
+// description is asserted to be the catalog row plus its search words.
+type PickerProps = Parameters<typeof adminEntry.FieldPicker>[0];
+expectTypeOf<PickerProps>().toEqualTypeOf<adminEntry.FieldPickerProps>();
+expectTypeOf<adminEntry.FieldPickerProps>().toEqualTypeOf<{
+  open: boolean;
+  config: adminEntry.FieldPickerConfig;
+  title?: string;
+  placement?: string;
+  onCancel: () => void;
+  onAdd: (
+    choice: adminEntry.FieldPickerChoice,
+    how: { addAnother: boolean }
+  ) => void;
+}>();
+expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
+  surface: "entries" | "users" | "forms" | "blocks";
+  types: readonly adminEntry.FieldTypeDescription<string>[];
+  exclude?: readonly string[];
+  mostUsed?: readonly string[];
+  deriveName: (label: string) => string;
+  fieldGroups?: {
+    type: string;
+    options: readonly adminEntry.FieldGroupOption[];
+    loading?: boolean;
+  };
+}>();
+expectTypeOf<adminEntry.FieldPickerChoice>().toEqualTypeOf<{
+  type: string;
+  label: string;
+  name: string;
+  fieldGroup?: string;
+}>();
+expectTypeOf<adminEntry.FieldGroupOption>().toEqualTypeOf<{
+  slug: string;
+  label: string;
+  text: string;
+}>();
+expectTypeOf<adminEntry.FieldTypeDescription<"rating">>().toEqualTypeOf<{
+  type: "rating";
+  label: string;
+  category: "Basic" | "Advanced" | "Media" | "Relational" | "Structured";
+  hint: string;
+  icon: string;
+  synonyms: readonly string[];
+}>();
+// One description function, generic over the surface's own type union.
+expectTypeOf(adminEntry.describeFieldTypes<"rating">)
+  .parameter(0)
+  .toEqualTypeOf<readonly FieldTypeCatalogEntry<"rating">[]>();
+expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
+  adminEntry.FieldTypeDescription<"rating">[]
+>();
+
+// A plugin's one-shot write to its own route: the caller names the answer's
+// shape, and a refusal arrives as a rejection rather than as `undefined`.
+expectTypeOf(
+  adminEntry.writePluginRoute<{ message: string }>
+).returns.toEqualTypeOf<Promise<{ message: string } | undefined>>();

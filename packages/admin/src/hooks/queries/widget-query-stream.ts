@@ -13,7 +13,7 @@
  * @module hooks/queries/widget-query-stream
  */
 
-import type { WidgetQuery } from "nextly/config";
+import type { WidgetRenderSize } from "nextly/widget-result";
 
 import { BASE_URL, noteSchemaVersion } from "@admin/lib/api/fetcher";
 import { parseApiError } from "@admin/lib/api/parseApiError";
@@ -21,12 +21,20 @@ import { authFetch } from "@admin/lib/api/refreshInterceptor";
 import type { WidgetQueryBatchResponse } from "@admin/types/dashboard/widgets";
 
 /**
- * A card asked for rather than a query: by its id, or with settings of the reader's choosing
- * (one not yet saved, or a settings preview). The server answers either from the declaration.
+ * A card asked for: by its id, or with settings of the reader's choosing (one not yet saved, or
+ * a settings preview). The server answers either from the widget's declaration.
  */
 export type CardAsk =
   | { widget: string; card: string }
   | { widget: string; settings: Record<string, unknown> };
+
+/**
+ * A card ask as it is SENT: with the size the card is drawn at, where the dashboard has one, which
+ * the server hands the widget's `load` (core's `WidgetLoadSize`, the shape a component is handed
+ * as `WidgetRenderSize`). A type of its own rather than a field of `CardAsk`, because a card's ask
+ * is part of its cache key and its size is kept out of the key (see `WidgetQueryRequest.cardSize`).
+ */
+export type SentCardAsk = CardAsk & { size?: WidgetRenderSize };
 
 /** The media type the endpoint streams settled slots in. */
 const NDJSON = "application/x-ndjson";
@@ -74,26 +82,34 @@ export function readResults(body: unknown): unknown[] {
 }
 
 /**
- * Asks `queries` and hands each settled slot to `onSlots` as it arrives,
+ * Asks for `queries`, one card each, and hands each settled slot to `onSlots` as it arrives,
  * resolving with every slot by position once the answer has ended: `undefined`
  * where the stream never carried one.
+ *
+ * `readAheadToken` is the token of the layout read the dashboard was drawn
+ * from, sent beside the cards so a card answered ahead by that read is
+ * handed that read's answer; left out when there is none.
  *
  * Rejects as `fetcher` does for a refused request (the parsed error envelope),
  * for a body that is neither a stream of slots nor `{ results }`, and for a
  * stream cut off partway, so the caller's retry and failure states see it.
  */
 export async function fetchWidgetBatch(
-  queries: readonly (WidgetQuery | CardAsk | undefined)[],
+  queries: readonly SentCardAsk[],
   options: {
     signal?: AbortSignal;
     onSlots: (slots: readonly StreamedSlot[]) => void;
+    readAheadToken?: string;
   }
 ): Promise<unknown[]> {
+  const { readAheadToken } = options;
   const res = await authFetch(`${BASE_URL}/dashboard/query`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", Accept: NDJSON },
-    body: JSON.stringify({ queries }),
+    body: JSON.stringify(
+      readAheadToken === undefined ? { queries } : { queries, readAheadToken }
+    ),
     ...(options.signal && { signal: options.signal }),
   });
   noteSchemaVersion(res);

@@ -45,7 +45,10 @@ async function bootWithForm(
       recaptcha: { enabled: false },
     },
   });
-  current = await createTestNextly({ plugins: [fb.plugin] });
+  // The boot's seeding, so the Public role a visitor is judged by holds what
+  // a real boot grants it: the read of a form, and the plugin's submission
+  // create.
+  current = await createTestNextly({ plugins: [fb.plugin], seedPublic: true });
   await current.nextly.create({ collection: "forms", data: form });
   return createDynamicHandlers();
 }
@@ -281,10 +284,14 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     });
     current = await createTestNextly({
       plugins: [fb.plugin],
+      // As above, and the read of `pages`, whose rule lets anyone read it.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
           localized: true,
+          // The redirect target is read as the visitor, so it is public.
+          access: { read: () => true },
           fields: [
             text({ name: "title" }),
             text({ name: "slug", localized: true }),

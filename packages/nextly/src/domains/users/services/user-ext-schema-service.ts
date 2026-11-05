@@ -98,6 +98,11 @@ import {
 } from "../../schema/field-types/field-type-registry";
 import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
+import {
+  columnTypeIsIndexable,
+  uniquenessCanBeAnIndex,
+} from "../../schema/services/index-name";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -191,6 +196,21 @@ const TIMESTAMP_DEFAULT: Record<SupportedDialect, string> = {
   mysql: "DEFAULT CURRENT_TIMESTAMP",
   sqlite: "DEFAULT (strftime('%s', 'now'))",
 };
+
+/**
+ * Whether a stored field's carried options declare it `admin.hidden`: the
+ * sync keeps a field's declared `admin` among them (`carriedUserFieldOptions`).
+ */
+function declaredHidden(
+  pluginOptions: Record<string, unknown> | null | undefined
+): boolean {
+  const admin = pluginOptions?.admin;
+  return (
+    typeof admin === "object" &&
+    admin !== null &&
+    (admin as { hidden?: unknown }).hidden === true
+  );
+}
 
 // ============================================================
 // UserExtSchemaService
@@ -417,9 +437,8 @@ export class UserExtSchemaService {
    */
   private canCarryUniqueIndex(columnType: string): boolean {
     if (/json/i.test(columnType)) return false;
-    return !(
-      this.dialect === "mysql" && columnType === SQL_COLUMN_TYPES.mysql.text
-    );
+    // The shared rule collections and components ask, which knows every TEXT and BLOB size.
+    return uniquenessCanBeAnIndex(columnType, this.dialect);
   }
 
   /**
@@ -551,6 +570,11 @@ export class UserExtSchemaService {
     const adminOpts: Record<string, unknown> = {};
     if (record.placeholder) adminOpts.placeholder = record.placeholder;
     if (record.description) adminOpts.description = record.description;
+    // A field declared `admin.hidden` keeps the flag: the row has no column
+    // for it, so the sync carries the declared `admin` among the field's
+    // options. Dropped here, a read asking to leave hidden fields out
+    // (`showHiddenFields: false`) would return this one.
+    if (declaredHidden(record.pluginOptions)) adminOpts.hidden = true;
     if (Object.keys(adminOpts).length > 0) base.admin = adminOpts;
 
     // Validation bounds ride the stored row so the schema builder and the
@@ -777,16 +801,22 @@ export class UserExtSchemaService {
 
       const columnName = this.toSnakeCase(field.name);
       const indexName = `idx_${TABLE_NAME}_${columnName}`;
+      const columnType = this.getColumnType(field) ?? "";
+      // A column the dialect cannot index at all (MySQL's JSON) gets none, as a collection's and a
+      // component's do, rather than a statement the server refuses.
+      if (!columnTypeIsIndexable(columnType, this.dialect)) continue;
 
-      if (this.dialect === "mysql") {
-        indexStatements.push(
-          `CREATE INDEX ${this.q}${indexName}${this.q} ON ${this.q}${TABLE_NAME}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      } else {
-        indexStatements.push(
-          `CREATE INDEX IF NOT EXISTS ${this.q}${indexName}${this.q} ON ${this.q}${TABLE_NAME}${this.q}(${this.q}${columnName}${this.q});`
-        );
-      }
+      // Rendered by the schema pipeline's own rule, so an unbounded text, a TEXT column MySQL
+      // refuses to index whole, is keyed by the same prefix a collection's column is.
+      const indexSql = columnIndexSql(
+        TABLE_NAME,
+        indexName,
+        columnName,
+        columnType,
+        this.dialect,
+        name => `${this.q}${name}${this.q}`
+      );
+      indexStatements.push(`${indexSql};`);
     }
 
     // Append indexes with statement breakpoints
@@ -796,114 +826,6 @@ export class UserExtSchemaService {
     }
 
     return sql;
-  }
-
-  /**
-   * Generate ALTER TABLE migration for updating the `user_ext` table.
-   *
-   * Detects added, removed, and modified fields and generates
-   * dialect-specific ALTER TABLE statements.
-   *
-   * @param oldFields - Previous field definitions
-   * @param newFields - New field definitions
-   * @returns SQL migration string
-   */
-  generateAlterTableMigration(
-    oldFields: UserFieldConfig[],
-    newFields: UserFieldConfig[]
-  ): string {
-    const statements: string[] = [
-      `-- Update user extension table: ${TABLE_NAME}`,
-    ];
-
-    const oldFieldMap = this.buildFieldMap(oldFields);
-    const newFieldMap = this.buildFieldMap(newFields);
-
-    // Find added fields
-    for (const [name, field] of newFieldMap) {
-      if (oldFieldMap.has(name)) continue;
-
-      const columnType = this.getColumnType(field);
-      if (!columnType) continue;
-
-      const columnName = this.toSnakeCase(name);
-      const nullable = "required" in field && field.required ? "NOT NULL" : "";
-
-      let defaultVal = "";
-      if ("defaultValue" in field && field.defaultValue !== undefined) {
-        // User fields are restricted to scalar types — defaultValue is string | number | boolean
-        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue as string | number | boolean, field.type)}`;
-      } else if ("required" in field && field.required) {
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(field.type)}`;
-      }
-
-      statements.push(
-        `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType} ${nullable} ${defaultVal};`.trim()
-      );
-
-      // Add unique constraint if specified
-      if ("unique" in field && field.unique) {
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${this.q}uq_${TABLE_NAME}_${columnName}${this.q} ON ${this.q}${TABLE_NAME}${this.q}(${this.q}${columnName}${this.q});`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD CONSTRAINT ${this.q}uq_${TABLE_NAME}_${columnName}${this.q} UNIQUE (${this.q}${columnName}${this.q});`
-          );
-        }
-      }
-    }
-
-    // Find removed fields
-    for (const [name] of oldFieldMap) {
-      if (newFieldMap.has(name)) continue;
-
-      const columnName = this.toSnakeCase(name);
-      if (this.dialect === "sqlite") {
-        statements.push(
-          `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} DROP COLUMN ${this.q}${columnName}${this.q};`
-        );
-      } else {
-        statements.push(
-          `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} DROP COLUMN IF EXISTS ${this.q}${columnName}${this.q};`
-        );
-      }
-    }
-
-    // Find modified fields (skip for SQLite — doesn't support ALTER COLUMN)
-    if (this.dialect !== "sqlite") {
-      for (const [name, newField] of newFieldMap) {
-        const oldField = oldFieldMap.get(name);
-        if (!oldField) continue;
-        if (!this.isFieldModified(oldField, newField)) continue;
-
-        const columnName = this.toSnakeCase(name);
-        const newType = this.getColumnType(newField);
-        if (!newType) continue;
-
-        statements.push(
-          `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} TYPE ${newType};`
-        );
-
-        const oldRequired = "required" in oldField && oldField.required;
-        const newRequired = "required" in newField && newField.required;
-
-        if (oldRequired !== newRequired) {
-          if (newRequired) {
-            statements.push(
-              `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} SET NOT NULL;`
-            );
-          } else {
-            statements.push(
-              `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} DROP NOT NULL;`
-            );
-          }
-        }
-      }
-    }
-
-    return statements.join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -1230,6 +1152,21 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       // an entries-only type must never be treated as a user column.
       isPluginFieldTypeOnSurface(fieldType, "users")
     );
+  }
+
+  /**
+   * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE and ADD COLUMN
+   * statements spell it.
+   *
+   * The same value `generateColumnSQL` and `ensureUserExtSchema` put into their column
+   * definitions, exposed so a caller that needs only the type can ask for it
+   * instead of restating this mapping or recovering it from rendered SQL.
+   *
+   * `null` where this service would emit no column at all, which is the same condition that makes
+   * those statements skip a field.
+   */
+  columnTypeFor(field: UserFieldConfig): string | null {
+    return this.getColumnType(field);
   }
 
   private getColumnType(field: UserFieldConfig): string | null {
@@ -1814,146 +1751,6 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   // ============================================================
   // Utility Methods
   // ============================================================
-
-  private isFieldModified(
-    oldField: UserFieldConfig,
-    newField: UserFieldConfig
-  ): boolean {
-    if (oldField.type !== newField.type) return true;
-
-    const oldRequired = "required" in oldField && oldField.required;
-    const newRequired = "required" in newField && newField.required;
-    if (oldRequired !== newRequired) return true;
-
-    const oldUnique = "unique" in oldField && oldField.unique;
-    const newUnique = "unique" in newField && newField.unique;
-    if (oldUnique !== newUnique) return true;
-
-    if (isTextField(oldField) && isTextField(newField)) {
-      if (oldField.maxLength !== newField.maxLength) return true;
-    }
-
-    if (isSelectField(oldField) && isSelectField(newField)) {
-      if (oldField.hasMany !== newField.hasMany) return true;
-    }
-
-    return false;
-  }
-
-  private buildFieldMap(
-    fields: UserFieldConfig[]
-  ): Map<string, UserFieldConfig> {
-    const map = new Map<string, UserFieldConfig>();
-    for (const field of fields) {
-      if (!this.isUserDataField(field)) continue;
-      if (!("name" in field) || !field.name) continue;
-      map.set(field.name, field);
-    }
-    return map;
-  }
-
-  /**
-   * Map a field type to the built-in category whose SQL default formatting
-   * matches its column. A plugin user field is keyed by its storage primitive
-   * (so a `number`-storage plugin field defaults like a number column, not
-   * text); built-ins pass through unchanged.
-   */
-  private effectiveDefaultType(type: string): string {
-    const storage = isPluginFieldTypeOnSurface(type, "users")
-      ? getFieldType(type)?.storage
-      : undefined;
-    if (!storage) return type;
-    switch (storage) {
-      case "number":
-        return "number";
-      case "boolean":
-        return "checkbox";
-      case "timestamp":
-        return "date";
-      case "json":
-        return "json";
-      default:
-        return "text"; // text / longText
-    }
-  }
-
-  /** A valid empty-JSON default literal for the current dialect. */
-  private emptyJsonDefault(): string {
-    // MySQL requires a JSON default to be a parenthesized expression.
-    return this.dialect === "mysql" ? "('{}')" : "'{}'";
-  }
-
-  /** Coerce a stored default (which may be a string like "false") to boolean. */
-  private toBooleanDefault(value: string | number | boolean): boolean {
-    return value === true || value === 1 || value === "true" || value === "1";
-  }
-
-  private getDefaultValueForType(rawType: string): string {
-    const type = this.effectiveDefaultType(rawType);
-    switch (type) {
-      case "text":
-      case "textarea":
-      case "email":
-      case "url":
-      case "phone":
-      case "select":
-      case "radio":
-        return "''";
-      case "number":
-        return "0";
-      case "checkbox":
-        return this.dialect === "sqlite" ? "0" : "FALSE";
-      case "json":
-        return this.emptyJsonDefault();
-      case "date":
-        if (this.dialect === "sqlite") {
-          return String(Math.floor(Date.now() / 1000));
-        }
-        return "NOW()";
-      default:
-        return "''";
-    }
-  }
-
-  private formatDefaultValue(
-    value: string | number | boolean,
-    rawType: string
-  ): string {
-    const type = this.effectiveDefaultType(rawType);
-    if (
-      type === "text" ||
-      type === "textarea" ||
-      type === "email" ||
-      type === "select" ||
-      type === "radio"
-    ) {
-      return `'${value}'`;
-    }
-    if (type === "checkbox") {
-      // A plugin boolean field's stored default is a string ("false"), which is
-      // truthy — coerce by value so "false" does not become TRUE.
-      const bool = this.toBooleanDefault(value);
-      if (this.dialect === "sqlite") return bool ? "1" : "0";
-      return bool ? "TRUE" : "FALSE";
-    }
-    if (type === "json") {
-      // The stored default is expected to be valid JSON text; emit it as a
-      // JSON literal (parenthesized for MySQL). An empty/blank value falls back
-      // to an empty object so a JSON column never gets an invalid DEFAULT ''.
-      const json = typeof value === "string" && value.trim() ? value : "{}";
-      return this.dialect === "mysql" ? `('${json}')` : `'${json}'`;
-    }
-    if (type === "date") {
-      if (this.dialect === "sqlite" && typeof value === "string") {
-        return String(Math.floor(new Date(value).getTime() / 1000));
-      }
-      return `'${value}'`;
-    }
-    if (type === "number") {
-      return String(value);
-    }
-    return String(value);
-  }
 
   private toSnakeCase(name: string): string {
     return userFieldColumnName(name);

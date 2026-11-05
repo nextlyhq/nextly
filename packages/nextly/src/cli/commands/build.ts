@@ -28,8 +28,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { relative, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
@@ -41,23 +41,31 @@ import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import {
-  assertPluginFieldDeclarations,
-  describeDeclarationFailure,
-} from "../../shared/lib/assert-plugin-field-declarations";
 import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
+import { reportDryRun, type DryRunChange } from "../dry-run";
+import { exitWithError, type CliError } from "../errors";
+import {
+  buildDeclarationsInvalid,
+  buildFailed,
+  buildGenerationFailed,
+  buildMigrationsNotApplied,
+  buildStrictWarnings,
+  type BuildDeclarationIssue,
+} from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
+  openDryRunAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadDeclaredConfigOrExit } from "../utils/command-prerequisites";
+import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
 import {
@@ -65,13 +73,19 @@ import {
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
-import { writeGeneratedTypesFile } from "../utils/write-generated-types";
+import {
+  generateTypesFile,
+  generatedOutputOrder,
+  writeGeneratedOutput,
+  type GeneratedFile,
+} from "../utils/write-generated-types";
 
 import {
   convertToComponentRecords,
   convertToSingleRecords,
   convertToUserFieldRecords,
   publishConfiguredWorkflows,
+  reportedAsRefusal,
 } from "./generate-types";
 
 // ============================================================================
@@ -105,6 +119,12 @@ export interface BuildCommandOptions {
    * @default false (Zod schemas are generated)
    */
   zod?: boolean;
+
+  /**
+   * `--dry-run`: validate and plan the files as a real build does, name each
+   * file it would write and the failure it would end with, and write nothing.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -229,41 +249,28 @@ export async function runBuild(
   // Step 1: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  // The configuration with its plugin field declarations checked. A dry run
+  // names an invalid declaration as its refusal; a real run reports it and
+  // exits, so it reads like every other build failure.
+  const configResult = await loadDeclaredConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
-
-  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
-  // first moment an unknown field type can be told apart from one a plugin had
-  // not contributed yet: the `define*` validators defer that question because
-  // the config bundle is evaluated before any plugin registers. Asked here, a
-  // misspelled or wrong-surface token fails the command instead of silently
-  // generating primitive fallback types and a snapshot that production boot
-  // then refuses.
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
-    });
-  } catch (error) {
-    // Reported and exited rather than thrown, so an invalid declaration reads
-    // like every other build failure instead of an unhandled crash.
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
-  }
+    },
+    logger,
+    error => reportedAsRefusal(logger, error, options.dryRun === true)
+  );
+  if (configResult === undefined) return;
 
   // A workflow that cannot be attached fails the build rather than the
   // deploy, and the types this build generates carry the workflows' names.
-  await publishConfiguredWorkflows(configResult, logger);
+  const published = await publishConfiguredWorkflows(
+    configResult,
+    logger,
+    options.dryRun === true
+  );
+  if (!published) return;
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -293,15 +300,22 @@ export async function runBuild(
 
   if (!hasSchema) {
     if (entityValidation.errors.length > 0) {
-      reportDeclarationErrors(entityValidation.errors, context);
       result.success = false;
       result.durationMs = Date.now() - startTime;
-      logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
-      logger.info("Fix the errors above and run `nextly build` again.");
-      process.exit(1);
+      const invalid = buildDeclarationsInvalid(
+        declarationIssues(entityValidation.errors)
+      );
+      // A dry run names the failure, as it does once the build has a schema.
+      if (options.dryRun === true) {
+        reportDryRun(logger, { changes: [], refusals: [invalid.what] });
+        return;
+      }
+      exitWithError(logger, invalid);
     }
     logger.warn("No schema defined in config");
     logger.info("Add collections to your nextly.config.ts to build.");
+    // Nothing to generate; a dry run still ends as every dry run ends.
+    if (options.dryRun === true) reportDryRun(logger, { changes: [] });
     return;
   }
 
@@ -332,9 +346,17 @@ export async function runBuild(
     ...entityValidation.errors,
   ];
 
+  // Each step that fails the build adds its reason here, and the build ends with them in the
+  // error shape once every step that runs has run, so each reason is printed once, at the end.
+  const failures: CliError[] = [];
+  // The files a real build writes, which a dry run names in place of writing them.
+  const dryRunChanges: DryRunChange[] = [];
+
   if (declarationErrors.length > 0) {
     result.success = false;
-    reportDeclarationErrors(declarationErrors, context);
+    failures.push(
+      buildDeclarationsInvalid(declarationIssues(declarationErrors))
+    );
   } else {
     logger.success(
       `Validated ${formatCount(collectionCount, "collection")} successfully`
@@ -342,14 +364,15 @@ export async function runBuild(
   }
 
   if (validationResult.warnings.length > 0) {
-    logger.warn(`${validationResult.warnings.length} warning(s):`);
-    for (const warning of validationResult.warnings) {
-      logger.item(warning, 1);
-    }
-
     if (options.strict) {
+      // Under `--strict` the warnings are the failure, so they are listed in it.
       result.success = false;
-      logger.error("Build failed due to warnings (--strict mode)");
+      failures.push(buildStrictWarnings(validationResult.warnings));
+    } else {
+      logger.warn(`${validationResult.warnings.length} warning(s):`);
+      for (const warning of validationResult.warnings) {
+        logger.item(warning, 1);
+      }
     }
   }
 
@@ -368,6 +391,12 @@ export async function runBuild(
       result.generatedZodSchemas = generationResult.zodSchemas;
       result.generatedTypesFile = generationResult.typesFile;
       result.warnings.push(...generationResult.warnings);
+      for (const file of generationResult.files) {
+        dryRunChanges.push({
+          action: "write",
+          target: relative(options.cwd ?? process.cwd(), file.path),
+        });
+      }
 
       // Display generation results
       if (generationResult.zodSchemas.length > 0) {
@@ -382,7 +411,7 @@ export async function runBuild(
       }
     } catch (error) {
       result.success = false;
-      logger.error(`File generation failed: ${describeError(error)}`);
+      failures.push(buildGenerationFailed(error));
     }
   }
 
@@ -411,9 +440,9 @@ export async function runBuild(
         const message = `Migration issues: ${issues.join(", ")}`;
 
         if (options.strict) {
+          // Under `--strict` the migrations are the failure, so they are named in it.
           result.success = false;
-          logger.error(message);
-          logger.info("Run `nextly migrate` to apply pending migrations.");
+          failures.push(buildMigrationsNotApplied(migrationResult));
         } else {
           logger.warn(message);
           logger.info(
@@ -430,8 +459,8 @@ export async function runBuild(
           }
         }
 
-        // Show failed migrations
-        if (migrationResult.failedMigrations.length > 0) {
+        // Show failed migrations; under `--strict` the failure names them.
+        if (!options.strict && migrationResult.failedMigrations.length > 0) {
           logger.error("Failed migrations:");
           for (const name of migrationResult.failedMigrations) {
             logger.error(`  - ${name}`);
@@ -457,6 +486,17 @@ export async function runBuild(
   // Step 5: Final summary
   result.durationMs = Date.now() - startTime;
 
+  // A dry run ends with what it planned: the files, and each reason the real
+  // build would fail, which a dry run names and does not exit on.
+  if (options.dryRun === true) {
+    logger.newline();
+    reportDryRun(logger, {
+      changes: dryRunChanges,
+      refusals: failures.map(failure => failure.what),
+    });
+    return;
+  }
+
   logger.newline();
   logger.divider();
 
@@ -481,9 +521,7 @@ export async function runBuild(
       );
     }
   } else {
-    logger.error(`Build failed in ${formatDuration(result.durationMs)}`);
-    logger.info("Fix the errors above and run `nextly build` again.");
-    process.exit(1);
+    exitWithError(logger, buildFailed(failures));
   }
 }
 
@@ -538,19 +576,14 @@ function validateAllCollections(
   return { errors, warnings };
 }
 
-/** Print declaration errors, naming the entity and field each belongs to. */
-function reportDeclarationErrors(
-  errors: BuildError[],
-  context: CommandContext
-): void {
-  const { logger } = context;
-  logger.error(`Validation failed with ${formatCount(errors.length, "error")}`);
-  for (const error of errors) {
-    const location = error.field
+/** Declaration errors as the build's failure lists them, by the entity and field each belongs to. */
+function declarationIssues(errors: BuildError[]): BuildDeclarationIssue[] {
+  return errors.map(error => ({
+    location: error.field
       ? `${error.collection}.${error.field}`
-      : error.collection;
-    logger.item(`${location}: ${error.message}`, 1);
-  }
+      : error.collection,
+    message: error.message,
+  }));
 }
 
 /**
@@ -689,6 +722,8 @@ async function generateAllFiles(
   zodSchemas: string[];
   typesFile?: string;
   warnings: string[];
+  /** Every file the build writes, in order; under `--dry-run`, written to none. */
+  files: GeneratedFile[];
 }> {
   const { logger } = context;
   const { config } = configResult;
@@ -698,7 +733,11 @@ async function generateAllFiles(
     zodSchemas: [] as string[],
     typesFile: undefined as string | undefined,
     warnings: [] as string[],
+    files: [] as GeneratedFile[],
   };
+  // Each file is planned first, path and content, and then written, so a dry
+  // run names exactly the files a real build writes.
+  const dryRun = options.dryRun === true;
 
   // Convert CollectionConfig[] to DynamicCollectionRecord[] for generators
   const records = convertToRecords(config.collections);
@@ -713,6 +752,9 @@ async function generateAllFiles(
     config.users?.fields ?? []
   );
 
+  let zodFiles: GeneratedFile[] = [];
+  let typesFile: GeneratedFile | undefined;
+
   // Generate Zod schemas
   if (options.zod !== false) {
     logger.debug("Generating Zod schemas...");
@@ -722,24 +764,16 @@ async function generateAllFiles(
       includeComments: true,
     });
 
-    const zodSchemas = zodGenerator.generateAllSchemas(records);
     // schemasDir/zod, fitted to the app's layout as `generate:types` fits it.
     const zodDir = generatedZodDir(cwd, config.db.schemasDir);
-    await ensureDir(zodDir);
-
-    for (const schema of zodSchemas) {
-      const schemaPath = resolve(zodDir, schema.filename);
-      await writeFile(schemaPath, schema.code, "utf-8");
-      result.zodSchemas.push(schemaPath);
-      logger.debug(`Written Zod schema: ${schemaPath}`);
-    }
-
-    // Generate index file
     const indexFile = zodGenerator.generateIndexFile(records);
-    const indexPath = resolve(zodDir, indexFile.filename);
-    await writeFile(indexPath, indexFile.code, "utf-8");
-    result.zodSchemas.push(indexPath);
-    logger.debug(`Written Zod index: ${indexPath}`);
+    zodFiles = [
+      ...zodGenerator.generateAllSchemas(records).map(schema => ({
+        path: resolve(zodDir, schema.filename),
+        code: schema.code,
+      })),
+      { path: resolve(zodDir, indexFile.filename), code: indexFile.code },
+    ];
   }
 
   // Generate TypeScript types
@@ -748,7 +782,7 @@ async function generateAllFiles(
 
     // The same writer `generate:types` uses, so a deployment build writes the
     // file a development run wrote: the same narrowed names, the same path.
-    const typesFilePath = await writeGeneratedTypesFile({
+    typesFile = generateTypesFile({
       cwd,
       outputFile: config.typescript.outputFile,
       config,
@@ -758,10 +792,21 @@ async function generateAllFiles(
       components: componentRecords,
       userFields: userFieldRecords,
       moduleAugmentation: true,
+    });
+  }
+
+  // Everything planned, then written in one place unless this is a dry run.
+  const output = { zod: zodFiles, types: typesFile };
+  result.files.push(...generatedOutputOrder(output));
+  if (!dryRun && result.files.length > 0) {
+    await writeGeneratedOutput(output, {
+      cwd,
+      outputFile: config.typescript.outputFile,
       warn: message => logger.warn(message),
     });
-    result.typesFile = typesFilePath;
-    logger.debug(`Written types: ${typesFilePath}`);
+    result.zodSchemas.push(...zodFiles.map(file => file.path));
+    result.typesFile = typesFile?.path;
+    logger.debug(`Written ${formatCount(result.files.length, "file")}`);
   }
 
   return result;
@@ -797,17 +842,6 @@ function convertToRecords(
     createdAt: new Date(),
     updatedAt: new Date(),
   }));
-}
-
-/**
- * Ensure directory exists
- */
-async function ensureDir(dir: string): Promise<void> {
-  try {
-    await mkdir(dir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
 }
 
 /**
@@ -862,11 +896,23 @@ async function checkMigrationStatus(
   // Try to connect to database
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createCliAdapter({
+    const connection = {
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,
-    });
+    };
+    // A dry run opens the database read-only; one that is not there has no
+    // migrations to check, as a database the build cannot reach has none.
+    if (options.dryRun === true) {
+      const opened = await openDryRunAdapter(connection);
+      if ("missing" in opened) {
+        logger.debug(`Cannot check migrations: ${opened.missing}`);
+        return result;
+      }
+      adapter = opened;
+    } else {
+      adapter = await createCliAdapter(connection);
+    }
     logger.debug(`Connected to ${getDialectDisplayName(dialect)}`);
   } catch (error) {
     logger.debug(`Cannot check migrations: ${describeError(error)}`);
@@ -972,43 +1018,28 @@ async function getAppliedMigrations(
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-/**
- * Register the build command with the program
- *
- * @param program - Commander program instance
- */
-export function registerBuildCommand(program: Command): void {
-  program
-    .command("build")
-    .description("Production build - validate collections and generate files")
-    .option("--strict", "Fail on any validation warnings", false)
-    .option(
-      "--skip-migrations-check",
-      "Skip migration status verification",
-      false
-    )
-    .option("--no-types", "Skip TypeScript type generation")
-    .option("--no-zod", "Skip Zod validation schema generation")
-    .action(async (cmdOptions: BuildCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/** The action of `nextly build`, loaded when it runs. */
+export async function buildAction(
+  cmdOptions: BuildCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedBuildOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedBuildOptions = {
+    ...cmdOptions,
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      try {
-        await runBuild(resolvedOptions, context);
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+  try {
+    await runBuild(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

@@ -12,9 +12,10 @@ import {
   registerBlocks,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import type {
-  PluginFieldWrite,
-  PluginStoredValueTarget,
+import {
+  NextlyError,
+  type PluginFieldWrite,
+  type PluginStoredValueTarget,
 } from "@nextlyhq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,8 +43,27 @@ const base = {
 beforeEach(() => {
   registerBlocks(
     [
-      { ...base, name: "acme/box" },
-      { ...base, name: "acme/columns" },
+      // Declared slots: a child in a slot its container never declares is
+      // refused on its own account, which these cases do not test.
+      { ...base, name: "acme/box", slots: { children: {} } },
+      { ...base, name: "acme/columns", slots: { children: {} } },
+      {
+        ...base,
+        name: "acme/linkcard",
+        slots: { children: {} },
+        contentModel: (props: { link?: string }) =>
+          props.link
+            ? {
+                is: ["flow", "interactive"],
+                accepts: { without: ["interactive"] },
+              }
+            : { is: ["flow"] },
+      },
+      {
+        ...base,
+        name: "acme/cta",
+        contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
+      },
       { ...base, name: "acme/column", parent: ["acme/columns"] },
       {
         ...base,
@@ -149,6 +169,8 @@ function storeOf(rows: Record<string, Record<string, Stored>>) {
     const value =
       target.form === "draft" ? (row.draft ?? row.published) : row.published;
     if (value === "unreadable") throw new Error("this row could not be read");
+    // A language whose store is not ready yet answers "unavailable".
+    if (value === "not-ready") throw NextlyError.serviceUnavailable();
     return { kind: "value", value };
   };
   return { readStored, asked };
@@ -183,9 +205,11 @@ function judge(
     onLockedExposures?: (found: LockedExposures) => void;
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
+    localized?: boolean;
   } = {}
 ) {
-  const { status, limits, composesDocuments, ...callbacks } = options;
+  const { status, limits, composesDocuments, localized, ...callbacks } =
+    options;
   return compositionIssues(
     value,
     {
@@ -195,6 +219,9 @@ function judge(
         ...(status === undefined ? {} : { status }),
       },
       ...(w === undefined ? {} : { write: w }),
+      ...(localized === undefined
+        ? {}
+        : { field: { name: FIELD, type: "blocks", localized } }),
     },
     {
       store: STORE,
@@ -839,21 +866,32 @@ describe("a page judged as a reader receives it", () => {
     });
 
     it("refuses as for a page never stored when the stored page cannot be read, as a localized field's cannot", async () => {
-      // A read that is refused, as core refuses a localized field, leaves no
+      // A localized field whose language store is not ready yet has no
       // stored value to keep: the page is measured against the starting
       // blocks alone, so the lock refuses rather than lets the value through.
       const { readStored } = storeOf({
         [COMPONENTS]: { sealed: { published: toned() } },
-        pages: { p1: { published: "unreadable" } },
+        pages: { p1: { published: "not-ready" } },
       });
       expect(
         codes(
           await judge(
             placed({ tone: "loud" }),
-            write(readStored, "pages", "p1")
+            write(readStored, "pages", "p1"),
+            { localized: true }
           )
         )
       ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("lets an unexpected failure to read the stored page propagate, rather than pass the write", async () => {
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: "unreadable" } },
+      });
+      await expect(
+        judge(placed({ tone: "loud" }), write(readStored, "pages", "p1"))
+      ).rejects.toThrow();
     });
 
     it("keeps what the component itself holds, on a page placing it for the first time", async () => {
@@ -1118,6 +1156,273 @@ describe("a component save judged inside the documents that use it", () => {
       })
     ).toEqual([]);
     expect(asked).toEqual([]);
+  });
+
+  it("judges its hosts when a setting changes what it is, with its shape unmoved", async () => {
+    // The page puts a call to action in the card's exposed slot; switching
+    // the card's link on moves nothing a shape footprint records.
+    const tile = (props: Node) =>
+      component(
+        [
+          {
+            id: "card",
+            type: "acme/linkcard",
+            version: 1,
+            props,
+            slots: { children: [] },
+          },
+        ],
+        { slots: { body: { label: "Body", nodeId: "card", slot: "children" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { tile: { published: tile({}) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "tile", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ tile: [hostPage] });
+
+    const issues = await judge(
+      tile({ link: "/go" }),
+      write(readStored, COMPONENTS, "tile"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
+  it("judges its hosts when two cards swap which one is linked", async () => {
+    // The same type/model pairs before and after, so only a footprint that
+    // knows WHICH card is linked sees the host's call to action move under a
+    // link.
+    const pair = (aLinked: boolean) =>
+      component(
+        [
+          {
+            id: "a",
+            type: "acme/linkcard",
+            version: 1,
+            props: aLinked ? { link: "/go" } : {},
+            slots: { children: [] },
+          },
+          {
+            id: "b",
+            type: "acme/linkcard",
+            version: 1,
+            props: aLinked ? {} : { link: "/go" },
+            slots: { children: [] },
+          },
+        ],
+        { slots: { first: { label: "First", nodeId: "a", slot: "children" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { pair: { published: pair(false) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "pair", {
+              slots: {
+                first: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ pair: [hostPage] });
+
+    const issues = await judge(
+      pair(true),
+      write(readStored, COMPONENTS, "pair"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
+  it("judges its hosts when an exposed slot's holder moves under a link", async () => {
+    // Every id, model, depth and root unchanged: only where the holder sits
+    // moves, under the linked card, and the host's call to action with it.
+    const cards = (holderUnderLink: boolean) => {
+      const holder = {
+        id: "h",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        slots: { children: [] },
+      };
+      return component(
+        [
+          {
+            id: "p",
+            type: "acme/linkcard",
+            version: 1,
+            props: {},
+            slots: { children: holderUnderLink ? [] : [holder] },
+          },
+          {
+            id: "l",
+            type: "acme/linkcard",
+            version: 1,
+            props: { link: "/go" },
+            slots: { children: holderUnderLink ? [holder] : [] },
+          },
+        ],
+        { slots: { body: { label: "Body", nodeId: "h", slot: "children" } } }
+      );
+    };
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards(false) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "cards", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ cards: [hostPage] });
+
+    const issues = await judge(
+      cards(true),
+      write(readStored, COMPONENTS, "cards"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
+  it("does not let a new placement break pass as the old one of the same kind", async () => {
+    // The host already has a call to action under the linked first card; the
+    // save unlinks the first and links the second, where the host has
+    // another. One break of that kind before and after, under one placement.
+    const two = (firstLinked: boolean) =>
+      component(
+        [
+          {
+            id: "a",
+            type: "acme/linkcard",
+            version: 1,
+            props: firstLinked ? { link: "/go" } : {},
+            slots: { children: [] },
+          },
+          {
+            id: "b",
+            type: "acme/linkcard",
+            version: 1,
+            props: firstLinked ? {} : { link: "/go" },
+            slots: { children: [] },
+          },
+        ],
+        {
+          slots: {
+            first: { label: "First", nodeId: "a", slot: "children" },
+            second: { label: "Second", nodeId: "b", slot: "children" },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { two: { published: two(true) } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "two", {
+              slots: {
+                first: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+                second: [{ id: "y", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ two: [hostPage] });
+
+    const issues = await judge(
+      two(false),
+      write(readStored, COMPONENTS, "two"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
+  });
+
+  it("judges its hosts when an exposed slot's allow-list narrows", async () => {
+    // The host puts a call to action in the exposed slot; the save narrows the
+    // exposure to headlines only. The inner slot takes anything, so only the
+    // exposure's own list refuses it, and the composed tree no longer has it.
+    const tile = (allow?: readonly string[]) =>
+      component(
+        [
+          {
+            id: "inner",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          },
+        ],
+        {
+          slots: {
+            body: {
+              label: "Body",
+              nodeId: "inner",
+              slot: "children",
+              ...(allow ? { allow } : {}),
+            },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { tile: { published: tile() } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "tile", {
+              slots: {
+                body: [{ id: "x", type: "acme/cta", version: 1, props: {} }],
+              },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = finder({ tile: [hostPage] });
+
+    const issues = await judge(
+      tile(["acme/text"]),
+      write(readStored, COMPONENTS, "tile"),
+      {
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toContain("COMPONENT_HOST_BROKEN");
   });
 
   it("does not report a host that was already broken before this save", async () => {
@@ -1729,3 +2034,194 @@ function listing(hosts: HostRef[]) {
   const hostsOf: HostFinder = { whole: async () => true, placing: lookups };
   return { hostsOf, lookups };
 }
+
+describe("a placement's own values", () => {
+  const header = component([node("t", "acme/quote")], {
+    exposed: [
+      {
+        id: "title",
+        label: "Title",
+        nodeId: "t",
+        propPath: "words",
+        type: "text",
+      },
+    ],
+  });
+  const valued = (overrides: Node) =>
+    placing("p", "header", { props: { componentId: "header", overrides } });
+
+  it("refuses a value of the wrong type, naming the field", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const issues = await judge(
+      page([valued({ title: 7 })]),
+      write(readStored, "pages", "home")
+    );
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "PLACEMENT_VALUE_WRONG_TYPE",
+        message: "Title needs text.",
+      }),
+    ]);
+  });
+
+  it("refuses an id the component does not expose when the write sets it", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    expect(
+      codes(
+        await judge(
+          page([valued({ subtitle: "Hi" })]),
+          write(readStored, "pages", "home")
+        )
+      )
+    ).toEqual(["PLACEMENT_VALUE_UNKNOWN_FIELD"]);
+  });
+
+  it("keeps an unknown id the stored page already held", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+      pages: { home: { published: page([valued({ subtitle: "Hi" })]) } },
+    });
+    expect(
+      await judge(
+        page([valued({ subtitle: "Hi", title: "New" })]),
+        write(readStored, "pages", "home")
+      )
+    ).toEqual([]);
+  });
+
+  it("where the stored value cannot be read, keeps every value it may already hold", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+      pages: { home: { published: "not-ready" } },
+    });
+    expect(
+      codes(
+        await judge(
+          page([valued({ subtitle: "Hi", title: 7 })]),
+          write(readStored, "pages", "home"),
+          { localized: true }
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it("on a single, keeps what its stored value holds and judges what the write sets", async () => {
+    const components = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const readStored: PluginFieldWrite["readStored"] = async target =>
+      "single" in target
+        ? { kind: "value", value: page([valued({ subtitle: "Hi" })]) }
+        : components.readStored(target);
+    const single: PluginFieldWrite = {
+      kind: "single",
+      slug: "homepage",
+      inTransaction: false,
+      readStored,
+    };
+    expect(
+      codes(await judge(page([valued({ subtitle: "Hi", title: 7 })]), single))
+    ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
+  });
+
+  it("judges a placement a condition gates, which the composition never expands", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    const gated = placing("p", "header", {
+      props: { componentId: "header", overrides: { title: 7 } },
+      visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+    });
+    expect(
+      codes(await judge(page([gated]), write(readStored, "pages", "home")))
+    ).toEqual(["PLACEMENT_VALUE_WRONG_TYPE"]);
+  });
+
+  it("refuses as unchecked when gated placements need more components than one save reads", async () => {
+    const rows: Record<string, Stored> = {};
+    const gated = Array.from({ length: 101 }, (_, i) => {
+      rows[`c${String(i)}`] = { published: header };
+      return placing(`p${String(i)}`, `c${String(i)}`, {
+        props: { componentId: `c${String(i)}`, overrides: { title: "Hi" } },
+        visibility: { conditions: [[{ field: "tier", op: "eq" }]] },
+      });
+    });
+    const { readStored } = storeOf({ [COMPONENTS]: rows });
+    expect(
+      codes(await judge(page(gated), write(readStored, "pages", "home")))
+    ).toContain("COMPOSITION_UNCHECKED");
+  });
+
+  it("accepts a cleared field and a value of the field's type", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { header: { published: header } },
+    });
+    expect(
+      await judge(
+        page([
+          valued({ title: "Hello" }),
+          placing("q", "header", {
+            props: {
+              componentId: "header",
+              overrides: { title: { $unset: true } },
+            },
+          }),
+        ]),
+        write(readStored, "pages", "home")
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("a placement's variant on a page write", () => {
+  const card = component([node("t")], {
+    variants: { featured: { label: "Featured", overrides: {} } },
+  });
+  const choosing = (variant: string) =>
+    page([
+      {
+        ...placing("i1", "card"),
+        props: { componentId: "card", variant },
+      },
+    ]);
+
+  it("accepts a variant the component defines", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+    });
+
+    expect(
+      await judge(choosing("featured"), write(readStored, "pages", "home"))
+    ).toEqual([]);
+  });
+
+  it("refuses one the write newly sets that the component lacks", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+      pages: { home: { published: choosing("featured") } },
+    });
+
+    const issues = await judge(
+      choosing("gone"),
+      write(readStored, "pages", "home")
+    );
+
+    expect(codes(issues)).toEqual(["PLACEMENT_VARIANT_UNKNOWN"]);
+    expect(issues[0]!.message).toContain('"gone"');
+  });
+
+  it("keeps a deleted variant's key the stored page already held", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { card: { published: card } },
+      pages: { home: { published: choosing("gone") } },
+    });
+
+    expect(
+      await judge(choosing("gone"), write(readStored, "pages", "home"))
+    ).toEqual([]);
+  });
+});

@@ -112,7 +112,9 @@ test("seeds a default notification, edits it in place, and guards referenced fie
   // sheet this replaced, which is how this test failed when it moved.
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  const editor = page.locator('[id^="notification-editor-"]');
+  // `:visible`: a hidden copy of this page, which Next.js may keep mounted,
+  // holds the same id.
+  const editor = page.locator('[id^="notification-editor-"]:visible');
   await editor
     .getByRole("textbox", { name: "Recipient address" })
     .fill("team@example.com");

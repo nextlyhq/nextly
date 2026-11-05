@@ -25,7 +25,7 @@ import {
 
 import { inlinePropsOfKind } from "./inline-target";
 import { propPatch } from "./inspector";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /** One passage a canvas may let an author edit in place. */
 export interface InlineRichTextTarget {

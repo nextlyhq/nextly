@@ -24,9 +24,9 @@ import {
   contrastObscuredAbove,
   colourHexOf,
   colourShowable,
-  colourTokenFor,
-  colourTokenLabel,
-  colourTokensFor,
+  variableFor,
+  variableLabel,
+  variablesFor,
   contrastObscuredBy,
   contrastObscuredIn,
   contrastOf,
@@ -34,7 +34,7 @@ import {
   contrastRatioText,
   contrastRoleOf,
   emitsContrastPartner,
-  type ColourToken,
+  type SiteVariable,
 } from "./style-colour";
 
 /** One catalog entry, as the array actually stores them. */
@@ -96,7 +96,7 @@ const TOKENS: SiteTokenSet = {
 
 describe("which tokens a colour control offers", () => {
   it("offers the site's colour tokens and withholds the others", () => {
-    const offered = colourTokensFor(COLOR, TOKENS).map(token => token.name);
+    const offered = variablesFor(COLOR, TOKENS).map(token => token.name);
     expect(offered).toContain("color.ink");
     expect(offered).toContain("color.themed");
     expect(offered).toContain("brand.main");
@@ -115,7 +115,7 @@ describe("which tokens a colour control offers", () => {
     // not the site has any tokens of its own. A picker reading the raw override
     // set offered none of them, and could not resolve a document referencing
     // one.
-    const bare = colourTokensFor(COLOR, { tokens: [] }).map(t => t.name);
+    const bare = variablesFor(COLOR, { tokens: [] }).map(t => t.name);
     expect(bare).toContain("color.text");
     expect(bare).toContain("color.background");
     expect(bare).toContain("color.primary");
@@ -123,14 +123,48 @@ describe("which tokens a colour control offers", () => {
     expect(bare).not.toContain("space.4");
   });
 
+  it("calls each by the name an author reads, with both its values to paint", () => {
+    const [brand] = variablesFor(COLOR, {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#1d2b6b", dark: "#8fa7ff" },
+        },
+        {
+          name: "color.paper",
+          label: "Page paper",
+          kind: "color",
+          values: { light: "#fefefe" },
+        },
+      ],
+    }).filter(token => token.name === "color.brand");
+    expect(brand?.label).toBe("Brand");
+    expect(brand?.pair).toEqual({ light: "#1d2b6b", dark: "#8fa7ff" });
+    const paper = variablesFor(COLOR, {
+      tokens: [
+        {
+          name: "color.paper",
+          label: "Page paper",
+          kind: "color",
+          values: { light: "#fefefe" },
+        },
+      ],
+    }).find(token => token.name === "color.paper");
+    // An own label wins, and a token with no dark value shows its light one
+    // for dark, as the page does.
+    expect(paper?.label).toBe("Page paper");
+    expect(paper?.pair).toEqual({ light: "#fefefe", dark: "#fefefe" });
+  });
+
   it("still offers nothing when the question was never asked", () => {
     // `undefined` is not "the site has the defaults" — it is "no host has said
     // what this site holds", and answering with the defaults would be a claim.
-    expect(colourTokensFor(COLOR, undefined)).toEqual([]);
+    expect(variablesFor(COLOR, undefined)).toEqual([]);
   });
 
   it("resolves a stored reference to a DEFAULT token", () => {
-    expect(colourTokenFor("color.primary", { tokens: [] })?.name).toBe(
+    expect(variableFor("color.primary", { tokens: [] })?.name).toBe(
       "color.primary"
     );
   });
@@ -140,11 +174,11 @@ describe("which tokens a colour control offers", () => {
     // the reason it offers no colour token is that the CATALOG gives it no
     // colour in `tokenKinds`, which is the fact a control must read.
     expect(OPACITY.tokenKinds).not.toContain("color");
-    expect(colourTokensFor(OPACITY, TOKENS)).toEqual([]);
+    expect(variablesFor(OPACITY, TOKENS)).toEqual([]);
   });
 
   it("offers nothing when the host supplied no table", () => {
-    expect(colourTokensFor(COLOR, undefined)).toEqual([]);
+    expect(variablesFor(COLOR, undefined)).toEqual([]);
   });
 
   it("carries the IDENTITY to store and the NAME to read, which differ", () => {
@@ -153,7 +187,7 @@ describe("which tokens a colour control offers", () => {
     // `tokenIdentity` while the compiler composes `var(...)` from the stored
     // string verbatim. Offering the NAME would store a reference to a property
     // nothing declares — the style vanishes and the page still renders.
-    const renamed = colourTokensFor(COLOR, TOKENS).find(
+    const renamed = variablesFor(COLOR, TOKENS).find(
       token => token.name === "brand.main"
     );
     expect(renamed).toBeDefined();
@@ -164,7 +198,7 @@ describe("which tokens a colour control offers", () => {
   it("falls back to the name as identity for a token that has no id", () => {
     // The continuity half of the same rule, and what every token stored before
     // `id` existed relies on.
-    const original = colourTokensFor(COLOR, TOKENS).find(
+    const original = variablesFor(COLOR, TOKENS).find(
       token => token.name === "color.ink"
     );
     expect(original?.identity).toBe("color.ink");
@@ -173,20 +207,20 @@ describe("which tokens a colour control offers", () => {
 
 describe("resolving a stored reference back to its token", () => {
   it("finds a renamed token by the identity a document stores", () => {
-    const found = colourTokenFor("color.primary", TOKENS);
+    const found = variableFor("color.primary", TOKENS);
     expect(found?.name).toBe("brand.main");
-    expect(found?.colour).toBe("#ffffff");
+    expect(found?.value).toBe("#ffffff");
   });
 
   it("does NOT find it by the name an author now reads", () => {
     // The separating case. A lookup keyed on the name would answer here, and
     // would answer nothing for the identity above — reversing which references
     // resolve.
-    expect(colourTokenFor("brand.main", TOKENS)).toBeUndefined();
+    expect(variableFor("brand.main", TOKENS)).toBeUndefined();
   });
 
   it("answers undefined for a token this site does not define", () => {
-    expect(colourTokenFor("color.nothing", TOKENS)).toBeUndefined();
+    expect(variableFor("color.nothing", TOKENS)).toBeUndefined();
   });
 });
 
@@ -420,9 +454,9 @@ describe("what a preset swatch may be painted with", () => {
   it("carries a RESOLVED colour, not the token's raw value", () => {
     // A preset button paints what it is handed, so the resolution has to happen
     // before the value reaches it.
-    const offered = colourTokensFor(COLOR, TOKENS);
+    const offered = variablesFor(COLOR, TOKENS);
     const ink = offered.find(token => token.name === "color.ink");
-    expect(ink?.colour).toBe("#111111");
+    expect(ink?.value).toBe("#111111");
     expect(ink?.swatch).toBe("#111111");
   });
 
@@ -430,13 +464,13 @@ describe("what a preset swatch may be painted with", () => {
     // The separating case, and the one that made this a defect: `var(--brand)`
     // is a valid colour a site may store in a token, and painted raw into the
     // inspector it resolves against the PANEL rather than the canvas.
-    const themed = colourTokensFor(COLOR, TOKENS).find(
+    const themed = variablesFor(COLOR, TOKENS).find(
       token => token.name === "color.themed"
     );
     // Still offered, so the reference stays choosable.
     expect(themed).toBeDefined();
     // And still truthful about what the site stores.
-    expect(themed?.colour).toBe("var(--brand)");
+    expect(themed?.value).toBe("var(--brand)");
     // But not paintable.
     expect(themed?.swatch).toBeUndefined();
   });
@@ -446,7 +480,7 @@ describe("what a preset swatch may be painted with", () => {
     // the same function that produced the field: comparing `swatch` against
     // `colourHexOf(colour)` is the expression that built it, so it holds for
     // any implementation including a wrong one.
-    for (const token of colourTokensFor(COLOR, TOKENS)) {
+    for (const token of variablesFor(COLOR, TOKENS)) {
       if (token.swatch === undefined) continue;
       expect(token.swatch).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/);
     }
@@ -499,23 +533,14 @@ describe("a translucent background withholds the verdict", () => {
 
 describe("which mode a token resolves in", () => {
   const media: SiteTokenSet = { ...TOKENS, darkMode: "media" };
-  const attribute: SiteTokenSet = { ...TOKENS, darkMode: "attribute" };
 
-  it("follows the system only where the site said to", () => {
-    // `emitTokenBlocks` wraps the dark block in
-    // `@media (prefers-color-scheme:dark)` for the media strategy, so the
-    // canvas switches with the system and nothing tells the panel.
-    expect(activeTokenMode(media, true)).toBe("dark");
-    expect(activeTokenMode(media, false)).toBe("light");
-  });
-
-  it("stays light on the attribute strategy, which the panel cannot observe", () => {
-    // The dark block is written under `[data-nx-theme="dark"]`, set by the HOST
-    // on an ancestor of its choosing. A stated limit, not a claim.
-    expect(activeTokenMode(attribute, true)).toBe("light");
-    // And the default, when a site names no strategy at all.
-    expect(activeTokenMode(TOKENS, true)).toBe("light");
-    expect(activeTokenMode(undefined, true)).toBe("light");
+  it("follows the device, which is what the compiled sheet follows", () => {
+    // The site sheet writes every dark value under
+    // `@media (prefers-color-scheme:dark)`, whatever the set's deprecated
+    // `darkMode` says, so the canvas switches with the device and the panel
+    // has to resolve the same way.
+    expect(activeTokenMode(true)).toBe("dark");
+    expect(activeTokenMode(false)).toBe("light");
   });
 
   it("resolves a reference to the value the canvas is actually showing", () => {
@@ -535,10 +560,10 @@ describe("which mode a token resolves in", () => {
   });
 
   it("paints preset swatches in the same mode", () => {
-    const dark = colourTokensFor(COLOR, media, "dark").find(
+    const dark = variablesFor(COLOR, media, "dark").find(
       token => token.name === "brand.main"
     );
-    expect(dark?.colour).toBe("#000000");
+    expect(dark?.value).toBe("#000000");
     expect(dark?.swatch).toBe("#000000");
   });
 
@@ -564,7 +589,7 @@ describe("only tokens the canvas will declare are offered", () => {
         { name: "color primary!", kind: "color", values: { light: "#222222" } },
       ],
     };
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).toContain("color.ok");
     expect(names).not.toContain("color primary!");
   });
@@ -587,7 +612,7 @@ describe("only tokens the canvas will declare are offered", () => {
         },
       ],
     };
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).toContain("color.primary-dark");
     expect(names).not.toContain("color-primary.dark");
   });
@@ -595,7 +620,7 @@ describe("only tokens the canvas will declare are offered", () => {
   it("offers a set with no collisions untouched", () => {
     // The positive control: the filter must remove those two shapes and
     // nothing else, or every picker would come back empty.
-    const names = colourTokensFor(COLOR, TOKENS).map(t => t.name);
+    const names = variablesFor(COLOR, TOKENS).map(t => t.name);
     expect(names).toContain("color.ink");
     expect(names).toContain("brand.main");
     expect(names).toContain("color.themed");
@@ -667,7 +692,7 @@ describe("the emitter decides which tokens are offered", () => {
         },
       ],
     };
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).toContain("color.ok");
     expect(names).not.toContain("color.bad");
   });
@@ -684,7 +709,7 @@ describe("the emitter decides which tokens are offered", () => {
         { name: "color.wrong", kind: "color", values: { light: "16px" } },
       ],
     };
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).toContain("color.ok");
     expect(names).not.toContain("color.wrong");
   });
@@ -703,11 +728,11 @@ describe("the emitter decides which tokens are offered", () => {
         },
       ],
     };
-    expect(colourTokensFor(COLOR, set, "light").map(t => t.name)).toContain(
+    expect(variablesFor(COLOR, set, "light").map(t => t.name)).toContain(
       "color.half"
     );
     // And withheld in the mode where it really is broken.
-    expect(colourTokensFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
+    expect(variablesFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
       "color.half"
     );
   });
@@ -736,10 +761,10 @@ describe("the emitter decides which tokens are offered", () => {
     // at all, in either mode.
     expect(emitTokenBlocks(set, ":root").css).toBe("");
 
-    expect(colourTokensFor(COLOR, set, "light").map(t => t.name)).not.toContain(
+    expect(variablesFor(COLOR, set, "light").map(t => t.name)).not.toContain(
       "color.fetches"
     );
-    expect(colourTokensFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
+    expect(variablesFor(COLOR, set, "dark").map(t => t.name)).not.toContain(
       "color.fetches"
     );
   });
@@ -778,7 +803,7 @@ describe("the emitter decides which tokens are offered", () => {
 
     // So neither is choosable: one resolves to nothing, and the other is not
     // declared at all.
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).not.toContain("color-primary.dark");
     expect(names).not.toContain("color.primary-dark");
   });
@@ -790,7 +815,7 @@ describe("the emitter decides which tokens are offered", () => {
         { name: "color.empty", kind: "color", values: { light: 4 } },
       ],
     } as unknown as SiteTokenSet;
-    const names = colourTokensFor(COLOR, set).map(t => t.name);
+    const names = variablesFor(COLOR, set).map(t => t.name);
     expect(names).toContain("color.ok");
     expect(names).not.toContain("color.empty");
   });
@@ -888,18 +913,20 @@ describe("what an ancestor puts over a pair", () => {
 });
 
 describe("what a token is CALLED where two share a name", () => {
-  const of = (identity: string, name: string): ColourToken =>
+  const of = (identity: string, name: string): SiteVariable =>
     ({
       identity,
       name,
+      // The label is what a list shows, so it is what collides.
+      label: name,
       kind: "color",
-      colour: "#000000",
+      value: "#000000",
       swatch: "#000000",
-    }) as ColourToken;
+    }) as SiteVariable;
 
   it("shows the plain name when nothing else offered carries it", () => {
     const list = [of("color.primary", "brand.main"), of("color.ink", "text")];
-    expect(colourTokenLabel(list[0] as ColourToken, list)).toBe("brand.main");
+    expect(variableLabel(list[0] as SiteVariable, list)).toBe("brand.main");
   });
 
   it("qualifies BOTH entries when two identities share one name", () => {
@@ -912,10 +939,10 @@ describe("what a token is CALLED where two share a name", () => {
       of("color.primary", "brand.main"),
       of("brand.main", "brand.main"),
     ];
-    expect(colourTokenLabel(list[0] as ColourToken, list)).toBe(
+    expect(variableLabel(list[0] as SiteVariable, list)).toBe(
       "brand.main (color.primary)"
     );
-    expect(colourTokenLabel(list[1] as ColourToken, list)).toBe(
+    expect(variableLabel(list[1] as SiteVariable, list)).toBe(
       "brand.main (brand.main)"
     );
   });
@@ -924,7 +951,7 @@ describe("what a token is CALLED where two share a name", () => {
     // The same token appearing once must not read as a collision with its own
     // entry, which an identity-blind comparison would produce.
     const one = of("color.primary", "brand.main");
-    expect(colourTokenLabel(one, [one])).toBe("brand.main");
+    expect(variableLabel(one, [one])).toBe("brand.main");
   });
 });
 

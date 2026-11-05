@@ -13,12 +13,37 @@ import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../services/shared";
+import { assertAddressAllowed } from "../../../shared/address-rule";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import {
+  applyCollectionSchemaChange,
+  refuseNewCollectionIndexNamesTaken,
+} from "../../schema/services/collection-schema-apply";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+
+import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
+import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
+
+/** The parts of a collection's registry row its delete reads. */
+interface DeletedCollectionRow {
+  tableName: string;
+  fields?: FieldDefinition[];
+  /** Set on a code-first collection's row: its definition is the code's. */
+  locked?: boolean | number | null;
+}
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -255,7 +280,13 @@ export class CollectionMetadataService extends BaseService {
   private async registerRuntimeSchema(
     tableName: string,
     fields: FieldDefinition[],
-    options?: { hasStatus?: boolean; localized?: boolean }
+    options?: {
+      hasStatus?: boolean;
+      localized?: boolean;
+      // Whether the companion keeps a `_status` of its own: per-language publishing, which only
+      // a translated Draft/Published collection has. The main table's flag when not given.
+      companionStatus?: boolean;
+    }
   ): Promise<void> {
     try {
       const { generateRuntimeSchema } = await import(
@@ -302,7 +333,7 @@ export class CollectionMetadataService extends BaseService {
           fields: fields,
           dialect,
           localized: true,
-          status: options?.hasStatus === true,
+          status: options?.companionStatus ?? options?.hasStatus === true,
         });
         if (companion) {
           this.fileManager.refreshSchema(
@@ -385,6 +416,38 @@ export class CollectionMetadataService extends BaseService {
     hooks?: StoredHookConfig[];
     createdBy?: string;
   }): Promise<MetadataServiceResult> {
+    // Every collection create reaches this point (the Builder, the root-exported
+    // CollectionService and plugins' ctx.services), so the address is judged here, before any
+    // migration is written or DDL runs, and outside the result mapping below so the refusal keeps
+    // its address and reason. The rule as written reads the request alone, so it is asked before
+    // the lock is taken: a malformed address is answered as one, not with a lock refusal.
+    assertAddressAllowed("collection", data.name);
+    // The whole create holds the schema lock: the slug check, the migration it runs in
+    // development, its file and the registry row. A storage migration running beside it could
+    // rename the tables this create is checked against and built beside. Refused at once, and
+    // thrown rather than returned as a result, so every caller answers it as the same
+    // SERVICE_UNAVAILABLE with the editor's message.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `create collection "${data.name}"`,
+        // The DDL runs here only in development; elsewhere this writes a migration file and a
+        // registry row, and must not create the lock table on a role without DDL rights.
+        issuesDdl: this.isDevelopment(),
+      },
+      () => this.createCollectionExcluded(data)
+    );
+  }
+
+  private async createCollectionExcluded(
+    data: Parameters<CollectionMetadataService["createCollection"]>[0]
+  ): Promise<MetadataServiceResult> {
+    // Against the addresses as they stand now that the lock is held, so a collection or Single
+    // registered while this request waited is not built over.
+    await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
+      addressKind: "collection",
+    });
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
@@ -392,6 +455,25 @@ export class CollectionMetadataService extends BaseService {
       // recorded, so a change the database refuses leaves no file, no registry row and nothing
       // reported as applied.
       if (this.isDevelopment()) {
+        // An index name the new table takes may already be held elsewhere, where the create's
+        // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
+        try {
+          await refuseNewCollectionIndexNamesTaken(this.adapter, {
+            slug: data.name,
+            tableName: artifacts.tableName,
+            fields: artifacts.metadata.fields,
+            localized: data.localized === true,
+          });
+        } catch (refusal: unknown) {
+          return errorToMetadataResult(
+            refusal,
+            {
+              statusCode: 400,
+              defaultMessage: "The collection's indexes could not be created",
+            },
+            this.dialect
+          );
+        }
         try {
           // The artefact carries the registry-row upsert so the committed file
           // recreates it where the Builder has never run. This database gets
@@ -438,7 +520,10 @@ export class CollectionMetadataService extends BaseService {
                 hasStatus: data.status === true,
                 // i18n: register the main table without translatable columns and register
                 // the companion, so reads/writes route localized fields correctly.
-                localized: data.localized === true,
+                localized: storesPerLanguage(data),
+                // As the migration laid it out: a collection that is not translated publishes
+                // as a document, so its companion has no `_status` even when it is Draft/Published.
+                companionStatus: publishesPerLanguage(data),
               }
             );
           } else {
@@ -770,7 +855,32 @@ export class CollectionMetadataService extends BaseService {
       hooks?: StoredHookConfig[];
     }
   ): Promise<MetadataServiceResult> {
+    // The whole update holds the schema lock, from the registry read the update is generated from
+    // to the registry write, so a storage migration cannot move the table between them.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `update collection "${params.collectionName}"`,
+        // Only a save that reshapes the table, in development, issues DDL here; a label or admin
+        // option change writes the registry row alone.
+        issuesDdl: collectionSaveIssuesDdl(body, this.isDevelopment()),
+      },
+      () => this.updateCollectionExcluded(params, body)
+    );
+  }
+
+  /** The save, once the schema lock is held. */
+  private async updateCollectionExcluded(
+    params: { collectionName: string },
+    body: Parameters<CollectionMetadataService["updateCollection"]>[1]
+  ): Promise<MetadataServiceResult> {
     try {
+      // The collection as it stands before the save, read inside the lock: what the apply changes
+      // it from.
+      const before = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const updateArtifacts =
         await this.collectionService.generateCollectionUpdate(
           params.collectionName,
@@ -786,12 +896,11 @@ export class CollectionMetadataService extends BaseService {
         // nothing reported as applied.
         if (this.isDevelopment()) {
           try {
-            // The file is what a fresh database will replay; this is what THIS one needs. They
-            // differ only where unattended provisioning left the local schema in a shape no
-            // migration history produces, and running the file here would then fail on a column
-            // that is already present.
-            // The file creates the archive when it is missing but cannot add the kind column to an
-            // archive from before rows recorded it, which its writes name.
+            // The file is what a database built from migrations replays; this database takes the
+            // change through one apply of the schema pipeline, as the schema dialog's does, which
+            // diffs the table as it is, so a save the database refused part-way is finished by the
+            // next. The file creates the archive when it is missing but cannot add the kind column
+            // to an archive from before rows recorded it, which the apply's writes name.
             if (updateArtifacts.needsArchive) {
               const { ensureI18nArchive } = await import(
                 "../../i18n/migration/ensure-archive"
@@ -801,9 +910,36 @@ export class CollectionMetadataService extends BaseService {
                 this.adapter.getCapabilities().dialect
               );
             }
-            await this.fileManager.runMigration(
-              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
-            );
+            const wasLocalized =
+              (before as { localized?: boolean }).localized === true;
+            const wasStatus = (before as { status?: boolean }).status === true;
+            const beforeFields = (before.fields ?? []) as FieldDefinition[];
+            await applyCollectionSchemaChange({
+              slug: params.collectionName,
+              collection: { tableName: before.tableName, fields: beforeFields },
+              fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+              wasLocalized,
+              isLocalized:
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalized,
+              status:
+                body.status !== undefined ? body.status === true : wasStatus,
+              wasStatus,
+              renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+              eventResolutions: [],
+              legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+              fills: updateArtifacts.pushAnswers.fills,
+              // The save detects its own renames; every other pair is a drop and an add.
+              dropAndAddUnansweredRenames: true,
+            });
+            // What the push leaves out of its diff, once it has run: a renamed field group's
+            // association and the junction tables, as the file carries them.
+            if (updateArtifacts.besideStatements) {
+              await this.fileManager.runMigration(
+                updateArtifacts.besideStatements
+              );
+            }
           } catch (migrationError: unknown) {
             return errorToMetadataResult(
               migrationError,
@@ -953,93 +1089,143 @@ export class CollectionMetadataService extends BaseService {
   }
 
   /**
-   * Delete a collection.
+   * Delete a collection, or several in one operation.
    * Generates drop migration, deletes schema file, and unregisters the collection.
    *
-   * @param params - Parameters containing collection name
+   * Refused before anything is removed while something outside the operation
+   * depends on any of them: a field that points at one, a foreign key a plugin
+   * or the app declares on one of their tables, or another owner's column,
+   * index, foreign key or check on one of them (`collection-dependents`).
+   * Collections deleted together are checked as one set, so two that point
+   * only at each other can go, where deleting either alone is refused.
+   *
+   * @param params - The collection to delete, and those deleted with it
    * @returns Deletion result
    */
   async deleteCollection(params: {
     collectionName: string;
+    /** Collections deleted in the same operation, after `collectionName`. */
+    together?: readonly string[];
   }): Promise<MetadataServiceResult> {
+    // The whole delete holds the schema lock: the rows it reads, the dependents it asks about,
+    // the teardown and the drop. Each of those reads describes storage a migration could be
+    // moving, and the delete acts on what they found.
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete collection "${params.collectionName}"`,
+        // The table drop runs here only in development; elsewhere the delete writes a drop
+        // migration and removes rows. Its one DDL outside development, dropping a localized
+        // collection's translations table, still runs under the lock wherever the lock table
+        // exists; a path that otherwise issues no DDL does not create it.
+        issuesDdl: this.isDevelopment(),
+      },
+      () => this.deleteCollectionExcluded(params)
+    );
+  }
+
+  private async deleteCollectionExcluded(
+    params: Parameters<CollectionMetadataService["deleteCollection"]>[0]
+  ): Promise<MetadataServiceResult> {
     try {
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-
-      // Embedded component instances live in `comp_<slug>` tables keyed by a plain
-      // `_parent_table` string with no FK, so dropping this collection's table cascades
-      // nothing and would strand every instance. Sweep them (and any nested instances)
-      // before the drop.
-      await teardownEntityComponentData({
-        adapter: this.adapter,
-        parentTable: collection.tableName,
-      });
-
-      // Tear down the localization artifacts in-process, before the main table goes.
-      // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
-      // companion holds an FK to `<main>.id` so dropping the child first is safe in every
-      // environment, and the shared-archive purge is DML that no migration file should
-      // carry (the archive table is created lazily and may not exist).
-      await teardownEntityI18n({
-        kind: "collection",
-        adapter: this.adapter,
-        slug: params.collectionName,
-        tableName: collection.tableName,
-      });
-
-      // With the fields, so the collection's own many-to-many junctions go with it.
-      const dropArtifacts = this.collectionService.generateDropTableMigration(
-        params.collectionName,
-        collection.tableName,
-        (collection.fields ?? []) as FieldDefinition[]
-      );
-
-      // Persist the drop migration. It is the durable DDL record applied by
-      // `nextly migrate` in non-dev/deploy flows.
-      await this.fileManager.saveDropMigration(
-        dropArtifacts.migrationSQL,
-        dropArtifacts.migrationFileName
-      );
-
-      // Run drop migration in development
-      if (this.isDevelopment()) {
-        await this.fileManager.runMigration(dropArtifacts.migrationSQL);
+      // Loaded when a delete runs, not with the service: everything that
+      // constructs the service would otherwise load the delete's readers.
+      const [
+        {
+          assertNothingDependsOn,
+          databaseDependentsSources,
+          unreadableFieldsRefusal,
+        },
+        { dropOrder },
+        { collectionOwnTables },
+      ] = await Promise.all([
+        import("./collection-dependents"),
+        import("./collection-drop-order"),
+        import("../../schema/services/field-column-descriptor"),
+      ]);
+      const slugs = [
+        ...new Set([params.collectionName, ...(params.together ?? [])]),
+      ];
+      const collections: DeletedCollectionRow[] = [];
+      for (const slug of slugs) {
+        collections.push(
+          (await this.collectionService.getCollection(
+            slug
+          )) as DeletedCollectionRow
+        );
       }
 
-      // Unregister from metadata
-      await this.collectionService.unregisterCollection(params.collectionName);
-
-      // Delete associated permissions
-      if (this.permissionSeedService) {
-        try {
-          const permissionResult =
-            await this.permissionSeedService.deletePermissionsForResource(
-              params.collectionName
-            );
-
-          if (permissionResult.created > 0) {
-            this.logger.info(
-              `Deleted ${permissionResult.created} permission(s) for collection "${params.collectionName}"`
-            );
-          }
-
-          if (permissionResult.skipped > 0) {
-            this.logger.warn(
-              `${permissionResult.skipped} permission(s) for "${params.collectionName}" could not be deleted (may be assigned to roles)`
-            );
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to cleanup permissions for collection "${params.collectionName}": ${error instanceof Error ? error.message : String(error)}`
-          );
+      // A collection defined in code is the code's to remove: deleted here,
+      // the next start would create it again, empty. Refused for the whole
+      // set, before anything else is asked or removed, as the registry's own
+      // delete refuses it.
+      for (const [index, collection] of collections.entries()) {
+        if (collection.locked === true || collection.locked === 1) {
+          throw NextlyError.definedInCode({
+            thing: "collection",
+            change: "delete",
+            logContext: {
+              reason: "collection-locked-delete",
+              slug: slugs[index],
+            },
+          });
         }
       }
+
+      // A stored field list that is not a list names no junction tables, so
+      // what depends on them would go unasked: refused as unreadable fields.
+      const unreadable = slugs.findIndex(
+        (_, index) =>
+          collections[index].fields != null &&
+          !Array.isArray(collections[index].fields)
+      );
+      if (unreadable !== -1) {
+        throw unreadableFieldsRefusal(slugs, slugs[unreadable]);
+      }
+
+      // Before anything is torn down, and for the whole set, so a refusal
+      // leaves every collection exactly as it was. The extension schema is the
+      // one this process published at boot or on its last reload.
+      await assertNothingDependsOn(
+        slugs.map((slug, index) => ({
+          slug,
+          tables: collectionOwnTables(
+            collections[index].tableName,
+            collections[index].fields ?? []
+          ),
+        })),
+        databaseDependentsSources(this.adapter, () =>
+          Promise.resolve(getActiveExtensionSchema(this.dialect))
+        )
+      );
+
+      // Holder first, so no database refuses a drop over a key another
+      // member of the set still holds; refused here, still before anything
+      // is removed, when no such order exists (`collection-drop-order`).
+      const order = dropOrder(
+        slugs.map((slug, index) => ({
+          slug,
+          tableName: collections[index].tableName,
+          keys: this.collectionService.relationshipForeignKeys(
+            collections[index].tableName,
+            collections[index].fields ?? []
+          ),
+        }))
+      );
+      const ordered = order.map(index => ({
+        slug: slugs[index],
+        collection: collections[index],
+      }));
+      await this.removeTogether(ordered);
 
       return {
         success: true,
         statusCode: 200,
-        message: "Collection deleted! Restart the app to complete removal.",
+        message:
+          slugs.length === 1
+            ? "Collection deleted! Restart the app to complete removal."
+            : "Collections deleted! Restart the app to complete removal.",
         data: { deleted: true },
       };
     } catch (error: unknown) {
@@ -1055,5 +1241,206 @@ export class CollectionMetadataService extends BaseService {
         this.dialect
       );
     }
+  }
+
+  /**
+   * Remove what other tables hold for a collection that nothing outside its
+   * operation depends on, before its tables go: its field-group values and
+   * its translations. Through `adapter`, which is the delete's transaction.
+   */
+  private async tearDownStoredWithIt(
+    slug: string,
+    collection: DeletedCollectionRow,
+    adapter: TeardownAdapter
+  ): Promise<void> {
+    // Embedded component instances live in `comp_<slug>` tables keyed by a plain
+    // `_parent_table` string with no FK, so dropping this collection's table cascades
+    // nothing and would strand every instance. Sweep them (and any nested instances)
+    // before the drop.
+    await teardownEntityComponentData({
+      adapter,
+      parentTable: collection.tableName,
+    });
+
+    // Tear down the localization artifacts in-process, before the main table goes.
+    // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
+    // companion holds an FK to `<main>.id` so dropping the child first is safe in every
+    // environment, and the shared-archive purge is DML that no migration file should
+    // carry (the archive table is created lazily and may not exist).
+    await teardownEntityI18n({
+      kind: "collection",
+      adapter,
+      slug,
+      tableName: collection.tableName,
+    });
+  }
+
+  /**
+   * Remove the collections deleted together, in drop order: all of them or,
+   * where the database can undo a table drop, none.
+   *
+   * What can fail without removing anything runs first: the drop migration is
+   * written before anything is torn down. One transaction then removes every
+   * collection's field-group values and translations, runs the drop in
+   * development, and removes the registry rows, so a failure part-way leaves
+   * the earlier collections as they were, and the migration written for the
+   * delete is withdrawn. PostgreSQL and SQLite undo the table drops with the
+   * rest. MySQL commits each table drop as it runs, and what ran before it:
+   * there the registry rows, removed last, keep every collection the delete
+   * had not finished registered, and deleting again finishes it, the
+   * teardowns finding nothing left where they had run. What this process
+   * remembers about each collection is forgotten only once the delete has
+   * committed.
+   */
+  private async removeTogether(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
+  ): Promise<void> {
+    const [{ teardownAdapterIn }, { splitStatements }] = await Promise.all([
+      import("./teardown-adapter-in-transaction"),
+      import("../../schema/pipeline/sql-statement-utils"),
+    ]);
+    const drop = this.dropMigrationFor(ordered);
+    await this.fileManager.saveDropMigration(
+      drop.migrationSQL,
+      drop.migrationFileName
+    );
+    // What each registry row's removal found, read after the commit.
+    const unregistered = new Map<string, UnregisteredCollectionRow>();
+    try {
+      await this.adapter.transaction(async tx => {
+        const teardownAdapter = teardownAdapterIn(this.adapter, tx);
+        for (const { slug, collection } of ordered) {
+          await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
+        }
+        // Development drops the tables now, in this transaction; elsewhere
+        // `nextly migrate` applies the file.
+        if (this.isDevelopment()) {
+          for (const statement of splitStatements([drop.migrationSQL])) {
+            await tx.execute(statement);
+          }
+        }
+        for (const { slug } of ordered) {
+          unregistered.set(
+            slug,
+            await this.collectionService.unregisterCollectionIn(tx, slug)
+          );
+        }
+      });
+    } catch (error) {
+      // On MySQL a registry row can have gone before the failure, so the
+      // cached rows are not trusted either way.
+      clearRegistryRowCache();
+      await this.withdrawDropMigration(drop.migrationFileName);
+      throw this.deleteFailed(error, ordered);
+    }
+    for (const { slug, collection } of ordered) {
+      await this.forgetDeleted(
+        slug,
+        collection,
+        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+      );
+    }
+  }
+
+  /**
+   * The drop migration of the collections deleted together, in drop order, as
+   * ONE file: the durable record `nextly migrate` applies in non-dev/deploy
+   * flows, and one file is applied in exactly the order development runs it.
+   */
+  private dropMigrationFor(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
+  ): { migrationSQL: string; migrationFileName: string } {
+    // With the fields, so the collections' own many-to-many junctions go too.
+    // A single collection's file is the one its delete has always written.
+    const [only] = ordered;
+    return ordered.length === 1
+      ? this.collectionService.generateDropTableMigration(
+          only.slug,
+          only.collection.tableName,
+          only.collection.fields ?? []
+        )
+      : this.collectionService.generateDropTablesMigration(
+          ordered.map(({ slug, collection }) => ({
+            collectionName: slug,
+            tableName: collection.tableName,
+            fields: collection.fields ?? [],
+          }))
+        );
+  }
+
+  /**
+   * Withdraw the drop migration of a delete that failed. A file that cannot
+   * be removed is logged rather than thrown, so the delete's own failure is
+   * what the caller sees: left in place, the next `nextly migrate` would drop
+   * the tables of collections that are still registered.
+   */
+  private async withdrawDropMigration(
+    migrationFileName: string
+  ): Promise<void> {
+    try {
+      await this.fileManager.removeDropMigration(migrationFileName);
+    } catch (error) {
+      this.logger.error(
+        `A failed collection delete could not remove its drop migration ${migrationFileName}. Remove it before the next \`nextly migrate\`, which would otherwise drop tables of collections that are still registered: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * What a failed delete says. On PostgreSQL and SQLite the transaction undid
+   * everything, so a refusal raised inside it keeps its own words and anything
+   * else says nothing was removed. On MySQL a table drop commits as it runs, so
+   * the delete says what may already be gone and how to finish it.
+   */
+  private deleteFailed(
+    error: unknown,
+    ordered: ReadonlyArray<{ slug: string }>
+  ): NextlyError {
+    const partial = this.dialect === "mysql";
+    if (!partial && NextlyError.is(error)) return error;
+    const one = ordered.length === 1;
+    const subject = one ? "this collection" : "these collections";
+    return new NextlyError({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: partial
+        ? `Deleting ${subject} failed part-way. MySQL keeps each table drop as it runs, so some of what ${one ? "it" : "they"} stored, such as field-group values and translations, may already be removed. ${one ? "Delete it again to finish." : "Delete those still listed again to finish."}`
+        : `Deleting ${subject} failed, so nothing was removed.`,
+      logMessage: `Collection delete failed: ${error instanceof Error ? error.message : String(error)}`,
+      logContext: {
+        collections: ordered.map(({ slug }) => slug),
+        partial,
+      },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
+
+  /**
+   * Once the delete has committed: forget, in this process, what it removed
+   * (the registry row's caches, the translations table's readiness, which the
+   * teardown recorded against the transaction rather than this adapter), and
+   * remove the collection's permissions, a cleanup that warns rather than
+   * fails.
+   */
+  private async forgetDeleted(
+    slug: string,
+    collection: DeletedCollectionRow,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
+    await this.collectionService.forgetUnregisteredCollection(
+      slug,
+      unregistered
+    );
+    const [{ forgetCompanionReadiness }, { deleteResourcePermissions }] =
+      await Promise.all([
+        import("../../i18n/runtime/companion-readiness"),
+        import("./delete-resource-permissions"),
+      ]);
+    forgetCompanionReadiness(this.adapter, `${collection.tableName}_locales`);
+    await deleteResourcePermissions({
+      service: this.permissionSeedService,
+      slug,
+      kind: "collection",
+      logger: this.logger,
+    });
   }
 }

@@ -157,7 +157,7 @@ describe("check-access-rule-role-names", () => {
         "templates/t/src/collections/Posts.ts": collection,
         "templates/t/src/collections/access.ts": [
           "export default {",
-          '  update: ({ permissions }) => permissions.includes("posts:update"),',
+          '  update: ({ permissions }) => permissions.includes("update-posts"),',
           "};",
         ].join("\n"),
       })
@@ -234,7 +234,7 @@ describe("check-access-rule-role-names", () => {
           "  permissions,",
           "  collection,",
           "  operation,",
-          "}) => permissions.includes(`${collection}:${operation}`);",
+          "}) => permissions.includes(`${operation}-${collection}`);",
         ].join("\n"),
         "templates/t/src/collections/Posts.ts": [
           'import { hasPermission } from "../access/has-permission";',

@@ -99,9 +99,10 @@ async function snapshot(folder: string): Promise<Record<string, string>> {
 async function existingApp(): Promise<string> {
   const app = path.join(dir, "app");
   await mkdir(path.join(app, "src/app"), { recursive: true });
+  // A supported Next.js, so the run gets past the framework version check.
   await writeFile(
     path.join(app, "package.json"),
-    JSON.stringify({ dependencies: { next: "16.0.0" } })
+    JSON.stringify({ dependencies: { next: "16.4.2" } })
   );
   await writeFile(
     path.join(app, "src/app/page.tsx"),

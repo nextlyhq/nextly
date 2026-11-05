@@ -1,0 +1,34 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+"create-nextly-app": patch
+"nextly": patch
+---
+
+A log line now hides the value after a quoted name longer than 256 characters that holds spaces,
+quotes or other escapes, such as `"… access token":"…"` in a JSON body or in a body quoted inside a
+message.

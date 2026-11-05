@@ -21,8 +21,11 @@ import {
   isTokenName,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  MAX_TOKEN_LABEL_LENGTH,
   MAX_TOKEN_SELECTOR_LENGTH,
   renameSiteToken,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   tokenIdentity,
   tokenValueFetches,
   resolveTokenPrefix,
@@ -566,10 +569,83 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain(":root{--site-color-text:#111}");
   });
 
-  it("follows the operating system when the site asks for that instead", () => {
+  it("follows the device's dark preference unless the marker pins light", () => {
+    // Dark values have to work with no setup: a visitor whose device prefers
+    // dark sees them, and nothing on the page has to be scripted for that. The
+    // guard is what lets the marker override the device in the other
+    // direction, so a host (or the editor's preview) can pin light on a dark
+    // device.
     const { css } = emitTokenBlocks(
       {
-        darkMode: "media",
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toBe(
+      ":root{--site-color-text:#111}" +
+        `@media (prefers-color-scheme:dark){:root:not([${DARK_MODE_ATTRIBUTE}="light"]){--site-color-text:#eee}}` +
+        `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}` +
+        `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`
+    );
+  });
+
+  it("declares light values at a light marker, so one below the root pins light too", () => {
+    // `:root:not(...)` sees only a marker on `<html>`. A marker on `<body>` or
+    // a wrapper would still inherit the dark values from the root, so the
+    // light values are declared on the marked element itself, after the dark
+    // block, and only for the variables that have a dark value to undo.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+        ],
+      },
+      ":root"
+    );
+    const light = `[${DARK_MODE_ATTRIBUTE}="light"]{--site-color-text:#111}`;
+    expect(css).toContain(light);
+    expect(css.indexOf(light)).toBeGreaterThan(
+      css.indexOf(`[${DARK_MODE_ATTRIBUTE}="dark"]{`)
+    );
+  });
+
+  it("guards each scoped marker block against a nearer marker of the other mode", () => {
+    // Pinned exactly: the browser spec checks what these select under nested
+    // markers, and spells the same selectors out.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ".scope"
+    );
+    expect(css).toContain(
+      ':is(.scope)[data-nx-theme="dark"],[data-nx-theme="dark"] :is(.scope):not([data-nx-theme="light"],[data-nx-theme="dark"] [data-nx-theme="light"] *){--site-color-text:#eee}'
+    );
+    expect(css).toContain(
+      ':is(.scope)[data-nx-theme="light"],[data-nx-theme="light"] :is(.scope):not([data-nx-theme="dark"],[data-nx-theme="light"] [data-nx-theme="dark"] *){--site-color-text:#111}'
+    );
+  });
+
+  it("writes a scoped light block for a light marker at or above the scope", () => {
+    const { css } = emitTokenBlocks(
+      {
         tokens: [
           {
             name: "color.text",
@@ -580,8 +656,49 @@ describe("emitTokenBlocks", () => {
       },
       SCOPE
     );
-    expect(css).toContain("@media (prefers-color-scheme:dark)");
-    expect(css).not.toContain(DARK_MODE_ATTRIBUTE);
+    expect(
+      css.endsWith(
+        `:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] :is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="dark"],[${DARK_MODE_ATTRIBUTE}="light"] [${DARK_MODE_ATTRIBUTE}="dark"] *){--site-color-text:#111}`
+      )
+    ).toBe(true);
+  });
+
+  it("guards a scoped selector's media block against a light marker at or above it", () => {
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain(
+      `@media (prefers-color-scheme:dark){:is(${SCOPE}):not([${DARK_MODE_ATTRIBUTE}="light"],[${DARK_MODE_ATTRIBUTE}="light"] *){--site-color-text:#eee}}`
+    );
+  });
+
+  it("writes the same sheet whichever deprecated darkMode a set still names", () => {
+    // `darkMode` once chose ONE of the two forms, and the default chose the one
+    // nothing set, so a default site never showed its dark values. Both forms
+    // are now always written; a stored strategy is accepted and changes nothing.
+    const tokens: SiteToken[] = [
+      {
+        name: "color.text",
+        kind: "color",
+        values: { light: "#111", dark: "#eee" },
+      },
+    ];
+    const plain = emitTokenBlocks({ tokens }, ":root").css;
+    expect(emitTokenBlocks({ tokens, darkMode: "media" }, ":root").css).toBe(
+      plain
+    );
+    expect(
+      emitTokenBlocks({ tokens, darkMode: "attribute" }, ":root").css
+    ).toBe(plain);
   });
 
   it("writes no dark block when nothing differs in dark", () => {
@@ -696,6 +813,71 @@ describe("font faces", () => {
 
   it("refuses a face with no file at all", () => {
     expect(validateFontFace({ family: "B", src: [] }, "f")).toHaveLength(1);
+  });
+
+  describe("where a face came from", () => {
+    const google = {
+      kind: "google" as const,
+      id: "inter",
+      licence: "OFL-1.1",
+      category: "sans-serif",
+    };
+
+    it("accepts a face saying it came from Google Fonts or an upload", () => {
+      expect(
+        validateFontFace({ family: "Inter", src: [local], source: google }, "f")
+      ).toEqual([]);
+      expect(
+        validateFontFace(
+          { family: "Brand", src: [local], source: { kind: "upload" } },
+          "f"
+        )
+      ).toEqual([]);
+    });
+
+    it("emits the same rule with or without it, since a page has no use for it", () => {
+      const bare = emitFontFaces([{ family: "Inter", src: [local] }]).css;
+      const sourced = emitFontFaces([
+        { family: "Inter", src: [local], source: google },
+      ]).css;
+      expect(sourced).toBe(bare);
+      expect(sourced).not.toContain("inter");
+    });
+
+    it("refuses a source of a kind it does not know", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "elsewhere" as "google" },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.message).toContain("where it came from");
+    });
+
+    it("refuses a source whose words are longer than any real one", () => {
+      const issues = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", licence: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(issues).toHaveLength(1);
+      // The script name is held to the same bound as the other words.
+      const script = validateFontFace(
+        {
+          family: "Inter",
+          src: [local],
+          source: { kind: "google", subset: "x".repeat(200) },
+        },
+        "fonts[0]"
+      );
+      expect(script).toHaveLength(1);
+    });
   });
 });
 
@@ -1265,5 +1447,134 @@ describe("the selector token blocks are written under", () => {
     const { css, issues } = emitTokenBlocks(oneToken, atBound);
     expect(issues).toEqual([]);
     expect(css).toContain(atBound);
+  });
+});
+
+describe("a variable's plain label", () => {
+  it("shows the label an author gave it", () => {
+    expect(
+      tokenDisplayLabel({ name: "color.primary", label: "Brand blue" })
+    ).toBe("Brand blue");
+  });
+
+  it("derives one from the code name when none was given", () => {
+    // Existing sites store no label, so every token has to read in plain
+    // words without a migration. The leading group word is what the panel's
+    // grouping already says, so it is dropped where something follows it.
+    expect(tokenDisplayLabel({ name: "color.brand" })).toBe("Brand");
+    expect(tokenDisplayLabel({ name: "color.border-strong" })).toBe(
+      "Border strong"
+    );
+    expect(tokenDisplayLabel({ name: "font-size.heading-1" })).toBe(
+      "Heading 1"
+    );
+    // A bare number says nothing on its own, so the group word stays.
+    expect(tokenDisplayLabel({ name: "space.4" })).toBe("Space 4");
+    // A first word that is not a group word is part of the name.
+    expect(tokenDisplayLabel({ name: "content.width" })).toBe("Content width");
+    expect(tokenDisplayLabel({ name: "brand" })).toBe("Brand");
+  });
+
+  it("falls back to the derived label when the stored one is blank", () => {
+    expect(tokenDisplayLabel({ name: "color.brand", label: "  " })).toBe(
+      "Brand"
+    );
+  });
+
+  it("accepts plain words and refuses what cannot be shown as one line", () => {
+    expect(tokenLabelIssue("Heading 1")).toBeUndefined();
+    expect(tokenLabelIssue("Café crème")).toBeUndefined();
+    expect(tokenLabelIssue(undefined)).toBeUndefined();
+    expect(tokenLabelIssue(42)).toMatch(/text/);
+    expect(tokenLabelIssue("   ")).toMatch(/empty/);
+    expect(tokenLabelIssue("a\nb")).toMatch(/one line/);
+    expect(tokenLabelIssue("x".repeat(MAX_TOKEN_LABEL_LENGTH))).toBeUndefined();
+    expect(tokenLabelIssue("x".repeat(MAX_TOKEN_LABEL_LENGTH + 1))).toMatch(
+      new RegExp(String(MAX_TOKEN_LABEL_LENGTH))
+    );
+  });
+
+  it("never reaches the stylesheet", () => {
+    // A label is for people. The custom property stays the identity's, so a
+    // label carrying CSS-looking text changes nothing on the page.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.brand",
+            label: "Brand}body{color:red",
+            kind: "color",
+            values: { light: "#123456" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toBe(":root{--site-color-brand:#123456}");
+  });
+});
+
+describe("the default spacing", () => {
+  /**
+   * A length as a browser would resolve it at one viewport width, for the
+   * `rem`/`vw`/`clamp()` forms the spacing defaults are written in.
+   */
+  function pixelsAt(value: string, viewport: number): number {
+    const length = (text: string): number =>
+      text
+        .split("+")
+        .map(term => term.trim())
+        .reduce((sum, term) => {
+          const amount = Number.parseFloat(term);
+          if (term.endsWith("rem")) return sum + amount * 16;
+          if (term.endsWith("vw")) return sum + (amount * viewport) / 100;
+          if (term.endsWith("px")) return sum + amount;
+          throw new Error(`unreadable term ${term}`);
+        }, 0);
+    const clamp = /^clamp\((.+), (.+), (.+)\)$/.exec(value);
+    if (clamp === null) return length(value);
+    const [min, preferred, max] = clamp.slice(1).map(length);
+    return Math.min(Math.max(preferred, min), max);
+  }
+
+  function valueOf(name: string): string {
+    const token = defaultSiteTokens().find(entry => entry.name === name);
+    if (token === undefined) throw new Error(`no default token ${name}`);
+    return token.values.light ?? "";
+  }
+
+  const widths = [375, 768, 1280] as const;
+
+  it.each([
+    ["space.stack", [16, 18, 20]],
+    ["space.section-y", [48, 63, 80]],
+    ["space.gutter", [16, 31, 32]],
+    ["space.columns", [16, 23, 32]],
+    ["space.card", [16, 20, 24]],
+  ] as const)("resolves %s to %j px at 375, 768 and 1280", (name, px) => {
+    expect(
+      widths.map(width => Math.round(pixelsAt(valueOf(name), width)))
+    ).toEqual(px);
+  });
+
+  it("pads a button 12 by 20 at every width", () => {
+    expect(pixelsAt(valueOf("button.padding-y"), 375)).toBe(12);
+    expect(pixelsAt(valueOf("button.padding-x"), 1280)).toBe(20);
+  });
+
+  it("spaces paragraphs by their own size", () => {
+    expect(valueOf("space.paragraph")).toBe("1em");
+  });
+
+  it("emits every spacing token as a custom property the blocks can read", () => {
+    const { css, issues } = emitTokenBlocks(
+      { tokens: defaultSiteTokens() },
+      ":root"
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain(
+      "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
+    );
+    expect(css).toContain("--site-button-padding-x:1.25rem");
   });
 });

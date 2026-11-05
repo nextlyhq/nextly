@@ -30,6 +30,10 @@ import type {
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import {
+  DOCUMENT_VERSION_KEY,
+  type StaleVersion,
+} from "@admin/lib/document-version";
 
 // The diff wire types live in core (the engine produces them); re-exported here
 // so admin components import them from the same place as the other version types.
@@ -114,8 +118,11 @@ export type VersionDetail = VersionMeta & {
   snapshot: unknown;
   /**
    * What the read rules held back from this reader: top-level field names, and
-   * dotted paths below them (`banner.secret`). A field named here was withheld,
-   * not absent from the version.
+   * dotted paths below them (`banner.secret`), a list row named by its index in
+   * this version (`items.1.secret`). A field named here was withheld, not absent
+   * from the version.
+   *
+   * @experimental
    */
   withheld: string[];
 };
@@ -208,12 +215,29 @@ export interface AutosaveDetail {
   snapshot: unknown;
   updatedAt: string;
   locale: string | null;
+  /**
+   * Whether the document has been written since this recovery point began,
+   * and by whom, as the server keeps it: `by-you` (this author's own later
+   * save or publish), `by-another` (anyone else, or a write that names no
+   * one), or `unknown` (a point recorded before this was kept). Absent while
+   * the document is as it was when the point began.
+   */
+  superseded?: "by-you" | "by-another" | "unknown";
+  /**
+   * What changed in the document since the version the point's edits began
+   * from, as a refused save says it; absent while nothing it covers did.
+   */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version, before versions. */
+  startingVersionUnknown?: boolean;
 }
 
 /** What a restore reports back. */
 export interface RestoreVersionResponse {
   message: string;
   restoredFrom: number;
+  /** The document's version after the restore. */
+  _rev?: string;
   /**
    * Snapshot keys the current schema no longer accepts. A restore with a
    * non-empty list succeeded but did not bring the document back in full.
@@ -299,11 +323,16 @@ export const versionApi = {
    */
   restore: (
     scope: VersionScope,
-    versionNo: number
+    versionNo: number,
+    /**
+     * The version of the document the restore writes over, as the editor
+     * holds it: a restore is refused when the document changed since.
+     */
+    version?: string
   ): Promise<RestoreVersionResponse> =>
     protectedApi.post<RestoreVersionResponse>(
       `${basePath(scope)}/${versionNo}/restore`,
-      {}
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
     ),
 
   /**
@@ -354,10 +383,16 @@ export const versionApi = {
    */
   discardWorkingDraft: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version the editor's copy started from. A discard moves the
+     * document's version, and is refused when the document changed since.
+     */
+    version?: string
   ): Promise<DiscardWorkingDraftResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
+    if (version) search.set(DOCUMENT_VERSION_KEY, version);
     const query = search.toString();
 
     return protectedApi.delete<DiscardWorkingDraftResponse>(
@@ -373,7 +408,12 @@ export const versionApi = {
    */
   takeLiveSharedValues: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version of the pending change's language the editor holds: a take
+     * is refused when the document changed since.
+     */
+    version?: string
   ): Promise<TakeLiveSharedValuesResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
@@ -381,7 +421,7 @@ export const versionApi = {
 
     return protectedApi.post<TakeLiveSharedValuesResponse>(
       `${basePath(scope)}/working-draft/take-live${query ? `?${query}` : ""}`,
-      {}
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
     );
   },
 

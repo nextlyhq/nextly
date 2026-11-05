@@ -25,8 +25,9 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
+import { isApiError } from "@admin/lib/api/parseApiError";
 import {
   populatedAmongStored,
   withStoredReferences,
@@ -133,13 +134,36 @@ interface Merge<T> {
   stored: Doc;
   fields: FieldConfig[];
   document: T;
+  /** When the older of the two reads was made. */
+  readAt: number;
+}
+
+/**
+ * When the document an editor shows was read, and how to read it again.
+ *
+ * `readAt` moves only when reads made since reach the document, including reads
+ * that found it unchanged; it is undefined while there is no document.
+ * `failed` is true while the last read of the document on screen failed.
+ * `reload` reads both again, replacing any read already on its way, and
+ * rejects when either fails.
+ */
+export interface DocumentLatest {
+  readAt: number | undefined;
+  failed: boolean;
+  reload: () => Promise<unknown>;
 }
 
 export interface StoredReferencesResult<T> {
   /** The populated document with every stored link kept. */
   document: T | undefined;
   isLoading: boolean;
+  /**
+   * Why there is no document to edit. A failed read of a document already on
+   * screen is not one, unless it was refused or the document is gone: that
+   * document stays, and `latest.failed` says so.
+   */
   error: Error | null;
+  latest: DocumentLatest;
 }
 
 /** The two reads, when both are in hand and nothing is about to replace either. */
@@ -215,14 +239,21 @@ function useReconcileRetries(
   };
 }
 
-/** The error the editor shows, if any, for these reads. */
+/**
+ * The error the editor shows, if any, for these reads. One that ends the
+ * document comes first, from either read: a read out of reach says nothing
+ * about whether the other was refused.
+ */
 function readError(
   populated: UseQueryResult<unknown, Error>,
   stored: UseQueryResult<unknown, Error>,
   gaveUp: boolean
 ): Error | null {
-  if (populated.error) return populated.error;
-  if (stored.error) return stored.error;
+  const failed = [populated.error, stored.error].filter(
+    (error): error is Error => error !== null
+  );
+  const first = failed.find(endsDocument) ?? failed[0];
+  if (first !== undefined) return first;
   // Still apart after every retry: the document keeps changing under the
   // editor. Saying so beats a form merged from two versions, and beats the
   // previous merge, which a save would write back over the newer document.
@@ -231,6 +262,69 @@ function readError(
         "This document kept changing while it loaded. Reload the page to edit it."
       )
     : null;
+}
+
+/**
+ * Whether a failed read ends the document's place on screen: refused, as after
+ * the editor's access to it is taken away, or gone. Kept, a copy the editor may
+ * no longer read stays in front of them, and a deleted one offers a retry that
+ * cannot succeed. Any other failure, such as the server being out of reach,
+ * leaves the copy on screen, held read-only.
+ */
+function endsDocument(failure: Error | null): boolean {
+  return (
+    isApiError(failure) && (failure.status === 403 || failure.status === 404)
+  );
+}
+
+/**
+ * Keep the merge of a pair of reads that agree, made at `readAt`, and say
+ * whether it is a new one.
+ *
+ * A cached merge for exactly these inputs is reused, so the document keeps its
+ * identity across renders and the form is not reset by a re-render. Reads that
+ * found the document unchanged keep it too, but still say when it was read.
+ */
+function rememberMerge<T extends Doc>(
+  last: { current: Merge<T> | null },
+  pair: SettledPair<T>,
+  scope: string,
+  readAt: number
+): boolean {
+  const kept = last.current;
+  if (kept !== null && isMergeOf(kept, pair, scope)) {
+    kept.readAt = readAt;
+    return false;
+  }
+  last.current = {
+    scope,
+    ...pair,
+    document: withStoredReferences(pair.fields, pair.populated, pair.stored),
+    readAt,
+  };
+  return true;
+}
+
+/**
+ * The merge the editor is handed, if any.
+ *
+ * Reads still apart after every retry drop it, since a save from it would
+ * write it back over the newer document; but not when a read failed. They are
+ * apart then because one could not be made. A read that fails after the
+ * document is on screen leaves the editor in place, edits and all, for the
+ * lock surface to hold read-only; only one that ends the document replaces the
+ * editor with the error.
+ */
+function documentOnScreen<T>(
+  merge: Merge<T> | null,
+  scope: string,
+  reads: { spent: boolean; readFailed: boolean; failure: Error | null }
+): T | undefined {
+  const dropped = reads.spent && !reads.readFailed;
+  if (dropped || merge?.scope !== scope || endsDocument(reads.failure)) {
+    return undefined;
+  }
+  return merge.document;
 }
 
 /**
@@ -277,21 +371,34 @@ export function useWithStoredReferences<T extends Doc>({
     populated.refetch,
     stored.refetch
   );
-  // A cached merge for exactly these inputs is reused, so the document keeps
-  // its identity across renders and the form is not reset by a re-render.
-  if (agree && !isMergeOf(last.current, pair, scope)) {
-    last.current = {
-      scope,
-      ...pair,
-      document: withStoredReferences(pair.fields, pair.populated, pair.stored),
-    };
-    retries.reset();
-  }
+  const readAt = Math.min(populated.dataUpdatedAt, stored.dataUpdatedAt);
+  if (agree && rememberMerge(last, pair, scope, readAt)) retries.reset();
 
-  const document =
-    !retries.spent && last.current?.scope === scope
-      ? last.current.document
-      : undefined;
-  const error = readError(populated, stored, retries.spent);
-  return { document, isLoading: document === undefined && !error, error };
+  const failure = readError(populated, stored, retries.spent);
+  const document = documentOnScreen(last.current, scope, {
+    spent: retries.spent,
+    readFailed: populated.error !== null || stored.error !== null,
+    failure,
+  });
+  const error = document === undefined ? failure : null;
+  const { refetch: refetchPopulated } = populated;
+  const { refetch: refetchStored } = stored;
+  const reload = useCallback(
+    () =>
+      Promise.all([
+        refetchPopulated({ cancelRefetch: true, throwOnError: true }),
+        refetchStored({ cancelRefetch: true, throwOnError: true }),
+      ]),
+    [refetchPopulated, refetchStored]
+  );
+  return {
+    document,
+    isLoading: document === undefined && !error,
+    error,
+    latest: {
+      readAt: document === undefined ? undefined : last.current?.readAt,
+      failed: document !== undefined && failure !== null,
+      reload,
+    },
+  };
 }

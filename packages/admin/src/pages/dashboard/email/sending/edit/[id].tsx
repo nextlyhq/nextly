@@ -37,6 +37,7 @@ import {
   useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
@@ -494,6 +495,8 @@ export default function EditEmailProviderPage(): JSX.Element {
     error,
     refetch,
   } = useEmailProvider(providerId ?? undefined);
+  // The tab names the provider being edited once it has arrived.
+  useDocumentTitle(provider?.name);
 
   if (!providerId) return <InvalidProviderId />;
   if (isLoading) return <ProviderLoading />;

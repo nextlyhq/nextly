@@ -10,9 +10,16 @@
  * it lists nothing. The adapter here is a stand-in whose registry read fails.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { PermissionSeedService } from "../permission-seed-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 /** A seed service whose every registry read fails with `failure`. */
 function seedServiceReading(failure: Error): PermissionSeedService {

@@ -18,6 +18,8 @@
 
 import type { JSX } from "react";
 
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+
 import type { BuilderField } from "../types";
 
 const STORAGE_KEY = "builder.showSystemInternals";
@@ -47,7 +49,7 @@ export function SystemFieldsRow({
     <div className="space-y-1">
       {/* PR G: label sits OUTSIDE the box per feedback 2. */}
       <div className="text-xs uppercase tracking-wider text-muted-foreground">
-        System Fields
+        System fields
       </div>
 
       {/* PR G: dashed bordered box containing all 5 chips + alert-style
@@ -76,6 +78,9 @@ export function SystemFieldsRow({
 }
 
 function SystemChip({ name, type }: { name: string; type: string }) {
+  // The chip names the type by its plain name, as the picker does; the
+  // internal names (no type) show the name alone.
+  const typeLabel = useFieldTypeLabel()(type);
   return (
     <div
       data-row-id={`system-${name}`}
@@ -84,7 +89,7 @@ function SystemChip({ name, type }: { name: string; type: string }) {
       className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-dashed border-border bg-muted/30 text-xs text-muted-foreground cursor-default"
     >
       <span className="font-medium">{name}</span>
-      {type && <span className="opacity-60">{type}</span>}
+      {type && <span className="opacity-60">{typeLabel}</span>}
     </div>
   );
 }

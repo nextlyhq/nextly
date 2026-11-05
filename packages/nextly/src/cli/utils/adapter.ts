@@ -8,11 +8,17 @@
  * @since 1.0.0
  */
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   activePostgresSchema,
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { reportDryRun } from "../dry-run";
+import { announceMode } from "../environment";
+import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
 
@@ -61,6 +67,11 @@ export interface DatabaseEnvValidation {
   valid: boolean;
   /** Error messages if invalid */
   errors: string[];
+  /**
+   * The first thing to fix, when invalid: what the CLI's error code is chosen by, so the code
+   * never depends on the wording of `errors`.
+   */
+  problem?: "url-missing" | "dialect-undetected" | "dialect-invalid";
   /** Detected dialect */
   dialect?: SupportedDialect;
   /** Database URL */
@@ -89,12 +100,17 @@ export function detectDialectFromUrl(
  * @returns Validation result with errors if any
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
+  // Every command that reaches a database checks its settings here first, so
+  // this is where the run names its mode and where its URL came from.
+  announceMode();
   const errors: string[] = [];
+  let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
   const dialectEnv = process.env.DB_DIALECT as SupportedDialect | undefined;
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL environment variable is required");
+    problem = "url-missing";
   }
 
   let dialect: SupportedDialect | undefined = dialectEnv;
@@ -106,15 +122,18 @@ export function validateDatabaseEnv(): DatabaseEnvValidation {
     errors.push(
       "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
     );
+    problem ??= "dialect-undetected";
   } else if (!["postgresql", "mysql", "sqlite"].includes(dialect)) {
     errors.push(
       `Invalid DB_DIALECT: ${dialect}. Must be one of: postgresql, mysql, sqlite`
     );
+    problem ??= "dialect-invalid";
   }
 
   return {
     valid: errors.length === 0,
     errors,
+    problem,
     dialect: errors.length === 0 ? dialect : undefined,
     databaseUrl: errors.length === 0 ? databaseUrl : undefined,
   };
@@ -158,53 +177,166 @@ export interface CLIDatabaseAdapter {
 export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
-  const { logger } = options;
+  const opened = await connectCliAdapter(options, false);
+  // Only a read-only open reports a missing database; this one creates it.
+  if ("missing" in opened) {
+    throw connectionFailure(options.dialect ?? "sqlite", opened.missing);
+  }
+  return opened;
+}
 
+/** What a read-only open finds where the database it names is not there. */
+export interface MissingDatabase {
+  /** The sentence a dry run reports as the real run's refusal. */
+  missing: string;
+}
+
+/**
+ * Opens the database a dry run reads, changing nothing: SQLite's file is
+ * opened read-only and neither it nor its folder is made, PostgreSQL's schema
+ * is looked for and not created, and MySQL creates nothing on connect anyway.
+ * A database that is not there comes back as `missing` instead of being made.
+ */
+export function openDryRunAdapter(
+  options: CreateCliAdapterOptions = {}
+): Promise<CLIDatabaseAdapter | MissingDatabase> {
+  return connectCliAdapter(options, true);
+}
+
+/**
+ * The database a command opens: as `createCliAdapter` opens it for a real run,
+ * read-only for a dry run. A dry run whose database is not there reports that
+ * as the real run's refusal and answers undefined, and the command then ends
+ * with exit 0 having made nothing.
+ */
+export async function openCommandAdapter(
+  options: CreateCliAdapterOptions & { dryRun?: boolean },
+  logger: Logger
+): Promise<CLIDatabaseAdapter | undefined> {
+  if (options.dryRun !== true) return createCliAdapter(options);
+  const opened = await openDryRunAdapter(options);
+  if (!("missing" in opened)) return opened;
+  reportDryRun(logger, { changes: [], refusals: [opened.missing] });
+  return undefined;
+}
+
+/** PostgreSQL's code for a schema that does not exist. */
+const INVALID_SCHEMA_NAME = "3F000";
+
+/** The one connect behind `createCliAdapter` and `openDryRunAdapter`. */
+async function connectCliAdapter(
+  options: CreateCliAdapterOptions,
+  readOnly: boolean
+): Promise<CLIDatabaseAdapter | MissingDatabase> {
+  // A command may connect without the settings check first, as
+  // `plugins install` does; it names its mode here instead (once a run).
+  announceMode();
+  const { dialect, databaseUrl } = cliTarget(options);
+  options.logger?.debug(`Creating ${dialect} adapter...`);
+  const missing = readOnly
+    ? missingSqliteFile(dialect, databaseUrl)
+    : undefined;
+  if (missing) return missing;
+  return createUnderEnv(options, readOnly, dialect, databaseUrl);
+}
+
+/**
+ * The dialect and URL a command connects with: given, or read from the
+ * environment, the dialect detected from the URL when not given. Refused with
+ * the errors the environment check gives, so a command that connects without
+ * checking first still ends with the code for what is missing.
+ */
+function cliTarget(options: CreateCliAdapterOptions): {
+  dialect: SupportedDialect;
+  databaseUrl: string;
+} {
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL;
-  let dialect = options.dialect;
-
-  if (!dialect && databaseUrl) {
-    dialect = detectDialectFromUrl(databaseUrl);
-  }
-  if (!dialect) {
-    dialect = process.env.DB_DIALECT as SupportedDialect | undefined;
-  }
-
+  const dialect =
+    options.dialect ??
+    (databaseUrl ? detectDialectFromUrl(databaseUrl) : undefined) ??
+    (process.env.DB_DIALECT as SupportedDialect | undefined);
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "url-missing",
+    });
   }
   if (!dialect) {
-    throw new Error(
-      "Could not detect database dialect. Set DB_DIALECT environment variable."
-    );
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "dialect-undetected",
+    });
   }
+  return { dialect, databaseUrl };
+}
 
-  logger?.debug(`Creating ${dialect} adapter...`);
+/**
+ * The file the SQLite adapter would open, by its own rule, when it is not
+ * there: a read-only open must not make it. Undefined for any other dialect,
+ * an in-memory database, or a file that exists.
+ */
+function missingSqliteFile(
+  dialect: SupportedDialect,
+  databaseUrl: string
+): MissingDatabase | undefined {
+  if (dialect !== "sqlite") return undefined;
+  const file = databaseUrl.replace(/^file:/, "");
+  if (file === ":memory:" || existsSync(resolve(file))) return undefined;
+  return { missing: `The database does not exist: ${file}.` };
+}
 
+/**
+ * Creates the adapter with the dialect and URL set in the environment the
+ * factory reads, put back afterwards, and the static system tables resolvable
+ * on it. A read-only open whose PostgreSQL schema is not there answers
+ * `missing`; any other failure ends with the one code every command that
+ * opens a database ends with.
+ */
+async function createUnderEnv(
+  options: CreateCliAdapterOptions,
+  readOnly: boolean,
+  dialect: SupportedDialect,
+  databaseUrl: string
+): Promise<CLIDatabaseAdapter | MissingDatabase> {
   const { createAdapterFromEnv } = await import("../../database/factory");
-
   const originalDialect = process.env.DB_DIALECT;
   const originalUrl = process.env.DATABASE_URL;
-
+  // The CONFIGURED schema, not the default. `migrate` applying DDL through
+  // `public` while the application it is migrating runs in `cms` splits the
+  // lock and the ledger and leaves the tables where nothing reads them.
+  const schema = options.schema ?? activePostgresSchema();
   try {
     process.env.DB_DIALECT = dialect;
     process.env.DATABASE_URL = databaseUrl;
-
-    // The CONFIGURED schema, not the default. `migrate` applying DDL through
-    // `public` while the application it is migrating runs in `cms` splits the
-    // lock and the ledger and leaves the tables where nothing reads them.
-    const schema = options.schema ?? activePostgresSchema();
-    const adapter = await createAdapterFromEnv(
-      schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
-    );
+    const adapter = await createAdapterFromEnv({
+      ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
+      ...(readOnly ? { readOnly: true } : {}),
+    });
+    // The static system tables, resolvable by name from the moment the adapter exists. The
+    // adapter writes only to a table its resolver holds, and several commands install no resolver
+    // of their own before they write one: the schema lock seeds its field-group row through a
+    // transaction insert, inside `migrate:resolve`, `migrate:baseline`, `migrate:down`, `upgrade`
+    // and plugin install and uninstall. A command that installs its own resolver replaces this one.
+    // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
+    const { installRegistryResolver } = await import("./registry-resolver");
+    installRegistryResolver(adapter);
     return adapter;
+  } catch (error) {
+    if (
+      readOnly &&
+      (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
+    ) {
+      return {
+        missing: `The database does not exist: PostgreSQL has no schema "${schema}".`,
+      };
+    }
+    // Read here, once, so every command that opens a database ends with the same code for it.
+    throw connectionFailure(dialect, error);
   } finally {
-    if (originalDialect !== undefined) {
-      process.env.DB_DIALECT = originalDialect;
-    }
-    if (originalUrl !== undefined) {
-      process.env.DATABASE_URL = originalUrl;
-    }
+    if (originalDialect !== undefined) process.env.DB_DIALECT = originalDialect;
+    if (originalUrl !== undefined) process.env.DATABASE_URL = originalUrl;
   }
 }
 

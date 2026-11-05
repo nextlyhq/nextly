@@ -28,7 +28,6 @@ import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
 import type { PluginRoute } from "./routes/route-types";
-import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
 /**
  * @public A plugin-declared custom permission. CRUD permissions are
@@ -69,7 +68,10 @@ export interface PluginPermission {
  * grant). Reference permissions by their `${action}-${resource}` slug.
  */
 export interface PluginRole {
-  /** Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` is reserved. */
+  /**
+   * Unique role slug (e.g. `'content-reviewer'`). `'super-admin'` and
+   * `'public'` are reserved for the built-in roles.
+   */
   slug: string;
   /** Human-readable name (e.g. `'Content Reviewer'`). */
   name: string;
@@ -249,9 +251,10 @@ export interface PluginFieldType {
    * Runs after the built-in rules for the storage primitive and BEFORE the
    * field's own `validate`, so a schema author's rule composes on top of this
    * one rather than replacing it. An absent or empty value never reaches here
-   * — that is what `required` is for — and neither does one the storage
-   * primitive already refused, so a validator never has to re-check that it
-   * was handed the shape its type stores.
+   * — that is what `required` is for — unless the type sets `validateEmpty`;
+   * and neither does one the storage primitive already refused, so a
+   * validator never has to re-check that it was handed the shape its type
+   * stores.
    *
    * Return `true` to accept. Return a string for a single problem, or an array
    * when one value can be wrong in several places at once (a structured
@@ -269,6 +272,18 @@ export interface PluginFieldType {
     value: unknown,
     args: PluginFieldValidateArgs
   ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+  /**
+   * @experimental Run `validate` for an EMPTY value too: a write that sets the
+   * field to `null` or an empty string, which otherwise never reaches it.
+   *
+   * For a type whose stored content a write must not be able to drop without
+   * being asked, such as a page whose blocks an author locked. Judged where
+   * every other rule is, on the data the write's `before*` hooks have left, so
+   * a hook emptying the field is judged as the caller emptying it would be.
+   * The validator then receives the empty value and decides what it means;
+   * required-ness is still reported as before.
+   */
+  validateEmpty?: boolean;
   /**
    * Checks on the field's own DECLARATION, run when a schema is registered
    * rather than when a value is written.
@@ -498,6 +513,14 @@ export interface PluginFieldWrite {
    */
   readonly id?: string;
   /**
+   * The language this write is judged in, for a document whose content is
+   * stored per language. Absent for a document that is not, and where the
+   * write is in the app's default language. A validator reading what this
+   * document already stores passes it on as {@link PluginStoredValueTarget}'s
+   * `locale`, so it compares the value with the same language's stored value.
+   */
+  readonly locale?: string;
+  /**
    * Whether the write runs inside a transaction — a batch, an import, or a
    * caller's own. `readStored` sees what it has written; a read on any other
    * connection does not, and can wait on the connection the transaction holds.
@@ -513,24 +536,56 @@ export interface PluginFieldWrite {
    *
    * Scoped to fields of the validator's own type, and refused otherwise: a
    * type may read the values of its own kind wherever they are stored, and
-   * nothing else. Only top-level fields of a collection are readable.
+   * nothing else. A top-level field of a collection or a single is
+   * readable, and so is one inside named groups, named by its path
+   * (`hero.body`). A field in a repeater's rows, in a field-group instance or
+   * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
 }
 
-/** @experimental Which stored value {@link PluginFieldWrite.readStored} reads. */
-export interface PluginStoredValueTarget {
-  /** The collection's slug. */
-  readonly collection: string;
-  /** The entry's id. */
-  readonly id: string;
-  /** A top-level field of the validator's own type. */
+/**
+ * @experimental Which stored value {@link PluginFieldWrite.readStored} reads:
+ * one field of a collection's entry, or of a single.
+ */
+export type PluginStoredValueTarget =
+  | PluginStoredEntryTarget
+  | PluginStoredSingleTarget;
+
+/** @experimental What a stored read names in either kind of document. */
+interface PluginStoredFieldTarget {
+  /**
+   * A field of the validator's own type: its name at top level, or its path
+   * through named groups (`hero.body`).
+   */
   readonly field: string;
   /**
    * `published` reads the live row. `draft` reads what an editor's preview
    * reads: the pending working draft where one is shown, else the live row.
    */
   readonly form: "published" | "draft";
+  /**
+   * The language to read, for a field stored per language. Absent: the
+   * language the write is judged in (`PluginFieldWrite.locale`), which is the
+   * app's default language for a write in it. A language that stores no value for the field reads as
+   * absent, never as another language's value. A field not stored per
+   * language has one value, which every language reads.
+   */
+  readonly locale?: string;
+}
+
+/** @experimental A field of one entry of a collection. */
+export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entry's id. */
+  readonly id: string;
+}
+
+/** @experimental A field of a single, which has one document and no id. */
+export interface PluginStoredSingleTarget extends PluginStoredFieldTarget {
+  /** The single's slug. */
+  readonly single: string;
 }
 
 /**
@@ -679,6 +734,19 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   /** @experimental Role bundles — named sets of permissions, seeded on boot. */
   roles?: PluginRole[];
   /**
+   * @experimental Permissions the Public role, the role every visitor is
+   * judged by, is granted on this plugin's own collections.
+   *
+   * Each is granted once, at the first boot that sees it, and recorded, so an
+   * owner who takes it away keeps it away. `collection` is the slug as this
+   * plugin declares it in `collections`; a host's rename is followed. A grant
+   * on a collection this plugin does not contribute is refused and logged.
+   *
+   * @example `[{ collection: "form-submissions", action: "create" }]`, so a
+   * visitor may submit a form.
+   */
+  publicGrants?: Array<{ collection: string; action: "read" | "create" }>;
+  /**
    * @experimental Background job types this plugin can run.
    *
    * Each entry is a `defineJob(...)` result. Registered with the runtime job
@@ -749,47 +817,20 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    */
   routes?: PluginRoute[];
   /**
-   * @experimental Dashboard-widget DATA SOURCES: a queryable source this plugin
-   * publishes, paired with the server-side function that answers it.
-   *
-   * Server-side, and therefore not under `admin`: a source is answered in the
-   * Nextly process against the caller's identity, while `admin.widgets` is
-   * about what the dashboard DRAWS. A plugin can contribute either without the
-   * other — a card over `collection:orders` needs no source, and a source is
-   * useful to any card that names it.
-   *
-   * Each entry declares the source's queryable fields and supported ops up
-   * front, so a query is validated against them before the resolver is ever
-   * called. The resolver receives `(query, caller, ctx)` -- its own plugin's
-   * context, which is how it reads data at all.
-   *
-   * 🔴 That validation checks field names, operators and operand SHAPES. It
-   * does not constrain operand VALUES: `where: { total: { equals: "http://..." } }`
-   * is a legal query, and a caller who may place a widget chooses those bytes.
-   * A resolver must never use a value out of `query` as an outbound URL, a
-   * path, or a table or column name without validating it against a closed set
-   * of its own.
-   *
-   * The host cannot prove a resolver consults `caller` — it hands the caller
-   * over and the plugin decides. That is the trust boundary this plugin's
-   * `init()`, hooks and services already cross, not a new one.
-   */
-  widgetSources?: PluginWidgetSource[];
-  /**
-   * @public Admin UI contributions: menu, pages + settings, per-collection view
-   * overrides and dashboard widgets. `widgets` is drawn by `WidgetGrid` and
-   * permission-gated; it stays `@experimental` and graduates per D55, which is
-   * a statement about the CONTRACT settling rather than about the card being
-   * drawn. `PluginAdminContributions` documents each.
+   * @public Admin UI contributions: menu, pages + settings and per-collection
+   * view overrides. Dashboard widgets are declared under `dashboard`, not
+   * here. `PluginAdminContributions` documents each.
    */
   admin?: PluginAdminContributions;
   /**
    * @experimental The plugin's dashboard: widgets declared with
    * `defineWidget()`, which core checks at startup with every other
    * declaration, keeps on the server with their data code, and publishes to
-   * the admin as data. `suggest` and `alternatives` ask for places on the
-   * default dashboard; core and the site config decide. Beside today's
-   * `admin.widgets` and `widgetSources`, which keep working.
+   * the admin as data. The add panel offers its widgets, none is placed on a
+   * dashboard on its own, and `alternatives` offers one in a built-in's
+   * place, which the site config decides. The one way a plugin adds a widget:
+   * startup refuses a plugin that still carries `admin.widgets` or
+   * `widgetSources`, the older keys, naming this one.
    */
   dashboard?: DashboardContribution<W>;
   /**
@@ -811,7 +852,7 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
 
   /**
    * @experimental The permission an operator needs to change this plugin's
-   * settings, in place of core's `manage-settings`: a payment provider's keys,
+   * settings, in place of core's `update-settings`: a payment provider's keys,
    * say, kept to the roles that handle payments.
    *
    * It must be one of this plugin's own `permissions`, so a misspelt name

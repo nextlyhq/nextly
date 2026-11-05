@@ -14,6 +14,8 @@ import { inArray } from "drizzle-orm";
 
 import { getDialectTables } from "../../../database";
 
+import { MAX_ROLE_HIERARCHY_DEPTH, walkRoleGraph } from "./role-graph";
+
 /**
  * The one read the walk makes, as any Drizzle handle or transaction offers it,
  * so the walk can run inside the transaction of the write it decides.
@@ -25,12 +27,6 @@ export interface RoleInheritsReader {
     };
   };
 }
-
-/**
- * Maximum depth for role hierarchy traversal to prevent infinite loops.
- * This safety limit stops BFS traversal after visiting this many roles.
- */
-export const MAX_ROLE_HIERARCHY_DEPTH = 2000;
 
 /**
  * All descendant roles (children, grandchildren, etc.) of a role, and whether
@@ -49,31 +45,19 @@ export async function walkDescendantRoleIds(
 ): Promise<{ ids: string[]; complete: boolean }> {
   // The tables of the database `db` reads, not of the environment's setting.
   const { roleInherits } = getDialectTables(dialect);
-  const visited = new Set<string>();
-  const queue: string[] = [roleId];
-
-  while (queue.length) {
-    const batch = queue.splice(0, 50);
-    const inheritances = await db
-      .select({ childRoleId: roleInherits.childRoleId })
-      .from(roleInherits)
-      .where(inArray(roleInherits.parentRoleId, batch));
-
-    for (const r of inheritances) {
-      const child = String(r.childRoleId);
-      if (!visited.has(child)) {
-        visited.add(child);
-        queue.push(child);
-      }
-    }
-
-    // Safety limit to prevent infinite loops
-    if (visited.size > MAX_ROLE_HIERARCHY_DEPTH) {
-      return { ids: Array.from(visited), complete: false };
-    }
-  }
-
-  return { ids: Array.from(visited), complete: true };
+  // The starting role is not counted as visited, so a cycle back to it lists
+  // it among its own descendants, as a holder of it would then hold it.
+  return walkRoleGraph(
+    [roleId],
+    async batch =>
+      (
+        await db
+          .select({ childRoleId: roleInherits.childRoleId })
+          .from(roleInherits)
+          .where(inArray(roleInherits.parentRoleId, [...batch]))
+      ).map(row => row.childRoleId),
+    { seedsVisited: false, limit: MAX_ROLE_HIERARCHY_DEPTH }
+  );
 }
 
 /**

@@ -23,17 +23,60 @@ import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
  * floating. The rail selects; it never opens a second panel beside the first.
  */
 export const LEFT_PANELS = [
-  "insert",
+  "add",
   "layers",
-  "components",
-  "tokens",
-  "classes",
-  "fonts",
   "pages",
+  "components",
+  "design",
   "settings",
 ] as const;
 
 export type LeftPanel = (typeof LEFT_PANELS)[number];
+
+/**
+ * The rail's two groups, in the order an author meets them: the daily tools at
+ * the top, and the page's settings at the bottom with Help, which opens a
+ * dialog rather than a panel and so is not one of these.
+ */
+export const RAIL_GROUPS: {
+  readonly top: readonly LeftPanel[];
+  readonly bottom: readonly LeftPanel[];
+} = {
+  top: ["add", "layers", "pages", "components", "design"],
+  bottom: ["settings"],
+};
+
+/**
+ * Where a panel stored under an id from before the rail was relabelled lives
+ * now: Insert became Add, and Tokens, Classes and Fonts became the tabs of one
+ * Design panel. Mapped explicitly rather than dropped as unknown, which would
+ * close the panel an author left open.
+ */
+const RENAMED_PANELS: Readonly<
+  Record<string, { panel: LeftPanel; view: string | null }>
+> = {
+  insert: { panel: "add", view: null },
+  tokens: { panel: "design", view: "variables" },
+  classes: { panel: "design", view: "classes" },
+  fonts: { panel: "design", view: "fonts" },
+};
+
+/** The panel and view a stored preference names, renamed ids included. */
+function storedPanel(
+  panel: unknown,
+  view: unknown
+): { panel: LeftPanel | null; view: string | null } {
+  if (isLeftPanel(panel)) {
+    return { panel, view: typeof view === "string" ? view : null };
+  }
+  if (typeof panel === "string" && Object.hasOwn(RENAMED_PANELS, panel)) {
+    return RENAMED_PANELS[panel];
+  }
+  // No panel open, or one this shell no longer has: the part an author last
+  // chose is kept, so the panel reopens on it, as it does when a panel is
+  // closed and opened again in one session.
+  return { panel: null, view: typeof view === "string" ? view : null };
+}
 
 /**
  * Whether a stored value still names a panel.
@@ -76,7 +119,11 @@ export const PANEL_BOUNDS = {
   inspector: { min: 280, max: 520, initial: 320 },
 } as const;
 
-/** The rail's fixed width in CSS pixels (PB-D17: 48px, icons only). */
+/**
+ * The rail's fixed width in CSS pixels: a 36px icon square with 6px either
+ * side. The rail shows icons alone, each named by its tooltip, so it gives the
+ * canvas back the width a labelled rail took.
+ */
 export const RAIL_WIDTH = 48;
 
 /**
@@ -150,7 +197,21 @@ export function fitsFullShell(width: number): boolean {
  */
 export interface ShellPreferences {
   leftPanel: LeftPanel | null;
+  /**
+   * Which part of a panel is showing, for a panel with parts — the Design
+   * panel's tab. The host decides what the names mean; the shell only keeps
+   * the one the author last chose.
+   */
+  leftPanelView: string | null;
   leftPinned: boolean;
+  /**
+   * Whether the author has hidden a side of the editor to give the canvas the
+   * room. Kept apart from which left panel is open, so hiding the left side
+   * and showing it again comes back to the same panel. The top bar's panel
+   * buttons and mod+backslash set them.
+   */
+  leftPanelHidden: boolean;
+  inspectorHidden: boolean;
   /**
    * How large the canvas draws the page, as the author last left it.
    *
@@ -159,6 +220,20 @@ export interface ShellPreferences {
    * not travel with the document to another author.
    */
   zoom: CanvasZoom;
+  /**
+   * The breakpoint the author is styling, as they last chose it: an id from the
+   * site's breakpoints, or null for the base one, which is named Desktop.
+   *
+   * A choice, never a reading. Taking it from the width the canvas measured
+   * made opening a panel, or a narrower window, move every edit to a narrower
+   * breakpoint the author never picked. Opening and closing panels changes
+   * only how far the canvas is zoomed to fit.
+   *
+   * Stored as the author left it even when the site no longer defines that
+   * breakpoint: the host resolves an unknown id to the base one, so removing a
+   * breakpoint and adding it back does not lose the choice.
+   */
+  editingBreakpoint: string | null;
   /**
    * Layouts, one per PANEL TOPOLOGY.
    *
@@ -179,39 +254,26 @@ export interface ShellPreferences {
    */
   layouts: Record<string, Record<string, number>>;
   /**
-   * Whether the canvas draws a box for containers that have no children yet.
+   * Whether the rail's single-letter keys (A, L, P, C, D) open its panels.
    *
-   * ON by default: a container with nothing in it has no height, so with this
-   * off it is invisible and unclickable, which is the state an author is most
-   * likely to need help with. It is a preference rather than a hardcode
-   * because the box is editor chrome the visitor never sees, and an author
-   * checking how the page really looks needs a way to take it away.
+   * ON by default, and a preference because a key with no modifier can be
+   * set off by speech input or a stray press: WCAG 2.1.4 asks that such a
+   * shortcut can be turned off. Help holds the switch, beside the keys.
+   *
+   * Optional in this published type, so a host that builds preferences
+   * written before the switch still compiles; absent reads as on.
    */
-  showEmptyElements: boolean;
+  panelKeys?: boolean;
 }
-
-/**
- * The DOM attribute the shell stamps on `.nx-builder-chrome` when
- * {@link ShellPreferences.showEmptyElements} is off.
- *
- * `builder-chrome.css` has no module system, so it cannot import this and its
- * selector spells the same string out literally. Exported so every reader of
- * that spelling — the shell that writes it and the test that pins the
- * stylesheet against it — takes it from one place: a rename here that missed
- * the CSS would otherwise leave the selector matching nothing, silently, with
- * no type error and no failed import to notice.
- */
-export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 
 /**
  * The class marking the editor shell's own root element.
  *
- * The scope every piece of editor chrome is drawn inside, and the element
- * {@link EMPTY_ELEMENTS_ATTRIBUTE} is stamped on. Kept beside that attribute
- * and away from the component, for the reason its docblock gives: the markers
- * `builder-chrome.css` has to spell out literally are the ones a rename can
- * break silently, so each has one exported spelling that the shell writing it,
- * the code asking about it and the test pinning the stylesheet all take from.
+ * The scope every piece of editor chrome is drawn inside. Kept here and away
+ * from the component because `builder-chrome.css` has to spell it out
+ * literally, and a marker spelled out literally is one a rename can break
+ * silently: so it has one exported spelling that the shell writing it, the
+ * code asking about it and the test pinning the stylesheet all take from.
  */
 export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
 
@@ -255,10 +317,14 @@ export function topologyKey(panelIds: readonly string[]): string {
 
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
+  leftPanelView: null,
   leftPinned: true,
+  leftPanelHidden: false,
+  inspectorHidden: false,
   zoom: FIT_ZOOM,
+  editingBreakpoint: null,
   layouts: {},
-  showEmptyElements: true,
+  panelKeys: true,
 };
 
 /**
@@ -295,12 +361,66 @@ export const NO_STORAGE: PreferenceStore = {
  *
  * @param key - where to store the value
  * @returns a store, or one that remembers nothing outside a browser
+ *
+ * @experimental
  */
 export function browserStore(key: string): PreferenceStore {
   if (typeof window === "undefined") return NO_STORAGE;
   return {
     read: () => window.localStorage.getItem(key),
     write: value => window.localStorage.setItem(key, value),
+  };
+}
+
+/**
+ * Where the shell keeps its preferences in a browser: under this key alone
+ * for a host that names no user, and under this key and the user's id for
+ * one that does.
+ */
+export const SHELL_PREFERENCES_KEY = "nextly.builder.shell";
+
+/**
+ * The shell's preferences for one signed-in user, so two authors of one
+ * browser each get their own panel, device and zoom.
+ *
+ * Preferences stored before they were kept per user sit under the shell's key
+ * alone. The first user to load with no record of their own takes that one:
+ * it is copied to theirs and removed, so it moves once and no second author
+ * inherits it. With no user known (signed out, or not read yet), nothing is
+ * remembered: a record kept for a guess would be read by the wrong author.
+ *
+ * @param userId - the signed-in user's id, or null when there is none
+ * @returns a store under that user's own key, or one that keeps nothing
+ */
+export function userPreferenceStore(userId: string | null): PreferenceStore {
+  if (userId === null || typeof window === "undefined") return NO_STORAGE;
+  // One store per user, so a host may call this on every render: a new
+  // object would read as a different store, and the shell would reload.
+  const cached = userStores.get(userId);
+  if (cached !== undefined) return cached;
+  const store = keyedStore(userId);
+  userStores.set(userId, store);
+  return store;
+}
+
+/** The stores handed out so far, by user id. */
+const userStores = new Map<string, PreferenceStore>();
+
+/** The store under one user's own key, moving the earlier record on a read. */
+function keyedStore(userId: string): PreferenceStore {
+  const own = browserStore(`${SHELL_PREFERENCES_KEY}:${userId}`);
+  const before = browserStore(SHELL_PREFERENCES_KEY);
+  return {
+    read: () => {
+      const kept = own.read();
+      if (kept !== null) return kept;
+      const moved = before.read();
+      if (moved === null) return null;
+      own.write(moved);
+      window.localStorage.removeItem(SHELL_PREFERENCES_KEY);
+      return moved;
+    },
+    write: own.write,
   };
 }
 
@@ -349,6 +469,11 @@ function isLayout(value: unknown): value is Record<string, number> {
  * Every field is validated separately and falls back on its own, rather than
  * one malformed field discarding the rest. A layout written under a different
  * panel set should reset the layout, not the author's panel choice with it.
+ *
+ * Only the fields named below are read, and anything else in the record is
+ * ignored rather than refused. Records written by an earlier release still
+ * carry `showEmptyElements`, a preference that no longer exists because empty
+ * containers are always shown: such a record loads whole, without it.
  */
 export function readPreferences(store: PreferenceStore): ShellPreferences {
   let raw: unknown;
@@ -365,22 +490,32 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
   if (typeof raw !== "object" || raw === null) return DEFAULT_PREFERENCES;
   const record = raw as Record<string, unknown>;
 
+  const left = storedPanel(record.leftPanel, record.leftPanelView);
   return {
-    leftPanel: isLeftPanel(record.leftPanel) ? record.leftPanel : null,
+    leftPanel: left.panel,
+    leftPanelView: left.view,
     leftPinned:
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
+    // Shown unless a stored true says otherwise, which covers every
+    // preference written before a side could be hidden.
+    leftPanelHidden: record.leftPanelHidden === true,
+    inspectorHidden: record.inspectorHidden === true,
     // Fit when the stored value is not a zoom, which includes every preference
     // written before there was one. `readZoom` refuses a scale outside the
     // bounds rather than painting the canvas somewhere the control cannot be
     // reached to undo it.
     zoom: readZoom(record.zoom) ?? DEFAULT_PREFERENCES.zoom,
+    editingBreakpoint:
+      typeof record.editingBreakpoint === "string" &&
+      record.editingBreakpoint !== ""
+        ? record.editingBreakpoint
+        : DEFAULT_PREFERENCES.editingBreakpoint,
     layouts: readLayouts(record.layouts),
-    showEmptyElements:
-      typeof record.showEmptyElements === "boolean"
-        ? record.showEmptyElements
-        : DEFAULT_PREFERENCES.showEmptyElements,
+    // On unless a stored false says otherwise, which covers every preference
+    // written before the keys could be turned off.
+    panelKeys: record.panelKeys !== false,
   };
 }
 

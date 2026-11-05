@@ -40,6 +40,7 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
@@ -212,6 +213,8 @@ describe.each(getConfiguredTestDialects())(
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        // Read only by --applied.
+        fileChecksum: () => Promise.reject(new Error("not read by this mode")),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       await expect(migratePlugin([module])).resolves.toMatchObject({
@@ -262,6 +265,10 @@ describe.each(getConfiguredTestDialects())(
           fileExists: () => Promise.resolve(true),
           loadTargetSnapshot: () => Promise.resolve(target),
           marksNoTransaction: () => Promise.resolve(true),
+          fileChecksum: () =>
+            Promise.resolve(
+              checksumOf(readFileSync(join(migrationsDir, filename), "utf8"))
+            ),
           introspectLive: () =>
             introspectLiveSnapshot(handle.adapter.getDrizzle(), dialect, [
               "ntr_t",
@@ -421,6 +428,9 @@ describe.each(getConfiguredTestDialects())(
             fileExists: () => Promise.resolve(true),
             loadTargetSnapshot: () => Promise.resolve(null),
             marksNoTransaction: () => Promise.resolve(false),
+            // Read only by --applied.
+            fileChecksum: () =>
+              Promise.reject(new Error("not read by this mode")),
             introspectLive: () => Promise.resolve({ tables: [] }),
           });
           await expect(migrate()).resolves.toBe(1);
@@ -431,10 +441,11 @@ describe.each(getConfiguredTestDialects())(
           expect(await backfilled()).toEqual(["backfilled"]);
           return;
         }
-        // The failed attempt was undone whole: the retry runs the file once.
+        // The failed attempt was undone whole, its ledger row with it: the
+        // retry runs the file once.
         expect(await backfilled()).toEqual([]);
         await expect(migrate()).resolves.toBe(1);
-        expect(await ledgerStatus(filename)).toEqual(["failed", "applied"]);
+        expect(await ledgerStatus(filename)).toEqual(["applied"]);
         expect(await backfilled()).toEqual(["backfilled"]);
       });
 
@@ -480,6 +491,8 @@ describe.each(getConfiguredTestDialects())(
               loadTargetSnapshot: () => Promise.resolve(null),
               marksNoTransaction: () =>
                 Promise.resolve(marksNoTransaction(readFileSync(path, "utf8"))),
+              fileChecksum: () =>
+                Promise.resolve(checksumOf(readFileSync(path, "utf8"))),
               introspectLive: () =>
                 Promise.reject(new Error("nothing to compare it with")),
             });
@@ -491,18 +504,19 @@ describe.each(getConfiguredTestDialects())(
             await expect(markApplied()).rejects.toMatchObject({
               code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
             });
-            expect(await ledgerStatus(filename)).toEqual(["failed"]);
+            // Undone whole, the attempt left no ledger row either.
+            expect(await ledgerStatus(filename)).toEqual([]);
           }
           await expect(
             markApplied(dialect === "mysql" ? undefined : true)
           ).resolves.toMatchObject({ kind: "applied", verified: false });
 
-          // Recorded, so the next run neither refuses it nor repeats it.
+          // Recorded, so the next run neither refuses it nor repeats it. On
+          // MySQL the failed attempt it supersedes stays as history.
           await expect(migrate()).resolves.toBe(0);
-          expect(await ledgerStatus(filename)).toEqual([
-            "superseded",
-            "applied",
-          ]);
+          expect(await ledgerStatus(filename)).toEqual(
+            dialect === "mysql" ? ["superseded", "applied"] : ["applied"]
+          );
           expect(await backfilled()).toEqual(["backfilled"]);
         });
       }
@@ -529,6 +543,9 @@ describe.each(getConfiguredTestDialects())(
           fileExists: () => Promise.resolve(true),
           loadTargetSnapshot: () => Promise.resolve(null),
           marksNoTransaction: () => Promise.resolve(true),
+          // Read only by --applied.
+          fileChecksum: () =>
+            Promise.reject(new Error("not read by this mode")),
           introspectLive: () => Promise.resolve({ tables: [] }),
         });
         await expect(migrate()).resolves.toBe(1);

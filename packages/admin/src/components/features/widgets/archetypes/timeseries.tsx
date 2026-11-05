@@ -5,22 +5,17 @@
  * because the intervals are ORDERED — bars would draw the same numbers while
  * saying nothing about the sequence, which is the whole question a timeline
  * asks. A soft fill under the line gives the shape a body without encoding a
- * second thing in colour.
- *
- * `preserveAspectRatio="none"` with a fixed viewBox, so the chart stretches to
- * whatever width the card has. The stroke is drawn with
- * `vector-effect="non-scaling-stroke"` for that reason: without it a stretched
- * viewBox scales the stroke horizontally too, and the line thins and thickens
- * with the card's width.
+ * second thing in colour. `OverTimeChart` draws it.
  *
  * @module components/features/widgets/archetypes/timeseries
  */
 
-import { formatGlobalDateTime } from "@admin/lib/dates/format";
+import { answerHasNothing } from "nextly/widget-result";
 
 import { OverTimeChart } from "../charts/over-time-chart";
+import { cardLocale } from "../frame/format";
 
-import type { ArchetypeAccepts, ArchetypeBody } from "./types";
+import type { ArchetypeBody } from "./types";
 
 /**
  * How each interval's start is written.
@@ -32,9 +27,11 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * would label March 4th's rows "Mar 3" while the table beside it and the
  * server both call it the 4th.
  *
- * The install's locale and date-format preferences still apply, because this
- * goes through the same formatter every other admin date does — only the zone
- * is fixed.
+ * Short, as a chart writes a date, in the words an interval is read in: "Oct
+ * 27" for a day, "Week of Oct 20" for a week, "Oct 2026" for a month. The
+ * install's locale applies; its full date format does not, since that writes
+ * the year into every day of a range that sits within one, which crowds the
+ * axis and the tooltip and says nothing they do not.
  */
 const LABEL_OPTIONS: Record<string, Intl.DateTimeFormatOptions> = {
   hour: { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" },
@@ -46,16 +43,16 @@ const LABEL_OPTIONS: Record<string, Intl.DateTimeFormatOptions> = {
 
 export function pointLabel(start: string, interval: string): string {
   const options = LABEL_OPTIONS[interval] ?? LABEL_OPTIONS.day;
+  const instant = new Date(start);
   // The raw value is the fallback, so an unparseable instant reaches the reader
   // as evidence rather than as an em dash claiming the interval has nothing.
-  return formatGlobalDateTime(start, { ...options, timeZone: "UTC" }, start);
+  if (Number.isNaN(instant.getTime())) return start;
+  const date = new Intl.DateTimeFormat(cardLocale(), {
+    ...options,
+    timeZone: "UTC",
+  }).format(instant);
+  return interval === "week" ? `Week of ${date}` : date;
 }
-
-export const timeseriesAccepts: ArchetypeAccepts = definition => {
-  if (definition.query) return undefined;
-  const name = definition.title ?? "This timeseries widget";
-  return `"${name}" is drawn from a query, and this widget declares none.`;
-};
 
 export const timeseriesBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "timeseries") {
@@ -73,7 +70,7 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
     count: point.count,
   }));
 
-  if (rows.length === 0) {
+  if (answerHasNothing(result)) {
     // The frame's one empty state, worded for a chart over time. Source-neutral: the card may read any
     // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
@@ -90,6 +87,7 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
     // The chart draws the line, its axis, its latest point and its words; this adapter only
     // reads the one series out of the answer, its intervals named in UTC.
     node: (
+      // No unit: the answer does not say what it counts, so its tooltip gives the bare number.
       <OverTimeChart
         title={definition.title ?? "Over time"}
         labelHeading="Interval"

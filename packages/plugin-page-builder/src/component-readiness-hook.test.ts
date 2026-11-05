@@ -29,6 +29,7 @@ const { registerComponentReadinessNotice, COMPONENTS_NOT_PUBLISHED_CODE } =
   await import("./component-readiness-hook");
 
 const COMPONENTS = "nx_pb_components";
+const LAYOUTS = "nx_pb_layouts";
 const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
 
 const doc = (componentIds: string[]) => ({
@@ -99,6 +100,7 @@ function harness(
     ctx: ctx as never,
     componentCollection: COMPONENTS,
     componentField: "content",
+    layoutCollection: LAYOUTS,
     limits: () => LIMITS,
   });
   const nextly = {
@@ -168,6 +170,54 @@ describe("the publish-readiness notice", () => {
     expect((recorded[0] as { message: string }).message).toContain(
       "1 component"
     );
+  });
+
+  it("reports a published Layout whose areas place a component that is not live", async () => {
+    // A Layout names its area components in a repeater, not a blocks field,
+    // so reading blocks fields alone says nothing about the header every page
+    // inside it will miss.
+    const h = harness({ published: ["footer"] });
+    const ctx = writeContext({
+      collection: LAYOUTS,
+      data: {
+        id: "l1",
+        status: "published",
+        areas: [
+          { area: "header", component: "hero" },
+          { area: "footer", component: { id: "footer" } },
+        ],
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      code: COMPONENTS_NOT_PUBLISHED_CODE,
+      collection: LAYOUTS,
+      entryId: "l1",
+    });
+    expect((recorded[0] as { message: string }).message).toBe(
+      "This Layout embeds 1 component that is not published, so it will not appear for visitors."
+    );
+  });
+
+  it("says nothing about a published Layout whose area components are live", async () => {
+    const h = harness({ published: ["hero"] });
+    const ctx = writeContext({
+      collection: LAYOUTS,
+      data: {
+        id: "l1",
+        status: "published",
+        areas: [{ area: "header", component: "hero" }],
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toEqual([]);
   });
 
   it("says nothing when every embedded component is live", async () => {

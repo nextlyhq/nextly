@@ -96,6 +96,7 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { refuseLinkingPublicRole } from "../../auth/services/public-role";
 import {
   refuseGrantingSuperAdmin,
   rolesConferSuperAdmin,
@@ -1046,6 +1047,14 @@ export class UserMutationService extends BaseService {
       namedRoles.map(r => r.id),
       { reason: "external-user-super-admin-refused", email }
     );
+    // The Public role is what visitors hold, never anyone's role.
+    await refuseLinkingPublicRole(
+      this.db as LastSuperAdminTx,
+      this.dialect,
+      namedRoles.map(r => r.id),
+      "assign",
+      { email }
+    );
 
     const now = new Date();
     const newUserId = randomUUID();
@@ -1339,6 +1348,14 @@ export class UserMutationService extends BaseService {
         }
         // Before the insert: the roles are assigned after the account is
         // committed, so a refusal there would leave the account behind.
+        // The Public role is what visitors hold, never anyone's role.
+        await refuseLinkingPublicRole(
+          this.db as LastSuperAdminTx,
+          this.dialect,
+          uniqueRoleIds,
+          "assign",
+          { email }
+        );
         if (caller === "plugin") {
           await this.refuseSuperAdminRoles(uniqueRoleIds, {
             reason: "plugin-user-super-admin-refused",
@@ -1581,11 +1598,14 @@ export class UserMutationService extends BaseService {
             logContext: { email },
           });
         }
+        // Written as the role rows spell them. MySQL matches ids
+        // case-insensitively, so a requested id can differ in case from its
+        // row's own, and a stored assignment is read back by comparing ids.
         await txDb.insert(this.tables.userRoles).values(
-          requestedRoleIds.map(roleId => ({
+          existing.map(role => ({
             id: randomUUID(),
             userId: newUserId,
-            roleId,
+            roleId: String(role.id),
             expiresAt: null,
           }))
         );
@@ -1817,6 +1837,14 @@ export class UserMutationService extends BaseService {
 
       // Before any write: the fields below are written before the roles, so a
       // refusal at the role step would leave the rest of the update applied.
+      // The Public role is what visitors hold, never anyone's role.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        changes.roles ?? [],
+        "assign",
+        { userId: currentUser.id }
+      );
       if (caller === "plugin" && changes.roles && changes.roles.length > 0) {
         await this.refuseSuperAdminRoles(Array.from(new Set(changes.roles)), {
           reason: "plugin-user-super-admin-refused",

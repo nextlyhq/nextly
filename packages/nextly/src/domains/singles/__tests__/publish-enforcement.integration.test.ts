@@ -48,7 +48,9 @@ describe("single publish enforcement — authorize before create (integration)",
     );
 
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // The caller holds no read grant either, so the refusal is answered as
+    // the Single being missing rather than as a 403 that confirms it exists.
+    expect(denied.statusCode).toBe(404);
 
     // The default was never inserted: the single's table is still empty.
     const row = await current.adapter.selectOne("single_branding", {});
@@ -179,7 +181,8 @@ describe("single publish enforcement — authorize before create (integration)",
       { user: { id: "u1" }, routeAuthorized: true, locale: "en" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // No read grant either: the refusal is answered as the Single missing.
+    expect(denied.statusCode).toBe(404);
 
     // The companion `_status` was not moved to published.
     const rows = (await adapter.executeQuery(
@@ -225,7 +228,9 @@ describe("single publish enforcement — authorize before create (integration)",
       }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // The key holds no `read-branding`, so its refusal is answered as the
+    // Single missing; the allowed key below shows read is not what decided.
+    expect(denied.statusCode).toBe(404);
 
     const allowed = await service.update(
       "branding",

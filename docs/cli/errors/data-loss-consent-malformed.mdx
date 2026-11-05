@@ -1,0 +1,28 @@
+---
+title: DATA_LOSS_CONSENT_MALFORMED
+description: "The data-loss consent names its targets in a form it cannot read, so the command changed nothing."
+---
+
+## Cause
+
+The data-loss consent names its targets in a form it cannot read, so the command changed nothing.
+
+`--accept-data-loss` and `NEXTLY_ACCEPT_DATA_LOSS` take either nothing, which consents to every deletion, or a list of what may be deleted: tables, and columns as `table.column`, separated by commas with no spaces. A list in any other form, or `--accept-data-loss=` with nothing after it, is refused before anything changes, rather than read loosely.
+
+## Fix
+
+Write the targets as a comma-separated list, or give the flag alone:
+
+```bash
+nextly migrate:down --accept-data-loss=dc_posts,dc_pages.summary
+nextly migrate:down --accept-data-loss
+```
+
+## Example
+
+```text
+✗ --accept-data-loss=dc_posts summary is not a list of tables and table.column pairs: "dc_posts summary" is not one.
+  Why:  Each target is a table or a `table.column` pair, separated by commas. Nothing was changed.
+  Next: Name tables and columns separated by commas (--accept-data-loss=posts,pages.summary), or give --accept-data-loss alone to consent to every deletion.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-malformed  (DATA_LOSS_CONSENT_MALFORMED)
+```

@@ -19,14 +19,16 @@ import {
   getPostsByCategory,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { detailStaticParams, isBuildPlaceholder } from "@/lib/static-params";
 
 // Pre-render known category pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so a
 // category or post change busts the tag and this page regenerates on the
 // next request — no time-based `revalidate`. New categories render on demand.
 export async function generateStaticParams() {
-  const slugs = await getAllCategorySlugs();
-  return slugs.map(slug => ({ slug }));
+  // Never empty, so the build learns this page reads the request: see
+  // detailStaticParams.
+  return detailStaticParams(await getAllCategorySlugs());
 }
 
 export async function generateMetadata({
@@ -35,6 +37,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  // The build-time placeholder has no metadata of its own.
+  if (isBuildPlaceholder(slug)) return {};
   const category = await getCategoryBySlug(slug);
   if (!category) return { title: "Category Not Found" };
 
@@ -59,11 +63,22 @@ export default async function CategoryPage({
   searchParams: Promise<{ page?: string }>;
 }) {
   const { slug } = await params;
-  const { page: pageParam } = await searchParams;
-  const currentPage = Math.max(1, Number(pageParam) || 1);
+  if (isBuildPlaceholder(slug)) {
+    // The request is read first, so the build learns the page reads it; the
+    // placeholder stops here, before any database read.
+    await searchParams;
+    notFound();
+  }
 
+  // Decided before the request is read: an unknown archive's render then
+  // reads nothing per request, so Next.js can store it and answer 404 (to a
+  // crawler at once, to a browser from its second request) instead of a
+  // streamed not-found page.
   const category = await getCategoryBySlug(slug);
   if (!category) notFound();
+
+  const { page: pageParam } = await searchParams;
+  const currentPage = Math.max(1, Number(pageParam) || 1);
 
   const posts = await getPostsByCategory(slug, {
     page: currentPage,

@@ -36,18 +36,32 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, isNull } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
 import {
+  inFolderTreeTransaction,
+  lockMediaFolders,
+  lockMediaItems,
+} from "../domains/media/lock-media-items";
+import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   storedPathForLog,
+  warnSizeNotHere,
   warnUnlocated,
+  type StorageReading,
+  type StoredFileRemover,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
+import {
+  hasRetiredSizesColumn,
+  retiredSizesOnTransaction,
+} from "../domains/media/retired-image-sizes-store";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
@@ -59,6 +73,7 @@ import {
 } from "../domains/media/stored-files";
 import type { ServiceErrorCode } from "../errors/error-codes";
 import { consoleLogger } from "../shared/types";
+import { mediaPageQuerySchema, type MediaPageQuery } from "../types/media";
 
 import { BaseService } from "./base-service";
 import type { Logger } from "./shared";
@@ -89,8 +104,19 @@ export interface UpdateFolderInput {
 export interface FolderContents {
   folder: MediaFolder;
   subfolders: MediaFolder[];
+  /** One page of the folder's own items. */
   mediaFiles: Record<string, unknown>[];
   breadcrumbs: Array<{ id: string; name: string }>;
+  /** Which page `mediaFiles` is, and how many items there are in all. */
+  meta: FolderContentsPage;
+}
+
+/** Which page of a folder's items a response holds. */
+export interface FolderContentsPage {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 export interface FolderResponse {
@@ -146,23 +172,38 @@ type RemoveStoredFiles = (
 ) => Promise<void>;
 
 /**
+ * How a cascading folder delete removes its items' files, and the one
+ * reading of the storage they are removed from (`StorageReading`), which the
+ * search for files another item keeps uses too: both ask "which files does
+ * this record name" of the same storage.
+ */
+interface FolderRemoval {
+  remove: RemoveStoredFiles;
+  reading: StorageReading;
+}
+
+/**
  * Every file of each item, as a delete of that item removes them, one item
  * at a time: a chunk of a hundred items asked for all at once would send the
  * storage every file of every item together, and a refused or throttled
  * request leaves its file stored.
  */
-const removeEveryStoredFile: RemoveStoredFiles = async (records, kept) => {
-  const storage = getMediaStorage();
-  for (const record of records) {
-    await removeStoredFiles(storage, record, record.id, kept);
-  }
-};
+function removeEveryStoredFile(storage: StoredFileRemover): RemoveStoredFiles {
+  return async (records, kept) => {
+    for (const record of records) {
+      await removeStoredFiles(storage, record, record.id, kept);
+    }
+  };
+}
 
 /**
  * Storage a caller hands a cascading folder delete, as the cleanup argument
- * has taken it before: given every stored file of the items removed.
+ * has taken it before: given every stored file of the items removed. Where it
+ * says where it serves a file, as the media storage does, an image size
+ * recorded by URL alone that it serves is among them (`storageReadingOf`).
  */
-interface FolderStorageCleanup {
+interface FolderStorageCleanup
+  extends Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> {
   bulkDelete(
     filePaths: string[],
     collection?: string
@@ -172,31 +213,88 @@ interface FolderStorageCleanup {
   }>;
 }
 
-/** The removal a cascading folder delete runs, from what its caller gave. */
+/** A refused folder update, in the service's answer shape. */
+function folderRefusal(
+  statusCode: number,
+  code: ServiceErrorCode,
+  message: string
+): FolderResponse {
+  return { success: false, statusCode, code, message, data: null };
+}
+
+/**
+ * The answer to a folder delete while the folder holds an item deleted
+ * inside its Undo window: the folder waits for it.
+ */
+function pendingDeletesRefusal(): DeleteFolderOutcome {
+  return {
+    success: false,
+    statusCode: 409,
+    code: "CONFLICT",
+    message:
+      "This folder holds items deleted moments ago that can still be brought back. Try again once their Undo has passed.",
+  };
+}
+
+/**
+ * The removal a cascading folder delete runs, from what its caller gave, with
+ * the reading of the storage it removes from: the given storage's, or the
+ * media storage's where none is given or a function removes the files.
+ */
 function removalFrom(
   cleanup: RemoveStoredFiles | FolderStorageCleanup | undefined
-): RemoveStoredFiles {
-  if (cleanup === undefined) return removeEveryStoredFile;
-  if (typeof cleanup === "function") {
-    // The rows are already gone: a failure is named, never thrown, so it
-    // cannot stop the rest of the cascade.
-    return async (records, kept) => {
-      try {
-        await cleanup(records, kept);
-      } catch (error) {
-        consoleLogger.warn(
-          "[MediaFolderService] Could not remove the files of the deleted items",
-          { error: errorForLog(error) }
-        );
-      }
+): FolderRemoval {
+  if (cleanup === undefined) {
+    const storage = getMediaStorage();
+    return {
+      remove: removeEveryStoredFile(storage),
+      reading: storageReadingOf(storage),
     };
   }
+  if (typeof cleanup === "function") {
+    return {
+      remove: removalBy(cleanup),
+      reading: storageReadingOf(getMediaStorage()),
+    };
+  }
+  const reading = storageReadingOf(cleanup);
+  return { remove: removalThrough(cleanup, reading), reading };
+}
+
+/** A removal by the caller's own function, which names a failure. */
+function removalBy(cleanup: RemoveStoredFiles): RemoveStoredFiles {
+  // The rows are already gone: a failure is named, never thrown, so it
+  // cannot stop the rest of the cascade.
+  return async (records, kept) => {
+    try {
+      await cleanup(records, kept);
+    } catch (error) {
+      consoleLogger.warn(
+        "[MediaFolderService] Could not remove the files of the deleted items",
+        { error: errorForLog(error) }
+      );
+    }
+  };
+}
+
+/**
+ * A removal through storage the caller gave, handed every file of the
+ * items, each read as `reading` reads it.
+ */
+function removalThrough(
+  cleanup: FolderStorageCleanup,
+  reading: StorageReading
+): RemoveStoredFiles {
   return async (records, kept) => {
     const filePaths: string[] = [];
     for (const record of records) {
-      const { paths, unlocated } = storedFilesOf(record);
+      const { paths, unlocated, notHere } = storedFilesOf(
+        record,
+        reading.locator
+      );
       filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
       for (const url of unlocated) warnUnlocated(url, record.id);
+      for (const url of notHere) warnSizeNotHere(url, record.id);
     }
     if (filePaths.length === 0) return;
     // The rows are already gone: a storage failure is named, never thrown.
@@ -461,7 +559,9 @@ export class MediaFolderService extends BaseService {
    * Get folder contents (subfolders + media files)
    */
   async getFolderContents(
-    folderId: string | null
+    folderId: string | null,
+    /** Which page of its items, and how they are narrowed and sorted. */
+    query: Partial<MediaPageQuery> = {}
   ): Promise<FolderContentsResponse> {
     try {
       const { mediaFolders: _mediaFolders, media } = this.tables;
@@ -496,15 +596,40 @@ export class MediaFolderService extends BaseService {
 
       const subfolders = subfoldersResult.data || [];
 
-      const mediaFiles = folderSchemaAvailable
-        ? await this.db
-            .select()
-            .from(media)
-            .where(
-              folderId ? eq(media.folderId, folderId) : isNull(media.folderId)
-            )
-            .orderBy(media.uploadedAt)
-        : await this.db.select().from(media).orderBy(media.uploadedAt);
+      // One page of the folder's items, narrowed, sorted and paged in the
+      // database by the same condition the media list uses, with the count of
+      // every item the narrowing matches.
+      const { page, limit, search, type, sortBy, sortOrder } =
+        mediaPageQuerySchema.parse(query);
+      // Loaded when a folder is read, not with the service.
+      const { mediaQueryCondition } = await import(
+        "../domains/media/media-library-query"
+      );
+      const where = mediaQueryCondition(
+        media,
+        null,
+        {
+          ...(folderSchemaAvailable ? { folderId: folderId ?? null } : {}),
+          search,
+          type,
+        },
+        this.dialect
+      );
+      const [counted] = await this.db
+        .select({ value: count() })
+        .from(media)
+        .where(where);
+      const total = Number(counted?.value ?? 0);
+      // The id after the sort column, so items uploaded in the same instant
+      // keep one order and no item shows on two pages.
+      const order = sortOrder === "asc" ? asc : desc;
+      const mediaFiles = await this.db
+        .select()
+        .from(media)
+        .where(where)
+        .orderBy(order(media[sortBy]), order(media.id))
+        .limit(limit)
+        .offset((page - 1) * limit);
 
       const breadcrumbs = await this.getBreadcrumbs(folderId);
 
@@ -525,6 +650,12 @@ export class MediaFolderService extends BaseService {
           subfolders,
           mediaFiles,
           breadcrumbs,
+          meta: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
         },
       };
     } catch (error) {
@@ -587,28 +718,15 @@ export class MediaFolderService extends BaseService {
         };
       }
 
-      // Prevent moving folder into itself or its own subfolder
-      if (updates.parentId) {
-        if (updates.parentId === folderId) {
-          return {
-            success: false,
-            statusCode: 400,
-            code: "INVALID_INPUT",
-            message: "Cannot move folder into itself",
-            data: null,
-          };
-        }
-
-        const isSubfolder = await this.isSubfolder(folderId, updates.parentId);
-        if (isSubfolder) {
-          return {
-            success: false,
-            statusCode: 400,
-            code: "INVALID_INPUT",
-            message: "Cannot move folder into its own subfolder",
-            data: null,
-          };
-        }
+      // Prevent moving folder into itself
+      if (updates.parentId && updates.parentId === folderId) {
+        return {
+          success: false,
+          statusCode: 400,
+          code: "INVALID_INPUT",
+          message: "Cannot move folder into itself",
+          data: null,
+        };
       }
 
       const updateData: Record<string, unknown> = {
@@ -616,10 +734,52 @@ export class MediaFolderService extends BaseService {
         updatedAt: new Date(),
       };
 
-      await this.db
-        .update(mediaFolders)
-        .set(updateData)
-        .where(eq(mediaFolders.id, folderId));
+      if (updates.parentId !== undefined) {
+        // A new parent changes the folder hierarchy: under the tree lock
+        // (`inFolderTreeTransaction`), then the folder and its new parent in
+        // the one order, and checked there, where no other hierarchy change
+        // can move them meanwhile.
+        const parentId = updates.parentId || null;
+        updateData.parentId = parentId;
+        const refusal = await inFolderTreeTransaction(
+          this.adapter,
+          async tx => {
+            await lockMediaFolders(
+              tx,
+              parentId ? [folderId, parentId] : [folderId]
+            );
+            if (!(await this.parentOfOn(tx, folderId))) {
+              return folderRefusal(404, "NOT_FOUND", "Folder not found");
+            }
+            if (parentId) {
+              if (!(await this.parentOfOn(tx, parentId))) {
+                return folderRefusal(
+                  404,
+                  "NOT_FOUND",
+                  "Parent folder not found"
+                );
+              }
+              if (await this.isUnderOn(tx, parentId, folderId)) {
+                return folderRefusal(
+                  400,
+                  "INVALID_INPUT",
+                  "Cannot move folder into its own subfolder"
+                );
+              }
+            }
+            await tx.update("media_folders", updateData, {
+              and: [{ column: "id", op: "=", value: folderId }],
+            });
+            return null;
+          }
+        );
+        if (refusal) return refusal;
+      } else {
+        await this.db
+          .update(mediaFolders)
+          .set(updateData)
+          .where(eq(mediaFolders.id, folderId));
+      }
 
       return {
         success: true,
@@ -645,21 +805,38 @@ export class MediaFolderService extends BaseService {
     }
   }
 
-  private async isSubfolder(
-    folder1Id: string,
-    folder2Id: string
+  /**
+   * The folder's row as `tx` reads it, `{ parentId }`, or `null` when there
+   * is no such folder.
+   */
+  private async parentOfOn(
+    tx: TransactionContext,
+    folderId: string
+  ): Promise<{ parentId: string | null } | null> {
+    const [row] = await tx.select<{ parentId?: unknown }>("media_folders", {
+      columns: ["parentId"],
+      where: { and: [{ column: "id", op: "=", value: folderId }] },
+    });
+    if (!row) return null;
+    return {
+      parentId: typeof row.parentId === "string" ? row.parentId : null,
+    };
+  }
+
+  /** Whether `folderId` is `ancestorId` or a folder under it, as `tx` reads. */
+  private async isUnderOn(
+    tx: TransactionContext,
+    folderId: string,
+    ancestorId: string
   ): Promise<boolean> {
-    let currentId: string | null = folder2Id;
-
-    while (currentId) {
-      if (currentId === folder1Id) return true;
-
-      const folderResult = await this.getFolderById(currentId);
-      if (!folderResult.success || !folderResult.data) break;
-
-      currentId = folderResult.data.parentId;
+    const seen = new Set<string>();
+    let current: string | null = folderId;
+    // `seen` ends a walk over a loop a corrupt hierarchy could hold.
+    while (current !== null && !seen.has(current)) {
+      if (current === ancestorId) return true;
+      seen.add(current);
+      current = (await this.parentOfOn(tx, current))?.parentId ?? null;
     }
-
     return false;
   }
 
@@ -705,6 +882,15 @@ export class MediaFolderService extends BaseService {
       };
     }
 
+    // An item deleted moments ago is hidden from the folder's listing but is
+    // still in it until its Undo window ends. Deleting the folder would move
+    // it to the library root (the folder going) or delete it before its
+    // deadline (the folder's contents going), so the folder waits for it,
+    // with or without its contents.
+    if (await this.holdsPendingDeletes(folderId)) {
+      return pendingDeletesRefusal();
+    }
+
     const contents = await this.getFolderContents(folderId);
     const hasContents =
       (contents.data?.subfolders.length ?? 0) > 0 ||
@@ -723,6 +909,105 @@ export class MediaFolderService extends BaseService {
     return null;
   }
 
+  /**
+   * `ids` in runs one statement may bind alongside `reserved` values of its
+   * own, by the adapter's `maxParamsPerQuery`: SQLite's limit is the lowest,
+   * so a large subtree takes a few statements there and one elsewhere.
+   */
+  private idRuns(ids: readonly string[], reserved: number): string[][] {
+    const limit = this.adapter.getCapabilities().maxParamsPerQuery;
+    const size = Number.isFinite(limit)
+      ? Math.max(1, Math.floor(limit) - reserved)
+      : 1;
+    const runs: string[][] = [];
+    for (let start = 0; start < ids.length; start += size) {
+      runs.push(ids.slice(start, start + size));
+    }
+    return runs;
+  }
+
+  /**
+   * Whether the folder, or any folder under it, holds an item deleted inside
+   * its Undo window: the folders asked together, in runs one statement may
+   * bind, on the items' folder index, for the first such item.
+   */
+  private async holdsPendingDeletes(folderId: string): Promise<boolean> {
+    const { media } = this.tables;
+    // Loaded when a folder is deleted, not with the service.
+    const { pendingDelete } = await import(
+      "../domains/media/media-library-query"
+    );
+    const folderIds = [
+      folderId,
+      ...(await this.collectAllSubfolderIds(folderId)),
+    ];
+    // The mark's key pattern is the one value the condition binds itself.
+    for (const run of this.idRuns(folderIds, 1)) {
+      const [found] = await this.db
+        .select({ id: media.id })
+        .from(media)
+        .where(and(inArray(media.folderId, run), pendingDelete(media)))
+        .limit(1);
+      if (found) return true;
+    }
+    return false;
+  }
+
+  /** The folder and every folder under it, each locked on `tx`. */
+  private async subtreeOn(
+    tx: TransactionContext,
+    folderId: string
+  ): Promise<string[]> {
+    // Each level locked, in the one order (`lockMediaFolders`), before the
+    // level under it is read. The tree lock this runs under keeps every other
+    // hierarchy change out, and a folder created under a locked one, or a
+    // file uploaded or moved into it, waits for its lock and then finds it
+    // gone: what is read here is all the delete removes. Read committed
+    // (`inFolderTreeTransaction`), so each read is the latest on MySQL too.
+    await lockMediaFolders(tx, [folderId]);
+    const all = [folderId];
+    let level = [folderId];
+    while (level.length > 0) {
+      const next = await this.childFoldersOn(tx, level);
+      await lockMediaFolders(tx, next);
+      all.push(...next);
+      level = next;
+    }
+    return all;
+  }
+
+  /** The folders directly under `parents`, as `tx` reads them. */
+  private async childFoldersOn(
+    tx: TransactionContext,
+    parents: readonly string[]
+  ): Promise<string[]> {
+    const children: string[] = [];
+    for (const run of this.idRuns(parents, 0)) {
+      const rows = await tx.select<{ id: string }>("media_folders", {
+        columns: ["id"],
+        where: { and: [{ column: "parentId", op: "IN", value: run }] },
+      });
+      children.push(...rows.map(row => String(row.id)));
+    }
+    return children;
+  }
+
+  /** The ids of the media the folders hold, as `tx` reads them. */
+  private async heldMediaOn(
+    tx: TransactionContext,
+    folderIds: readonly string[]
+  ): Promise<string[]> {
+    const held: string[] = [];
+    for (const run of this.idRuns(folderIds, 0)) {
+      const rows = await tx.select<{ id: string }>("media", {
+        columns: ["id"],
+        where: { and: [{ column: "folderId", op: "IN", value: run }] },
+      });
+      held.push(...rows.map(row => String(row.id)));
+    }
+    return [...new Set(held)];
+  }
+
   async deleteFolder(
     folderId: string,
     deleteContents: boolean = false,
@@ -733,81 +1018,104 @@ export class MediaFolderService extends BaseService {
      */
     cleanup?: RemoveStoredFiles | FolderStorageCleanup
   ): Promise<DeleteFolderOutcome> {
-    const removeFiles = removalFrom(cleanup);
+    const files = removalFrom(cleanup);
     try {
-      const { mediaFolders } = this.tables;
-
       const refusal = await this.refuseUndeletableFolder(
         folderId,
         deleteContents
       );
       if (refusal) return refusal;
 
-      let deletedMediaCount = 0;
-      let deletedFoldersCount = 0;
-      // Hoisted: the folder delete below needs this list too, because
-      // `media.folder_id` nulls on its parent's removal and any row still
-      // pointing at one of these folders is changed by it.
-      const subfolderIds = await this.collectAllSubfolderIds(folderId);
-      const allFolderIds = [folderId, ...subfolderIds];
+      // One transaction, all or nothing, holding the folder tree's lock
+      // (`inFolderTreeTransaction`). The folder and every folder under it
+      // are locked next (`subtreeOn`), so nothing arrives in them while it
+      // runs; then every media row they hold is read, as committed now, and
+      // locked, in the order a delete that can be undone locks its items in
+      // (`lockMediaItems`), and then their marks are read. An item marked since the check above
+      // refuses the whole delete before anything changes: deleting it would
+      // cut its Undo short, and moving it would bring it back outside its
+      // folder. A mark asked for later waits for these locks and finds its
+      // item gone or moved.
+      // Whether the media table still has the retired `sizes` column, which
+      // the Drizzle definition no longer names, asked of the catalogue
+      // before the transaction. The sizes themselves are read inside it, for
+      // the rows as they are under their locks
+      // (`retiredSizesOnTransaction`): an item moved into the folder after
+      // this ask is deleted with its size files.
+      const sizesColumn =
+        deleteContents && (await hasRetiredSizesColumn(this.db, this.dialect));
+      const removal = await inFolderTreeTransaction(this.adapter, async tx => {
+        const folders = await this.subtreeOn(tx, folderId);
+        const held = await this.heldMediaOn(tx, folders);
+        await lockMediaItems(tx, held);
+        if (await this.anyMarked(tx, held)) return null;
+        // The rows as they are under their locks, so the files removed are
+        // the ones they hold at their removal: a crop committed since the
+        // folder was checked is seen, and one reaching its commit while the
+        // rows are held finds them gone and removes its own new sizes.
+        // Read with a lock, the latest committed on every dialect, and kept
+        // only while still in one of the folders: an item moved out before
+        // its lock was taken stays.
+        const removed: StoredMediaRecord[] = [];
+        if (deleteContents) {
+          const inSubtree = new Set(folders);
+          for (const run of this.idRuns(held, 0)) {
+            const rows = (
+              await tx.select<StoredMediaRecord & { folderId?: unknown }>(
+                "media",
+                {
+                  where: { and: [{ column: "id", op: "IN", value: run }] },
+                  forUpdate: true,
+                }
+              )
+            ).filter(row => inSubtree.has(String(row.folderId)));
+            if (rows.length === 0) continue;
+            const ids = rows.map(row => row.id);
+            // Read before the rows go, on this transaction, so a drop of the
+            // column since it was asked about cannot end it.
+            const retiredSizes = sizesColumn
+              ? await retiredSizesOnTransaction(tx, ids)
+              : new Map<string, unknown>();
+            await tx.delete("media", {
+              and: [{ column: "id", op: "IN", value: ids }],
+            });
+            removed.push(
+              ...rows.map(row => ({
+                ...row,
+                sizes: retiredSizes.get(row.id) ?? null,
+              }))
+            );
+          }
+        }
+        await tx.delete("media_folders", {
+          and: [{ column: "id", op: "=", value: folderId }],
+        });
+        // Without its contents, `media.folder_id` is ON DELETE SET NULL:
+        // what the folders held has moved to the library root.
+        const going = new Set(removed.map(record => record.id));
+        return {
+          removed,
+          moved: held.filter(id => !going.has(id)),
+          subfolders: folders.length - 1,
+        };
+      });
+      if (removal === null) return pendingDeletesRefusal();
 
-      if (deleteContents) {
-        deletedFoldersCount = subfolderIds.length;
-
-        const records = await this.collectMediaInFolders(allFolderIds);
-        deletedMediaCount = records.length;
-
-        // ONE shared-tag flush for a delete that commits in chunks. Each
-        // chunk busts its own rows' tags as it commits; this scope holds only
-        // `nextly:media`, the string every row emits, so a folder of several
-        // hundred files does not re-invalidate it once per chunk.
-        //
-        // Scoped to the media fan-out rather than the whole method: the
-        // validation above and the folder-row delete below emit no media tags,
-        // and holding the shared one across them would defer it behind work
-        // that has nothing to do with it.
+      // ONE shared-tag flush for the removed items, however many runs their
+      // files are removed in.
+      if (removal.removed.length > 0) {
         await withMediaRevalidationBatch(() =>
-          this.deleteMediaRowsInChunks(
-            records.map(record => record.id),
-            removeFiles
-          )
+          this.removeFilesOfRemoved(removal.removed, files)
         );
       }
-
-      // A file uploaded or moved INTO one of these folders after the
-      // collection above is absent from `records`, and `media.folder_id` is
-      // ON DELETE SET NULL — so the folder delete silently changes that row
-      // while nothing busts its tags. Collected here, as close to the delete
-      // as the code can get, because the gap otherwise spans the storage
-      // cleanup and its retry backoffs.
-      //
-      // The DESCENDANT list is re-derived rather than reused: a folder created
-      // under this one during that same gap is absent from the earlier
-      // snapshot, the root delete cascades into it, and its media would be
-      // re-parented with nothing naming it. Reusing the snapshot covers a file
-      // added to a known folder and misses a file added to a new one.
-      //
-      // This NARROWS the window; it does not close it. A row arriving between
-      // this query and the statement below is still missed, and closing that
-      // needs the two to share a transaction or a lock on the folder rows,
-      // which this method does not have.
-      const currentFolderIds = [
-        folderId,
-        ...(await this.collectAllSubfolderIds(folderId)),
-      ];
-      const strays = await this.collectMediaInFolders(currentFolderIds);
-
-      // Delete folder (CASCADE handles subfolder records)
-      await this.db.delete(mediaFolders).where(eq(mediaFolders.id, folderId));
-
       // After the statement, so this only names rows the delete really changed,
       // and inside an enclosing SQLite transaction after that commits.
-      if (strays.length > 0) {
-        await this.afterCommit(() =>
-          revalidateMedia(strays.map(record => record.id))
-        );
+      if (removal.moved.length > 0) {
+        await this.afterCommit(() => revalidateMedia(removal.moved));
       }
 
+      const deletedMediaCount = removal.removed.length;
+      const deletedFoldersCount = deleteContents ? removal.subfolders : 0;
       return {
         success: true,
         statusCode: 200,
@@ -828,75 +1136,89 @@ export class MediaFolderService extends BaseService {
     }
   }
 
-  /** The id of every media row held by any of these folders. */
-  private async collectMediaInFolders(
-    folderIds: string[]
-  ): Promise<Array<{ id: string }>> {
-    const { media } = this.tables;
-    const records: Array<{ id: string }> = [];
-    for (const folderId of folderIds) {
-      const inFolder = await this.db
-        .select({ id: media.id })
-        .from(media)
-        .where(eq(media.folderId, folderId));
-      records.push(...inFolder);
+  /**
+   * Bust the removed items' cache tags and remove their stored files, in
+   * runs of a hundred, once their rows are gone: inside an enclosing SQLite
+   * transaction only once that commits, since a rollback brings the rows
+   * back and they must still have their files. The files another item still
+   * refers to are asked for then (`filesKeptByOthers`), and stay.
+   */
+  private async removeFilesOfRemoved(
+    removed: readonly StoredMediaRecord[],
+    files: FolderRemoval
+  ): Promise<void> {
+    const runSize = 100;
+    for (let start = 0; start < removed.length; start += runSize) {
+      const run = removed.slice(start, start + runSize);
+      const ids = run.map(record => record.id);
+      await this.afterCommit(() => revalidateMedia(ids));
+      await this.afterCommit(async () => {
+        // Every file the removal can take, a size recorded by URL alone
+        // among them where its storage serves it, so each is asked about,
+        // with every other item's record read against that same storage.
+        const { reading } = files;
+        const kept = await filesKeptByOthers(
+          this.storedFileSearch,
+          run.flatMap(record => storedFilesOf(record, reading.locator).paths),
+          ids,
+          reading
+        );
+        if (kept) await files.remove(run, kept);
+        await this.removeKeptFilesOf(ids);
+      });
     }
-    return records;
   }
 
   /**
-   * Remove the rows in chunks, busting each chunk's cache tags and removing
-   * its items' stored files as it commits.
-   *
-   * There is no encompassing transaction here, so an earlier chunk is already
-   * durable when a later one throws or the process is killed. Holding its tags
-   * until the end would leave those files cached with no row behind them; the
-   * shared collection tag is still paid once, by the scope the caller opened.
-   * The files go only once their rows are gone, and inside an enclosing
-   * SQLite transaction only once that commits: a rollback brings the rows
-   * back, and they must still have their files.
-   *
-   * Each chunk's rows are locked and re-read in the transaction that deletes
-   * them, as a single delete does, so the files removed are the ones the rows
-   * held at their removal: a crop that committed after the folder's items
-   * were listed is seen, and one that reaches its commit while the rows are
-   * held finds them gone and removes its own new sizes.
+   * Whether any of `ids` is marked for a delete inside its Undo window, as
+   * the latest committed marks say: read with a lock, so on MySQL it is not
+   * answered from a snapshot taken before the rows' locks were waited for.
    */
-  private async deleteMediaRowsInChunks(
-    mediaIds: string[],
-    removeFiles: RemoveStoredFiles
-  ): Promise<void> {
-    if (mediaIds.length === 0) return;
-    const chunkSize = 100;
-    // In one order, so two deletes holding overlapping chunks cannot each
-    // wait on a row the other holds.
-    const ordered = [...mediaIds].sort();
-
-    for (let i = 0; i < ordered.length; i += chunkSize) {
-      const chunk = ordered.slice(i, i + chunkSize);
-      const inChunk = {
-        and: [{ column: "id", op: "IN" as const, value: chunk }],
-      };
-      const removed = await this.adapter.transaction(async tx => {
-        // Locked and read in one statement, the chunk's rows at once.
-        const current = await tx.select<StoredMediaRecord>("media", {
-          where: inChunk,
-          forUpdate: true,
-        });
-        if (current.length > 0) await tx.delete("media", inChunk);
-        return current;
+  private async anyMarked(
+    tx: TransactionContext,
+    ids: readonly string[]
+  ): Promise<boolean> {
+    if (ids.length === 0) return false;
+    // Loaded when a folder is deleted, not with the service.
+    const { pendingDeleteKey } = await import(
+      "../domains/media/pending-delete"
+    );
+    for (const run of this.idRuns(ids, 0)) {
+      const [found] = await tx.select("nextly_meta", {
+        columns: ["key"],
+        where: {
+          and: [{ column: "key", op: "IN", value: run.map(pendingDeleteKey) }],
+        },
+        forUpdate: true,
+        limit: 1,
       });
-      // After the statement, so this only ever names rows that are gone, and
-      // inside an enclosing SQLite transaction after that commits. The files
-      // another item still refers to are asked for then (filesKeptByOthers).
-      await this.afterCommit(() => revalidateMedia(chunk));
-      await this.afterCommit(async () => {
-        const kept = await filesKeptByOthers(
-          this.storedFileSearch,
-          removed.flatMap(record => storedFilesOf(record).paths),
-          removed.map(record => record.id)
-        );
-        if (kept) await removeFiles(removed, kept);
+      if (found) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The files a Replace kept for the removed items' uses by address, and the
+   * record of them: the step a delete of each item runs (`removeKeptFiles`),
+   * so a folder's items leave nothing of theirs behind. Never fails the
+   * cascade, whose rows are already gone.
+   */
+  private async removeKeptFilesOf(mediaIds: string[]): Promise<void> {
+    if (mediaIds.length === 0) return;
+    try {
+      // Loaded when a folder's items are deleted, not with the service.
+      const { removeKeptFiles } = await import(
+        "../domains/media/usage/address-uses"
+      );
+      await removeKeptFiles(
+        this.adapter,
+        getMediaStorage(),
+        this.logger,
+        mediaIds
+      );
+    } catch (error) {
+      this.logger.warn("[MediaFolderService] Kept files not removed", {
+        error: errorForLog(error),
       });
     }
   }
@@ -914,24 +1236,35 @@ export class MediaFolderService extends BaseService {
     message: string;
   }> {
     try {
-      const { media } = this.tables;
-
-      if (folderId) {
-        const folderResult = await this.getFolderById(folderId);
-        if (!folderResult.success) {
-          return {
-            success: false,
-            statusCode: 404,
-            code: "NOT_FOUND",
-            message: "Folder not found",
-          };
+      // The destination folder, then the item, in the one order
+      // (`lockMediaFolders`), so a folder delete holding the folder and
+      // waiting for the item takes turns with this move rather than
+      // deadlocking with it. A folder gone meanwhile is not found.
+      const moved = await this.adapter.transaction(async tx => {
+        if (folderId) {
+          await lockMediaFolders(tx, [folderId]);
+          const [folder] = await tx.select("media_folders", {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: folderId }] },
+          });
+          if (!folder) return false;
         }
+        await lockMediaItems(tx, [mediaId]);
+        await tx.update(
+          "media",
+          { folderId, updatedAt: new Date() },
+          { and: [{ column: "id", op: "=", value: mediaId }] }
+        );
+        return true;
+      });
+      if (!moved) {
+        return {
+          success: false,
+          statusCode: 404,
+          code: "NOT_FOUND",
+          message: "Folder not found",
+        };
       }
-
-      await this.db
-        .update(media)
-        .set({ folderId, updatedAt: new Date() })
-        .where(eq(media.id, mediaId));
 
       // A direct media-row write that never reaches the media service, so it
       // carries its own invalidation for the same reason the cascade above does.

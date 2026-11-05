@@ -32,6 +32,11 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
+// The Next.js / React check an existing app passes before anything is written.
+import {
+  frameworkVersionMessage,
+  frameworkVersionProblems,
+} from "./lib/framework-versions";
 import {
   nextlySource,
   nextlyVersionConflictMessage,
@@ -65,6 +70,7 @@ import type {
   ProjectType,
 } from "./types";
 import {
+  detectAppPackageManager,
   detectPackageManager,
   detectPluginPackage,
   detectProject,
@@ -161,6 +167,27 @@ export async function createNextly(
 
   if (existingProject) {
     p.log.success(`${pc.green("Next.js")} project detected`);
+
+    // An app on a Next.js, React or React DOM outside the supported ranges
+    // would install Nextly and then fail at build or at run time. It is
+    // refused here, the first thing the existing-app path does after reading
+    // package.json and before any prompt, install or write, so the app is
+    // left exactly as it was and the person answers nothing first.
+    const frameworkProblems = await frameworkVersionProblems(cwd);
+    if (frameworkProblems.length > 0) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(
+        frameworkVersionMessage(
+          frameworkProblems,
+          await detectAppPackageManager(cwd)
+        )
+      );
+      process.exit(1);
+    }
 
     if (!defaults) {
       const shouldInstall = await p.confirm({

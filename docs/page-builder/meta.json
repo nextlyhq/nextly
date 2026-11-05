@@ -1,4 +1,13 @@
 {
   "title": "Page Builder",
-  "pages": ["index", "locked-areas"]
+  "pages": [
+    "index",
+    "editor",
+    "placement",
+    "locked-areas",
+    "layouts",
+    "moving-between-sites",
+    "compose-through-the-api",
+    "contributed-blocks"
+  ]
 }

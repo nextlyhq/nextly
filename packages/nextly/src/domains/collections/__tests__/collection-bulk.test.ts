@@ -17,7 +17,15 @@
 // imports carry the adapter transaction shape the caller-owned entry points
 // take, the result contracts the assertions pin, the write-integrity marker
 // whose failures force a rollback, and the typed error the abort paths throw.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from "vitest";
 import {
   poolWaitTimeoutError,
   type TransactionContext,
@@ -46,7 +54,16 @@ import {
   createMockRbacAccessControlService,
   createMockComponentDataService,
   createSampleEntry,
+  publicMay,
+  resetCallerAccess,
 } from "./collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
@@ -135,8 +152,10 @@ const callerLookup = vi.hoisted(() => ({ failure: undefined as unknown }));
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
   const real =
     await importOriginal<typeof import("../../../auth/access/resolve-actor")>();
+  const fake = await import("../../../auth/access/__tests__/fake-caller");
   return {
     ...real,
+    actorForVisitor: fake.fakeActorForVisitor,
     actorForUser: (...args: Parameters<typeof real.actorForUser>) =>
       callerLookup.failure === undefined
         ? real.actorForUser(...args)
@@ -171,8 +190,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
     const mockHookRegistry = createMockHookRegistry();
     const mockRbac = createMockRbacAccessControlService();
     // The batch writes here are made with no user, as an anonymous caller
-    // makes them, and an anonymous write needs a rule that allows it. The
-    // mechanics under test start past that gate.
+    // makes them, and an anonymous write needs the Public role's permission
+    // and a rule that allows it. The mechanics under test start past that
+    // gate.
+    resetCallerAccess();
+    publicMay("read", "create", "update", "delete");
     mockRbac.getRegisteredAccess.mockReturnValue({
       create: true,
       update: true,
@@ -506,8 +528,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // throws NextlyError.forbidden so the dispatcher emits a canonical
       // 403 error envelope instead of fabricating a synthetic row in
       // `failures[]` with no real id to attach it to.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -564,8 +588,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // See bulkUpdateByQuery analogue above: a collection-wide access denial
       // is a request-level authorization failure (403), not a partial-success
       // entry in `failures[]`.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -1001,7 +1027,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
 
           expect(result.successful).toBe(1);
           expect(result.failed).toBe(1);
-          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          // The code-less 500 envelope reports the code the single-entry
+          // write answers it with.
+          expect(result.errors).toEqual([
+            { index: 1, error: "nope", code: "INTERNAL_ERROR" },
+          ]);
           // The committed-then-failed item still owes its delivery and its
           // tags, even though it is counted a failure.
           expect(result.eventRecorded).toBe(true);
@@ -1013,7 +1043,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           const result = await op.inTx(makeTx());
 
           expect(result.successful).toBe(1);
-          expect(result.errors).toEqual([{ index: 1, error: "nope" }]);
+          // The code-less 500 envelope reports the code the single-entry
+          // write answers it with.
+          expect(result.errors).toEqual([
+            { index: 1, error: "nope", code: "INTERNAL_ERROR" },
+          ]);
           expect(result.revalidationIntents).toHaveLength(2);
         });
 
@@ -1080,10 +1114,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             () => undefined,
             (error: unknown) => error
           );
-          // The abort is a typed internal failure: the public message stays
-          // generic — a returned worker failure may be a hook, access, or
-          // server problem, not caller input — and the per-index detail
-          // rides the cause, which the wire never serializes.
+          // The abort is the item's own answer, rebuilt from its envelope: a
+          // code-less 500 is a typed internal failure with the generic public
+          // message, and the per-index detail rides the log context, which
+          // the wire never serializes.
           if (!(rejection instanceof NextlyError)) {
             throw new Error(
               "expected the stopOnError abort to be a NextlyError"
@@ -1091,7 +1125,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           }
           expect(rejection.code).toBe("INTERNAL_ERROR");
           expect(rejection.message).toBe("An unexpected error occurred.");
-          expect(rejection.cause?.message).toContain("Entry at index 1 failed");
+          expect(rejection.logContext).toMatchObject({
+            batchIndex: 1,
+            itemMessage: "nope",
+          });
         });
 
         it("leaves the outbox signal absent on the twin when no item records an event", async () => {

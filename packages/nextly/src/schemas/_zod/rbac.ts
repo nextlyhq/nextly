@@ -189,6 +189,18 @@ export const RoleSchema = z.object({
     .optional(),
   level: z.number().int().min(0, "Level must be non-negative").default(0),
   isSystem: z.boolean().default(false),
+  /**
+   * Whether the role may be given to a user or an API key, or built on by
+   * another role: false for the built-in Public role, as the roles API sends
+   * it. Optional, so a role read from a source without it still parses; it
+   * is never filled in as `true`.
+   */
+  assignable: z.boolean().optional(),
+  /**
+   * Which built-in role it is, where it is one: the Public role or
+   * super-admin, as the roles API sends it. Absent on every other role.
+   */
+  builtIn: z.enum(["public", "super-admin"]).optional(),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });

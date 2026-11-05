@@ -19,6 +19,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -67,8 +68,7 @@ const previewSchema = z.object({
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf,
     ]);
 
     const { id } = await context.params;

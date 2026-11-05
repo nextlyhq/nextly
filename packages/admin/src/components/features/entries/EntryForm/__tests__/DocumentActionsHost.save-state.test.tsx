@@ -17,6 +17,7 @@ import {
   DocumentActionsHost,
   useHostedDocumentActions,
 } from "../DocumentActionsContext";
+import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { useTrackedWrite } from "../useDocumentActionHooks";
 import type {
   DocumentActionBindings,
@@ -225,5 +226,49 @@ describe("the document's save state", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
     );
     expect(state(probe)).toEqual(before);
+  });
+});
+
+describe("the stored time the host hands its surfaces", () => {
+  function drawChip(entry: DocumentActionBindingsInput["entry"]) {
+    return render(
+      <DocumentActionsHost
+        input={{
+          mode: "edit",
+          hasStatus: true,
+          entry,
+          collectionSlug: "posts",
+        }}
+      >
+        <DocumentSaveIndicator />
+      </DocumentActionsHost>
+    );
+  }
+
+  it("comes from the document's updatedAt, so the editor's chip opens as Saved", () => {
+    drawChip({
+      ...draft,
+      updatedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    expect(screen.getByText("Saved")).toBeTruthy();
+  });
+
+  it("has no age for a pending working draft, whose row keeps the published time", async () => {
+    drawChip({
+      ...published,
+      _isWorkingDraft: true,
+      updatedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    await userEvent.hover(screen.getByText("Saved"));
+    expect(
+      (await screen.findAllByText("Changes saved as a draft")).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/days ago/)).toBeNull();
+  });
+
+  it("is absent for a document with no readable updatedAt", () => {
+    const { container } = drawChip({ ...draft, updatedAt: "not a time" });
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(container.querySelector('[data-tone="none"]')).not.toBeNull();
   });
 });

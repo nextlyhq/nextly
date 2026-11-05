@@ -36,32 +36,26 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { movedOnto } from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
-import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
+import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -79,28 +73,34 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { getProductionNotifier } from "../../runtime/notifications/index";
-import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  builderSchemaPush,
+  leavingSettingsStep,
+  pushAndReconcileCompanion,
+  refuseRefusedLeavingSettings,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getMigrationJournalFromDI,
+  getLoggerFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
@@ -118,6 +118,7 @@ import {
   requireParam,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -258,7 +259,7 @@ export const SINGLE_VERSION_METHODS: Record<
     },
   },
   restoreSingleVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, never from the URL: a Single
       // has exactly one document and the client must not name which.
@@ -274,6 +275,8 @@ export const SINGLE_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -427,12 +430,15 @@ export const SINGLE_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized Single resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, from the query: a DELETE
+        // carries no body to read it from.
+        version: versionInputOfQuery(p),
       });
       return respondMutation("Working draft discarded.", item);
     },
   },
   takeLiveSingleSharedValues: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, body) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, as for a discard: it is what
       // the authorization checks are made against.
@@ -445,6 +451,8 @@ export const SINGLE_VERSION_METHODS: Record<
         // `?locale=` names the language whose pending change takes the live
         // values. An empty value is the same as none: the default language.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, judged as a save of it.
+        version: versionInputOf(body),
       });
       return respondMutation("Live values taken.", item);
     },
@@ -511,8 +519,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const items = result.data.map(s =>
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
+      // A Single removed from code stays listed, marked, so the admin can say
+      // so and name the step that retires it. The mark is loaded on first use
+      // rather than with the dispatcher, so a module that imports the
+      // dispatcher and never lists does not load it.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       return respondList(
-        items,
+        await withRemovedFromCodeMarks(
+          "single",
+          items as unknown as Record<string, unknown>[]
+        ),
         offsetPaginationToMeta({
           total: result.total,
           limit,
@@ -549,23 +567,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         | undefined;
 
       if (!b?.slug) throw new Error("Single slug is required");
-      // Rejected before the DDL below runs: a reserved slug seeds the same
-      // permission rows a system resource's routes check, and checking only at
-      // registration (further down) would create `single_<slug>` and its locale
-      // companion first, leaving orphan tables when registration then refused it.
-      if (isReservedResourceSlug(b.slug)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "slug",
-              code: "reserved_slug",
-              message:
-                "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
-            },
-          ],
-          logContext: { reason: "system-resource-slug", slug: b.slug },
-        });
-      }
+      // Judged by the one address rule every road shares, before the DDL below runs, so a refused
+      // address leaves no `single_<slug>` table behind. A system resource's name is among its
+      // refusals: it seeds the same permission rows that resource's routes check.
+      assertAddressAllowed("single", b.slug);
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
@@ -580,6 +585,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Canonical resolver keeps the UI-create path in sync with registry
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
+
+      // Refused for a slug a COLLECTION already owns, one reserved by a system resource, or one
+      // with the same snake_case form as another collection's or Single's address; asked before
+      // the table-family check below so that refusal names both addresses. `registerSingle` makes
+      // this check too, but it makes it after the table has been created, so a conflicting slug
+      // rejected the request and left `single_<slug>` behind with nothing describing it. Checked
+      // here, the rejection costs nothing and creates nothing. The registry keeps its own call
+      // because other callers reach it without passing through this handler.
+      const conflictAdapter = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter")
+        : undefined;
+      if (conflictAdapter) {
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug, {
+          addressKind: "single",
+        });
+      }
 
       // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
       // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
@@ -599,19 +620,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             ownedBy: owner.slug,
           },
         });
-      }
-
-      // The same refusal for a slug a COLLECTION already owns, or one reserved by a system
-      // resource. `registerSingle` makes this check too, but it makes it after the table has been
-      // created, so a conflicting slug rejected the request and left `single_<slug>` behind with
-      // nothing describing it. Checked here, the rejection costs nothing and creates nothing.
-      // The registry keeps its own call because other callers reach it without passing through
-      // this handler.
-      const conflictAdapter = container.has("adapter")
-        ? container.get<DrizzleAdapter>("adapter")
-        : undefined;
-      if (conflictAdapter) {
-        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
       }
 
       // i18n: a localized single stores translatable values via the app's
@@ -786,11 +794,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
           actor: readAuthenticatedActor(),
-          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
-          // that re-check while field-level write access + response redaction
-          // still run for this user (overrideAccess stays false).
+          // Where route auth admitted the caller on update, `routeAuthorized`
+          // skips only that re-check while field-level write access + response
+          // redaction still run for this user (overrideAccess stays false). A
+          // caller admitted on publish or unpublish alone is judged here.
           overrideAccess: false,
-          routeAuthorized: !!user,
+          routeAuthorized: !!user && routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -807,7 +816,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
@@ -816,21 +825,51 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
         overrideAccess: false,
-        // Route auth already ran the RBAC gate for `update`; attesting it skips
-        // only that re-check. The publish gate always runs.
-        routeAuthorized: !!user,
-        // The route authorized this POST as `update` against an API key's
-        // scope; the service judges the key's own `publish-{slug}` grant.
+        // The route admitted this POST on the `publish-{slug}` grant alone,
+        // so it attests no gate: a Single with nothing to publish is still
+        // asked update by the service.
+        routeAuthorized: false,
+        // The service judges an API key's own `publish-{slug}` grant and the
+        // rule, in each language the publish puts live.
         authenticatedScope: readAuthenticatedScope(),
+        // The version the publish was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const published = unwrapServiceResult<{
         id: string;
         status?: "published";
+        languages?: unknown[];
       }>(result, { slug });
       return respondAction(result.message ?? "All languages published.", {
         slug,
         ...published,
       });
+    },
+  },
+
+  previewPublishAllSingleLocales: {
+    // What publishing every language would do, language by language, without
+    // doing it. Asked as the publish is: the service judges the publish
+    // permission and rule in each language it would put live, and names only
+    // the fields the caller may read.
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const result = await svc.entry.previewPublishAllLocales(slug, {
+        user: readAuthenticatedUser(),
+        overrideAccess: false,
+        // The route admitted this read on the `publish-{slug}` grant alone,
+        // so it attests no gate, as the publish's route attests none.
+        routeAuthorized: false,
+        authenticatedScope: readAuthenticatedScope(),
+      });
+      const preview = unwrapServiceResult<{
+        id: string;
+        languages: unknown[];
+        blockers: unknown[];
+      }>(result, { slug });
+      // One caller's answer: who may publish, and which fields they may read,
+      // decide it, so no shared cache may hand it to anyone else.
+      return withSessionCacheHeaders(respondData({ slug, ...preview }));
     },
   },
 
@@ -842,7 +881,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
-      const single = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const single = await svc.registry.getSingleForWrite(slug);
       consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
         detail: single ? `found (tableName: ${single.tableName})` : "null",
       });
@@ -931,12 +971,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema record IS the doc here, so the admin Schema Builder
       // reads slug/fields/admin off the response body directly without
       // an envelope wrapper.
-      return respondDoc({
-        ...injectSingleDefaultFields(
-          enrichedData as unknown as SingleWithFields
-        ),
-        ...draftSplitResponseFields(draftSplit),
-      });
+      // Marked as the listing marks it, so the Single's own screen shows the
+      // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
+      const [marked] = await withRemovedFromCodeMarks("single", [
+        {
+          ...injectSingleDefaultFields(
+            enrichedData as unknown as SingleWithFields
+          ),
+          ...draftSplitResponseFields(draftSplit),
+        } as Record<string, unknown>,
+      ]);
+      return respondDoc(marked);
     },
   },
 
@@ -972,7 +1020,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       if (!b) throw new Error("Update data is required");
 
-      const existing = await svc.registry.getSingleBySlug(slug);
+      // As stored, past the registry row cache: the write below decides from it.
+      const existing = await svc.registry.getSingleForWrite(slug);
       if (!existing) {
         throw new Error(`Single "${slug}" not found`);
       }
@@ -1052,25 +1101,31 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const { record: updated, migrationStatus } =
-        await svc.metadata.updateSingleSchema({
-          slug,
-          existing,
-          updateData,
-          fields: schemaFields,
-          isLocalized,
-          wasLocalized,
-          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-          // the record inside its exclusion and needs to tell an explicit `localized: false` from
-          // this handler having filled in the value it read.
-          localizedRequested: b.localized !== undefined,
-          hasStatus,
-          wasStatus,
-          // Whether the request SET the toggle, which is not the same as changing it: saving it at
-          // its current value still reaches the companion, and that is what repairs a localized
-          // single whose companion `_status` was never provisioned.
-          statusRequested: b.status !== undefined,
-        });
+      const {
+        record: updated,
+        migrationStatus,
+        refusedSettings,
+      } = await svc.metadata.updateSingleSchema({
+        slug,
+        existing,
+        updateData,
+        fields: schemaFields,
+        isLocalized,
+        wasLocalized,
+        // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+        // the record inside its exclusion and needs to tell an explicit `localized: false` from
+        // this handler having filled in the value it read.
+        localizedRequested: b.localized !== undefined,
+        hasStatus,
+        wasStatus,
+        // Whether the request SET the toggle, which is not the same as changing it: saving it at
+        // its current value still reaches the companion, and that is what repairs a localized
+        // single whose companion `_status` was never provisioned.
+        statusRequested: b.status !== undefined,
+      });
+
+      // Leaving settings the database refused: the admin is told which setting on which field.
+      refuseRefusedLeavingSettings(slug, refusedSettings);
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
@@ -1095,6 +1150,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
+      // A pair of sibling fields this save would create is refused before anything is planned;
+      // one the entity already holds keeps working (judged against the stored fields).
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        fields,
+        single.fields ?? []
+      );
 
       const currentFields = (single.fields ??
         []) as unknown as FieldDefinition[];
@@ -1109,7 +1171,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: single,
+          requestedLocalized: readRequestLocalized(body),
+        }) as DesiredSingle["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: single.status === true,
@@ -1149,9 +1217,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   applySingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
-      const single = await svc.registry.getSingleBySlug(slug);
-      if (!single) throw new Error("Single not found");
-      refuseChangeDefinedInCode(single, "Single", slug);
 
       const {
         fields,
@@ -1180,229 +1245,272 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
 
-      // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
-      // simultaneous toggle+field-change save); fall back to the registry value.
-      const wasLocalized =
-        (single as { localized?: boolean }).localized === true;
-      // Validated rather than coerced: `localized: "false"` would read as
-      // `false` under `=== true` and turn an ordinary save of a localized
-      // single into a DISABLE transition, restoring the companion's columns
-      // onto the main table and archiving it.
-      const isLocalized = readRequestLocalized(body) ?? wasLocalized;
-      // i18n: gate the Internationalization enable on the app-level
-      // `localization` config (false→true transition only).
-      if (!wasLocalized && isLocalized) {
-        assertLocalizationConfigured("single", slug);
-      }
+      // Everything above reads the request alone, so it is decided before the lock is taken: a
+      // malformed save is answered as one, not with a lock refusal or a lock table created on the
+      // way to rejecting it. Everything below, from the registry read to the response, holds the
+      // schema lock and is refused at once while a migration holds it. This road does its DDL
+      // itself rather than through the metadata service, so the lock is taken here.
+      return withSchemaChangeExcluded(
+        {
+          adapter: getAdapterFromDI(),
+          // An app whose DI registered no logger still saves; the refusal's log line then goes to
+          // the console.
+          logger: getLoggerFromDI() ?? consoleLogger,
+          label: `apply schema changes to single "${slug}"`,
+          // This road runs the push pipeline, so it issues DDL and may create the lock table.
+          issuesDdl: true,
+        },
+        async () => {
+          // As stored, past the registry row cache, and read once the lock is held: its schema
+          // version is checked and advanced below, and every check is asked against the row the DDL
+          // and the registry write act on.
+          const single = await svc.registry.getSingleForWrite(slug);
+          if (!single) throw new Error("Single not found");
+          refuseChangeDefinedInCode(single, "Single", slug);
+          // A pair of sibling fields this save would create is refused before any statement or archive
+          // write; one the entity already holds keeps working. Asked here because this road reaches its
+          // DDL through no shared service that could ask it.
+          assertNoNewSiblingClashes(
+            { kind: "single", slug },
+            fields,
+            single.fields ?? []
+          );
 
-      const currentVersion = single.schemaVersion ?? 1;
-      // Reject a stale UI save before any DDL runs so two admins editing the
-      // same single cannot silently overwrite each other (last-write-wins).
-      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
-      const tableName = single.tableName;
+          // i18n: prefer the request's localized flag over the persisted one (which may be stale on a
+          // simultaneous toggle+field-change save); fall back to the registry value.
+          const wasLocalized =
+            (single as { localized?: boolean }).localized === true;
+          // Validated rather than coerced: `localized: "false"` would read as
+          // `false` under `=== true` and turn an ordinary save of a localized
+          // single into a DISABLE transition, restoring the companion's columns
+          // onto the main table and archiving it.
+          const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // i18n: gate the Internationalization enable on the app-level
+          // `localization` config (false→true transition only).
+          if (!wasLocalized && isLocalized) {
+            assertLocalizationConfigured("single", slug);
+          }
 
-      const legacyBundle = resolutions
-        ? { tableName, byFieldName: resolutions }
-        : undefined;
+          const currentVersion = single.schemaVersion ?? 1;
+          // Reject a stale UI save before any DDL runs so two admins editing the
+          // same single cannot silently overwrite each other (last-write-wins).
+          assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
+          const tableName = single.tableName;
 
-      const adapter = getAdapterFromDI();
-      if (!adapter) throw new Error("Database adapter not initialized");
-      // The dialog's answer on a translated field's rename, refused when it does not say,
-      // before anything changes.
-      const companionRename = await resolveCompanionRename(renameResolutions, {
-        tableName,
-        oldFields: single.fields as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        dialect: adapter.dialect,
-        // A Single's table is built by the collection's generator.
-        builtBy: "collection",
-      });
-      // A field leaving translation has preconditions of its own, asked before the push alters
-      // anything.
-      await archiveFieldsLeavingTranslation({
-        // This builder made the table, which decides the column bounds compared.
-        builtBy: "collection",
-        // The rename the admin chose, or that none was; when none was offered (a storage change,
-        // or no single candidate), the preflight finds it from the fields and refuses what it must.
-        renamed: companionRename,
-        tableName: single.tableName,
-        defaultLocale: appLocalization()?.defaultLocale ?? "en",
-        adapter,
-        entity: slug,
-        kind: "single",
-        oldFields: single.fields as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        // This apply's push refuses a main-table column drop the admin did not confirm.
-        mainDropsConfirmed: true,
-      });
-      const dialect = adapter.dialect;
-      const db = adapter.getDrizzle();
-      const databaseName =
-        dialect === "mysql"
-          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
-          : undefined;
+          const legacyBundle = resolutions
+            ? { tableName, byFieldName: resolutions }
+            : undefined;
 
-      const desired = await buildFullDesiredSchema();
-      desired.singles[slug] = {
-        slug,
-        tableName,
-        fields: fields as DesiredSingle["fields"],
-        // Mirror previewSingleSchemaChanges so apply diffs against the
-        // same desired schema.
-        status: single.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable columns
-        // from the single's main table (they live in single_<slug>_locales, reconciled
-        // out-of-band below) — mirrors the collection apply path.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
+          const adapter = getAdapterFromDI();
+          if (!adapter) throw new Error("Database adapter not initialized");
+          // The dialog's answer on a translated field's rename, refused when it does not say,
+          // before anything changes.
+          const companionRename = await resolveCompanionRename(
+            renameResolutions,
+            {
+              tableName,
+              oldFields: single.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasLocalized,
+              isLocalized,
+              dialect: adapter.dialect,
+              // A Single's table is built by the collection's generator.
+              builtBy: "collection",
+            }
+          );
+          // A field leaving translation has preconditions of its own, asked before the push alters
+          // anything.
+          await archiveFieldsLeavingTranslation({
+            // This builder made the table, which decides the column bounds compared.
+            builtBy: "collection",
+            // The rename the admin chose, or that none was; when none was offered (a storage change,
+            // or no single candidate), the preflight finds it from the fields and refuses what it must.
+            renamed: companionRename,
+            tableName: single.tableName,
+            defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            adapter,
+            entity: slug,
+            kind: "single",
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            // This apply's push refuses a main-table column drop the admin did not confirm.
+            mainDropsConfirmed: true,
+          });
+          const dialect = adapter.dialect;
+          const db = adapter.getDrizzle();
+          const databaseName =
+            dialect === "mysql"
+              ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+              : undefined;
 
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
+          // A Required or Unique field leaving translation is pushed without its setting first, and
+          // the setting is pushed once the companion reconcile has copied its values in, before its
+          // companion column is dropped.
+          const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            renamed: companionRename,
+          });
 
-      const migrationJournal =
-        getMigrationJournalFromDI() ?? noopMigrationJournal;
-      const pipeline = new PushSchemaPipeline({
-        executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: new RealClassifier(),
-        promptDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal,
-        notifier: getProductionNotifier(),
-      });
-
-      const result = await pipeline.apply({
-        desired,
-        db,
-        dialect,
-        source: "ui",
-        promptChannel: "browser",
-        databaseName,
-        uiTargetSlug: slug,
-        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
-        // kind is invisible to every history query filtered by its own.
-        uiTargetKind: "single" as const,
-        // A field becoming translated keeps its value as this language's; the apply moves it after
-        // its prompts and refusals, before it drops the main column.
-        defaultLocale: appLocalization()?.defaultLocale ?? "en",
-      });
-
-      if (!result.success) {
-        throw new Error(
-          result.error?.message ?? "Failed to apply schema changes"
-        );
-      }
-
-      // i18n: the push pipeline excludes companion tables, so reconcile the single's companion
-      // out-of-band — create single_<slug>_locales on the first translatable field, then ADD/DROP
-      // columns as the field set changes (mirrors collections). Uses the request's `isLocalized`.
-      try {
-        await reconcileSingleCompanion({
-          slug,
-          tableName,
-          oldFields: single.fields as unknown as FieldDefinition[],
-          newFields: fields as unknown as FieldDefinition[],
-          localized: isLocalized,
-          // Detect an enable/disable transition against the persisted state so this apply
-          // seeds/restores existing rows rather than only creating an empty companion.
-          wasLocalized: (single as { localized?: boolean }).localized === true,
-          status: single.status === true,
-          // Read from the same persisted record as `wasLocalized`, so both describe the state
-          // before this apply.
-          wasStatus: single.status === true,
-          adapter,
-          // Added to the companion, with their values, by the apply before its drop.
-          joinedBefore: movedOnto(result, tableName),
-          // A translated field the admin renamed: the dialog's answer naming the companion.
-          renamed: companionRename ?? undefined,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: { op: "singleCompanionReconcile", slug, detail: msg },
-        });
-      }
-
-      const newSchemaVersion = currentVersion + 1;
-
-      // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
-      // schema_version so the optimistic-lock check above sees a new value on the
-      // next save (without the bump a second stale save would pass the guard), and
-      // persist `localized` so a simultaneous toggle+field-change save keeps the
-      // flag alongside the field set. The write is non-fatal (the DDL already
-      // succeeded), but track whether it landed so the response never reports a
-      // version the database did not persist.
-      let versionPersisted = true;
-      try {
-        await adapter.update(
-          "dynamic_singles",
-          {
-            fields: JSON.stringify(fields),
-            schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-            migration_status: "applied",
-            localized: isLocalized,
-            schema_version: newSchemaVersion,
-            updated_at: new Date(),
-          },
-          { and: [{ column: "slug", op: "=", value: slug }] }
-        );
-      } catch (err) {
-        versionPersisted = false;
-        const msg = err instanceof Error ? err.message : String(err);
-        consoleLogger.warn(
-          `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
-            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
-        );
-      }
-
-      // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
-      // table omits translatable columns, then register the companion runtime table so
-      // per-language reads/writes resolve in this process without a restart.
-      try {
-        const { table: freshTable } = generateRuntimeSchema(
-          tableName,
-          fields as FieldDefinition[],
-          dialect,
-          { localized: isLocalized, status: single.status === true }
-        );
-        getSchemaRegistryFromDI()?.registerDynamicSchema(tableName, freshTable);
-        if (isLocalized) {
-          const companion = buildCompanionRuntimeTable({
+          const desired = await buildFullDesiredSchema();
+          desired.singles[slug] = {
             slug,
             tableName,
-            fields: fields as FieldDefinition[],
-            dialect,
-            localized: true,
+            fields: (settingsDeferred ?? fields) as DesiredSingle["fields"],
+            // Mirror previewSingleSchemaChanges so apply diffs against the
+            // same desired schema.
             status: single.status === true,
+            // i18n: carry the localized flag so the push diff omits translatable columns
+            // from the single's main table (they live in single_<slug>_locales, reconciled
+            // out-of-band below) — mirrors the collection apply path.
+            localized: isLocalized,
+            // Authored in the Schema Builder: this is the Builder's own save path.
+            builderOwned: true,
+          };
+
+          const push = builderSchemaPush({
+            dialect,
+            db,
+            databaseName,
+            slug,
+            kind: "single",
+            resolutions: [
+              renameResolutions ?? [],
+              eventResolutions ?? [],
+              legacyBundle,
+            ],
           });
-          if (companion) {
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              companion.companionTableName,
-              companion.table
+          // The push excludes companion tables, so single_<slug>_locales is brought in step right
+          // after it: created on the first translatable field, then ADD/DROPped as the field set
+          // changes (mirrors collections).
+          await pushAndReconcileCompanion(push, desired, "single", {
+            slug,
+            tableName,
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: isLocalized,
+            wasLocalized:
+              (single as { localized?: boolean }).localized === true,
+            // Both read from the same persisted record as `wasLocalized`, so all three describe the
+            // state before this apply.
+            status: single.status === true,
+            wasStatus: single.status === true,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the pipeline
+            // keeps the last one it applied, by reference, to skip a push that changes nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "collection",
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      singles: {
+                        ...desired.singles,
+                        [slug]: {
+                          ...desired.singles[slug],
+                          fields: fields as DesiredSingle["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          });
+
+          const newSchemaVersion = currentVersion + 1;
+
+          // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
+          // schema_version so the optimistic-lock check above sees a new value on the
+          // next save (without the bump a second stale save would pass the guard), and
+          // persist `localized` so a simultaneous toggle+field-change save keeps the
+          // flag alongside the field set. The write is non-fatal (the DDL already
+          // succeeded), but track whether it landed so the response never reports a
+          // version the database did not persist.
+          let versionPersisted = true;
+          try {
+            await adapter.update(
+              "dynamic_singles",
+              {
+                fields: JSON.stringify(fields),
+                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+                migration_status: "applied",
+                localized: isLocalized,
+                schema_version: newSchemaVersion,
+                updated_at: new Date(),
+              },
+              { and: [{ column: "slug", op: "=", value: slug }] }
+            );
+            // Written past the registry service, so the cached registry row is cleared here.
+            clearRegistryRowCache();
+          } catch (err) {
+            versionPersisted = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            consoleLogger.warn(
+              `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+                `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
             );
           }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        consoleLogger.warn(
-          `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
-        );
-      }
 
-      return respondAction(`Schema applied for single '${slug}'`, {
-        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
-      });
+          // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
+          // table omits translatable columns, then register the companion runtime table so
+          // per-language reads/writes resolve in this process without a restart.
+          try {
+            const { table: freshTable } = generateRuntimeSchema(
+              tableName,
+              fields as FieldDefinition[],
+              dialect,
+              { localized: isLocalized, status: single.status === true }
+            );
+            getSchemaRegistryFromDI()?.registerDynamicSchema(
+              tableName,
+              freshTable
+            );
+            if (isLocalized) {
+              const companion = buildCompanionRuntimeTable({
+                slug,
+                tableName,
+                fields: fields as FieldDefinition[],
+                dialect,
+                localized: true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published Single its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: single.status,
+                }),
+              });
+              if (companion) {
+                getSchemaRegistryFromDI()?.registerDynamicSchema(
+                  companion.companionTableName,
+                  companion.table
+                );
+              }
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            consoleLogger.warn(
+              `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
+            );
+          }
+
+          return respondAction(`Schema applied for single '${slug}'`, {
+            newSchemaVersion: versionPersisted
+              ? newSchemaVersion
+              : currentVersion,
+          });
+        }
+      );
     },
   },
 };

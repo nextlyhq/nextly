@@ -38,11 +38,12 @@ import type {
   ComponentLookup,
   NestingSource,
 } from "@nextlyhq/blocks-engine";
-import { findNode, placementVerdict } from "@nextlyhq/blocks-engine";
+import { canPlaceIn, findNode } from "@nextlyhq/blocks-engine";
 
-import { refusalWording, type RefusalWording } from "./drag-refusal";
-import { placementTypesOf } from "./inserter";
-import type { OpPosition } from "./ops";
+import { placementWording, type RefusalWording } from "./drag-refusal";
+import { placementSources } from "./drop-targets";
+import { layerLabel } from "./layers";
+import type { OpPosition } from "./op-vocabulary";
 
 /**
  * The nesting rule's refusal for a proposed move, or `null` if it permits it.
@@ -67,39 +68,31 @@ export function nestingRefusalForMove(
 ): RefusalWording | null {
   const moving = findNode(document.nodes, movingId);
   if (moving === undefined) return null;
-
-  /*
-   * The destination as the nesting rule describes it. A position with no
-   * `parentId` is the root, which the rule treats as its own case rather than
-   * as a slot with no container — a block restricted to living inside
-   * something is refused AT the root for a reason no slot could give.
-   */
   const parent =
     to.parentId === undefined
       ? undefined
       : findNode(document.nodes, to.parentId);
   if (to.parentId !== undefined && parent === undefined) return null;
-  const target =
+  // The one placement rule, over the moving block and everything it holds, at
+  // the destination with what its ancestors refuse. A position whose slot is
+  // unnamed is the root's.
+  const verdict = canPlaceIn(
+    document.nodes,
+    [moving],
     parent === undefined
-      ? ({ kind: "root" } as const)
-      : ({
-          kind: "slot",
-          parentType: parent.type,
-          slot: to.slot ?? "",
-        } as const);
-
-  const verdict = placementVerdict(
-    placementTypesOf(moving, definitions),
-    target,
-    nesting
+      ? { kind: "root" }
+      : { kind: "slot", parentId: parent.id, slot: to.slot ?? "" },
+    placementSources({
+      nesting,
+      ...(definitions === undefined ? {} : { definitions }),
+    })
   );
   // ALLOWED is null: the rule permits this placement. Whether it survives the
   // store's own limits is a later question with a different answer.
   if (verdict.allowed) return null;
-
   // Worded by the node being moved, as the pointer route words a refused drop:
   // the author picked up the instance, not the root inside it that refused.
-  return refusalWording(verdict, moving.type, parent?.type);
+  return placementWording(verdict, moving.type, parent?.type);
 }
 
 /**
@@ -117,4 +110,23 @@ export function refusalAnnouncement(wording: RefusalWording): string {
   return wording.remedy === null
     ? wording.headline
     : `${wording.headline} ${wording.remedy}`;
+}
+
+/**
+ * What is said when the store refused a move nothing judged beforehand would
+ * refuse: a byte cap, a depth limit, an op the forest rejects. It names no
+ * cause, because none was established, and it is still said, because a move
+ * that was attempted and did not happen cannot otherwise be told apart from
+ * one that did.
+ *
+ * @param document - the document the move was asked of
+ * @param id - the block that did not move
+ * @returns the announcement text
+ */
+export function unmovedAnnouncement(
+  document: BlockDocument,
+  id: string
+): string {
+  const block = findNode(document.nodes, id);
+  return `${block === undefined ? "The block" : layerLabel(block)} could not be moved.`;
 }

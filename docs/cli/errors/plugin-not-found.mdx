@@ -1,0 +1,24 @@
+---
+title: PLUGIN_NOT_FOUND
+description: "The plugin named on the command line is not among the plugins the configuration lists."
+---
+
+## Cause
+
+The plugin named on the command line is not among the plugins the configuration lists.
+
+`nextly plugins info` looks a plugin up by its package name or its admin slug among the plugins `nextly.config.ts` lists. Nothing it lists matched the name given.
+
+## Fix
+
+- Run `nextly plugins list` to see the configured plugins, and pass one of the names it shows.
+- If the plugin should be there, add it to `plugins` in `nextly.config.ts`.
+
+## Example
+
+```text
+✗ Plugin "@acme/sitemap" not found.
+  Why:  No plugin the configuration lists has that name or admin slug.
+  Next: Run `nextly plugins list` to see installed plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-not-found  (PLUGIN_NOT_FOUND)
+```

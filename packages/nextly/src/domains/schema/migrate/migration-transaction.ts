@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 
+import { requiredColumnCheckpoint } from "./required-column-guard";
 import {
   refusingNewDanglingReferences,
   sqliteForeignKeysOn,
@@ -222,7 +223,10 @@ export function outsideTransactionNotice(source: string): string {
  * as it runs, which is what lets PostgreSQL's `CREATE INDEX CONCURRENTLY`
  * run at all. A statement that fails stops the unit, and nothing undoes the
  * statements before it; the error says how many of them stayed applied.
- * `after` runs once every statement has, with the adapter's own handle.
+ * `after` runs once every statement has, with the adapter's own handle. On
+ * MySQL the statements share one connection whose session runs in strict
+ * mode, as a unit run in a transaction does, so a statement that would cut a
+ * stored value short fails rather than applying with a warning.
  *
  * On SQLite a unit run outside a transaction keeps the foreign-key contract
  * `executeTransaction` gives one run in a transaction, except the rollback:
@@ -241,9 +245,15 @@ export async function runMigrationStatements(
   unit: MigrationUnit,
   after?: (db: unknown, statementsExecuted: number) => Promise<void>
 ): Promise<number> {
+  const dialect = adapter.getCapabilities().dialect;
+  // A column made required after an earlier statement of the unit filled its rows is counted at
+  // its statement, after the fill, through the handle the statements run on; undefined when the
+  // unit has no such column, so this costs nothing.
+  const checkpoint = requiredColumnCheckpoint(statements, dialect, unit);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
-      for (const statement of statements) {
+      for (const [index, statement] of statements.entries()) {
+        await checkpoint?.(tx.db, index);
         await tx.execute(statement);
       }
       if (after === undefined) return;
@@ -252,16 +262,23 @@ export async function runMigrationStatements(
     });
     return statements.length;
   }
-  const runEach = async (): Promise<void> => {
+  const runEach = async (
+    execute: (statement: string) => Promise<unknown>
+  ): Promise<void> => {
     for (const [index, statement] of statements.entries()) {
+      // Outside a transaction each statement has committed, so the pool reads what they left. The
+      // refusal names the statements that ran and says they stayed applied, so it reaches the
+      // caller as it is, not as a statement that failed part-way.
+      await checkpoint?.(adapter.getDrizzle(), index);
       try {
-        await adapter.executeQuery(statement);
+        await execute(statement);
       } catch (error) {
         throw partialFailure(unit, index, statements.length, error);
       }
     }
   };
-  if (adapter.getCapabilities().dialect === "sqlite") {
+  const onPool = (statement: string) => adapter.executeQuery(statement);
+  if (dialect === "sqlite") {
     const session: SqliteForeignKeySession = {
       read: statement => adapter.executeQuery(statement),
       run: async statement => {
@@ -272,13 +289,24 @@ export async function runMigrationStatements(
       await assertForeignKeysOff(session);
       await refusingNewDanglingReferences(
         session,
-        runEach,
+        () => runEach(onPool),
         (count, pairs) =>
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
     });
+  } else if (dialect === "mysql") {
+    // Strict mode, as `executeTransaction` gives a unit run in a transaction:
+    // a statement that would cut a value short, such as a column narrowed
+    // below a stored value's length, fails instead of applying with a
+    // warning nobody reads. A session setting covers only its own
+    // connection, so every statement runs on the one connection the session
+    // holds, which is closed afterwards rather than pooled.
+    await adapter.withSession(
+      session => runEach(statement => session.execute(statement)),
+      { strictSqlMode: true }
+    );
   } else {
-    await runEach();
+    await runEach(onPool);
   }
   await after?.(adapter.getDrizzle(), statements.length);
   return statements.length;

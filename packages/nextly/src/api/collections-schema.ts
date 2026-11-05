@@ -21,26 +21,27 @@ import { z } from "zod";
 
 import { schemaListed } from "../auth/access/route-gate-adapters";
 import { getRBACService } from "../auth/code-access";
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "../auth/collection-definition-policy";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../domains/schema/sibling-fields";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
+import { assertGlobalResourceSlugAvailable } from "../services/lib/resource-slug-guard";
+import { addressSchema } from "../shared/address-rule";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondList, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteAuthentication,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -64,26 +65,9 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
 }
 
 const createCollectionSchema = z.object({
-  // 🔴 This endpoint's own slug rules, NOT `collectionNameSchema`. The Schema
-  // Builder posts to `POST /collections`, which validates with that schema --
-  // 50 characters, a curated reserved list, a SQL-keyword refusal. This is a
-  // different door: a manifest-shaped create for callers driving the schema
-  // API directly, and it has always accepted names that one rejects.
-  //
-  // Kept apart deliberately rather than by omission: 255 is the limit every
-  // caller of this endpoint has been accepted under, and the Builder's 50 would
-  // reject a slug it has always taken. Anything deciding whether a name is
-  // creatable through the ADMIN surface reads
-  // `domains/collections/creatable-slug`, which asks the Builder's validator,
-  // rather than borrowing these limits.
-  slug: z
-    .string()
-    .min(1, "Slug is required")
-    .max(255, "Slug must be 255 characters or less")
-    .regex(
-      /^[a-z][a-z0-9_]*$/,
-      "Slug must start with a letter and contain only lowercase letters, numbers, and underscores"
-    ),
+  // The one address rule every road shares, so this manifest-shaped create
+  // refuses exactly what the Builder's create and configuration refuse.
+  slug: addressSchema("collection"),
   labels: z.object({
     singular: z.string().trim().min(1, "Singular label is required"),
     plural: z.string().trim().min(1, "Plural label is required").optional(),
@@ -230,8 +214,8 @@ function pageOf<T>(all: T[], limit: number, offset: number) {
 /**
  * POST handler for creating a new UI collection.
  *
- * Requires super-admin or `manage-settings` permission. Creates a new
- * collection with `source="ui"` and `locked=false`.
+ * Requires super-admin, or create, update and delete on settings. Creates a
+ * new collection with `source="ui"` and `locked=false`.
  *
  * Response Codes:
  * - 201 Created: Collection created successfully
@@ -249,13 +233,9 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Initialize services (required for permission check via RBAC tables).
   const registry = await getCollectionRegistry();
 
-  // Authorise: only super-admins or users with manage-settings permission
-  // may create new collections (matches the frontend route guard).
-  await requireRoutePermission(
-    request,
-    COLLECTION_DEFINITION_ACTION,
-    COLLECTION_DEFINITION_RESOURCE
-  );
+  // Authorise: a super-admin, or a caller holding every permission a
+  // collection definition change asks (create, update and delete settings).
+  await requireRouteAllPermissions(request, COLLECTION_DEFINITION_PERMISSIONS);
 
   const body = await request.json();
 
@@ -267,6 +247,14 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields, { kind: "collection" });
+  // A new collection holds no pair of sibling fields yet, so every pair it is created with is
+  // new. Asked here because this route writes the registry row itself, through the create the
+  // code-first sync also uses after the start has judged it.
+  assertNoNewSiblingClashes(
+    { kind: "collection", slug: validated.slug },
+    validated.fields,
+    null
+  );
 
   const tableName = validated.slug
     .toLowerCase()
@@ -289,37 +277,61 @@ export const POST = withErrorHandler(async (request: Request) => {
       simplePluralize(validated.labels.singular),
   };
 
-  const collection = await registry.registerCollection({
-    slug: validated.slug,
-    labels: normalizedLabels,
-    tableName,
-    description: validated.description,
-    fields,
-    timestamps: validated.timestamps,
-    admin: validated.admin,
-    source: "ui",
-    locked: false,
-    // Forward Draft/Published flag so the schema-level POST honours the
-    // user's status opt-in just like the dispatcher path does.
-    status: validated.status === true,
-    // i18n: forward the localization opt-in so the registry stores it (companion
-    // table is provisioned on the next migrate).
-    localized: validated.localized === true,
-    // Version history opt-in, normalized to the resolved config the column
-    // holds and every runtime reader tests. Retention rides with the switch.
-    versions: resolveBuilderVersions(
-      validated.versions,
-      validated.versionsMaxPerDoc
-    ),
-    // Cache-revalidation opt-out, normalized to the resolved config the write
-    // path reads (null = standard tags, { disable: true } = off).
-    revalidate: resolveBuilderRevalidate(validated.revalidate),
-    // Persist the recording opt-out alongside the other policy columns so it
-    // survives a restart, not just this process.
-    webhooks: resolveBuilderWebhooks(validated.webhooks),
-    schemaHash,
-    hooks: validated.hooks,
-  });
+  // The address check and the row write hold the schema lock together, refused at once while a
+  // migration holds it: the row describes storage a migration could be moving, and the address is
+  // judged against the collections and Singles as they stand while it is held. Everything above
+  // reads the request alone and is decided before the lock is taken.
+  const adapter = getService("adapter");
+  const collection = await withSchemaChangeExcluded(
+    {
+      adapter,
+      logger: getService("logger"),
+      label: `create collection "${validated.slug}"`,
+      // This route writes the registry row alone; the table comes from the next migrate. It issues
+      // no DDL, so it must not create the lock table on a role without DDL rights.
+      issuesDdl: false,
+    },
+    async () => {
+      // A new address beside another collection's or Single's of the same snake_case form is
+      // refused here, before the row is written: the registry's own guard leaves that check to
+      // the road.
+      await assertGlobalResourceSlugAvailable(adapter, validated.slug, {
+        addressKind: "collection",
+      });
+
+      return registry.registerCollection({
+        slug: validated.slug,
+        labels: normalizedLabels,
+        tableName,
+        description: validated.description,
+        fields,
+        timestamps: validated.timestamps,
+        admin: validated.admin,
+        source: "ui",
+        locked: false,
+        // Forward Draft/Published flag so the schema-level POST honours the
+        // user's status opt-in just like the dispatcher path does.
+        status: validated.status === true,
+        // i18n: forward the localization opt-in so the registry stores it (companion
+        // table is provisioned on the next migrate).
+        localized: validated.localized === true,
+        // Version history opt-in, normalized to the resolved config the column
+        // holds and every runtime reader tests. Retention rides with the switch.
+        versions: resolveBuilderVersions(
+          validated.versions,
+          validated.versionsMaxPerDoc
+        ),
+        // Cache-revalidation opt-out, normalized to the resolved config the write
+        // path reads (null = standard tags, { disable: true } = off).
+        revalidate: resolveBuilderRevalidate(validated.revalidate),
+        // Persist the recording opt-out alongside the other policy columns so it
+        // survives a restart, not just this process.
+        webhooks: resolveBuilderWebhooks(validated.webhooks),
+        schemaHash,
+        hooks: validated.hooks,
+      });
+    }
+  );
 
   // POST is a create; canonical mutation envelope ships a toast message
   // alongside the new collection so the admin can confirm success.

@@ -10,12 +10,19 @@
  * an upgrade.
  */
 import { getTableName } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/manifest";
 import { getDialectTablesForPush } from "../../database/index";
 import { getCoreSchema, getCoreTableNames } from "../index";
 import { STORAGE_FORMAT } from "../storage-format";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
 

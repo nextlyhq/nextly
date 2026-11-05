@@ -66,6 +66,7 @@ import type {
   FindFormBySlugArgs,
   FindFormsArgs,
   FindSingleArgs,
+  FoundSingle,
   FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
@@ -316,9 +317,14 @@ export interface Nextly {
    * });
    * ```
    */
-  findSingle: <TSlug extends SingleSlug>(
-    args: FindSingleArgs<TSlug>
-  ) => Promise<RowFromSingleSlug<TSlug>>;
+  findSingle: <
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    // `createIfMissing: false` reads without creating, and only then does
+    // the answer include `null`; see `FoundSingle`.
+    args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+  ) => Promise<FoundSingle<TSlug, TCreate>>;
 
   /**
    * Update a Single document.
@@ -965,6 +971,21 @@ export interface Nextly {
    * ```
    */
   principals: NextlyPrincipals;
+
+  /**
+   * @experimental In-process access to plugin-contributed services, keyed by
+   * plugin name then service name: the same registry plugins reach as
+   * `ctx.services.plugins`, and the same member the `Nextly` class declares.
+   * Lazily resolved; cast to the service's type, or import it from the
+   * providing plugin.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   * const service = nextly.plugins["@acme/plugin-x"]?.["reader"];
+   * ```
+   */
+  plugins: Record<string, Record<string, unknown>>;
 
   /**
    * Content releases — batch documents and put them live at one instant.

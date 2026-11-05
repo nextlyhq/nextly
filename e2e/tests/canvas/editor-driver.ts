@@ -1,13 +1,8 @@
 /**
- * Driving the real page builder, wherever its canvas renders.
+ * Driving the real page builder, whose canvas renders in a same-origin iframe
+ * the editor owns, titled "Page canvas: …":
  *
- * The canvas renders in the admin's own document today. It is meant to move
- * into a same-origin iframe the editor owns, titled "Page canvas: …", and this
- * suite exists to be the before-and-after check for that move. So nothing here
- * assumes which document the blocks are in:
- *
- * - blocks are found through {@link canvasScope}, which is the canvas frame
- *   when there is one and the page otherwise;
+ * - blocks are found through {@link canvasScope}, the canvas frame;
  * - anything evaluated against a block reads the block's OWN document and
  *   window (`ownerDocument`, `defaultView`), never the globals of whichever
  *   realm the evaluation started in;
@@ -15,8 +10,8 @@
  *   framed element in the main page's coordinates, so `page.mouse` lands on it
  *   either way.
  *
- * The editor's chrome — Layers, the live region, the inspector — stays in the
- * admin's document in both arrangements, so it is found on the page.
+ * The editor's chrome — Layers, the live region, the inspector, the toolbar —
+ * is in the admin's document, so it is found on the page.
  *
  * Black box like the rest of `e2e/`: no product code is imported.
  *
@@ -31,9 +26,10 @@ import {
 } from "@playwright/test";
 
 import { gotoAdmin } from "../support/admin";
+import { CANVAS_FRAME } from "../support/canvas-frame";
 
-/** The frame the canvas will render in, by the title the editor gives it. */
-export const CANVAS_FRAME = 'iframe[title^="Page canvas"]';
+/** The frame the canvas renders in, by the title the editor gives it. */
+export { CANVAS_FRAME };
 
 const HOMEPAGE = "/admin/api/singles/homepage";
 
@@ -44,16 +40,15 @@ const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 type Scope = Page | FrameLocator;
 
 /**
- * The document the blocks are in.
+ * The document the blocks are in: the canvas frame's.
  *
- * Asked fresh on every call rather than decided once, because the frame is
- * created when the canvas mounts and a scope taken before that would point at
- * the page for the rest of the test.
+ * Always the frame, never decided by whether one exists yet: a scope taken
+ * before the frame has mounted would look for the blocks on the page for the
+ * rest of a wait, and find nothing there.
  */
-export async function canvasScope(page: Page): Promise<Scope> {
-  return (await page.locator(CANVAS_FRAME).count()) > 0
-    ? page.frameLocator(CANVAS_FRAME)
-    : page;
+export function canvasScope(page: Page): Promise<Scope> {
+  // A promise still, the shape every caller awaits.
+  return Promise.resolve(page.frameLocator(CANVAS_FRAME));
 }
 
 /** The canvas's root element, inside whichever document holds it. */
@@ -289,17 +284,27 @@ export async function editorSelectionText(field: Locator): Promise<string> {
 }
 
 /**
- * Clear the selection by pressing empty canvas below the last block.
+ * Clear the selection by pressing the page below the last block.
  *
  * The editor restores the author's last selection when the page opens again,
  * so a test cannot assume it starts with nothing selected. Cleared with a
  * press on the background rather than Escape, so a broken Escape fails the
  * test about Escape and not every test's setup.
+ *
+ * Below the canvas where the frame shows more of the page: on a page the site
+ * serves, the site's layout decides how tall the canvas is, and the canvas
+ * ends at its last block. On the editor's blank page the canvas fills the
+ * frame, so the press lands on its own ground, just inside its end.
  */
 export async function clearSelection(page: Page): Promise<void> {
   const root = await (await canvasRoot(page)).boundingBox();
-  if (root === null) throw new Error("[e2e] the canvas has no box");
-  await page.mouse.click(root.x + 12, root.y + root.height - 12);
+  const frame = await page.locator("[data-nx-canvas-frame-box]").boundingBox();
+  if (root === null || frame === null) {
+    throw new Error("[e2e] the canvas has no box");
+  }
+  const below = root.y + root.height + 12;
+  const y = below < frame.y + frame.height ? below : root.y + root.height - 12;
+  await page.mouse.click(root.x + 12, y);
   await expect.poll(() => selection(page)).toEqual([]);
 }
 
@@ -316,8 +321,12 @@ export async function openEditorWith(
   nodes: readonly unknown[],
   firstId: string
 ): Promise<void> {
+  // A fixture, set over whatever the single holds.
   const stored = await page.request.patch(HOMEPAGE, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
@@ -327,4 +336,24 @@ export async function openEditorWith(
   // The block must be ON SCREEN before anything is aimed at it: a gesture sent
   // at an element that has not rendered lands on the page behind it.
   await expect(await block(page, firstId)).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Save from the top bar without publishing, as an author does: "Save draft"
+ * on a page never published, "Save" on one that is.
+ *
+ * The save leads where there is nothing to publish, and otherwise sits on the
+ * leading action's arrow, beside Publish, so a caller need not know which.
+ */
+export async function pressSave(page: Page): Promise<void> {
+  const bar = page.locator('[data-topbar="end"]');
+  const leading = bar.getByRole("button", { name: /^Save( draft)?$/ });
+  if ((await leading.count()) > 0) {
+    await leading.click();
+    return;
+  }
+  await bar
+    .getByRole("button", { name: /^More (ways to publish|document actions)$/ })
+    .click();
+  await page.getByRole("menuitem", { name: /^Save( draft)?$/ }).click();
 }

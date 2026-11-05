@@ -15,11 +15,8 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  canonicalWidgets,
-  placedByDefault,
-} from "../../domains/widgets/canonical";
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import { allWidgets } from "../../domains/widgets/canonical";
+import { CORE_WIDGET_IDS } from "../../domains/widgets/core-widgets";
 import {
   deferredEntities,
   setDeferredEntities,
@@ -46,9 +43,10 @@ import {
   ACTIVITY_SOURCE_ID,
   ATTENTION_SOURCE_ID,
   CONTENT_SOURCE_ID,
-  RECENT_EDITS_SOURCE_ID,
+  CONTINUE_SOURCE_ID,
   TEAM_SOURCE_ID,
 } from "../../domains/widgets/system-source-ids";
+import { defineWidget } from "../../domains/widgets/declaration/define-widget";
 import { resetWidgetRegistries } from "../registrations/register-widgets";
 
 beforeEach(() => {
@@ -72,8 +70,7 @@ function seedWidget(id: string): void {
       id,
       title: id,
       archetype: "metric",
-      defaultSize: "sm",
-      query: { source: "plugin:stripe/revenue", op: "count" },
+      size: { default: { w: 3, h: 2 } },
     },
     { source: "@acme/stripe" }
   );
@@ -99,7 +96,7 @@ describe("resetWidgetRegistries", () => {
         ACTIVITY_SOURCE_ID,
         ATTENTION_SOURCE_ID,
         CONTENT_SOURCE_ID,
-        RECENT_EDITS_SOURCE_ID,
+        CONTINUE_SOURCE_ID,
         RELEASES_SOURCE_ID,
         TEAM_SOURCE_ID,
         VERSIONS_SOURCE_ID,
@@ -139,16 +136,11 @@ describe("resetWidgetRegistries", () => {
     expect(systemResolver(RELEASES_SOURCE_ID)).toBeDefined();
   });
 
-  it("does NOT register a plugin's contributed source, which needs a context this runs before", () => {
-    // 🔴 An ordering fact, not a preference. This function runs before
-    // `initializePlugins` has built any plugin context, and a contributed
-    // resolver without its context can answer nothing -- a plugin's data
-    // services are reachable through nothing else. Registering here would
-    // publish a source whose resolver could only return constants.
-    //
-    // They register from `initializePlugins`, each bound to its own plugin's
-    // context, which `plugin-widget-source.integration.test.ts` exercises
-    // through a real boot.
+  it("registers nothing a plugin carries under contributes.widgetSources", () => {
+    // Nextly no longer reads the key: plugin resolution refuses a plugin that
+    // carries it before this reset runs, and nothing here registers what it
+    // holds, so a plugin reaching here around that refusal still adds no
+    // source.
     resetWidgetRegistries([
       {
         name: "@acme/stripe",
@@ -174,6 +166,39 @@ describe("resetWidgetRegistries", () => {
     // The control: core's own sources DID register in the same call, so this
     // cannot pass by registering nothing at all.
     expect(getSource(RELEASES_SOURCE_ID)).toBeDefined();
+  });
+
+  it("lists a plugin's declared widget under that plugin, by its name", () => {
+    // The add panel lists a plugin's widgets under the plugin that declared
+    // them: the name travels from the plugin, through its dashboard, to the
+    // widget's summary.
+    resetWidgetRegistries([
+      {
+        name: "@acme/forms",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          dashboard: {
+            widgets: [
+              defineWidget({
+                id: "forms/latest",
+                title: "Latest",
+                description: "The newest submissions.",
+                size: { default: { w: 6, h: 4 } },
+                load: () => Promise.resolve({ items: [] }),
+                view: { component: "@acme/forms/admin#Latest" },
+                isEmpty: () => false,
+              }),
+            ],
+          },
+        },
+      } as never,
+    ]);
+    const byId = new Map(allWidgets().map(card => [card.id, card]));
+    expect(byId.get("forms/latest")?.plugin).toBe("@acme/forms");
+    // The control: core's own widgets name no plugin.
+    expect(byId.get(CORE_WIDGET_IDS[0])).toBeDefined();
+    expect(byId.get(CORE_WIDGET_IDS[0])).not.toHaveProperty("plugin");
   });
 
   it("leaves the deferral store alone, because it has not synced anything yet", () => {
@@ -208,7 +233,8 @@ describe("resetWidgetRegistries", () => {
 
     const ids = listWidgets().map(widget => widget.id);
     expect(ids).not.toContain("stripe/revenue");
-    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
+    // Every one of core's, its definitions and its declarations alike.
+    expect([...ids].sort()).toEqual([...CORE_WIDGET_IDS].sort());
     expect(() => seedWidget("stripe/revenue")).not.toThrow();
   });
 
@@ -219,56 +245,27 @@ describe("resetWidgetRegistries", () => {
     // clear in this one function.
     resetWidgetRegistries();
     expect(() => resetWidgetRegistries()).not.toThrow();
-    expect(listWidgets()).toHaveLength(CORE_WIDGETS.length);
+    expect(listWidgets()).toHaveLength(CORE_WIDGET_IDS.length);
   });
 
-  it("leaves no core card querying a source nothing serves", () => {
-    // 🔴 A definition naming an unregistered source is a legal definition: it
-    // is refused at QUERY time, and only for the reader unlucky enough to hold
-    // the card. So renaming a source is silent on both sides -- the source and
-    // its own tests keep passing, and the card keeps naming what used to serve
-    // it. Sharing one declaration is what makes that impossible; this is what
-    // makes it CHECKED, since a future card could still spell the id by hand.
+  it("answers every source core's own cards read in their load", () => {
+    // 🔴 A card's `load` reads its `system:` source through the resolver
+    // registered for it, so a source registered under another id, or not at
+    // all, would fail that card for every reader. Core's cards and their
+    // sources name each id by one shared constant, and this is what makes that
+    // CHECKED: each is answered once boot has run.
     resetWidgetRegistries();
-    const asking = CORE_WIDGETS.filter(card => asksOf(card).length > 0);
-    // The population, asserted before the verdict: with no querying card at all
-    // the check below is vacuously satisfied, which is the shape of a check
-    // reporting on nothing.
-    expect(asking.length).toBeGreaterThan(0);
-    expect(unservedAsks(CORE_WIDGETS, placedById())).toEqual([]);
-  });
-
-  it("reports a sourceless card no Collection setting supplies, and one placed set to nothing served", () => {
-    // The control: the check above passes only because each of these fails it.
-    resetWidgetRegistries();
-    const bare = { id: "core/bare", query: { op: "count" } };
-    const placedOnNothing = {
-      id: "core/placed",
-      query: { op: "count" },
-      settings: [
-        { name: "collection", type: "collection", defaultValue: "gone" },
-      ],
-    };
-    expect(
-      unservedAsks([bare, placedOnNothing], id => id === "core/placed")
-    ).toEqual([
-      "core/bare: names no source, and no Collection setting supplies one",
-      'core/placed: is placed by default, set to "gone", which nothing serves',
-    ]);
-  });
-
-  it("registers core's sources before core's cards, so a card's filter settings are admitted", () => {
-    // 🔴 Recently edited's Collection and Only mine settings are admitted only
-    // because its source declares those filters, which admission reads from the
-    // source registry. With the sources registered after the cards, as they
-    // once were, the source is not there yet and this boot refuses the card.
-    expect(() => resetWidgetRegistries()).not.toThrow();
-    const settings = listWidgets()
-      .find(widget => widget.id === "core/recently-edited")
-      ?.settings?.map(setting => setting.name);
-    expect(settings).toEqual(
-      expect.arrayContaining(["collection", "onlyMine", "limit"])
-    );
+    for (const id of [
+      CONTENT_SOURCE_ID,
+      TEAM_SOURCE_ID,
+      CONTINUE_SOURCE_ID,
+      RELEASES_SOURCE_ID,
+      ACTIVITY_SOURCE_ID,
+    ]) {
+      expect([id, systemResolver(id) !== undefined]).toEqual([id, true]);
+    }
+    // The control: an id nothing registers has no resolver.
+    expect(systemResolver("system:nothing-serves-this")).toBeUndefined();
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {
@@ -285,65 +282,3 @@ describe("resetWidgetRegistries", () => {
     expect(() => seedWidget("stripe/revenue")).toThrow(/already registered/);
   });
 });
-
-/** A core card as this check reads it: its query, its cells' queries and its settings. */
-interface AskingCard {
-  id: string;
-  query?: { source?: unknown; op?: unknown };
-  cells?: readonly { query?: { source?: unknown; op?: unknown } }[];
-  settings?: readonly { type: string; defaultValue?: unknown }[];
-}
-
-/** Every query a card asks: its own, and each of its cells'. */
-function asksOf(card: AskingCard): { source?: unknown }[] {
-  return [
-    ...(card.query === undefined ? [] : [card.query]),
-    ...(card.cells ?? []).flatMap(cell => (cell.query ? [cell.query] : [])),
-  ];
-}
-
-/** Whether core places each of its cards on a new dashboard, by the one rule. */
-function placedById(): (id: string) => boolean {
-  const canonical = new Map(canonicalWidgets([]).map(card => [card.id, card]));
-  return id => {
-    const card = canonical.get(id);
-    return card !== undefined && placedByDefault(card);
-  };
-}
-
-/**
- * Why a card would query a source nothing serves, one line each: a named
- * source no one registered; a sourceless query no Collection setting supplies;
- * or a sourceless card placed by default set to a collection nothing serves.
- */
-function unservedAsks(
-  cards: readonly AskingCard[],
-  placed: (id: string) => boolean
-): string[] {
-  return cards.flatMap(card => {
-    const asks = asksOf(card);
-    const named = asks.flatMap(ask =>
-      typeof ask.source === "string" && getSource(ask.source) === undefined
-        ? [`${card.id}: queries ${ask.source}, which nothing serves`]
-        : []
-    );
-    if (!asks.some(ask => typeof ask.source !== "string")) return named;
-    const setting = card.settings?.find(entry => entry.type === "collection");
-    if (setting === undefined) {
-      return [
-        ...named,
-        `${card.id}: names no source, and no Collection setting supplies one`,
-      ];
-    }
-    const start = setting.defaultValue;
-    const served =
-      typeof start === "string" &&
-      getSource(`collection:${start}`) !== undefined;
-    return placed(card.id) && !served
-      ? [
-          ...named,
-          `${card.id}: is placed by default, set to ${JSON.stringify(start)}, which nothing serves`,
-        ]
-      : named;
-  });
-}

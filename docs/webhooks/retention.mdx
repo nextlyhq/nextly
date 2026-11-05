@@ -68,6 +68,8 @@ nextly webhooks:prune            # run one retention pass now
 nextly webhooks:prune --dry-run  # report what a pass would remove, delete nothing
 ```
 
+Pruning deletes rows, so it takes the data-loss consent: `--accept-data-loss`, or `NEXTLY_ACCEPT_DATA_LOSS=1`. At a terminal, without either, it asks before deleting.
+
 The command reports how many webhook events, audit events, and terminal delivery rows it removed. If a batch bound stops the pass before it finishes, it says so — run it again to continue. It reads the same `webhooks.retention` policy as the automatic passes, and does nothing when retention is disabled.
 
 **`webhooks:prune` is cleanup, not delivery.** It does not fan out or deliver anything. Its behaviour splits on whether an enabled endpoint exists:
@@ -78,10 +80,12 @@ The command reports how many webhook events, audit events, and terminal delivery
 A daily cron is a good baseline where you want scheduled cleanup:
 
 ```bash
-0 3 * * *  cd /path/to/app && nextly webhooks:prune
+0 3 * * *  cd /path/to/app && nextly webhooks:prune --accept-data-loss
 ```
 
-Global flags inherited from the root `nextly` command apply: `--config <path>`, `--cwd <path>`, `--verbose`, `-q/--quiet`. Note that `--cwd` selects where the config is discovered, but `nextly` loads `.env` and reads `DATABASE_URL` from the directory you actually run it in — so invoke `webhooks:prune` from the app directory, or export the database environment yourself, when using `--cwd`.
+A cron run has nobody to ask. In this release such a run still deletes without the consent and prints a notice; from the next release it needs `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS=1`), so give it now.
+
+Global flags inherited from the root `nextly` command apply: `--config <path>`, `--cwd <path>`, `--verbose`, `-q/--quiet`, `--non-interactive`. Note that `--cwd` selects where the config is discovered, but `nextly` loads `.env` and reads `DATABASE_URL` from the directory you actually run it in — so invoke `webhooks:prune` from the app directory, or export the database environment yourself, when using `--cwd`.
 
 ## Keeping the tables small
 

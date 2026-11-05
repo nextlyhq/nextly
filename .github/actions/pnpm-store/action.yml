@@ -1,0 +1,60 @@
+name: pnpm store
+description: >-
+  Restores pnpm's package store before an install, on every event, and saves it
+  after one, on a push only (`save: "true"`).
+
+# A dependency cache is written only by `main`'s pushes and read everywhere
+# else, the same split as the shared turbo cache. A pull request that saved its
+# own store kept a copy under its merge ref that nobody else reads, often of the
+# very key `main` saves moments later, and each such copy is several hundred MB
+# of the repository's cache allowance.
+#
+# Restored by the lockfile's exact key only. A pull request that changes the
+# lockfile installs from the registry until `main` saves that lockfile's store
+# (measured cold: 7 to 11 s on Linux, 15 to 24 s on Windows, 18 s on macOS),
+# and a saved store holds one lockfile's packages, never every earlier one's.
+# It is not pruned: `pnpm store prune` takes a file nothing hard-links to as
+# unreferenced, and where pnpm copies or clones into `node_modules` (macOS, or
+# a Windows store on another drive) that is every file it just installed.
+#
+# Saving looks the key up first, so of the many jobs a push to `main` runs on
+# one platform, only the first to finish its install uploads, and the rest skip
+# without a reservation warning.
+#
+# Needs pnpm on the PATH (`pnpm/action-setup`) and the repository checked out.
+
+inputs:
+  save:
+    description: '"true" to save the store after an install, instead of restoring it before one.'
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Find the store
+      id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the store
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+    - name: Ask whether this store is saved already
+      id: saved
+      if: inputs.save == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+        lookup-only: true
+
+    - name: Save the store
+      if: inputs.save == 'true' && steps.saved.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}

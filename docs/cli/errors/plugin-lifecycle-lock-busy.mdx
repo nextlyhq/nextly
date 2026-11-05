@@ -1,0 +1,23 @@
+---
+title: PLUGIN_LIFECYCLE_LOCK_BUSY
+description: "Another migration held the migrate lock, so a plugin install or uninstall ran nothing."
+---
+
+## Cause
+
+Another migration held the migrate lock, so a plugin install or uninstall ran nothing.
+
+Plugins are installed and removed under the same lock as every schema change, so they never change the schema at once. Another migration held it, and the install or uninstall ran nothing.
+
+## Fix
+
+Run the command again once that migration finishes.
+
+## Example
+
+```text
+✗ Another migration is holding the migrate lock, so @acme/seo was not installed.
+  Why:  Plugins are installed and removed under the same lock as every schema change. Nothing was changed.
+  Next: Re-run once it finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-lifecycle-lock-busy  (PLUGIN_LIFECYCLE_LOCK_BUSY)
+```

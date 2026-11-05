@@ -16,12 +16,18 @@ import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
+import { keepaliveOptions } from "../lib/api/keepalive";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   ActionResponse,
   MutationResponse,
 } from "../lib/api/response-types";
+import { DOCUMENT_VERSION_KEY } from "../lib/document-version";
 
+import type {
+  PublishAllLanguageOutcome,
+  PublishAllPreview,
+} from "./publishAllPreview";
 import type {
   FieldResolution,
   SchemaApplyResponse,
@@ -121,11 +127,19 @@ type SingleApiType = {
   readonly updateDocument: (
     slug: string,
     data: Record<string, unknown>,
-    options?: { locale?: string }
+    options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
   readonly publishAllLocales: (
+    slug: string,
+    version?: string
+  ) => Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }>;
+  readonly previewPublishAllLocales: (
     slug: string
-  ) => Promise<{ id: string; status?: string }>;
+  ) => Promise<PublishAllPreview>;
 };
 
 /**
@@ -307,7 +321,7 @@ export const singleApi: SingleApiType = {
     if (options?.draft) params.set("draft", "1");
     // context is trusted; pass status=all so a freshly-created Single
     // (auto-created with status='draft') is reachable. Without this
-    // the user sees "Failed to load Single: Not found." on the page
+    // the user sees "Not found." on the page
     // they just navigated to from "+ New Single".
     params.set("status", "all");
     const query = params.toString();
@@ -324,14 +338,16 @@ export const singleApi: SingleApiType = {
     data: Record<string, unknown>,
     // i18n: `?locale=de` stores the translatable values for German only (the shared
     // columns are still updated). Omitted for non-localized singles.
-    options?: { locale?: string }
+    // `keepalive` asks for an update that outlives the page (lib/api/keepalive).
+    options?: { locale?: string; keepalive?: boolean }
   ): Promise<SingleDocument> => {
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
       `/singles/${slug}${qs ? `?${qs}` : ""}`,
-      data
+      data,
+      keepaliveOptions(data, options?.keepalive)
     );
     return result.item;
   },
@@ -344,18 +360,40 @@ export const singleApi: SingleApiType = {
    * observable with some languages live and others not.
    */
   publishAllLocales: async (
-    slug: string
-  ): Promise<{ id: string; status?: string }> => {
+    slug: string,
+    /**
+     * The version of every language, as a read of every language gives it: a
+     * publish of every language is refused when any of them changed since.
+     */
+    version?: string
+  ): Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }> => {
     // The route answers with the action envelope (`{ message, ...data }`)
     // rather than a document, since publishing changes status and returns no
-    // content the editor did not already have.
+    // content the editor did not already have. It carries each language's
+    // outcome, which the result message names language by language.
     return protectedApi.post<{
       message: string;
       slug: string;
       id: string;
       status?: string;
-    }>(`/singles/${slug}/publish-all`, {});
+      languages?: PublishAllLanguageOutcome[];
+    }>(
+      `/singles/${slug}/publish-all`,
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
+    );
   },
+
+  /**
+   * What publishing every language of a Single would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   * Hits `GET /api/singles/{slug}/publish-all`.
+   */
+  previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
+    protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
 } as const;
 
 // ============================================================

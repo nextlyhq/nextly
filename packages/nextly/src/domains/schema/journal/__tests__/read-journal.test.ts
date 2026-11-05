@@ -5,9 +5,16 @@
 // captures the query-builder calls + returns canned events rows so we can
 // verify cursor pagination math + the events→API row mapping in isolation.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { readJournal } from "../read-journal";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 function makeFakeDb(returnRows: Array<Record<string, unknown>>): unknown {
   // Chainable query-builder shape that resolves to `returnRows` when awaited.
@@ -94,7 +101,11 @@ describe("readJournal", () => {
     ];
     for (const [eventStatus, apiStatus] of cases) {
       const db = makeFakeDb([baseRow({ status: eventStatus })]);
-      const result = await readJournal({ db, dialect: "postgresql", limit: 20 });
+      const result = await readJournal({
+        db,
+        dialect: "postgresql",
+        limit: 20,
+      });
       expect(result.rows[0].status).toBe(apiStatus);
     }
   });

@@ -14,6 +14,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
   countParentsWithoutLocale,
   countValuesByLocale,
+  queryRows,
 } from "../../schema/pipeline/classifier/count-helpers";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
@@ -22,6 +23,7 @@ import {
   refusalsForFieldsLeavingTranslation,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import { fieldsLeavingTranslation } from "./reconcile-companion";
 
 /** One field leaving translation, as the preview reports it. */
@@ -86,15 +88,24 @@ export async function previewFieldsLeavingTranslation(
   const leaving = fieldsLeavingTranslation(args.oldFields, args.newFields);
   if (leaving.length === 0) return [];
 
+  const shapeRefusals = refusalsForFieldsLeavingTranslation({
+    leaving: new Set(leaving),
+    newFields: args.newFields,
+    oldFields: args.oldFields,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+    surface: "builder",
+  });
   const refusals = new Map(
-    refusalsForFieldsLeavingTranslation({
-      leaving: new Set(leaving),
-      newFields: args.newFields,
-      oldFields: args.oldFields,
-      dialect: args.dialect,
-      builtBy: args.builtBy,
-      surface: "builder",
-    }).map(refusal => [
+    [
+      ...shapeRefusals,
+      ...(await valueRefusals(
+        args,
+        leaving.filter(
+          name => !shapeRefusals.some(r => r.path === `fields.${name}`)
+        )
+      )),
+    ].map(refusal => [
       refusal.path.replace(/^fields\./, ""),
       { reason: refusal.reason, steps: refusal.steps },
     ])
@@ -134,6 +145,31 @@ export async function previewFieldsLeavingTranslation(
       ...(refusal !== undefined ? { refusal } : {}),
     };
   });
+}
+
+/**
+ * What Apply will refuse because the values cannot take a Required or Unique setting, asked as
+ * Apply asks it (`refusalsForConstrainedFieldsLeaving`). None when they could not be read: Apply
+ * asks again before anything runs, and refuses then.
+ */
+async function valueRefusals(args: PreviewLeavingArgs, leaving: string[]) {
+  try {
+    return await refusalsForConstrainedFieldsLeaving({
+      adapter: {
+        executeQuery: text => queryRows(args.db, args.dialect, text),
+      },
+      dialect: args.dialect,
+      tableName: args.tableName,
+      builtBy: args.builtBy,
+      defaultLocale: args.defaultLocale,
+      leaving: new Set(leaving),
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      surface: "builder",
+    });
+  } catch {
+    return [];
+  }
 }
 
 /**

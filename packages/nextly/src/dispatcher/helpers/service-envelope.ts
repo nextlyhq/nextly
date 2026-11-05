@@ -35,6 +35,7 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
+import type { NextlyError } from "../../errors/nextly-error";
 
 /**
  * Translate the service-result `{ total, page, limit, totalPages }`
@@ -179,4 +180,23 @@ export function unwrapServiceResult<T>(
   }
   const ctx = { legacyMessage: result.message, ...logContext };
   throw errorFromServiceEnvelope(result, ctx);
+}
+
+/**
+ * The error a failed envelope stands for when a handler RETURNS it rather than
+ * unwrapping it: rebuilt by the same converter as {@link unwrapServiceResult},
+ * so a returned 403 is answered 403 with its own code, as a thrown one is,
+ * rather than as a server fault. An envelope that names its status only as
+ * `status` is read the same way.
+ */
+export function returnedServiceFailure(result: {
+  statusCode?: number;
+  status?: number;
+  code?: string;
+  message?: string;
+}): NextlyError {
+  return errorFromServiceEnvelope(
+    { ...result, statusCode: result.statusCode ?? result.status },
+    { legacyMessage: result.message }
+  );
 }

@@ -9,9 +9,16 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import * as schemas from "../index";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 describe("schemas public API", () => {
   describe("getCoreSchema()", () => {
@@ -62,6 +69,13 @@ describe("schemas public API", () => {
       expect(schemas).not.toHaveProperty("userPermissionCache");
     });
 
+    it("no longer names the image size definitions", () => {
+      // Image sizes are no longer made, so a new install never creates
+      // `image_sizes`; an existing database keeps it until `nextly migrate`
+      // drops it once no item names a size file.
+      expect(schemas.CORE_TABLE_NAMES).not.toContain("image_sizes");
+    });
+
     it("includes the canonical core tables", () => {
       const required = [
         "users",
@@ -78,7 +92,6 @@ describe("schemas public API", () => {
         "activity_log",
         "media",
         "media_folders",
-        "image_sizes",
         "dynamic_collections",
         "dynamic_singles",
         "dynamic_components",
