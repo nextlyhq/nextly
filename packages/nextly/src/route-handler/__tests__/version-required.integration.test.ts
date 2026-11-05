@@ -389,11 +389,13 @@ describe.each(getConfiguredTestDialects())(
         { ids, data: { title: "with revs" }, revs }
       );
       expect(withRevs.status, JSON.stringify(withRevs.json)).toBe(200);
-      await t.nextly.update({
-        collection: NOTES as never,
-        where: { id: { in: ids } },
-        data: { title: "overwritten", _overwrite: true },
-      } as never);
+      const overwritten = await rest(
+        key,
+        "POST",
+        ["collections", NOTES, "entries", "bulk-update"],
+        { ids, data: { title: "overwritten", _overwrite: true } }
+      );
+      expect(overwritten.status, JSON.stringify(overwritten.json)).toBe(200);
       for (const id of ids) {
         expect((await stored(t, NOTES, id)).title).toBe("overwritten");
       }
@@ -418,10 +420,11 @@ describe.each(getConfiguredTestDialects())(
             {}
           )
         );
-        expectVersionRequired(
-          await rest(key, "POST", ["singles", BANNER, route], {})
-        );
       }
+      // A Single moves every language through its publish only.
+      expectVersionRequired(
+        await rest(key, "POST", ["singles", BANNER, "publish-all"], {})
+      );
       expect((await stored(t, PAGES, id)).status).toBe("draft");
 
       const published = await rest(

@@ -113,10 +113,11 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
  * What an update is judged against: the version it gave, or nothing.
  *
  * One decision, taken once at each write path's boundary, before the body's
- * version is dropped: a write with no `_rev`, or one the server exempts, is
- * applied as it always was. `overwrite` is a write that names
- * `_overwrite: true`: it saves over whatever came in between, and the
- * version it gave, if any, says what it replaced.
+ * version is dropped. `overwrite` is a write that names `_overwrite: true`:
+ * it saves over whatever came in between, and the version it gave, if any,
+ * says what it replaced. `unjudged` is a write the server exempts, a release
+ * run's own; any other write that gives neither is refused
+ * (`versionCheckFor`).
  */
 export type VersionCheck =
   | { kind: "judge"; given: DecodedVersion; raw: string }
@@ -159,6 +160,8 @@ function overwriteOf(body: Readonly<Record<string, unknown>>): boolean {
  *
  * @throws NextlyError.validation for a `_rev` that is not a version, or an
  *   `_overwrite` that is not true or false.
+ * @throws NextlyError.versionRequired for a write that gives neither: it
+ *   would replace whatever was saved since its caller last read, unasked.
  */
 export function versionCheckFor(
   body: Readonly<Record<string, unknown>>,
@@ -172,9 +175,14 @@ export function versionCheckFor(
   if (options.exempt) return { kind: "unjudged" };
   if (overwrite)
     return given ? { kind: "overwrite", given } : { kind: "overwrite" };
-  return given
-    ? { kind: "judge", given, raw: raw as string }
-    : { kind: "unjudged" };
+  if (given) return { kind: "judge", given, raw: raw as string };
+  throw NextlyError.versionRequired({
+    keys: {
+      version: DOCUMENT_VERSION_KEY,
+      overwrite: DOCUMENT_OVERWRITE_KEY,
+      revs: DOCUMENT_REVS_KEY,
+    },
+  });
 }
 
 /**
