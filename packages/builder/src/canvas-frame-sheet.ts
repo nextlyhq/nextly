@@ -219,16 +219,19 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
   /* Its words, and the one action a fallen-back sort offers, on one row. */
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
   color-scheme: var(--nx-builder-scheme, light);
-  margin-block-end: 0.5rem;
-  padding: 0.5rem 0.75rem;
   border: 1px solid;
   border-radius: var(--radius-sm, 0.25rem);
   color: var(--nx-builder-text, CanvasText);
   font-family: var(--font-sans, system-ui), sans-serif;
-  font-size: 0.8125rem;
+  /* The admin's size whatever the zoom, so the author can read it on a
+     page drawn small; its spacing is in its own text's units, so it keeps
+     its shape at every zoom. */
+  font-size: calc(0.8125rem / var(--nx-canvas-zoom, 1));
   line-height: 1.5;
+  gap: 0.9em;
+  margin-block-end: 0.6em;
+  padding: 0.6em 0.9em;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {
@@ -245,13 +248,13 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
 [data-nx-list-diagnostic] > [data-nx-list-action] {
   flex: none;
   margin-inline-start: auto;
-  padding: 0.125rem 0.5rem;
+  padding: 0.15em 0.6em;
   border: 1px solid currentColor;
   border-radius: var(--radius-sm, 0.25rem);
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.92em;
   font-weight: 500;
   cursor: pointer;
 }

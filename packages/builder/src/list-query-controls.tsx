@@ -2097,11 +2097,9 @@ function BoundFoot({
     return <FieldError id={errorId}>{problem}</FieldError>;
   }
   if (hint === undefined) return null;
+  // In the field's control column already, under the number it is about.
   return (
-    <p
-      className="nx-inspector__note nx-list-query__hint nx-list-query__indented"
-      role="status"
-    >
+    <p className="nx-inspector__note nx-list-query__hint" role="status">
       {hint}
     </p>
   );

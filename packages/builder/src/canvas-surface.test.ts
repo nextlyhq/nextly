@@ -562,6 +562,10 @@ describe("a collection list's notes and tag in the canvas frame", () => {
     const note = ruleIn(CANVAS_FRAME_SHEET, "[data-nx-list-diagnostic]");
     expect(declared(note, "grid-column")).toBe("1 / -1");
     expect(declared(note, "flex-basis")).toBe("100%");
+    // Read at the admin's size on a page drawn small.
+    expect(declared(note, "font-size")).toBe(
+      "calc(0.8125rem / var(--nx-canvas-zoom, 1))"
+    );
     // Each is the theme's own, so it follows light and dark.
     expect(
       ruleFor(
