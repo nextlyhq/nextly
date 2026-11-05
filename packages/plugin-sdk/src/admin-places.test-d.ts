@@ -29,17 +29,11 @@ expectTypeOf<AdminPlaces["acme-billing.invoice"]["context"]>().toEqualTypeOf<{
 // Core's places are accepted with no augmentation.
 at("collection.list");
 at("account");
-expectTypeOf<CoreAdminPlaceId>().toMatchTypeOf<AdminPlaceId>();
+expectTypeOf<CoreAdminPlaceId>().toExtend<AdminPlaceId>();
 
-// A misspelled plugin place is not.
-// @ts-expect-error not a declared place
-at("acme-billing.invoce");
-
-// Nor a misspelled core one.
-// @ts-expect-error not a declared place
-at("colection.list");
-
-// Nor a plain string: the ids are a closed set, not any string.
-declare const anyName: string;
-// @ts-expect-error not a declared place
-at(anyName);
+// A misspelled plugin place is not, nor a misspelled core one, nor a plain
+// string: the ids are a closed set. Asserted by the checker, so each fails
+// only when the id would be accepted, not on an unrelated error.
+expectTypeOf<"acme-billing.invoce">().not.toExtend<AdminPlaceId>();
+expectTypeOf<"colection.list">().not.toExtend<AdminPlaceId>();
+expectTypeOf<string>().not.toExtend<AdminPlaceId>();

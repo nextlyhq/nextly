@@ -418,6 +418,39 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
           next: `Execute "${field(error, "point")}" as a ${field(error, "declared")}, the kind its plugin declares.`,
         };
       }),
+      ...resolved("admin-place-malformed", error => ({
+        what: detail(error),
+        why: "An admin place is named by its plugin's slug and a dot, so where it belongs can be read from the name.",
+        next: `Rename the place in "${field(error, "plugin")}" to lower-case letters, digits and single dashes, starting with the plugin's admin slug and a dot.`,
+      })),
+      ...resolved("admin-place-reserved-slug", error => ({
+        what: detail(error),
+        why: `Admin places under "${field(error, "slug")}" are Nextly's own, and every place a plugin declares starts with its slug.`,
+        next: `Rename the plugin "${field(error, "plugin")}" so that its admin slug is not "${field(error, "slug")}".`,
+      })),
+      ...resolved("admin-place-reserved", error => ({
+        what: detail(error),
+        why: "Admin places under that segment are Nextly's own, so a plugin's would be taken for one of them.",
+        next: `Rename the place "${field(error, "place")}" so that it starts with the plugin's admin slug and a dot.`,
+      })),
+      ...resolved("admin-place-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's admin places are named under its admin slug, so no plugin declares another's.",
+        next: `Rename the place "${field(error, "place")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("admin-place-collision", error => ({
+        what: detail(error),
+        why: "An admin place is looked up by its name, so each name is declared once.",
+        next: `Declare the place "${field(error, "place")}" once.`,
+      })),
+      ...resolved("admin-place-unknown", error => ({
+        what: detail(error),
+        why: "A contribution renders at the place it names, so the place must be one of Nextly's or one an enabled plugin declares.",
+        next:
+          field(error, "owningPrefix") === ""
+            ? `Name one of Nextly's admin places instead of "${field(error, "place")}".`
+            : `Enable the plugin whose admin slug is "${field(error, "owningPrefix")}" and list it in the \`requires\` of "${field(error, "plugin")}", or correct the place's name.`,
+      })),
       ...resolved("principal-kind-invalid", error => {
         const parts = cut(detail(error), " cannot be used: ");
         return {

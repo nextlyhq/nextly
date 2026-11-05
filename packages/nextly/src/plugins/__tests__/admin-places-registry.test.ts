@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { toCliError } from "../../cli/errors";
 import { CORE_ADMIN_PLACES } from "../admin-places";
 import {
   assertPlacesExist,
@@ -186,6 +187,27 @@ describe("collecting the places plugins declare", () => {
     });
   });
 
+  it("refuses places that are not a list, as a plugin in plain JavaScript may give them", () => {
+    expect(
+      refusalOf(() =>
+        collectAdminPlaces([
+          {
+            name: "@acme/billing",
+            version: "1.0.0",
+            nextly: "*",
+            contributes: {
+              admin: { places: { name: "acme-billing.invoice" } as never },
+            },
+          },
+        ])
+      )
+    ).toMatchObject({
+      code: "PLUGIN_RESOLUTION_ERROR",
+      reason: "admin-place-malformed",
+      logContext: { plugin: "@acme/billing" },
+    });
+  });
+
   it("refuses a place two plugins both declare, naming both", () => {
     // `@acme/billing` and `acme-billing` share the slug `acme-billing`, so
     // each passes the namespace rule with the same name.
@@ -322,6 +344,24 @@ describe("at start", () => {
     expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
   });
 
+  it("publishes no places from a list a later check refuses", () => {
+    resolveDeclaredPlugins([], { coreVersion: "1.0.0" });
+    // Every manifest check passes; the dependency sort, after them, refuses.
+    expect(
+      refusalOf(() =>
+        resolveDeclaredPlugins(
+          [
+            plugin("@acme/crm", ["acme-crm.contact"], {
+              dependsOn: { "@acme/absent": "*" },
+            }),
+          ],
+          { coreVersion: "1.0.0" }
+        )
+      )
+    ).toMatchObject({ reason: "missing-dependency" });
+    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
+  });
+
   it("publishes the places once every declaration passes, and keeps the last good set when one fails", () => {
     resolveDeclaredPlugins(
       [plugin("@acme/billing", ["acme-billing.invoice"])],
@@ -348,4 +388,63 @@ describe("at start", () => {
     expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
     expect(getDeclaredAdminPlaces().has("acme-billing.invoice")).toBe(true);
   });
+});
+
+describe("in the CLI", () => {
+  it.each<[string, () => unknown]>([
+    [
+      "admin-place-malformed",
+      () => collectAdminPlaces([plugin("@acme/billing", ["Bad"])]),
+    ],
+    [
+      "admin-place-reserved-slug",
+      () => collectAdminPlaces([plugin("settings", ["settings.panel"])]),
+    ],
+    [
+      "admin-place-reserved",
+      () => collectAdminPlaces([plugin("@acme/billing", ["collection.badge"])]),
+    ],
+    [
+      "admin-place-outside-namespace",
+      () => collectAdminPlaces([plugin("@acme/billing", ["other.invoice"])]),
+    ],
+    [
+      "admin-place-collision",
+      () =>
+        collectAdminPlaces([
+          plugin("@acme/billing", [
+            "acme-billing.invoice",
+            "acme-billing.invoice",
+          ]),
+        ]),
+    ],
+    [
+      "admin-place-unknown",
+      () =>
+        assertPlacesExist(collectAdminPlaces([]), [
+          {
+            plugin: "@acme/reports",
+            place: "acme-crm.contact",
+            what: 'block "totals"',
+          },
+        ]),
+    ],
+  ])(
+    "reads %s as a plugin resolution error, saying what to do",
+    (reason, refuse) => {
+      let thrown: unknown;
+      try {
+        refuse();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(
+        (thrown as { logContext?: { reason?: string } }).logContext?.reason
+      ).toBe(reason);
+      const cli = toCliError(thrown);
+      expect(cli.code).toBe("PLUGIN_RESOLUTION_ERROR");
+      expect(cli.what).toBe((thrown as { logMessage?: string }).logMessage);
+      expect(cli.next.trim()).not.toBe("");
+    }
+  );
 });

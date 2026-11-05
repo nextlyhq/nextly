@@ -171,10 +171,11 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   assertSettingsPermissionsGuardSettings(plugins);
   // Admin places, checked as hook points are: a place in another plugin's
   // namespace or core's, or one declared twice, would otherwise surface as a
-  // contribution rendered in the wrong place or nowhere. Last, so a refused
-  // start publishes none, and two plugins sharing a slug are refused for the
-  // slug before their places collide on it.
-  publishAdminPlaces(collectAdminPlaces(plugins));
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked here and published by `resolvePlugins`, once the whole list
+  // has resolved.
+  collectAdminPlaces(plugins);
 }
 
 /**
@@ -266,7 +267,12 @@ export function resolvePlugins(
   // Last, because it reads what the earlier validators already accepted: a
   // declared schemaVersion must be one the plugin's own migrations reach.
   validatePluginMigrations(plugins);
-  return topoSortPlugins(plugins);
+  const sorted = topoSortPlugins(plugins);
+  // Only once every check has passed, so a list refused by any of them leaves
+  // the last resolved places in place for whoever reads them meanwhile, as in
+  // a development reload.
+  publishAdminPlaces(collectAdminPlaces(plugins));
+  return sorted;
 }
 
 /**

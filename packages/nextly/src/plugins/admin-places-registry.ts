@@ -141,15 +141,30 @@ export function collectAdminPlaces(
     if (plugin.enabled === false) continue;
     const slug = pluginAdminSlug(plugin.name);
 
-    for (const place of plugin.contributes?.admin?.places ?? []) {
+    const declared: unknown = plugin.contributes?.admin?.places;
+    if (declared === undefined) continue;
+    // Not a list at all from a plugin written in plain JavaScript, which
+    // iterating would refuse with a bare TypeError naming neither.
+    if (!Array.isArray(declared)) {
+      throw resolutionError(
+        "admin-place-malformed",
+        `Plugin "${plugin.name}" declares \`contributes.admin.places\` as something other than a list of places.`,
+        { plugin: plugin.name, place: undefined }
+      );
+    }
+    for (const place of declared as readonly unknown[]) {
       // Read from what was given, which a plugin in plain JavaScript may have
       // written as a bare string.
-      const name: unknown = (place as { name?: unknown } | null)?.name;
+      const given = place as { name?: unknown; description?: unknown } | null;
+      const name = given?.name;
       assertPlaceDeclarable(places, name, plugin.name, slug);
+      const description = given?.description;
       places.set(name, {
         name,
         owner: plugin.name,
-        ...(place.description ? { description: place.description } : {}),
+        ...(typeof description === "string" && description !== ""
+          ? { description }
+          : {}),
       });
     }
   }
