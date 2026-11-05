@@ -110,7 +110,7 @@ export function useLoopCollections(
 }
 
 /** A stored text value, trimmed, or `undefined` for anything else or nothing. */
-export function storedName(value: unknown): string | undefined {
+function storedName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
@@ -123,7 +123,7 @@ interface LoopControlProps extends ContentControlProps {
 }
 
 /** One row of a loop picker's list. */
-export interface LoopChoice extends ListedChoice {
+interface LoopChoice extends ListedChoice {
   /** What picking it writes; `undefined` removes the prop. */
   readonly value: string | undefined;
 }
@@ -140,87 +140,47 @@ export interface LoopChoice extends ListedChoice {
 export function LoopPicker<C extends ListedChoice>({
   id,
   labelId,
-  shown,
-  state,
+  value,
   disabled,
-  choices,
-  currentKey,
-  listLabel,
-  searchLabel,
-  noMatch,
-  searchFrom,
-  onPick,
-  groups,
-  renderChoice,
-  above,
-  below,
-  icon,
-  invalid,
-  describedBy,
+  list,
+  around,
   defaultOpen,
+  onPick,
 }: {
   id: string;
   labelId: string;
-  /** The words the button shows. */
-  shown: string;
-  /** Whether they are a prompt, or a stored value the list does not hold. */
-  state: "value" | "prompt" | "unknown";
+  /** What the button shows, and how it is marked. */
+  value: PickerValue;
   disabled: boolean;
-  choices: readonly C[];
-  currentKey: string;
-  listLabel: string;
-  searchLabel: string;
-  noMatch: string;
-  searchFrom?: number;
-  onPick: (choice: C) => void;
-  /** The list's group headings, in order, for a list of grouped rows. */
-  groups?: ReadonlyArray<{ group: string; heading: string }>;
-  renderChoice?: (choice: C) => React.ReactNode;
-  /** Drawn in the open list above its rows: a group with nothing to offer. */
-  above?: React.ReactNode;
-  /** Drawn in the open list below its rows: what the list leaves out. */
-  below?: React.ReactNode;
-  /** Drawn before the value, such as the mark of a related source. */
-  icon?: React.ReactNode;
-  /** A value the save would refuse, marked as the field's error. */
-  invalid?: boolean;
-  /** The id of the text describing the value, such as its error. */
-  describedBy?: string;
+  /** What the open list holds. */
+  list: PickerList<C>;
+  /** Drawn in the open list above and below its rows. */
+  around?: {
+    /** A group with nothing to offer, said where its rows would be. */
+    readonly above?: React.ReactNode;
+    /** What the list leaves out. */
+    readonly below?: React.ReactNode;
+  };
   /** Opened as soon as it is drawn, as a new filter's field menu is. */
   defaultOpen?: boolean;
+  onPick: (choice: C) => void;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(defaultOpen === true);
   const valueId = `${id}-value`;
+  const { choices, currentKey, label, searchLabel, noMatch, ...optional } =
+    list;
   return (
-    <div
-      className="nx-font-pick"
-      data-unknown={state === "unknown" ? "" : undefined}
-      data-invalid={invalid === true ? "" : undefined}
-    >
+    <div className="nx-font-pick" {...pickerMarks(value)}>
       <Popover open={open} onOpenChange={setOpen} modal={false}>
         <PopoverTrigger asChild>
-          <button
-            type="button"
+          <PickerButton
             id={id}
-            className="nx-font-pick__trigger"
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-labelledby={`${labelId} ${valueId}`}
-            aria-invalid={invalid === true ? true : undefined}
-            aria-describedby={describedBy}
+            labelledBy={`${labelId} ${valueId}`}
+            valueId={valueId}
+            shown={value}
+            open={open}
             disabled={disabled}
-          >
-            {icon}
-            <span
-              id={valueId}
-              className="nx-font-pick__value"
-              data-placeholder={state === "prompt" ? "" : undefined}
-              title={shown}
-            >
-              {shown}
-            </span>
-            <ChevronDown aria-hidden="true" size={14} />
-          </button>
+          />
         </PopoverTrigger>
         {/* Aligned to the control's right edge, as the font list is: the list
             may be wider than the control, at the window's right edge. */}
@@ -231,27 +191,113 @@ export function LoopPicker<C extends ListedChoice>({
           onOpenAutoFocus={event => event.preventDefault()}
         >
           <div className="nx-font-pick__body">
-            {above}
+            {around?.above}
             <ChoiceList
               choices={choices}
               currentKey={currentKey}
-              label={listLabel}
+              label={label}
               searchLabel={searchLabel}
               noMatch={noMatch}
-              {...(searchFrom === undefined ? {} : { searchFrom })}
-              {...(groups === undefined ? {} : { groups })}
-              {...(renderChoice === undefined ? {} : { renderChoice })}
+              // Given only where the caller said, so the list's own defaults hold.
+              {...definedOnly(optional)}
               onPick={choice => {
                 setOpen(false);
                 onPick(choice);
               }}
             />
-            {below}
+            {around?.below}
           </div>
         </PopoverContent>
       </Popover>
     </div>
   );
+}
+
+/** What a picker's button shows, and how it is marked. */
+export interface PickerValue {
+  /** The words the button shows. */
+  readonly words: string;
+  /** Whether they are a prompt, or a stored value the list does not hold. */
+  readonly state: "value" | "prompt" | "unknown";
+  /** Drawn before the value, such as the mark of a related source. */
+  readonly icon?: React.ReactNode;
+  /** A value the save would refuse, marked as the field's error. */
+  readonly invalid?: boolean;
+  /** The id of the text describing the value, such as its error. */
+  readonly describedBy?: string | undefined;
+}
+
+/** What a picker's open list holds. */
+export interface PickerList<C extends ListedChoice> {
+  readonly choices: readonly C[];
+  readonly currentKey: string;
+  readonly label: string;
+  readonly searchLabel: string;
+  readonly noMatch: string;
+  readonly searchFrom?: number;
+  /** The list's group headings, in order, for a list of grouped rows. */
+  readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
+  readonly renderChoice?: (choice: C) => React.ReactNode;
+}
+
+/** The button a picker opens from: its value, named with its field's label. */
+const PickerButton = React.forwardRef<
+  HTMLButtonElement,
+  {
+    id: string;
+    labelledBy: string;
+    valueId: string;
+    shown: PickerValue;
+    open: boolean;
+    disabled: boolean;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function PickerButton(
+  { id, labelledBy, valueId, shown, open, disabled, ...trigger },
+  ref
+) {
+  return (
+    <button
+      {...trigger}
+      ref={ref}
+      type="button"
+      id={id}
+      className="nx-font-pick__trigger"
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      aria-labelledby={labelledBy}
+      aria-invalid={shown.invalid === true || undefined}
+      aria-describedby={shown.describedBy}
+      disabled={disabled}
+    >
+      {shown.icon}
+      <span
+        id={valueId}
+        className="nx-font-pick__value"
+        data-placeholder={shown.state === "prompt" ? "" : undefined}
+        title={shown.words}
+      >
+        {shown.words}
+      </span>
+      <ChevronDown aria-hidden="true" size={14} />
+    </button>
+  );
+});
+
+/** The marks on a picker: a stored value the list lacks, a refused one. */
+function pickerMarks(value: PickerValue): Record<string, string> {
+  return {
+    ...(value.state === "unknown" ? { "data-unknown": "" } : {}),
+    ...(value.invalid === true ? { "data-invalid": "" } : {}),
+  };
+}
+
+/** The entries of `options` that hold a value, for props that must be absent. */
+function definedOnly<T extends Record<string, unknown>>(
+  options: T
+): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined)
+  ) as Partial<T>;
 }
 
 /**
@@ -364,15 +410,16 @@ function CollectionField({
       <LoopPicker
         id={id}
         labelId={labelId}
-        shown={shown.words}
-        state={shown.state}
+        value={shown}
         disabled={disabled || listed.kind === "loading"}
-        choices={choices}
-        currentKey={stored ?? ""}
-        listLabel="Collections"
-        searchLabel="Search collections"
-        noMatch="No collection matches."
-        searchFrom={COLLECTIONS_SEARCH_FROM + 1}
+        list={{
+          choices,
+          currentKey: stored ?? "",
+          label: "Collections",
+          searchLabel: "Search collections",
+          noMatch: "No collection matches.",
+          searchFrom: COLLECTIONS_SEARCH_FROM + 1,
+        }}
         onPick={choice => {
           if (choice.value !== stored) onCommit(prop.name, choice.value);
         }}
@@ -577,8 +624,7 @@ function SortField({
         <LoopPicker
           id={id}
           labelId={labelId}
-          shown={shown.words}
-          state={shown.state}
+          value={shown}
           // A stored sort stays reachable without a collection, so it can be
           // cleared; with neither, there is nothing to choose from yet.
           disabled={
@@ -586,11 +632,13 @@ function SortField({
             waiting ||
             (collection === undefined && first === undefined)
           }
-          choices={choices}
-          currentKey={first?.field ?? ""}
-          listLabel="Fields to sort by"
-          searchLabel="Search fields"
-          noMatch="No field matches."
+          list={{
+            choices,
+            currentKey: first?.field ?? "",
+            label: "Fields to sort by",
+            searchLabel: "Search fields",
+            noMatch: "No field matches.",
+          }}
           onPick={choice => commit(pickedKey(choice.value, fields, first))}
         />
         <DirectionToggle

@@ -137,7 +137,7 @@ export const OPERATORS: Readonly<
 };
 
 /** The menu key a stored row's operator is listed under. */
-export function operatorKey(op: ListFilterOp, value: unknown): string {
+function operatorKey(op: ListFilterOp, value: unknown): string {
   return op === "exists" ? `exists:${String(value === true)}` : op;
 }
 
@@ -157,7 +157,7 @@ export function takesList(op: ListFilterOp): boolean {
 }
 
 /** What a sort's two directions are called, for a field of each kind. */
-export const DIRECTION_WORDS: Readonly<
+const DIRECTION_WORDS: Readonly<
   Record<
     ListFieldKind,
     { readonly ascending: string; readonly descending: string }
@@ -201,7 +201,7 @@ export function dayWords(day: string): string {
 }
 
 /** "A, B" or "A, B and 2 more": a list of values on one short line. */
-export function listWords(words: readonly string[], shown = 2): string {
+function listWords(words: readonly string[], shown = 2): string {
   if (words.length <= shown + 1) return words.join(", ");
   return `${words.slice(0, shown).join(", ")} and ${String(words.length - shown)} more`;
 }

@@ -1095,7 +1095,53 @@ function replayStep(
  * empty, so keeping them in state would re-render every consumer on each edit
  * to deliver a value none of them read.
  */
-export function useEditorState({
+/**
+ * Which lists the canvas shows empty, and the way to change it: a new set
+ * only when one changes, so the canvas, which draws per set, draws again only
+ * then.
+ */
+function useListsShowingEmpty(): {
+  listsShowingEmpty: ReadonlySet<string>;
+  showListEmpty: (id: string, empty: boolean) => void;
+} {
+  const [listsShowingEmpty, setListsShowingEmpty] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const showListEmpty = useCallback((id: string, empty: boolean) => {
+    setListsShowingEmpty(current => toggled(current, id, empty));
+  }, []);
+  return { listsShowingEmpty, showListEmpty };
+}
+
+/** `current` with `id` in it or not, the same set when nothing changes. */
+function toggled(
+  current: ReadonlySet<string>,
+  id: string,
+  present: boolean
+): ReadonlySet<string> {
+  if (current.has(id) === present) return current;
+  const next = new Set(current);
+  if (present) next.add(id);
+  else next.delete(id);
+  return next;
+}
+
+/**
+ * The editor's state: the document and its history, with which lists the
+ * canvas shows empty beside them, which is editor state and no step of the
+ * history.
+ */
+export function useEditorState(args: UseEditorStateArgs): EditorState {
+  const state = useDocumentState(args);
+  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
+  return useMemo(
+    () => ({ ...state, listsShowingEmpty, showListEmpty }),
+    [state, listsShowingEmpty, showListEmpty]
+  );
+}
+
+/** The document, its selection and its history: see {@link useEditorState}. */
+function useDocumentState({
   initialDocument,
   limits = DEFAULT_LIMITS,
   definitions,
@@ -1350,21 +1396,6 @@ export function useEditorState({
     []
   );
 
-  // Which lists the canvas shows empty: a new set only when one changes, so
-  // the canvas, which draws per set, draws again only then.
-  const [listsShowingEmpty, setListsShowingEmpty] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const showListEmpty = useCallback((id: string, empty: boolean) => {
-    setListsShowingEmpty(current => {
-      if (current.has(id) === empty) return current;
-      const next = new Set(current);
-      if (empty) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }, []);
-
   return useMemo(
     () => ({
       document,
@@ -1384,8 +1415,6 @@ export function useEditorState({
       canRedo: depths.redo > 0,
       limits,
       undoDepth: depths.document,
-      listsShowingEmpty,
-      showListEmpty,
     }),
     [
       document,
@@ -1402,8 +1431,6 @@ export function useEditorState({
       recordStep,
       depths,
       limits,
-      listsShowingEmpty,
-      showListEmpty,
     ]
   );
 }
