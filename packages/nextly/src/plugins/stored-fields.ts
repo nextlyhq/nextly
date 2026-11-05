@@ -25,6 +25,8 @@
  * @experimental
  */
 
+import { z } from "zod";
+
 import {
   registeredReadLanguagesFor,
   registeredWriteLanguagesFor,
@@ -389,16 +391,41 @@ function documentOf(target: PluginStoredDocument):
       readonly slug: string;
       readonly id: string;
     } {
-  if (typeof target.single === "string") {
-    return { kind: "single", slug: target.single };
+  const named = ONE_DOCUMENT.safeParse(target);
+  if (!named.success) {
+    throw NextlyError.invalidInput({
+      message:
+        "Name one document: a collection and an entry id, or a Single, and not both.",
+    });
   }
-  if (typeof target.collection === "string" && typeof target.id === "string") {
-    return { kind: "collection", slug: target.collection, id: target.id };
-  }
-  throw NextlyError.invalidInput({
-    message: "Name a document: a collection and an entry id, or a Single.",
-  });
+  return "single" in named.data && typeof named.data.single === "string"
+    ? { kind: "single", slug: named.data.single }
+    : {
+        kind: "collection",
+        slug: named.data.collection ?? "",
+        id: named.data.id ?? "",
+      };
 }
+
+/**
+ * The one document a request may name, parsed at the boundary: an entry, by
+ * its collection and id with no Single beside them, or a Single with neither.
+ * A plugin's call is outside input as far as its types go: plain JavaScript,
+ * or an object passed on unchecked, can name both, and choosing either would
+ * read or write a document the caller did not mean.
+ */
+const ONE_DOCUMENT = z.union([
+  z.object({
+    collection: z.string().min(1),
+    id: z.string().min(1),
+    single: z.undefined(),
+  }),
+  z.object({
+    single: z.string().min(1),
+    collection: z.undefined(),
+    id: z.undefined(),
+  }),
+]);
 
 /** A document as a request names it, and nothing else of the request. */
 function targetOf(

@@ -85,6 +85,11 @@ const releases: (() => void)[] = [];
  * writer, whether its first transaction took a row lock: the content write's
  * transaction does, so the seam is shown to sit in the write itself.
  */
+/** Whether a transaction's options make it a read-only snapshot. */
+function isSnapshot(rest: readonly unknown[]): boolean {
+  return (rest[0] as { readOnly?: boolean } | undefined)?.readOnly === true;
+}
+
 function raceSeam(
   t: TestNextly,
   pausing: Writer,
@@ -111,43 +116,55 @@ function raceSeam(
     signalPaused = resolve;
   });
   const state = { paused: false, released: false };
+  const release = () => {
+    state.released = true;
+    letCommit();
+  };
+  /** The writer whose first write transaction this is, now claimed; else none. */
+  const firstWriteOf = (): Writer | undefined => {
+    const who = writerOf.getStore();
+    if (who === undefined || locked.has(who)) return undefined;
+    locked.set(who, false);
+    return who;
+  };
+  /** Records that `who`'s first write transaction took a row lock. */
+  const watchLock = (
+    who: Writer,
+    tx: { lockRow(table: string, id: string): Promise<void> }
+  ) => {
+    const lockRow = tx.lockRow.bind(tx);
+    tx.lockRow = async (table, id) => {
+      locked.set(who, true);
+      return lockRow(table, id);
+    };
+  };
+  /** Holds the pausing writer's transaction open, after its work, until released. */
+  const pauseAfter = async <T>(who: Writer, out: T): Promise<T> => {
+    if (who === pausing) {
+      state.paused = true;
+      signalPaused();
+      await mayCommit;
+    }
+    return out;
+  };
   vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
     // A read-only transaction (a stored read's snapshot) is not the write the
     // seam is about, and passes through. On SQLite it still waits behind the
     // paused writer, which holds the database's one writer, so there the
     // releasing writer's snapshot is the earliest it can go on: it releases.
-    if ((rest[0] as { readOnly?: boolean } | undefined)?.readOnly === true) {
-      if (dialect === "sqlite" && writerOf.getStore() === releasing) {
-        state.released = true;
-        letCommit();
-      }
+    if (isSnapshot(rest)) {
+      if (dialect === "sqlite" && writerOf.getStore() === releasing) release();
       return original(work, ...rest);
     }
-    const who = writerOf.getStore();
-    const first = who !== undefined && !locked.has(who);
-    if (who !== undefined && first) locked.set(who, false);
+    const who = firstWriteOf();
+    if (who === undefined) return original(work, ...rest);
     // Released on entry, before queueing: SQLite runs one transaction at a
     // time, so the released writer must commit for this one to start.
-    if (first && who === releasing) {
-      state.released = true;
-      letCommit();
-    }
+    if (who === releasing) release();
     return original(
       async tx => {
-        if (first && who !== undefined) {
-          const lockRow = tx.lockRow.bind(tx);
-          tx.lockRow = async (table, id) => {
-            locked.set(who, true);
-            return lockRow(table, id);
-          };
-        }
-        const out = await work(tx);
-        if (first && who === pausing) {
-          state.paused = true;
-          signalPaused();
-          await mayCommit;
-        }
-        return out;
+        watchLock(who, tx);
+        return pauseAfter(who, await work(tx));
       },
       ...rest
     );
@@ -1221,6 +1238,64 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+      });
+    });
+
+    describe("the document named", () => {
+      it("refuses a request naming both an entry and a Single, and writes neither", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: "site" } },
+          overrideAccess: true,
+        } as never);
+        // Plain JavaScript, or an object passed on unchecked, can name both.
+        const both = {
+          collection: "pages",
+          id,
+          single: "site",
+        } as unknown as PluginStoredDocument;
+
+        const read = await rejectionOf(
+          readStoredFields(owner, {
+            ...both,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+        // The expectation matches the Single, so a write that chose it would land.
+        const write = await rejectionOf(
+          updateIfUnchanged(owner, {
+            ...both,
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "site" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        expect(
+          await readStoredFields(owner, {
+            single: "site",
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "site" } } },
+        });
+        expect(
+          await stored({ collection: "pages", id }, "body", "published")
+        ).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
     });
 
