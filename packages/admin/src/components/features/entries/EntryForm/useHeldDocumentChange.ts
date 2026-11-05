@@ -26,6 +26,7 @@ import type { DocumentLockChange } from "nextly/document-lock";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DocumentLockChangeNotice } from "@admin/hooks/queries/useDocumentLock";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { changerName } from "@admin/lib/document-version";
 
@@ -34,6 +35,7 @@ import type {
   DocumentLockNotice,
   HeldChangeChoice,
 } from "./document-lock-affordances";
+import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 export interface HeldDocumentChangeOptions {
   /** The change the lock told of, not yet answered. */
@@ -205,4 +207,32 @@ export function withHeldChange<T extends DocumentLockAffordances>(
     ...(held.holding ? { readOnly: true, actionsDisabled: true } : {}),
     ...(held.notice ? { notice: held.notice } : {}),
   };
+}
+
+/**
+ * An editor's lock with someone else's change said over it: one wiring for
+ * both editors. `lock` is what the editor's claim allows so far; the surface
+ * tells the change, and the form holds its edits and loads the current
+ * version.
+ */
+export function useLockWithHeldChange<T extends DocumentLockAffordances>(
+  lock: T,
+  editor: {
+    surface: Pick<DocumentLockSurface, "change" | "settleChange">;
+    dirty: () => boolean;
+    hold: (change: DocumentLockChange) => void;
+    loadCurrent: () => Promise<void>;
+    /** The reads that feed the form; absent, nothing is read again. */
+    latest: DocumentLatest | undefined;
+  }
+): ReturnType<typeof withHeldChange<T>> {
+  const held = useHeldDocumentChange({
+    change: editor.surface.change,
+    settleChange: editor.surface.settleChange,
+    dirty: editor.dirty,
+    hold: editor.hold,
+    loadCurrent: editor.loadCurrent,
+    reload: () => editor.latest?.reload() ?? Promise.resolve(),
+  });
+  return withHeldChange(lock, held);
 }

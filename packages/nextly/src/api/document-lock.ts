@@ -333,6 +333,25 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+/**
+ * What a claim and a renewal both read before they act: the caller, the body,
+ * the document, the version the caller's copy started from, and the caller as
+ * the gates judged them.
+ *
+ * The version is read before anything is claimed or renewed, so a malformed
+ * one is refused without displacing anybody.
+ */
+async function claimRequest(req: Request) {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  const body = await readBody(req);
+  const ref = readRef(body);
+  const held = heldVersionOf(body);
+  const authenticated = await authorize(auth, ref, "claim");
+  return { auth, body, ref, held, authenticated };
+}
+
 /** Who holds this document, if anyone still does. */
 export const readLock = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -368,15 +387,7 @@ export const readLock = withErrorHandler(async (req: Request) => {
  * recorded in the document's history, and refused if it cannot be.
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-
-  const body = await readBody(req);
-  const ref = readRef(body);
-  // Read before anything is claimed, so a malformed version is refused
-  // without displacing anybody.
-  const held = heldVersionOf(body);
-  const authenticated = await authorize(auth, ref, "claim");
+  const { auth, body, ref, held, authenticated } = await claimRequest(req);
 
   const acquired = await (
     await getDocumentLockService()
@@ -418,14 +429,7 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
 
 /** Extend a claim this caller still believes it holds. */
 export const renewLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-
-  const body = await readBody(req);
-  const ref = readRef(body);
-  // Read before anything is renewed, as a claim reads it.
-  const held = heldVersionOf(body);
-  const authenticated = await authorize(auth, ref, "claim");
+  const { body, ref, held, authenticated } = await claimRequest(req);
 
   const outcome = await withChange(
     await (await getDocumentLockService()).renew(ref, readClaimToken(body)),

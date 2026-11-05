@@ -31,7 +31,6 @@ export {
 } from "./timings";
 export type {
   AcquireDocumentLockOutcome,
-  DocumentLockChange,
   DocumentLockHolder,
   DocumentRef,
   RenewDocumentLockOutcome,

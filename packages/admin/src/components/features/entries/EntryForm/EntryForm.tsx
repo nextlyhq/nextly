@@ -134,7 +134,7 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
-import { useHeldDocumentChange, withHeldChange } from "./useHeldDocumentChange";
+import { useLockWithHeldChange } from "./useHeldDocumentChange";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -747,24 +747,21 @@ export function EntryForm({
   // offer it: one way, for a refused save's dialog and for someone else's
   // change alike. The offer is made below, so this is filled in there.
   const keepEditsAndLoad = useRef<() => Promise<void>>(loadCurrentVersion);
-  const heldChange = useHeldDocumentChange({
-    change: lockSurface.change,
-    settleChange: lockSurface.settleChange,
-    dirty: () => form.formState.isDirty,
-    hold: holdForVersionChange,
-    loadCurrent: () => keepEditsAndLoad.current(),
-    reload: () => latest?.reload() ?? Promise.resolve(),
-  });
-  // A gained entry's latest version starts the whole form again, whatever its
-  // `updatedAt` says, and the lock holds until it has; the document views key
-  // on the count it carries. Someone else's change is said over it, and
-  // withholds the form while the current version loads.
-  const lock = withHeldChange(
+  // A gained entry's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries. Someone else's change is said over it.
+  const lock = useLockWithHeldChange(
     heldWhileRecovering(
       useResetOnReload(form, lockSurface, defaultValues),
       recovering
     ),
-    heldChange
+    {
+      surface: lockSurface,
+      dirty: () => form.formState.isDirty,
+      hold: holdForVersionChange,
+      loadCurrent: () => keepEditsAndLoad.current(),
+      latest,
+    }
   );
 
   /*
