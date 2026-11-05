@@ -67,8 +67,10 @@ import {
 } from "../utils/logger";
 import {
   generateTypesFile,
+  generatedOutputOrder,
   writeGeneratedOutput,
   type GeneratedFile,
+  type GeneratedOutput,
 } from "../utils/write-generated-types";
 
 import { runComponentMapCheck } from "./component-map-check-command";
@@ -470,13 +472,17 @@ function planGeneration(
   };
 }
 
+/** The plan's files as the writer takes them. */
+function outputOf(plan: GenerationPlan): GeneratedOutput {
+  return {
+    zod: plan.zodIndex ? [...plan.zodSchemas, plan.zodIndex] : [],
+    types: plan.types,
+  };
+}
+
 /** The plan's files in the order a real run writes them. */
 function plannedFiles(plan: GenerationPlan): GeneratedFile[] {
-  return [
-    plan.types,
-    ...plan.zodSchemas,
-    ...(plan.zodIndex ? [plan.zodIndex] : []),
-  ];
+  return generatedOutputOrder(outputOf(plan));
 }
 
 /** Write the planned files, and answer what was written for the summary. */
@@ -500,17 +506,11 @@ async function writeGeneration(
     warnings: [],
   };
 
-  await writeGeneratedOutput(
-    {
-      zod: plan.zodIndex ? [...plan.zodSchemas, plan.zodIndex] : [],
-      types: plan.types,
-    },
-    {
-      cwd,
-      outputFile: options.output ?? config.typescript.outputFile,
-      warn: message => logger.warn(message),
-    }
-  );
+  await writeGeneratedOutput(outputOf(plan), {
+    cwd,
+    outputFile: options.output ?? config.typescript.outputFile,
+    warn: message => logger.warn(message),
+  });
   result.typesFile = plan.types.path;
   result.zodSchemaFiles.push(...plan.zodSchemas.map(schema => schema.path));
   result.zodIndexFile = plan.zodIndex?.path;

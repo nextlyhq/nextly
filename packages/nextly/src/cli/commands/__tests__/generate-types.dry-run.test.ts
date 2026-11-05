@@ -119,11 +119,12 @@ async function run(
 const report = (printed: string[]) =>
   printed.slice(printed.findIndex(line => line.startsWith("Would ")));
 
+/** In the order a real run writes them: the manifest, the Zod files, then the types. */
 const WRITES = [
   "src/types/blocks.manifest.json",
-  "src/types/nextly-types.ts",
   "src/db/schemas/zod/posts.zod.ts",
   "src/db/schemas/zod/index.ts",
+  "src/types/nextly-types.ts",
 ];
 
 describe("generate:types --dry-run", () => {
@@ -169,10 +170,10 @@ describe("generate:types --dry-run", () => {
 
     expect(report(printed)).toEqual(
       dryRunLines({
-        changes: WRITES.slice(0, 2).map(target => ({
-          action: "write",
-          target,
-        })),
+        // Every planned file but the Zod ones, in the same order.
+        changes: WRITES.filter(target => !target.includes("/zod/")).map(
+          target => ({ action: "write", target })
+        ),
         notes: [COMPONENT_MAP_DRY_RUN_NOTE],
       })
     );

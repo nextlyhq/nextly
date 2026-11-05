@@ -233,6 +233,18 @@ describe("migrate:create --dry-run", () => {
     expect(dry.lines).toContain(
       "No changes detected. Your config matches the latest snapshot."
     );
+    // And ends as every dry run ends.
+    expect(dry.lines.slice(-2)).toEqual(dryRunLines({ changes: [] }));
+    expect(folder()).toEqual(before);
+  });
+
+  it("ends a run with no schema at all as every dry run ends", async () => {
+    const before = folder();
+    const dry = await migrateCreate(
+      defineConfig({ db: { migrationsDir: "./migrations" } } as never),
+      { name: "init", dryRun: true }
+    );
+    expect(dry.lines.slice(-2)).toEqual(dryRunLines({ changes: [] }));
     expect(folder()).toEqual(before);
   });
 

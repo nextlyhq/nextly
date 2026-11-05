@@ -8,6 +8,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dryRunLines } from "../../dry-run";
+import { createProgram } from "../../program";
 import {
   telemetryDisableAction,
   telemetryEnableAction,
@@ -23,6 +24,7 @@ vi.mock("@nextlyhq/telemetry", () => ({
   setEnabled: (enabled: boolean) =>
     void store.calls.push(`setEnabled(${String(enabled)})`),
   resetConsent: () => void store.calls.push("resetConsent"),
+  capture: () => void store.calls.push("capture"),
   getStatus: () => ({ disabled: false }),
 }));
 
@@ -82,6 +84,24 @@ describe("nextly telemetry --dry-run", () => {
       // Without the flag, the same command makes its change.
       await action({}, command());
       expect(store.calls).toEqual(real);
+    }
+  );
+});
+
+describe("nextly telemetry --dry-run, run through the program", () => {
+  // The program's own hooks run before the action, and one of them starts
+  // telemetry for every other command; a telemetry command handles its own.
+  it.each(["enable", "disable", "reset"])(
+    "%s opens no consent store before its action either",
+    async name => {
+      await createProgram().parseAsync([
+        "node",
+        "nextly",
+        "telemetry",
+        name,
+        "--dry-run",
+      ]);
+      expect(store.calls).toEqual([]);
     }
   );
 });

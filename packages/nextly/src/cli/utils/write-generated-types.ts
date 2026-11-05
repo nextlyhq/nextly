@@ -112,12 +112,30 @@ async function writeTypesFile(
  * both commands, which plan these files first so a dry run can name them.
  */
 export async function writeGeneratedOutput(
-  output: { zod: readonly GeneratedFile[]; types?: GeneratedFile },
+  output: GeneratedOutput,
   options: Pick<WriteGeneratedTypesOptions, "cwd" | "outputFile" | "warn">
 ): Promise<void> {
-  for (const file of output.zod) {
-    await mkdir(dirname(file.path), { recursive: true });
-    await writeFile(file.path, file.code, "utf-8");
+  for (const file of generatedOutputOrder(output)) {
+    if (file === output.types) {
+      await writeTypesFile(file, options);
+    } else {
+      await mkdir(dirname(file.path), { recursive: true });
+      await writeFile(file.path, file.code, "utf-8");
+    }
   }
-  if (output.types) await writeTypesFile(output.types, options);
+}
+
+/** What `generate:types` and `build` generate: the Zod files and the types file. */
+export interface GeneratedOutput {
+  zod: readonly GeneratedFile[];
+  types?: GeneratedFile;
+}
+
+/**
+ * The files of `output` in the order `writeGeneratedOutput` writes them, which
+ * is the order a dry run names them in: should a write fail part way, the
+ * files before it are the ones a real run had already written.
+ */
+export function generatedOutputOrder(output: GeneratedOutput): GeneratedFile[] {
+  return [...output.zod, ...(output.types ? [output.types] : [])];
 }

@@ -185,5 +185,27 @@ describe.each(getConfiguredTestDialects())(
       },
       3 * NEXTLY_RUN_TIMEOUT
     );
+
+    it(
+      "names the lock --force-unlock clears even where the real run then refuses",
+      async () => {
+        const real = await nextly(["migrate:baseline"]);
+        expect(real.status, real.stdout + real.stderr).toBe(0);
+        const before = await state();
+
+        // A real run clears the lock before it reaches the refusal, so the
+        // dry run names that change beside the refusal.
+        const dry = await nextly([
+          "migrate:baseline",
+          "--dry-run",
+          "--force-unlock",
+        ]);
+        expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+        expect(dry.stdout).toContain("Would remove any migrate lock held");
+        expect(dry.stdout).toMatch(/A real run would refuse: /);
+        expect(await state()).toEqual(before);
+      },
+      3 * NEXTLY_RUN_TIMEOUT
+    );
   }
 );

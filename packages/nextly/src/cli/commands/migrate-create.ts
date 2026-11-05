@@ -249,12 +249,24 @@ function recordModeReader(recording: boolean | undefined): {
 }
 
 /**
- * The refusal a dry run reports in place of the real run's error, in the real run's own words:
- * an error the plan's checks raise. An internal error, or one that is not Nextly's, means the plan
- * could not be worked out, and the dry run fails on it as the real run does.
+ * The errors a plan's own checks raise when the real run would refuse: a
+ * declaration or a change the checks reject, a plugin module that may not be
+ * written, and the bookkeeping `migrate:baseline` must not adopt over. A dry
+ * run reports these and exits 0. Anything else, such as a database that cannot
+ * be reached, means the plan could not be worked out, and the dry run fails on
+ * it as the real run does.
  */
+const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "VALIDATION_ERROR",
+  "PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN",
+  "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+  "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
+  "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
+]);
+
+/** The refusal a dry run reports for `error`, in the real run's own words. */
 export function dryRunRefusalOf(error: unknown): string | undefined {
-  if (!NextlyError.is(error) || error.code === "INTERNAL_ERROR") {
+  if (!NextlyError.is(error) || !PLAN_REFUSAL_CODES.has(error.code)) {
     return undefined;
   }
   return error.publicMessage;
@@ -309,12 +321,27 @@ function reportMigrationDryRun(
  * nothing to write does: nothing to do is not a failure. The message, not the
  * code, tells it from a record to commit.
  */
-function nothingToRecord(logger: CommandContext["logger"]): never {
+function nothingToRecord(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): never {
   logger.newline();
   logger.info(
     "Nothing to record: no snapshot here predates the record of which fields are translated."
   );
+  endNothingToDo(logger, dryRun);
   process.exit(0);
+}
+
+/**
+ * Where the real run has nothing to do, a dry run says the same and then ends
+ * as every dry run ends, so a script can rely on its last lines.
+ */
+function endNothingToDo(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): void {
+  if (dryRun === true) reportDryRun(logger, { changes: [] });
 }
 
 /**
@@ -643,12 +670,14 @@ export async function runMigrateCreate(
   });
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
-  if (nothing && options.recordSnapshot === true) nothingToRecord(logger);
+  if (nothing && options.recordSnapshot === true)
+    nothingToRecord(logger, options.dryRun);
   if (nothing) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
     logger.info("Use --blank to create an empty migration for custom SQL.");
+    endNothingToDo(logger, options.dryRun);
     return;
   }
 
@@ -695,7 +724,7 @@ export async function runMigrateCreate(
   }
 
   if (result === null && options.recordSnapshot === true) {
-    nothingToRecord(logger);
+    nothingToRecord(logger, options.dryRun);
   }
 
   if (result === null) {
@@ -705,6 +734,7 @@ export async function runMigrateCreate(
     );
     // Nothing to do is not a failure: 0, as every command ends a run with
     // nothing to do.
+    endNothingToDo(logger, options.dryRun);
     process.exit(0);
   }
 
@@ -1600,6 +1630,7 @@ async function runMigrateCreatePlugin(
       `No schema changes detected for plugin "${definition.name}" — nothing to generate.`
     );
     // Nothing to do, which is not a failure.
+    endNothingToDo(logger, options.dryRun);
     process.exit(0);
   }
 

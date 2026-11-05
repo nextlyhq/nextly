@@ -72,7 +72,7 @@ import {
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { NextlyError } from "../../errors/index";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { reportDryRun, type DryRunChange } from "../dry-run";
+import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
@@ -429,6 +429,72 @@ type AdoptionPlan =
   | PlannedAdoption
   | Exclude<BaselineCoreResult, { kind: "baselined" | "would-baseline" }>;
 
+/** The outcome of a plan that adopts nothing, as the run reports it. */
+function notAdopting(
+  plan: Exclude<ReturnType<typeof planBaseline>, { kind: "baseline" }>
+): AdoptionPlan {
+  if (plan.kind === "already-baselined") {
+    return { kind: "already-baselined", snapshotName: plan.snapshotName };
+  }
+  if (plan.kind === "history-not-empty") {
+    return { kind: "history-not-empty", filename: plan.filename };
+  }
+  return { kind: "empty-database" };
+}
+
+/**
+ * The statements that rebuild the derived tables the snapshot leaves out: the
+ * junctions, from what the database holds, and the translation tables, from
+ * their columns there and the config's DDL builder, with any columns the
+ * config no longer describes.
+ */
+async function derivedTableStatements(
+  deps: BaselineCoreDeps,
+  junctionTables: ReadonlySet<string>,
+  companionTables: string[]
+): Promise<
+  ReturnType<typeof buildCompanionStatements> & {
+    junctionStatements: string[];
+  }
+> {
+  const { db, dialect } = deps;
+  const junctionLive =
+    junctionTables.size > 0
+      ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
+      : { tables: [] };
+  // Rendered as a list, not per operation: on SQLite a split-out foreign
+  // key becomes a rebuild of its table to what the database holds.
+  const junctionSql = generateStatements(
+    withCyclicForeignKeysSplit(
+      diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+      dialect,
+      []
+    ),
+    dialect,
+    junctionLive.tables
+  );
+
+  // The companion's own columns, read from the database for the same
+  // reason the junction's are: what is standing there is the schema being
+  // adopted. Only its structure — the composite key and the cascading
+  // foreign key, neither of which a snapshot can hold — comes from the
+  // config's DDL builder.
+  const companionLive =
+    companionTables.length > 0
+      ? await introspectLiveSnapshot(db, dialect, companionTables)
+      : EMPTY_SNAPSHOT;
+
+  const companionSql = buildCompanionStatements({
+    companionTables,
+    liveCompanions: companionLive,
+    entities: deps.localizedEntities ?? [],
+    dialect,
+    defaultLocale: deps.defaultLocale ?? "en",
+    adoptUnknown: deps.adoptUnknown === true,
+  });
+  return { ...companionSql, junctionStatements: junctionSql };
+}
+
 /**
  * What adopting the database would write, decided from the database and the migrations folder:
  * the migration's text, where it and its snapshot go, or the reason there is nothing to adopt.
@@ -471,15 +537,7 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
     appliedMigration: await firstAppliedMigration(repo, adapter),
   });
 
-  if (plan.kind === "already-baselined") {
-    return { kind: "already-baselined", snapshotName: plan.snapshotName };
-  }
-  if (plan.kind === "history-not-empty") {
-    return { kind: "history-not-empty", filename: plan.filename };
-  }
-  if (plan.kind === "empty-database") {
-    return { kind: "empty-database" };
-  }
+  if (plan.kind !== "baseline") return notAdopting(plan);
 
   const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
   const now = deps.now ?? new Date();
@@ -507,40 +565,11 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   // A junction has no config-derived shape to rebuild it from — unlike a
   // companion, nothing declares its columns — so it is emitted from what
   // the database actually has.
-  const junctionLive =
-    junctionTables.size > 0
-      ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
-      : { tables: [] };
-  // Rendered as a list, not per operation: on SQLite a split-out foreign
-  // key becomes a rebuild of its table to what the database holds.
-  const junctionSql = generateStatements(
-    withCyclicForeignKeysSplit(
-      diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
-      dialect,
-      []
-    ),
-    dialect,
-    junctionLive.tables
+  const companionSql = await derivedTableStatements(
+    deps,
+    junctionTables,
+    companionTables
   );
-
-  // The companion's own columns, read from the database for the same
-  // reason the junction's are: what is standing there is the schema being
-  // adopted. Only its structure — the composite key and the cascading
-  // foreign key, neither of which a snapshot can hold — comes from the
-  // config's DDL builder.
-  const companionLive =
-    companionTables.length > 0
-      ? await introspectLiveSnapshot(db, dialect, companionTables)
-      : EMPTY_SNAPSHOT;
-
-  const companionSql = buildCompanionStatements({
-    companionTables,
-    liveCompanions: companionLive,
-    entities: deps.localizedEntities ?? [],
-    dialect,
-    defaultLocale: deps.defaultLocale ?? "en",
-    adoptUnknown: deps.adoptUnknown === true,
-  });
   if (companionSql.undescribed.length > 0) {
     // Before anything is written. A baseline that silently omitted these
     // would rebuild the companion without them, so the failure would not
@@ -563,7 +592,7 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
       dialect,
       plan.snapshot.tables
     ),
-    ...junctionSql,
+    ...companionSql.junctionStatements,
     ...companionSql.statements,
   ];
   const sqlContent = formatMigrationFile({
@@ -758,7 +787,17 @@ export async function runMigrateBaseline(
       return;
     }
 
-    // A dry run clears nothing; it says the run would clear the lock first.
+    // A dry run clears nothing; every report from here on says the run would
+    // clear the lock first, as the real run does whatever it then finds.
+    const unlocks: DryRunChange[] =
+      options.forceUnlock === true
+        ? [{ action: "remove", target: "any migrate lock held" }]
+        : [];
+    const reportPlan = (plan: DryRunPlan): void =>
+      reportDryRun(logger, {
+        ...plan,
+        changes: [...unlocks, ...plan.changes],
+      });
     if (options.dryRun !== true) {
       await maybeForceUnlock(
         { forceUnlock: options.forceUnlock === true },
@@ -797,9 +836,7 @@ export async function runMigrateBaseline(
     });
 
     if (result.kind === "would-baseline") {
-      reportDryRun(logger, {
-        changes: baselineChanges(result, cwd, options.forceUnlock === true),
-      });
+      reportPlan({ changes: baselineChanges(result, cwd) });
       return;
     }
 
@@ -808,7 +845,7 @@ export async function runMigrateBaseline(
       logger.info(
         "Create your first migration instead:  pnpm nextly migrate:create --name init"
       );
-      if (options.dryRun === true) reportDryRun(logger, { changes: [] });
+      if (options.dryRun === true) reportPlan({ changes: [] });
       return;
     }
 
@@ -816,7 +853,7 @@ export async function runMigrateBaseline(
       const refused = refusalLines(result);
       if (options.dryRun === true) {
         // One refusal, in the words the run prints over several lines.
-        reportDryRun(logger, {
+        reportPlan({
           changes: [],
           refusals: [
             refused
@@ -851,19 +888,15 @@ export async function runMigrateBaseline(
 }
 
 /**
- * What a run would change, in the order it changes it: the lock it clears with
- * `--force-unlock`, the migration and its snapshot, the ledger table where there is none, and
- * the ledger row recording the migration as applied.
+ * What an adoption would change after any lock it clears, in the order it changes it: the
+ * migration and its snapshot, the ledger table where there is none, and the ledger row
+ * recording the migration as applied.
  */
 function baselineChanges(
   result: Extract<BaselineCoreResult, { kind: "would-baseline" }>,
-  cwd: string,
-  forceUnlock: boolean
+  cwd: string
 ): DryRunChange[] {
   return [
-    ...(forceUnlock
-      ? [{ action: "remove" as const, target: "any migrate lock held" }]
-      : []),
     { action: "write", target: relative(cwd, result.sqlPath) },
     { action: "write", target: relative(cwd, result.snapshotPath) },
     ...(result.createsLedger

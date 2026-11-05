@@ -79,6 +79,7 @@ import {
 } from "../utils/migration-discovery";
 import {
   generateTypesFile,
+  generatedOutputOrder,
   writeGeneratedOutput,
   type GeneratedFile,
 } from "../utils/write-generated-types";
@@ -800,16 +801,14 @@ async function generateAllFiles(
   }
 
   // Everything planned, then written in one place unless this is a dry run.
-  result.files.push(...zodFiles, ...(typesFile ? [typesFile] : []));
+  const output = { zod: zodFiles, types: typesFile };
+  result.files.push(...generatedOutputOrder(output));
   if (!dryRun && result.files.length > 0) {
-    await writeGeneratedOutput(
-      { zod: zodFiles, types: typesFile },
-      {
-        cwd,
-        outputFile: config.typescript.outputFile,
-        warn: message => logger.warn(message),
-      }
-    );
+    await writeGeneratedOutput(output, {
+      cwd,
+      outputFile: config.typescript.outputFile,
+      warn: message => logger.warn(message),
+    });
     result.zodSchemas.push(...zodFiles.map(file => file.path));
     result.typesFile = typesFile?.path;
     logger.debug(`Written ${formatCount(result.files.length, "file")}`);
