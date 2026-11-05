@@ -15,7 +15,8 @@
  * Asked from the action runner's before-action hook, so every way of
  * publishing asks it, from the top bar, the menu or a plugin's `run`. A check
  * that cannot be made publishes as before: the server still says afterwards
- * what went live without its parts.
+ * what went live without its parts. An edit made while the server answers is
+ * asked about too, before the publish goes ahead.
  *
  * @module admin/publish-offer
  */
@@ -72,6 +73,8 @@ export interface PublishOfferInput {
   readonly documents: () => readonly unknown[];
   /** The Layout the page names, or null. */
   readonly layout: string | null;
+  /** Whether the page is drawn inside the site's default Layout instead. */
+  readonly siteDefault?: boolean;
   readonly subject: PublishSubject;
   /**
    * Whether this surface asks. False for every blocks field of a form but
@@ -82,6 +85,23 @@ export interface PublishOfferInput {
 
 /** The action ids that put the document live. */
 const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
+
+/**
+ * How many times one publish asks, the draft having changed while it was
+ * asked about. A draft still changing after this many is refused rather than
+ * published unasked.
+ */
+const MAX_ASKS = 3;
+
+/** The readiness request for the draft as it is now. */
+function readinessRequest(input: PublishOfferInput): PublishReadinessRequest {
+  return {
+    documents: input.documents(),
+    layout: input.layout,
+    // Sent only when it applies, so a request names what it asks about.
+    ...(input.siteDefault === true ? { siteDefault: true } : {}),
+  };
+}
 
 /**
  * Ask before a publish, and return the dialog that asks.
@@ -99,16 +119,18 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     latest.current = input;
   });
 
-  useBeforeDocumentAction(async (action, store) => {
-    if (!PUBLISHING_ACTIONS.has(action)) return;
-    const { documents, layout, subject, enabled } = latest.current;
-    if (enabled === false) return;
-    const readiness = await askReadiness({ documents: documents(), layout });
+  /**
+   * Put the question, when the answer calls for one: the author's choice, or
+   * null when there was nothing to ask.
+   */
+  const ask = async (
+    readiness: PublishReadinessResponse | null
+  ): Promise<PublishChoice | null> => {
     if (
       readiness === null ||
       (readiness.dependencies.length === 0 && readiness.missing === 0)
     ) {
-      return;
+      return null;
     }
     const choice = await new Promise<PublishChoice>(answer => {
       setQuestion({ readiness, answer });
@@ -117,12 +139,45 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     if (choice.kind === "cancel") {
       throw new DOMException("Publishing was cancelled.", "AbortError");
     }
-    if (choice.kind === "only") return;
-    // Nothing goes live for a store a failed write will refuse: the page
-    // would stay as it was while its parts went live without it.
-    if (!(await store.writesSettled())) return;
-    const result = await publishChosen(choice.dependencies);
-    reportLeftUnpublished(result, readiness, subject);
+    return choice;
+  };
+
+  useBeforeDocumentAction(async (action, store) => {
+    if (!PUBLISHING_ACTIONS.has(action)) return;
+    const { subject, enabled } = latest.current;
+    if (enabled === false) return;
+    // The form stays editable while the server answers, and the store writes
+    // the draft as it is when it writes: an edit made meanwhile was not asked
+    // about, so the draft is asked about again until the answer is about the
+    // one stored.
+    for (let asked = 0; asked < MAX_ASKS; asked++) {
+      const request = readinessRequest(latest.current);
+      const askedAbout = JSON.stringify(request);
+      const unchanged = () =>
+        JSON.stringify(readinessRequest(latest.current)) === askedAbout;
+      const readiness = await askReadiness(request);
+      // An answer about a draft since edited is not put to the author.
+      if (!unchanged()) continue;
+      const choice = await ask(readiness);
+      // Nothing goes live for a store a failed write will refuse: the page
+      // would stay as it was while its parts went live without it.
+      if (!(await store.writesSettled())) return;
+      // Compared before any part is published, so a draft asked about again,
+      // or refused, has put nothing live without its page.
+      if (!unchanged()) continue;
+      if (choice?.kind === "with" && readiness !== null) {
+        const result = await publishChosen(choice.dependencies);
+        reportLeftUnpublished(result, readiness, subject);
+      }
+      // Made again just before the write, after the handlers that run after
+      // this one and the writes the store waits for: a change in that time
+      // runs this again, about the draft as it is.
+      store.checkBeforeWrite(unchanged);
+      return;
+    }
+    throw new Error(
+      `This ${subject} kept changing while it was checked, so it wasn't published. Publish again once you've finished editing.`
+    );
   });
 
   return (
@@ -230,6 +285,7 @@ export function useFormPublishOffer(input: {
   readonly name: string;
   readonly value: () => unknown;
   readonly layout: string | null;
+  readonly siteDefault?: boolean;
   readonly subject: PublishSubject;
 }): JSX.Element {
   const fields = fieldsOf(input.form);
@@ -258,6 +314,9 @@ export function useFormPublishOffer(input: {
   return usePublishOffer({
     documents: () => [...fields.values.values()].map(read => read()),
     layout: input.layout,
+    ...(input.siteDefault === undefined
+      ? {}
+      : { siteDefault: input.siteDefault }),
     subject: input.subject,
     enabled: asking,
   });

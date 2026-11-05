@@ -43,6 +43,7 @@ import {
 
 import {
   PageLayoutPicker,
+  usePageLayoutAsk,
   usePageLayoutRegions,
   usePageLayoutSettings,
 } from "./page-layout";
@@ -698,5 +699,44 @@ describe("a Layout behind Remove Layout's fence in the list", () => {
     expect(option.getAttribute("title")).toBe(reason);
     expect(option.getAttribute("aria-description")).toBe(reason);
     expect(option.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("what a publish asks about the page's Layout", () => {
+  function askFor(defaults: FieldValues) {
+    return renderHook(() => {
+      const form = useForm({ defaultValues: defaults });
+      return usePageLayoutAsk(form.control);
+    }).result.current;
+  }
+
+  it("names the Layout a page names", () => {
+    expect(askFor({ layout: "landing", noHeaderFooter: false })).toEqual({
+      layout: "landing",
+      siteDefault: false,
+    });
+  });
+
+  it("asks about the site's default for a page that names none", () => {
+    expect(askFor({ layout: null, noHeaderFooter: false })).toEqual({
+      layout: null,
+      siteDefault: true,
+    });
+  });
+
+  it("asks about no Layout for a page drawn with no header or footer", () => {
+    expect(askFor({ layout: "landing", noHeaderFooter: true })).toEqual({
+      layout: null,
+      siteDefault: false,
+    });
+  });
+
+  it("asks about no Layout on a form that is not a page's", () => {
+    formCollection = "posts";
+    answering(choices);
+    expect(askFor({ layout: null, noHeaderFooter: false })).toEqual({
+      layout: null,
+      siteDefault: false,
+    });
   });
 });

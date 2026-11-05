@@ -24,7 +24,8 @@
  *
  * Before the drift check it also warns, without failing, about each file
  * holding a statement `nextly migrate` or `migrate:down` would refuse
- * (`REFUSED_STATEMENT`), and names each file marked
+ * (`REFUSED_STATEMENT`), and about each file whose UP or DOWN deletes data,
+ * naming what it deletes (`DESTRUCTIVE`), and names each file marked
  * `-- nextly:no-transaction`. A warning, because the check does not connect:
  * a file already applied is never run again, and failing CI over one would
  * leave the operator nothing to fix.
@@ -57,6 +58,15 @@ import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
+  describeDeletion,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import {
+  fileDeletions,
+  functionsDefinedBy,
+  type DeletionFacts,
+} from "../../domains/schema/migrate/file-deletions";
+import {
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
@@ -84,6 +94,7 @@ import { reportMigrationSiblingFields } from "../../domains/schema/migrate-creat
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  parseSnapshotFile,
   SnapshotFileError,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
@@ -92,6 +103,7 @@ import type {
   NextlySchemaSnapshot,
   Operation,
 } from "../../domains/schema/pipeline/diff/types";
+import { renderedType } from "../../domains/schema/pipeline/sql-templates/create-table-body";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -124,8 +136,8 @@ import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
 import {
+  loadDeclaredConfigOrExit,
   requireDatabaseEnv,
-  loadConfigOrExit,
 } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
@@ -171,7 +183,9 @@ export async function runMigrateCheck(
   const dialect = dbValidation.dialect;
 
   // Load config.
-  const configResult = await loadConfigOrExit(
+  // The configuration with its plugin field declarations checked; an invalid
+  // one is reported and the check exits, like every other check failure.
+  const configResult = await loadDeclaredConfigOrExit(
     {
       configPath: options.config,
       cwd: options.cwd,
@@ -179,25 +193,7 @@ export async function runMigrateCheck(
     },
     logger
   );
-
-  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
-  // first moment an unknown field type can be told apart from one a plugin had
-  // not contributed yet: the `define*` validators defer that question because
-  // the config bundle is evaluated before any plugin registers. Asked here, a
-  // misspelled or wrong-surface token fails the command instead of silently
-  // generating primitive fallback types and a snapshot that production boot
-  // then refuses.
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
-    });
-  } catch (error) {
-    // Reported and exited rather than thrown, so an invalid declaration reads
-    // like every other check failure instead of an unhandled crash.
-    exitWithError(logger, configDeclarationError(error) ?? error);
-  }
+  if (configResult === undefined) return;
 
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
@@ -418,17 +414,10 @@ export async function runChecks(args: {
   // check cannot tell a pending file from an applied one, which never runs
   // again.
   if (args.dialect !== undefined) {
-    const judged = await judgeStatements(migrationsDir, args.dialect);
-    for (const file of judged.outsideTransaction) {
-      logger.info(
-        `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
-      );
-    }
-    for (const { file, message } of judged.refused) {
-      logger.warn(
-        `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
-      );
-    }
+    reportStatements(
+      await judgeStatements(migrationsDir, args.dialect),
+      logger
+    );
   }
 
   // Check 4: schema drift (config vs latest snapshot).
@@ -530,6 +519,33 @@ function settingsInStep(
 }
 
 /**
+ * Prints what `judgeStatements` found: each file marked to run outside a
+ * transaction, each statement a run would refuse (`REFUSED_STATEMENT`), and
+ * each UP or DOWN that deletes data (`DESTRUCTIVE`). Warnings only.
+ */
+function reportStatements(
+  judged: Awaited<ReturnType<typeof judgeStatements>>,
+  logger: CommandContext["logger"]
+): void {
+  for (const file of judged.outsideTransaction) {
+    logger.info(
+      `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
+    );
+  }
+  for (const { file, message } of judged.refused) {
+    logger.warn(
+      `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
+    );
+  }
+  for (const { file, section, deletions } of judged.destructive) {
+    const command = section === "UP" ? "nextly migrate" : "migrate:down";
+    logger.warn(
+      `DESTRUCTIVE: ${file} (${section}) deletes data: ${deletions.map(describeDeletion).join("; ")}. ${command} runs it only with --accept-data-loss covering each.`
+    );
+  }
+}
+
+/**
  * What `nextly migrate` and `migrate:down` would make of each migration
  * file's statements on `dialect`: the files marked to run outside a
  * transaction, and every statement either would refuse. The file judged is
@@ -542,28 +558,162 @@ export async function judgeStatements(
 ): Promise<{
   outsideTransaction: string[];
   refused: { file: string; message: string }[];
+  destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[];
 }> {
   const outsideTransaction: string[] = [];
   const refused: { file: string; message: string }[] = [];
+  const destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[] = [];
   const groups = await discoverMigrationGroups(migrationsDir);
+  const metaDir = resolve(migrationsDir, "meta");
+  // The schema before the file being read: nothing before the first file,
+  // then the snapshot paired with the file before it (undefined when that
+  // file has none, as a localisation file does).
+  let before: NextlySchemaSnapshot | undefined = EMPTY_SNAPSHOT;
+  const files = await readSections(migrationsDir, groups, dialect);
+  // Without a catalog, a function counts as user-defined when a migration
+  // file defines it (a qualified one outside pg_catalog always does).
+  const functions = new Set(
+    files.flatMap(({ sections }) =>
+      sections.flatMap(([, statements]) =>
+        functionsDefinedBy(statements, dialect)
+      )
+    )
+  );
+  for (const { file, transaction, sections } of files) {
+    // UP runs against the schema before the file, DOWN against the one the
+    // file leaves, which its own snapshot records.
+    const after = await pairedSnapshot(metaDir, file);
+    const schemaFor = { UP: before, DOWN: after };
+    before = after;
+    if (!transaction) outsideTransaction.push(file);
+    for (const [section, statements] of sections) {
+      for (const refusal of statementRefusals(statements, dialect, {
+        transaction,
+        unit: "file",
+      })) {
+        refused.push({ file, message: refusal.message });
+      }
+      const deletions = fileDeletions(
+        statements,
+        dialect,
+        offlineFacts(schemaFor[section], functions)
+      );
+      if (deletions.length > 0) destructive.push({ file, section, deletions });
+    }
+  }
+  return { outsideTransaction, refused, destructive };
+}
+
+/**
+ * The facts a section's deletions are judged against without a database.
+ * No foreign key or trigger is known: the deletions named are the ones the
+ * statements name, and the run itself judges what a removal reaches. The
+ * user-defined functions are `functions`, the ones a migration file defines. The
+ * columns of the tables a SQLite rebuild rebuilds are read from `schema`, the
+ * snapshot of the schema the section runs against, so a column the rebuild
+ * leaves out is named. Without a snapshot, or for a table it does not hold, a
+ * rebuild is left to the run unless it carries everything.
+ */
+/** Each migration file in run order, the dialect's variant, with its UP and DOWN split into statements. */
+async function readSections(
+  migrationsDir: string,
+  groups: Awaited<ReturnType<typeof discoverMigrationGroups>>,
+  dialect: SupportedDialect
+): Promise<
+  {
+    file: string;
+    transaction: boolean;
+    sections: (readonly ["UP" | "DOWN", string[]])[];
+  }[]
+> {
+  const files = [];
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     if (file === undefined) continue;
     const content = await readFile(resolve(migrationsDir, file), "utf-8");
     const transaction = !marksNoTransaction(content);
-    if (!transaction) outsideTransaction.push(file);
     const { upSql, downSql } = parseSqlSections(content);
-    for (const sql of [upSql, downSql]) {
-      for (const refusal of statementRefusals(
-        splitSqlStatements(sql, dialect, { transaction }),
-        dialect,
-        { transaction, unit: "file" }
-      )) {
-        refused.push({ file, message: refusal.message });
-      }
-    }
+    const split = (sql: string) =>
+      splitSqlStatements(sql, dialect, { transaction });
+    files.push({
+      file,
+      transaction,
+      sections: [
+        ["UP", split(upSql)],
+        ["DOWN", split(downSql)],
+      ] as const satisfies (readonly ["UP" | "DOWN", string[]])[],
+    });
   }
-  return { outsideTransaction, refused };
+  return files;
+}
+
+function offlineFacts(
+  schema: NextlySchemaSnapshot | undefined,
+  functions: ReadonlySet<string>
+): DeletionFacts {
+  const columnTypes = new Map(
+    (schema?.tables ?? []).map(table => [
+      table.name.toLowerCase(),
+      // Each type as the generated DDL spells it, so a column the rebuild
+      // carries unchanged compares equal and only a converted one is named.
+      new Map(
+        table.columns.map(column => [
+          column.name.toLowerCase(),
+          renderedType(column).toLowerCase(),
+        ])
+      ),
+    ])
+  );
+  return {
+    cascadeFrom: () => [],
+    truncateCascadeFrom: () => [],
+    nulledBy: () => [],
+    // No code a table carries, nor inheritance tree, is known without a
+    // database; the run judges what a change reaches.
+    hiddenCode: () => false,
+    descendantsOf: () => [],
+    // The tables the schema before the section holds, from its snapshot.
+    liveTable: table =>
+      schema === undefined ? undefined : columnTypes.has(table.toLowerCase()),
+    userFunctions: functions,
+    unseenRebuild: "deferred",
+    // Derived from the one reading of the types, so the two agree on which
+    // columns a table has.
+    liveColumns: new Map(
+      [...columnTypes].map(([table, columns]) => [
+        table,
+        new Set(columns.keys()),
+      ])
+    ),
+    liveColumnTypes: columnTypes,
+  };
+}
+
+/**
+ * The schema recorded by the snapshot paired with migration `file`, or
+ * undefined when it has none or it cannot be read. `runChecks` has already
+ * failed on an unreadable snapshot by then; this reader only judges what a
+ * file deletes, which then falls back to leaving a rebuild to the run.
+ */
+async function pairedSnapshot(
+  metaDir: string,
+  file: string
+): Promise<NextlySchemaSnapshot | undefined> {
+  const name = `${file.replace(/\.sql$/, "")}.snapshot.json`;
+  try {
+    const content = await readFile(resolve(metaDir, name), "utf-8");
+    return parseSnapshotFile(content, name).snapshot;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

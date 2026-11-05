@@ -223,6 +223,34 @@ describe("createPublicReader findSingle", () => {
     await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();
   });
 
+  // A source a route hands over may fail before it returns a promise. That is
+  // the same miss, so it gets the same answer.
+  it.each([
+    ["missing or unpublished", NextlyError.notFound()],
+    ["refused to the visitor", NextlyError.forbidden()],
+    ["refused for want of a sign-in", NextlyError.authRequired()],
+  ])(
+    "answers null for a Single that is %s when the source throws at once",
+    async (_, error) => {
+      const { reader } = readerOver(
+        vi.fn(() => {
+          throw error;
+        })
+      );
+      await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();
+    }
+  );
+
+  it("lets any other failure through when the source throws at once", async () => {
+    const failure = NextlyError.internal();
+    const { reader } = readerOver(
+      vi.fn(() => {
+        throw failure;
+      })
+    );
+    await expect(reader.findSingle({ slug: "banner" })).rejects.toBe(failure);
+  });
+
   it("answers null when the Single has no document", async () => {
     const { reader } = readerOver(vi.fn(async () => null));
     await expect(reader.findSingle({ slug: "banner" })).resolves.toBeNull();

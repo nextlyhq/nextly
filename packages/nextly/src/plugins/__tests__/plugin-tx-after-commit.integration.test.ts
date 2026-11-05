@@ -184,7 +184,9 @@ async function writeEverything(ctx: Captured, tag: string): Promise<void> {
     },
     {}
   );
-  await ctx.settings.set({ port: 8443 });
+  // No settings write: one is refused inside a plugin's transaction
+  // (`plugin-settings-in-transaction.integration.test.ts`). Its announcement
+  // outside one is held below.
 }
 
 const EVERY_EFFECT = [
@@ -193,7 +195,6 @@ const EVERY_EFFECT = [
   `collection.${SLUG}.created`,
   "field.afterChange:",
   "media.uploaded",
-  "plugin.settings.changed",
 ];
 
 /** Order-free comparison, with the field hook's value stripped. */

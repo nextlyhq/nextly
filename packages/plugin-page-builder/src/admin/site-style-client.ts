@@ -65,6 +65,7 @@ import {
   type Context,
 } from "react";
 
+import { asOverwrite } from "../document-version";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
@@ -135,6 +136,8 @@ export interface SiteStyleRead {
   readonly pending: boolean;
   /** Why the read failed, when it did. */
   readonly error: Error | null;
+  /** Whether the stored tier is the site as it is now, as the read reports. */
+  readonly current: boolean;
 }
 
 /**
@@ -146,7 +149,7 @@ export interface SiteStyleRead {
  * does not fetch them twice.
  */
 export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
-  const { data, isPending, error } = useStoredSiteStyle();
+  const { data, isPending, error, current } = useStoredSiteStyle();
   const preview = useContext(SiteStylePreviewContext);
 
   // Narrowed and merged in one memo over one source. A stored row predates its
@@ -184,6 +187,7 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
     unreadableFonts,
     pending: isPending,
     error: error ?? null,
+    current,
   };
 }
 
@@ -611,7 +615,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           });
           await refetch();
         } else {
-          await mutation.mutateAsync({ [section]: value });
+          // Saved over whatever the style holds now, on purpose: the last
+          // writer wins, as it always has here. Each studio keeps its own
+          // copy, so no one version could stand for what this editor saw.
+          await mutation.mutateAsync(asOverwrite({ [section]: value }));
           // The editor reads the style through the plugin's route, which the
           // Single's own write does not invalidate, so it is asked again.
           // Not awaited, as the Single's own invalidation is not: the save has

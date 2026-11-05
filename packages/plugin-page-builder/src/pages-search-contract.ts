@@ -143,6 +143,12 @@ export interface PageItem {
    * says: a scheduled page can hold them too. Absent otherwise.
    */
   readonly pendingChange?: true;
+  /**
+   * The page's version as this answer read it, which a rename sends back so
+   * a save of the page since then refuses the rename. Absent from a server
+   * that issues no versions.
+   */
+  readonly rev?: string;
 }
 
 /**

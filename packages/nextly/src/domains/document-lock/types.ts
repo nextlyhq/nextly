@@ -4,6 +4,8 @@
  * @module domains/document-lock/types
  */
 
+import type { StaleVersionPublicData } from "../../errors/public-data";
+
 import type { DocumentScopeKind } from "./lock-key";
 
 /** The document a claim is about. */
@@ -13,6 +15,18 @@ export interface DocumentRef {
   readonly slug: string;
   readonly entryId: string;
 }
+
+/**
+ * Someone else's change since the version the claimant's copy started from,
+ * told exactly as a save refused for it would tell it: the current version
+ * always, who and when only to a caller who may read the document.
+ *
+ * Present only when the claim or renewal named that version (`_rev`) and the
+ * parts it covers (the document's own row and its language) have moved.
+ *
+ * @experimental
+ */
+export type DocumentLockChange = StaleVersionPublicData;
 
 /** Who holds a claim, and how much of it is left. */
 export interface DocumentLockHolder {
@@ -47,6 +61,12 @@ export type AcquireDocumentLockOutcome =
       readonly status: "acquired";
       readonly holder: DocumentLockHolder;
       readonly claimToken: string;
+      /**
+       * What changed since the version the claimant's copy started from: how
+       * an editor taking a document back learns it changed while they were
+       * away.
+       */
+      readonly changed?: DocumentLockChange;
     }
   | {
       readonly status: "held";
@@ -97,5 +117,11 @@ export type RenewDocumentLockOutcome =
        * who has already gone.
        */
       readonly waiting: boolean;
+      /**
+       * What someone else changed since the version the holder's copy started
+       * from, on the beat the holder already sends, so they are told before
+       * they save rather than by a refused save.
+       */
+      readonly changed?: DocumentLockChange;
     }
   | { readonly status: "lost"; readonly holder?: DocumentLockHolder };

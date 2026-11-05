@@ -125,7 +125,7 @@ export {
   type BuilderOp,
   type NodePatch,
   type OpPosition,
-} from "./ops";
+} from "./op-vocabulary";
 
 /**
  * @experimental The editor shell's props.
@@ -417,6 +417,15 @@ export {
   writeZoom,
   type CanvasZoom,
 } from "./canvas-zoom";
+
+/**
+ * @experimental The device an author edits at once the device they chose is
+ * removed from the site's breakpoints.
+ *
+ * Pure, so it is on this entry beside the zoom model: a host keeps the set it
+ * last drew with and asks this when a new one arrives.
+ */
+export { fallbackBreakpoint } from "./canvas-width";
 
 export {
   BLOCK_GROUP,

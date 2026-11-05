@@ -260,6 +260,7 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   ScheduledTask,
+  PluginWebhookEventType,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
@@ -657,6 +658,32 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental A document's stored field values read with no read hook, and
+ *   a write of a field made only if the stored value is still the one read.
+ *   Graduates once `@nextlyhq/plugin-page-builder`'s component delete has
+ *   rewritten site content through it in a release.
+ *
+ * A plugin that rewrites content it did not author has two problems the
+ *   ordinary Direct API cannot solve: a site's `afterRead` hook can hide or
+ *   reshape the value it reads, and a check made before the write's
+ *   transaction leaves a gap in which an author's save is overwritten.
+ *   `readStoredFields` reads the stored form (live row, working draft, one
+ *   language) of fields of a plugin field type stored as JSON, judged by the
+ *   person's read access. `updateIfUnchanged` makes the ordinary update as
+ *   that person, refused with a `CONFLICT` error when the field no longer
+ *   hashes, under the write's own row lock, to what was read.
+ *   `storedValueHash` is the one hash both sides compare.
+ */
+export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
+export type {
+  PluginConditionalUpdate,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginWriteExpectation,
+} from "nextly";
+
+/**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.
  * The component-registration runtime lives on `@nextlyhq/plugin-sdk/admin`.
  *
@@ -676,6 +703,21 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * Admin places: the named places on admin pages a plugin adds to, and the
+ * places a plugin declares on its own pages (`contributes.admin.places`).
+ * A plugin types its own places by augmenting `AdminPlaces` from this module.
+ * @experimental No first-party plugin declares or adds to a place yet (see
+ *   STABILITY.md).
+ */
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+  type PluginAdminPlaceDeclaration,
 } from "nextly";
 
 /**

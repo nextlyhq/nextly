@@ -20,6 +20,7 @@ import {
   type ClassificationResult,
   type ClassifierEvent,
   type DestructiveDropEvent,
+  type ResolutionKind,
 } from "../resolution/types";
 
 import { narrowingRefusal } from "./narrowing-refusal";
@@ -56,9 +57,21 @@ export class RealClassifier implements Classifier {
       column: string,
       length: number
     ) => Promise<number>;
+    /** Whether a column is unique in the schema being applied (`uniqueColumnLookup`). */
+    isUnique?: (table: string, column: string) => boolean;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult> {
     const events: ClassifierEvent[] = [];
+    // One value written to every row it fills repeats in a unique column, or collides with a value
+    // a row already holds, so "fill with one value" is never offered for one.
+    const offered = (
+      table: string,
+      column: string,
+      answers: ResolutionKind[]
+    ): ResolutionKind[] =>
+      args.isUnique?.(table, column) === true
+        ? answers.filter(answer => answer !== "provide_default")
+        : answers;
 
     for (const op of args.operations) {
       if (
@@ -82,12 +95,12 @@ export class RealClassifier implements Classifier {
             columnName: op.columnName,
             nullCount,
             tableRowCount,
-            applicableResolutions: [
+            applicableResolutions: offered(op.tableName, op.columnName, [
               "provide_default",
               "make_optional",
               "delete_nonconforming",
               "abort",
-            ],
+            ]),
           });
         }
       } else if (op.type === "change_column_type") {
@@ -154,11 +167,11 @@ export class RealClassifier implements Classifier {
             tableName: op.tableName,
             columnName: op.column.name,
             tableRowCount,
-            applicableResolutions: [
+            applicableResolutions: offered(op.tableName, op.column.name, [
               "provide_default",
               "make_optional",
               "abort",
-            ],
+            ]),
           });
         }
       } else if (op.type === "drop_column") {

@@ -23,6 +23,7 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   editingBreakpointOf,
+  fallbackBreakpoint,
   frameFitScale,
   frameFillingRegion,
   previewHeight,
@@ -432,6 +433,96 @@ describe("the device an edit goes to", () => {
       container: [{ id: "card", label: "Card", maxWidth: 400 }],
     };
     expect(editingBreakpointOf(withContainer, "card")).toBe(BASE_BREAKPOINT);
+  });
+});
+
+describe("the device edited once the chosen one is removed", () => {
+  /*
+   * Four bounded devices, so a removal in the middle has both a narrower and
+   * a wider neighbour, and the answer shows which way the fallback moves.
+   */
+  const four = (): BreakpointSet => ({
+    viewport: [
+      { id: "laptop", label: "Laptop", maxWidth: 1199 },
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+      { id: "small", label: "Small tablet", maxWidth: 767 },
+      { id: "mobile", label: "Mobile", maxWidth: 575 },
+    ],
+    container: [],
+  });
+  const without = (set: BreakpointSet, ...ids: string[]): BreakpointSet => ({
+    ...set,
+    viewport: set.viewport.filter(entry => !ids.includes(entry.id)),
+  });
+
+  it("moves to the narrowest breakpoint wider than the removed one", () => {
+    // Tablet, the next one up: not Laptop, the widest remaining, and not
+    // Mobile, the next one down.
+    expect(fallbackBreakpoint(four(), without(four(), "small"), "small")).toBe(
+      "tablet"
+    );
+    // With the next one up removed too, the one beyond it.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "small", "tablet"), "small")
+    ).toBe("laptop");
+  });
+
+  it("keeps the width when a breakpoint at the same bound remains", () => {
+    /*
+     * Two at one bound: only the later is offered, until it is removed and the
+     * earlier one is offered at that same width. Strictly wider would skip it
+     * for Laptop.
+     */
+    const doubled: BreakpointSet = {
+      viewport: [
+        { id: "laptop", label: "Laptop", maxWidth: 1199 },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "tablet-wide", label: "Wide tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    };
+    expect(
+      fallbackBreakpoint(
+        doubled,
+        without(doubled, "tablet-wide"),
+        "tablet-wide"
+      )
+    ).toBe("tablet");
+  });
+
+  it("moves to the base when no wider breakpoint remains", () => {
+    // Narrower ones remain, and none of them is chosen.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop", "tablet"), "tablet")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("moves to the base when the removed one was the widest", () => {
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop"), "laptop")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("keeps the chosen breakpoint while the site still has it", () => {
+    // Another one removed, a wider one among them.
+    expect(fallbackBreakpoint(four(), without(four(), "laptop"), "small")).toBe(
+      "small"
+    );
+    // Its own bound moved: still the same breakpoint.
+    const moved: BreakpointSet = {
+      ...four(),
+      viewport: four().viewport.map(entry =>
+        entry.id === "small" ? { ...entry, maxWidth: 1300 } : entry
+      ),
+    };
+    expect(fallbackBreakpoint(four(), moved, "small")).toBe("small");
+    expect(fallbackBreakpoint(four(), four(), null)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("goes to the base for a choice the earlier set never offered", () => {
+    // No width to compare: a stored choice for a breakpoint already gone.
+    expect(fallbackBreakpoint(four(), four(), "watch")).toBe(BASE_BREAKPOINT);
   });
 });
 

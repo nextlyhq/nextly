@@ -73,6 +73,8 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { populateCompanionFields } from "../../i18n/companion-join";
+import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -1741,11 +1743,54 @@ export class CollectionRelationshipService extends BaseService {
     const rows = lifecycleRows.filter(row => matching.has(row));
     this.recordWithheld(targetCollection, fetched, rows, access);
 
+    // A target whose translatable values live in its companion is read with them, in the language
+    // chain of the read that reached it, as a direct read of the target is. Before the redaction,
+    // so a translated value is judged by its field's read rule like any other.
+    await this.fillTargetTranslations(
+      targetCollection,
+      rows,
+      statusFilter,
+      access
+    );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * Fill `rows` of `targetCollection` with their translatable values from its companion, in the
+   * language chain the surrounding read resolved. Nothing to do for a target with no companion,
+   * a system entity, or a read with no language.
+   */
+  private async fillTargetTranslations(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    statusFilter: StatusFilter | null,
+    access: RelatedRowAccess
+  ): Promise<void> {
+    const localeChain =
+      access.localeChain ?? (access.locale ? [access.locale] : null);
+    if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
+      return;
+    }
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (!companion) return;
+    await populateCompanionFields({
+      db: this.db as never,
+      companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      localizedFields: companion.localizedFields,
+      rows,
+      // A copy: the read's chain is shared and read-only, and the fill takes a list of its own.
+      localeChain: [...localeChain],
+      statusValues:
+        companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+    });
   }
 
   /**

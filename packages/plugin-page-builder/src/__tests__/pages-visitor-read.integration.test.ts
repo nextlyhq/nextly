@@ -142,6 +142,8 @@ describe.each(getConfiguredTestDialects())(
       const one = await visit(["collections", PAGES, "entries", liveId]);
       expect(one.status).toBe(200);
       expect(Object.keys((await one.json()) as Doc).sort()).toEqual([
+        // The version reaches every reader, and names no person.
+        "_rev",
         "content",
         "createdAt",
         "firstPublishedAt",

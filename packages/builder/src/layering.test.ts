@@ -106,6 +106,11 @@ const ALLOWED_RUNTIME_IMPORTS = [
   // the root today; when the editor needs SDK types, add a type-only route
   // deliberately rather than widening this entry back.
   "@nextlyhq/plugin-sdk/admin",
+  // The composition actions' schemas, which the server-safe `ops` subpath
+  // publishes so a route, a script and an agent judge an action alike. Plain
+  // data validation: it reaches neither React nor the CMS, and only the `ops`
+  // entry imports it.
+  "zod",
 ];
 
 /** Node built-ins and test-only tooling, which never reach a consumer's bundle. */

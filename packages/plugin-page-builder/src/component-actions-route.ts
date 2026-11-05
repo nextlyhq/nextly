@@ -76,10 +76,13 @@ import {
   reconcileAfterCommit,
   requirePluginStore,
   requireUnchangedPage,
+  storedPageReadOf,
   storeOf,
   type CompositionRouteContext,
   type CompositionRouteSetup,
+  type StoredPageRead,
 } from "./composition-route-kit";
+import { documentVersionOf, withVersionFrom } from "./document-version";
 import { DRY_RUN_COMPONENT_ID } from "./library-contract";
 import { readingAsUser } from "./library-route";
 import type { OriginStore } from "./origin-store";
@@ -127,11 +130,14 @@ const UpdatePatternBody = z.strictObject({
 
 /** What these routes read besides their context. */
 export interface ComponentActionReads {
-  /** A stored page's blocks document, read as the caller, or `null`. */
+  /**
+   * A stored page's blocks document, read as the caller, with the version of
+   * the read, or `null`.
+   */
   page(
     address: StoredAt,
     ctx: CompositionRouteContext
-  ): Promise<BlockDocument | null>;
+  ): Promise<StoredPageRead | null>;
   /** A component as the canvas shows it to this caller: its draft overlaid. */
   shown(
     id: string,
@@ -231,8 +237,11 @@ export async function detachPlacement(
 
   // An ordinary update, whose own hooks keep the usage indexes.
   const stored = at.stored;
-  await requireUnchangedPage(() => reads.page(stored, ctx), at.document);
-  await writeStoredPage(ctx, at, plan.pageOps, limits);
+  const rev = await requireUnchangedPage(
+    () => reads.page(stored, ctx),
+    at.document
+  );
+  await writeStoredPage(ctx, at, plan.pageOps, limits, rev);
   return respondMutation<DetachResult>(
     "The placement was detached.",
     result(false)
@@ -428,13 +437,16 @@ async function duplicateStored(
         asCaller(ctx)
       )
     );
-    await requireUnchangedPage(() => reads.page(stored, ctx), at.document);
+    const rev = await requireUnchangedPage(
+      () => reads.page(stored, ctx),
+      at.document
+    );
     const converted = applyOps(at.document, repoint(id), limits).document;
     await collections.updateEntryInTransaction(
       tx,
       stored.collection,
       stored.id,
-      { [stored.field]: converted },
+      withVersionFrom({ [stored.field]: converted }, rev),
       asCaller(ctx, stored.locale)
     );
     return id;
@@ -466,7 +478,8 @@ export async function updatePatternFromSelection(
   const body = await readBodyWith(req, UpdatePatternBody, "update-pattern");
   const reads = setup.reads ?? directReads(setup, ctx);
   const id = ctx.params?.id ?? "";
-  if ((await reads.pattern(id, ctx)) === null) {
+  const pattern = await reads.pattern(id, ctx);
+  if (pattern === null) {
     throw NextlyError.notFound({
       logContext: { reason: "update-pattern-missing" },
     });
@@ -495,10 +508,15 @@ export async function updatePatternFromSelection(
       result(true)
     );
   }
+  // Sent with the version the pattern was read at, so a save of it made
+  // since refuses this update rather than being replaced by it.
   await ctx.services.collections.updateEntry(
     slug,
     id,
-    { content: update.document, status: "published" },
+    withVersionFrom(
+      { content: update.document, status: "published" },
+      documentVersionOf(pattern)
+    ),
     asCaller(ctx)
   );
   return respondMutation<UpdatePatternResult>(
@@ -535,14 +553,14 @@ async function placementIn(
       logContext: { reason: "composition-needs-page-update" },
     });
   }
-  const document = await reads.page(stored, ctx);
-  if (document === null) {
+  const read = await reads.page(stored, ctx);
+  if (read === null) {
     throw NextlyError.notFound({
       logContext: { reason: "composition-page-missing" },
     });
   }
   return {
-    document: documentOf(document),
+    document: documentOf(read.document),
     instanceId: body.instanceId,
     stored,
     ...(stored.locale === undefined ? {} : { locale: stored.locale }),
@@ -573,12 +591,16 @@ function placedComponentId(at: PlacementIn): string {
   });
 }
 
-/** Write a stored page with the ops applied, as the caller. */
+/**
+ * Write a stored page with the ops applied, as the caller, sent with `rev`:
+ * the version the page was read at just before the write.
+ */
 async function writeStoredPage(
   ctx: CompositionRouteContext,
   at: PlacementIn,
   ops: readonly BuilderOp[],
-  limits: DocumentLimits | undefined
+  limits: DocumentLimits | undefined,
+  rev: string | undefined
 ): Promise<void> {
   const stored = at.stored;
   if (stored === undefined) return;
@@ -586,7 +608,7 @@ async function writeStoredPage(
   await ctx.services.collections.updateEntry(
     stored.collection,
     stored.id,
-    { [stored.field]: next },
+    withVersionFrom({ [stored.field]: next }, rev),
     asCaller(ctx, stored.locale)
   );
 }
@@ -621,7 +643,7 @@ function directReads(
   };
   return {
     page: async (address, caller) =>
-      blocksDocumentOf(
+      storedPageReadOf(
         await readOrNull(async () =>
           requireNextly().findByID({
             collection: address.collection,
