@@ -413,7 +413,7 @@ export async function publishConfiguredWorkflows(
  * field-declaration check's issues, or a workflow that cannot attach.
  * Undefined for anything else, which ends a dry run as it ends a real one.
  */
-export function declarationRefusalOf(error: unknown): string | undefined {
+function declarationRefusalOf(error: unknown): string | undefined {
   const declared = configDeclarationError(error);
   if (declared) return `${declared.what} ${declared.why}`;
   if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
