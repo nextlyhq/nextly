@@ -146,6 +146,7 @@ async function refusal(
       desired,
       events,
       resolutions,
+      operations: [],
       fieldGroupRegistryTable: undefined,
     });
   } catch (error) {
@@ -193,6 +194,7 @@ describe("refuseRequiredColumnsOverNulls", () => {
       desired: posts,
       events: [madeRequired("dc_gone", "title")],
       resolutions: [],
+      operations: [],
       fieldGroupRegistryTable: undefined,
     }).then(
       () => undefined,
@@ -361,5 +363,162 @@ describe("PushSchemaPipeline.apply with an unanswered column made required", () 
     expect(executePreRes).not.toHaveBeenCalled();
     expect(preCleanup).not.toHaveBeenCalled();
     expect(executeStatements).not.toHaveBeenCalled();
+  });
+
+  /** An apply over the real SQLite rows, with the classifier, the dialog and the plan given. */
+  async function applyWith(args: {
+    desired: DesiredSchema;
+    events: ClassifierEvent[];
+    ops: Operation[];
+    /** The dialog's answer; runs while the prompt is open, so rows can change in it. */
+    answer: () => Resolution[];
+  }) {
+    const executePreRes = vi.fn().mockResolvedValue(0);
+    const pipeline = new PushSchemaPipeline(
+      {
+        executor: { executeStatements: vi.fn().mockResolvedValue(undefined) },
+        renameDetector: noopRenameDetector,
+        classifier: {
+          classify: vi
+            .fn<Classifier["classify"]>()
+            .mockResolvedValue({ level: "interactive", events: args.events }),
+        },
+        promptDispatcher: {
+          dispatch: vi
+            .fn<PromptDispatcher["dispatch"]>()
+            .mockImplementation(() =>
+              Promise.resolve({
+                confirmedRenames: [],
+                resolutions: args.answer(),
+                proceed: true,
+              })
+            ),
+        },
+        preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: noopPreCleanupExecutor,
+        migrationJournal: noopMigrationJournal,
+        notifier: noopNotifier,
+      },
+      {
+        _kitOverride: {
+          pushSchema: vi
+            .fn()
+            .mockResolvedValue({ sqlStatements: [], hints: [] }),
+        },
+        _buildDrizzleSchemaOverride: () => ({}),
+        _txOverride: (async <T>(fn: (tx: unknown) => Promise<T>) =>
+          fn(db)) as never,
+        _introspectSnapshotOverride: async () => ({ tables: [] }),
+        _executePreResolutionOverride: executePreRes,
+        _resolvedOpsOverride: args.ops,
+      }
+    );
+    const result = await pipeline.apply({
+      desired: args.desired,
+      db,
+      dialect: "sqlite",
+      source: "ui",
+      promptChannel: "browser",
+    });
+    return { result, executePreRes };
+  }
+
+  // A column with no null row when the change was classified raises no event, but a row can lose
+  // its value while the prompt is open: the gate counts every column the plan makes NOT NULL.
+  it("refuses a column with no null at classification that gains one while the prompt is open", async () => {
+    sqlite.exec(`UPDATE dc_posts SET summary = 'filled'`);
+    // Another change keeps the prompt open: a column dropped, asked about first.
+    const dropped: ClassifierEvent = {
+      id: "destructive_drop:dc_posts.legacy",
+      kind: "destructive_drop",
+      tableName: "dc_posts",
+      columnName: "legacy",
+      columnType: "text",
+      tableRowCount: 3,
+      applicableResolutions: ["confirm_drop", "abort"],
+    };
+    const { result, executePreRes } = await applyWith({
+      desired: posts,
+      events: [dropped],
+      ops: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "legacy",
+          columnType: "text",
+        },
+        {
+          type: "change_column_nullable",
+          tableName: "dc_posts",
+          columnName: "summary",
+          fromNullable: true,
+          toNullable: false,
+        },
+      ],
+      answer: () => {
+        sqlite.exec(`UPDATE dc_posts SET summary = NULL WHERE id = '1'`);
+        return [{ kind: "confirm_drop", eventId: dropped.id }];
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe(
+      "Collection 'posts': field 'summary' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the field optional."
+    );
+    expect(executePreRes).not.toHaveBeenCalled();
+  });
+
+  // The fill and delete judgements run on the rows as they stand before the renames and drops of
+  // pre-resolution, read through a rename to the column the database still has: on MySQL those
+  // would have committed by the time pre-cleanup ran.
+  it("refuses a unique fill whose rows grew while the prompt was open, before any rename", async () => {
+    sqlite.exec(`ALTER TABLE dc_posts ADD COLUMN nick TEXT`);
+    const event: ClassifierEvent = {
+      ...madeRequired("dc_posts", "handle"),
+      // One null row when classified; all three hold none by the time the answer comes.
+      nullCount: 1,
+      tableRowCount: 3,
+    };
+    const { result, executePreRes } = await applyWith({
+      desired: {
+        ...posts,
+        collections: {
+          posts: {
+            ...posts.collections.posts,
+            fields: [
+              { name: "summary", type: "text" },
+              { name: "body", type: "text" },
+              { name: "handle", type: "text", required: true, unique: true },
+            ] as never,
+          },
+        },
+      },
+      events: [event],
+      ops: [
+        {
+          type: "rename_column",
+          tableName: "dc_posts",
+          fromColumn: "nick",
+          toColumn: "handle",
+          fromType: "text",
+          toType: "text",
+        },
+        {
+          type: "change_column_nullable",
+          tableName: "dc_posts",
+          columnName: "handle",
+          fromNullable: true,
+          toNullable: false,
+        },
+      ],
+      answer: () => [
+        { kind: "provide_default", eventId: event.id, value: "same" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain(
+      "is unique, so one value for its 3 rows would repeat"
+    );
+    // Nothing renamed: pre-resolution never ran.
+    expect(executePreRes).not.toHaveBeenCalled();
   });
 });

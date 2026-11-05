@@ -6,6 +6,7 @@ import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import { PromptCancelledError } from "../../prompt-dispatcher/errors";
 import type { ClassifierEvent, Resolution } from "../../resolution/types";
 import {
+  assertLiveCounts,
   assertPreCleanupAccepted,
   RealPreCleanupExecutor,
   withAddedColumnsLeftToTighten,
@@ -282,7 +283,7 @@ describe("RealPreCleanupExecutor", () => {
     liveCounts.set("dc_users.email", 7);
     const execute = vi.fn();
     await expect(
-      new RealPreCleanupExecutor().execute({
+      assertLiveCounts({
         tx: { execute },
         desiredSnapshot: baseSnapshot,
         resolutions: [
@@ -301,7 +302,7 @@ describe("RealPreCleanupExecutor", () => {
     liveCounts.set("dc_users.handle", 2);
     const execute = vi.fn();
     await expect(
-      new RealPreCleanupExecutor().execute({
+      assertLiveCounts({
         tx: { execute },
         desiredSnapshot: baseSnapshot,
         resolutions: [

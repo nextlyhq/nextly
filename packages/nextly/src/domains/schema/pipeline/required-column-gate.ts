@@ -34,10 +34,9 @@ import {
   countRowsBreakingNotNull,
   querySqlRows,
 } from "./classifier/count-helpers";
+import type { ColumnSpec, Operation } from "./diff/types";
 import type { PromptDispatchResult } from "./pushschema-pipeline-interfaces";
 import type {
-  AddNotNullWithNullsEvent,
-  AddRequiredFieldNoDefaultEvent,
   ClassifierEvent,
   Resolution,
   ResolutionKind,
@@ -50,10 +49,6 @@ const FILLING_ANSWERS: ReadonlySet<ResolutionKind> = new Set([
   "delete_nonconforming",
   "make_optional",
 ]);
-
-type RequiredColumnEvent =
-  | AddNotNullWithNullsEvent
-  | AddRequiredFieldNoDefaultEvent;
 
 /** An entity of the desired schema, with the fields its column is named from. */
 interface Owner {
@@ -112,46 +107,113 @@ function fieldNameOf(
   );
 }
 
-/** The events a change makes a column NOT NULL by that no answer fills first. */
-function unansweredEvents(
+/** A column the apply makes NOT NULL, and what to count in its way as the database stands. */
+interface Tightening {
+  tableName: string;
+  /** The column as the apply leaves it named. */
+  columnName: string;
+  /** The column the rows are counted in now (before a rename the apply makes), or `null` for an
+   * added column, which every existing row breaks. */
+  countColumn: string | null;
+  added: boolean;
+}
+
+const tighteningKey = (table: string, column: string) =>
+  `${table.toLowerCase()}.${column.toLowerCase()}`;
+
+/**
+ * Every column the apply makes NOT NULL that no answer fills first: from the plan's operations
+ * (an `add_column` NOT NULL with no default or generated value, a `change_column_nullable` to NOT
+ * NULL), and the classifier's events besides. The operations, not the events, decide what is
+ * counted: the classifier raises no event for a column with no null row when it ran, and a row can
+ * lose its value while the prompt is open. A column renamed by the apply is counted under the name
+ * it has now. Answers only take columns out: a fill, a delete or "make optional".
+ */
+function unansweredTightenings(
+  operations: readonly Operation[],
   events: readonly ClassifierEvent[],
   resolutions: readonly Resolution[]
-): RequiredColumnEvent[] {
-  const answered = new Set(
+): Tightening[] {
+  const answeredIds = new Set(
     resolutions.filter(r => FILLING_ANSWERS.has(r.kind)).map(r => r.eventId)
   );
-  return events.filter(
-    (e): e is RequiredColumnEvent =>
-      (e.kind === "add_not_null_with_nulls" ||
-        e.kind === "add_required_field_no_default") &&
-      !answered.has(e.id)
+  const answered = new Set(
+    events
+      .filter(e => answeredIds.has(e.id))
+      .map(e => tighteningKey(e.tableName, e.columnName))
+  );
+  const renamedFrom = new Map(
+    operations.flatMap(op =>
+      op.type === "rename_column"
+        ? [[tighteningKey(op.tableName, op.toColumn), op.fromColumn] as const]
+        : []
+    )
+  );
+  const byKey = new Map<string, Tightening>();
+  const tighten = (tableName: string, columnName: string, added: boolean) => {
+    const key = tighteningKey(tableName, columnName);
+    if (byKey.has(key)) return;
+    byKey.set(key, {
+      tableName,
+      columnName,
+      added,
+      countColumn: added ? null : (renamedFrom.get(key) ?? columnName),
+    });
+  };
+  for (const op of operations) {
+    if (op.type === "add_column" && addedWithNoValue(op.column)) {
+      tighten(op.tableName, op.column.name, true);
+    } else if (op.type === "change_column_nullable" && !op.toNullable) {
+      tighten(op.tableName, op.columnName, false);
+    }
+  }
+  for (const event of events) {
+    if (
+      event.kind === "add_not_null_with_nulls" ||
+      event.kind === "add_required_field_no_default"
+    ) {
+      tighten(
+        event.tableName,
+        event.columnName,
+        event.kind === "add_required_field_no_default"
+      );
+    }
+  }
+  return [...byKey.values()].filter(
+    t => !answered.has(tighteningKey(t.tableName, t.columnName))
   );
 }
 
-/** The rows in an event's way, by parent for a field group; a count that fails refuses. */
-async function countEvent(
+/** A column added NOT NULL that gives existing rows no value: no default, nothing the database fills. */
+function addedWithNoValue(column: ColumnSpec): boolean {
+  return (
+    !column.nullable &&
+    column.default === undefined &&
+    column.autoIncrement !== true &&
+    column.primaryKey !== true
+  );
+}
+
+/** The rows in a column's way, by parent for a field group; a count that fails refuses. */
+async function countTightening(
   db: unknown,
   dialect: SupportedDialect,
-  event: RequiredColumnEvent,
+  target: Tightening,
   owner: Owner | undefined
 ): Promise<Awaited<ReturnType<typeof countRowsBreakingNotNull>>> {
   try {
     return await countRowsBreakingNotNull(db, dialect, {
-      table: event.tableName,
-      // An added column holds null in every existing row.
-      column:
-        event.kind === "add_required_field_no_default"
-          ? null
-          : event.columnName,
+      table: target.tableName,
+      column: target.countColumn,
       byParent: owner?.entity.kind === "fieldGroup",
     });
   } catch (cause) {
     // A count that fails cannot say the change is safe: refused before anything runs.
     throw requiredColumnUncountedError({
-      table: event.tableName,
+      table: target.tableName,
       field: owner
-        ? fieldNameOf(owner, event.columnName, dialect)
-        : event.columnName,
+        ? fieldNameOf(owner, target.columnName, dialect)
+        : target.columnName,
       cause,
     });
   }
@@ -230,11 +292,17 @@ export async function refuseRequiredColumnsOverNulls(args: {
   desired: DesiredSchema;
   events: readonly ClassifierEvent[];
   resolutions: readonly Resolution[];
+  /** The apply's operations as answered: every column it makes NOT NULL is counted. */
+  operations: readonly Operation[];
   /** The field-group registry's name; absent, it is resolved from the catalog when needed. */
   fieldGroupRegistryTable?: string;
 }): Promise<void> {
   const { db, dialect } = args;
-  const unanswered = unansweredEvents(args.events, args.resolutions);
+  const unanswered = unansweredTightenings(
+    args.operations,
+    args.events,
+    args.resolutions
+  );
   if (unanswered.length === 0) return;
 
   const owners = ownersByTable(args.desired);
@@ -248,16 +316,16 @@ export async function refuseRequiredColumnsOverNulls(args: {
     ));
   const breaks: RequiredColumnBreak[] = [];
 
-  for (const event of unanswered) {
-    const added = event.kind === "add_required_field_no_default";
-    const owner = owners.get(event.tableName.toLowerCase());
-    const counted = await countEvent(db, dialect, event, owner);
+  for (const target of unanswered) {
+    const { added } = target;
+    const owner = owners.get(target.tableName.toLowerCase());
+    const counted = await countTightening(db, dialect, target, owner);
     if (counted.total === 0) continue;
     if (owner === undefined) {
       // A table outside the entities (a plugin's, an extension's) is named by its table and column.
       breaks.push({
-        entity: { kind: "table", slug: event.tableName },
-        field: event.columnName,
+        entity: { kind: "table", slug: target.tableName },
+        field: target.columnName,
         count: counted.total,
         added,
       });
@@ -269,7 +337,7 @@ export async function refuseRequiredColumnsOverNulls(args: {
         : undefined;
     breaks.push({
       entity: owner.entity,
-      field: fieldNameOf(owner, event.columnName, dialect),
+      field: fieldNameOf(owner, target.columnName, dialect),
       count: counted.total,
       added,
       ...(users ? { users } : {}),
@@ -287,7 +355,8 @@ export async function refuseRequiredColumnsOverNulls(args: {
 export function refuseNotNullOverNulls(
   apply: { db: unknown; dialect: SupportedDialect; desired: DesiredSchema },
   classification: { events: readonly ClassifierEvent[] },
-  answers: Pick<PromptDispatchResult, "resolutions">
+  answers: Pick<PromptDispatchResult, "resolutions">,
+  operations: readonly Operation[]
 ): Promise<void> {
   return refuseRequiredColumnsOverNulls({
     db: apply.db,
@@ -295,5 +364,6 @@ export function refuseNotNullOverNulls(
     desired: apply.desired,
     events: classification.events,
     resolutions: answers.resolutions,
+    operations,
   });
 }

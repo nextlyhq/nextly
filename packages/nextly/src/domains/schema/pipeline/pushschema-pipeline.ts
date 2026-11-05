@@ -101,6 +101,7 @@ import {
   planCompanionMoves,
 } from "./moved-to-companion";
 import {
+  assertLiveCounts,
   assertPreCleanupAccepted,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
@@ -350,6 +351,9 @@ function withoutSqliteDropsLeftToRebuild(
  */
 function preCleanupFailure(err: unknown): Error {
   if (err instanceof PromptCancelledError) return err;
+  // A refusal is not a failed statement: pre-cleanup's checks refuse before it runs any, and the
+  // refusal carries the column and the reason, which a DDL wrapper would replace with its message.
+  if (NextlyError.isValidation(err)) return err;
   return new DdlExecutionError(
     err instanceof Error ? err.message : String(err),
     err
@@ -876,8 +880,6 @@ export class PushSchemaPipeline {
       if (!dispatchResult.proceed) {
         throw new PromptCancelledError();
       }
-      // A column made NOT NULL over rows no answer fills is refused here, before anything runs.
-      await refuseNotNullOverNulls(args, classificationResult, dispatchResult);
 
       // F5 PR 4: patch desired.collections inline for make_optional
       // resolutions BEFORE building drizzleSchema, so pushSchema sees the
@@ -934,6 +936,15 @@ export class PushSchemaPipeline {
               .map(c => c.tableName.toLowerCase())
           )
         );
+
+      // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
+      // every column the answered plan makes NOT NULL, not only those the classifier raised.
+      await refuseNotNullOverNulls(
+        args,
+        classificationResult,
+        dispatchResult,
+        resolvedOps
+      );
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //
@@ -1140,6 +1151,17 @@ export class PushSchemaPipeline {
             events: classificationResult.events,
             fields: aggregatedFields,
             desiredSnapshot,
+            dialect,
+          });
+          // Judged again on the rows as they stand after the prompt, inside this transaction and
+          // before Phase C: on MySQL its renames and drops commit as they run.
+          await assertLiveCounts({
+            tx,
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            fields: aggregatedFields,
+            desiredSnapshot,
+            operations: resolvedOps,
             dialect,
           });
         } catch (err) {

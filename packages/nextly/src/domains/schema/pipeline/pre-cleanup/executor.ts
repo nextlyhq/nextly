@@ -133,30 +133,46 @@ export function assertPreCleanupAccepted(args: {
 }
 
 /**
- * The fill and delete judgements again, on the rows as they stand when pre-cleanup runs, counted
- * through its own handle before its first statement: rows can change while the prompt is open, so
- * the classifier's counts can be stale. Counted with the shared counter
- * (`countRowsBreakingNotNull`): a column added over the table counts every row, an existing one
- * its null rows. Only the answers these judge are counted.
+ * The fill and delete judgements again, on the rows as they stand after the prompt, counted through
+ * the apply's transaction before its first statement (the pipeline asks it ahead of the renames and
+ * drops of pre-resolution, which on MySQL commit as they run): rows can change while the prompt is
+ * open, so the classifier's counts can be stale. Counted with the shared counter
+ * (`countRowsBreakingNotNull`): a column added over the table counts every row, an existing one its
+ * null rows, under the name it has now when the apply renames it. Only the answers these judge are
+ * counted.
  */
-async function assertLiveCounts(args: {
+export async function assertLiveCounts(args: {
   tx: unknown;
   resolutions: Resolution[];
   events: ClassifierEvent[];
   fields: PreCleanupField[];
   desiredSnapshot: NextlySchemaSnapshot;
+  /** The apply's operations: a column it renames is counted under its current name. */
+  operations: readonly Operation[];
   dialect: SupportedDialect;
 }): Promise<void> {
+  const renamedFrom = (table: string, column: string) =>
+    args.operations.find(
+      op =>
+        op.type === "rename_column" &&
+        sameName(op.tableName, table) &&
+        sameName(op.toColumn, column)
+    );
   for (const { resolution, event } of sideEffectResolutions(args)) {
     const added = event.kind === "add_required_field_no_default";
     const judgesFill =
       resolution.kind === "provide_default" && fillTargetOf(args, event).unique;
     const judgesDelete = resolution.kind === "delete_nonconforming" && !added;
     if (!judgesFill && !judgesDelete) continue;
+    const rename = renamedFrom(event.tableName, event.columnName);
     const rows = (
       await countRowsBreakingNotNull(args.tx, args.dialect, {
         table: event.tableName,
-        column: added ? null : event.columnName,
+        column: added
+          ? null
+          : rename?.type === "rename_column"
+            ? rename.fromColumn
+            : event.columnName,
       })
     ).total;
     if (judgesFill) assertFillCanBeUnique(event, true, rows);
@@ -514,7 +530,6 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot> {
     assertPreCleanupAccepted(args);
-    await assertLiveCounts(args);
     // Rendered up front so a column the desired schema lacks is refused
     // before the first statement below, not after some have run.
     const addStatements = addStatementsFor(args);
