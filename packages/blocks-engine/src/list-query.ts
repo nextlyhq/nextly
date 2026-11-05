@@ -1,0 +1,885 @@
+/**
+ * A collection list's query, as `core/collection-loop` stores it: where its
+ * entries come from, the filter rows that narrow them, the keys that order
+ * them and the window that cuts them.
+ *
+ * The block's props are outside input: an editor writes them, and so do an
+ * import, a script and an agent through the API. This module is the ONE
+ * reading of them. The validator judges a save with it, and the renderer
+ * builds its read from it, so a list that saves is a list that reads the
+ * same way, and a stored list that no longer fits is told apart by the same
+ * rules on both sides.
+ *
+ * What is stored, all of it optional and added beside the block's original
+ * `collection`, `limit` and `sort`, so a list stored before any of it reads
+ * as it always did:
+ *
+ * - `filters`: rows of `{ field, op, value }`, all of which must hold. The
+ *   operators are a closed set, spelled as the Direct API spells them, and
+ *   the value is a typed literal: never a raw query.
+ * - `sort`: the keys as one string, comma-separated, `-` for descending
+ *   (`-publishedAt,title`), as the block has always stored it. The reader
+ *   adds the id as the last key, so it is never stored.
+ * - `offset`: how many matching entries to skip, a whole number from 0.
+ * - `limit`: how many to show, 1 to 100.
+ * - `relation`: the entries of a to-many relation of the page's entry
+ *   (`of: "entry"`) or of the item the list sits in (`of: "item"`), named
+ *   by its field. `collection` then names the related collection, so what
+ *   the list's children bind to is checked as for any list.
+ *
+ * Which fields a list may name is a question about the schema and about who
+ * may read it, so it is asked of a {@link ListFieldSource} the caller
+ * supplies: the engine reads no storage. A list's filter or sort may use only
+ * fields the public may read, since which entries show, and in what order,
+ * would otherwise reveal a field no visitor may see.
+ *
+ * @module list-query
+ */
+import type { BindingFieldShape } from "./binding-rules";
+import type { BlockDocument } from "./document";
+import { describeValue, pointer } from "./issue-text";
+import { isPlainRecord } from "./plain-record";
+
+/** The block a list query belongs to. */
+export const COLLECTION_LIST_TYPE = "core/collection-loop";
+
+/**
+ * The operators a filter row may use, as the Direct API spells them. Closed:
+ * each means the same on every database, and `contains` ignores case.
+ */
+export const LIST_FILTER_OPS = [
+  "equals",
+  "not_equals",
+  "greater_than",
+  "greater_than_equal",
+  "less_than",
+  "less_than_equal",
+  "contains",
+  "in",
+  "not_in",
+  "exists",
+] as const;
+
+/** One of {@link LIST_FILTER_OPS}. */
+export type ListFilterOp = (typeof LIST_FILTER_OPS)[number];
+
+/** A literal a filter compares with. */
+export type ListFilterScalar = string | number | boolean;
+
+/** One filter row: a field, an operator and a typed value. */
+export interface ListFilter {
+  readonly field: string;
+  readonly op: ListFilterOp;
+  readonly value: ListFilterScalar | readonly ListFilterScalar[];
+}
+
+/** One sort key: the field it orders by, and which way. */
+export interface ListSortKey {
+  readonly field: string;
+  readonly descending: boolean;
+}
+
+/** Where a list's entries come from when they are a relation's. */
+export interface ListRelation {
+  /** The page's entry, or the item of the list this one sits in. */
+  readonly of: "entry" | "item";
+  /** The to-many relation field holding the entries. */
+  readonly field: string;
+}
+
+/** The bounds of `limit`, the number of entries a list shows. */
+export const LIST_LIMIT_MIN = 1;
+export const LIST_LIMIT_MAX = 100;
+
+/** How many filter rows one list may hold, and values one `in` row. */
+const MAX_FILTERS = 20;
+const MAX_LIST_VALUES = 100;
+
+/** A list's query as stored, each part present only when it was stored well. */
+export interface ListQuery {
+  /** The collection read, trimmed; absent when none is named. */
+  readonly collection?: string;
+  readonly relation?: ListRelation;
+  readonly filters: readonly ListFilter[];
+  readonly sort: readonly ListSortKey[];
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+/** The props a stored list query is read from. */
+export type ListQueryProp =
+  | "collection"
+  | "relation"
+  | "filters"
+  | "sort"
+  | "limit"
+  | "offset";
+
+/** Why part of a stored list query could not be read. */
+export interface ListQueryProblem {
+  readonly prop: ListQueryProp;
+  readonly code: ListShapeCode;
+  readonly message: string;
+}
+
+/** The codes a list's own shape is refused with. */
+export type ListShapeCode =
+  | "list-limit-invalid"
+  | "list-offset-invalid"
+  | "list-filter-invalid"
+  | "list-sort-invalid"
+  | "list-relation-invalid";
+
+/** The codes a list is refused with when judged against the schema. */
+export type ListFieldCode =
+  | "list-field-unknown"
+  | "list-field-protected"
+  | "list-field-unsortable"
+  | "list-relation-unsuitable"
+  | "list-too-deep";
+
+/** Every code a list query is judged with, each described for authors. */
+export const LIST_ISSUE_CODES: {
+  readonly [Code in ListShapeCode | ListFieldCode]: string;
+} = {
+  "list-limit-invalid":
+    "A list's number of items is not a whole number from 1 to 100.",
+  "list-offset-invalid":
+    "A list's number of entries to skip is not a whole number from 0.",
+  "list-filter-invalid":
+    "A list's filter row is not a field, an operator and a value that operator takes.",
+  "list-sort-invalid": "A list's sort is not a list of field names.",
+  "list-relation-invalid":
+    "A list's related source does not name the entry or the outer item and a field.",
+  "list-field-unknown":
+    "A list filters or sorts by a field its collection does not have.",
+  "list-field-protected":
+    "A list filters or sorts by a field visitors may not see.",
+  "list-field-unsortable":
+    "A list sorts by a field that holds more than one value.",
+  "list-relation-unsuitable":
+    "A list's related source is not a to-many relation to its collection.",
+  "list-too-deep":
+    "A list shows related entries of a list that already shows related entries.",
+};
+
+/** A field name as a list may write it: no paths, operators or quoting. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A calendar day, as a date filter stores it. */
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Whether a value is a field name a list may write. */
+function isFieldName(value: unknown): value is string {
+  return (
+    typeof value === "string" && FIELD_NAME.test(value) && value !== "__proto__"
+  );
+}
+
+/** Whether `op` is one of the closed set. */
+export function isListFilterOp(op: unknown): op is ListFilterOp {
+  return (
+    typeof op === "string" &&
+    (LIST_FILTER_OPS as readonly string[]).includes(op)
+  );
+}
+
+/**
+ * Whether a value is a calendar day, `YYYY-MM-DD`, that exists: a date filter
+ * stores the day an author picked, and the reader compares whole days.
+ */
+export function isListDay(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = DAY.exec(value);
+  if (match === null) return false;
+  const [year, month, day] = [match[1], match[2], match[3]].map(Number);
+  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() + 1 === month &&
+    date.getUTCDate() === day
+  );
+}
+
+function isScalar(value: unknown): value is ListFilterScalar {
+  return (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+/** Why a value is not a list of values an `in` row takes. */
+function listValueProblem(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "takes a list of one value or more";
+  }
+  if (value.length > MAX_LIST_VALUES) {
+    return `takes at most ${String(MAX_LIST_VALUES)} values`;
+  }
+  return value.every(isScalar)
+    ? undefined
+    : "takes text, numbers or yes-or-no values";
+}
+
+/** Why a value is not one an order compares: a number, or a day. */
+function orderValueProblem(value: unknown): string | undefined {
+  return (typeof value === "number" && Number.isFinite(value)) ||
+    isListDay(value)
+    ? undefined
+    : "takes a number, or a day written YYYY-MM-DD";
+}
+
+/** Why a value is not one literal. */
+function scalarValueProblem(value: unknown): string | undefined {
+  return isScalar(value) ? undefined : "takes one text, number or yes-or-no";
+}
+
+/**
+ * What each operator takes, as the reason a value does not fit it. A table,
+ * so an operator added to the set fails to compile here until it is given
+ * one.
+ */
+const VALUE_RULES: Readonly<
+  Record<ListFilterOp, (value: unknown) => string | undefined>
+> = {
+  equals: scalarValueProblem,
+  not_equals: scalarValueProblem,
+  greater_than: orderValueProblem,
+  greater_than_equal: orderValueProblem,
+  less_than: orderValueProblem,
+  less_than_equal: orderValueProblem,
+  contains: value =>
+    typeof value === "string" && value !== ""
+      ? undefined
+      : "takes the text to look for",
+  in: listValueProblem,
+  not_in: listValueProblem,
+  exists: value =>
+    typeof value === "boolean"
+      ? undefined
+      : "takes true (has a value) or false (is empty)",
+};
+
+/** Why a filter row's value does not fit its operator, or nothing when it does. */
+function valueProblem(op: ListFilterOp, value: unknown): string | undefined {
+  return VALUE_RULES[op](value);
+}
+
+/** One stored filter row read, or why it could not be. */
+function readFilter(
+  row: unknown,
+  index: number
+): ListFilter | ListQueryProblem {
+  const where = `Filter ${String(index + 1)}`;
+  const problem = (message: string): ListQueryProblem => ({
+    prop: "filters",
+    code: "list-filter-invalid",
+    message: `${where} ${message}.`,
+  });
+  if (!isPlainRecord(row)) return problem("is not a filter row");
+  const extra = Object.keys(row).filter(
+    key => key !== "field" && key !== "op" && key !== "value"
+  );
+  if (extra.length > 0) {
+    return problem(
+      `holds ${extra.map(key => `"${describeValue(key)}"`).join(", ")}, which a filter row does not take`
+    );
+  }
+  if (!isFieldName(row.field)) {
+    return problem(`names "${describeValue(row.field)}", which is not a field`);
+  }
+  if (!isListFilterOp(row.op)) {
+    return problem(
+      `uses "${describeValue(row.op)}", which is not one of: ${LIST_FILTER_OPS.join(", ")}`
+    );
+  }
+  const wrong = valueProblem(row.op, row.value);
+  if (wrong !== undefined) {
+    return problem(`on "${row.field}" ${wrong}`);
+  }
+  return {
+    field: row.field,
+    op: row.op,
+    value: Array.isArray(row.value)
+      ? (row.value as ListFilterScalar[]).slice()
+      : (row.value as ListFilterScalar),
+  };
+}
+
+/**
+ * The stored sort read as keys: split on commas, each trimmed, empty ones
+ * skipped, as the reader that orders the rows splits and skips them.
+ */
+function readSort(
+  value: unknown
+): { keys: ListSortKey[] } | { problem: ListQueryProblem } {
+  if (value === undefined || value === null) return { keys: [] };
+  const problem = (message: string) => ({
+    problem: {
+      prop: "sort" as const,
+      code: "list-sort-invalid" as const,
+      message,
+    },
+  });
+  if (typeof value !== "string") {
+    return problem("The sort is not text naming fields, such as -date,title.");
+  }
+  const keys: ListSortKey[] = [];
+  for (const part of value.split(",")) {
+    const text = part.trim();
+    if (text === "") continue;
+    const descending = text.startsWith("-");
+    const field = (descending ? text.slice(1) : text).trim();
+    if (!isFieldName(field)) {
+      return problem(
+        `The sort names "${describeValue(text)}", which is not a field name, such as -date.`
+      );
+    }
+    keys.push({ field, descending });
+  }
+  return { keys };
+}
+
+/** A whole number within bounds, or why it is not. */
+function wholeNumber(
+  value: unknown,
+  min: number,
+  max: number
+): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= min &&
+    value <= max
+    ? value
+    : undefined;
+}
+
+function readRelation(
+  value: unknown,
+  collection: string | undefined
+): ListRelation | ListQueryProblem | undefined {
+  if (value === undefined || value === null) return undefined;
+  const problem = (message: string): ListQueryProblem => ({
+    prop: "relation",
+    code: "list-relation-invalid",
+    message,
+  });
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).some(key => key !== "of" && key !== "field")
+  ) {
+    return problem(
+      'The related source is not { of: "entry" | "item", field }.'
+    );
+  }
+  if (value.of !== "entry" && value.of !== "item") {
+    return problem(
+      `The related source is of "${describeValue(value.of)}", which is neither "entry" nor "item".`
+    );
+  }
+  if (!isFieldName(value.field)) {
+    return problem(
+      `The related source names "${describeValue(value.field)}", which is not a field.`
+    );
+  }
+  if (collection === undefined) {
+    return problem(
+      "A related source needs the collection its entries are in, named as the list's collection."
+    );
+  }
+  return { of: value.of, field: value.field };
+}
+
+function isProblem(value: unknown): value is ListQueryProblem {
+  return isPlainRecord(value) && typeof value.code === "string";
+}
+
+/** A stored whole number within bounds, or the problem it is. */
+function readBound(
+  value: unknown,
+  bound: {
+    readonly prop: "limit" | "offset";
+    readonly min: number;
+    readonly max: number;
+    readonly code: ListShapeCode;
+    readonly message: (stored: string) => string;
+  }
+): { value?: number; problem?: ListQueryProblem } {
+  if (value === undefined) return {};
+  const read = wholeNumber(value, bound.min, bound.max);
+  if (read !== undefined) return { value: read };
+  return {
+    problem: {
+      prop: bound.prop,
+      code: bound.code,
+      message: bound.message(describeValue(value)),
+    },
+  };
+}
+
+/** The stored filter rows read, each one that could not be named. */
+function readFilters(value: unknown): {
+  filters: ListFilter[];
+  problems: ListQueryProblem[];
+} {
+  if (value === undefined) return { filters: [], problems: [] };
+  const refused = (message: string) => ({
+    filters: [],
+    problems: [
+      {
+        prop: "filters" as const,
+        code: "list-filter-invalid" as const,
+        message,
+      },
+    ],
+  });
+  if (!Array.isArray(value)) {
+    return refused("The filters are not a list of filter rows.");
+  }
+  if (value.length > MAX_FILTERS) {
+    return refused(
+      `A list holds at most ${String(MAX_FILTERS)} filters; this one holds ${String(value.length)}.`
+    );
+  }
+  const filters: ListFilter[] = [];
+  const problems: ListQueryProblem[] = [];
+  // Index-based, so a hole in a sparse list is read as the row it is.
+  for (let index = 0; index < value.length; index += 1) {
+    const read = readFilter(value[index] as unknown, index);
+    if (isProblem(read)) problems.push(read);
+    else filters.push(read);
+  }
+  return { filters, problems };
+}
+
+/**
+ * The collection a list names, trimmed. A cleared text field persists as an
+ * empty string, which names no collection rather than one called "".
+ */
+function collectionOf(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
+}
+
+/**
+ * A list's stored props read as its query, with every part that could not
+ * be read named. A part that could not be read is left out of the query, so
+ * a caller can tell "not stored" from "stored badly" by the problems.
+ */
+export function readListQuery(props: unknown): {
+  readonly query: ListQuery;
+  readonly problems: readonly ListQueryProblem[];
+} {
+  const record = isPlainRecord(props) ? props : {};
+  const collection = collectionOf(record.collection);
+  const limit = readBound(record.limit, {
+    prop: "limit",
+    min: LIST_LIMIT_MIN,
+    max: LIST_LIMIT_MAX,
+    code: "list-limit-invalid",
+    message: stored =>
+      `Number of items is ${stored}. Show between ${String(LIST_LIMIT_MIN)} and ${String(LIST_LIMIT_MAX)} entries.`,
+  });
+  const offset = readBound(record.offset, {
+    prop: "offset",
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+    code: "list-offset-invalid",
+    message: stored =>
+      `The number of entries to skip is ${stored}. Skip a whole number of entries, 0 or more.`,
+  });
+  const filters = readFilters(record.filters);
+  const sorted = readSort(record.sort);
+  const relation = readRelation(record.relation, collection);
+  const problems = [
+    limit.problem,
+    offset.problem,
+    ...filters.problems,
+    "problem" in sorted ? sorted.problem : undefined,
+    isProblem(relation) ? relation : undefined,
+  ].filter((problem): problem is ListQueryProblem => problem !== undefined);
+  return {
+    query: {
+      ...(collection === undefined ? {} : { collection }),
+      ...(relation === undefined || isProblem(relation) ? {} : { relation }),
+      filters: filters.filters,
+      sort: "keys" in sorted ? sorted.keys : [],
+      ...(limit.value === undefined ? {} : { limit: limit.value }),
+      ...(offset.value === undefined ? {} : { offset: offset.value }),
+    },
+    problems,
+  };
+}
+
+/** The fields of one collection, as a list's filters and sort are judged. */
+export interface ListFields {
+  /** Every field the collection declares, its id and timestamps included. */
+  readonly declared: ReadonlySet<string>;
+  /**
+   * The fields the public may read, as the public sees them; empty when the
+   * public may read none of the collection.
+   */
+  readonly readable: readonly BindingFieldShape[];
+}
+
+/**
+ * Where a list's fields are looked up. `undefined` means the collection is
+ * not known, and a list over it is judged by its shape alone.
+ */
+export interface ListFieldSource {
+  fieldsOf(collection: string): ListFields | undefined;
+}
+
+/** What {@link listQueryIssues} judges with. */
+export interface ListQueryJudgement {
+  /** The schema; absent, lists are judged by their shape and nesting only. */
+  readonly fields?: ListFieldSource;
+  /** The collection of the entry the page shows, for an `entry` relation. */
+  readonly entryCollection?: string;
+  /**
+   * The document's stored forms. A problem one of them already holds, on the
+   * same block, is a warning rather than an error: a list stored before a
+   * field was removed or hidden must not make its page unsavable for a
+   * change nobody made to it.
+   */
+  readonly stored?: readonly BlockDocument[];
+  /** How many nodes to visit at most, as the rest of validation is bounded. */
+  readonly maxNodes?: number;
+}
+
+/** One finding about a list, before its severity is decided. */
+interface Finding {
+  readonly path: string;
+  readonly nodeId: string;
+  readonly code: ListShapeCode | ListFieldCode;
+  readonly message: string;
+}
+
+/** A list in the walk: its node's query, and where its entries come from. */
+interface EnclosingList {
+  readonly query: ListQuery;
+}
+
+/** The fields a field-bound part of the query names, each with its part. */
+function namedFields(
+  query: ListQuery
+): { field: string; use: "filter" | "sort" }[] {
+  return [
+    ...query.filters.map(row => ({ field: row.field, use: "filter" as const })),
+    ...query.sort.map(key => ({ field: key.field, use: "sort" as const })),
+  ];
+}
+
+/**
+ * The public's shape of a field a list names, or why the list may not name
+ * it: a field the collection does not have, or one the public may not read.
+ * The one place the two are told apart, for filters, sort keys and related
+ * sources alike.
+ */
+function readableField(
+  field: string,
+  fields: ListFields,
+  words: { readonly uses: string; readonly collection: string }
+):
+  | { readonly shape: BindingFieldShape }
+  | { readonly code: ListFieldCode; readonly message: string } {
+  const shape = fields.readable.find(candidate => candidate.name === field);
+  if (shape !== undefined) return { shape };
+  return fields.declared.has(field)
+    ? {
+        code: "list-field-protected",
+        message: `This list ${words.uses} "${field}", which visitors can't see, so the entries shown would reveal its values. Choose a field visitors can see.`,
+      }
+    : {
+        code: "list-field-unknown",
+        message: `This list ${words.uses} "${field}", which ${words.collection} does not have.`,
+      };
+}
+
+/** The finding about one field a filter or the sort names, if any. */
+function namedFieldFinding(
+  named: { readonly field: string; readonly use: "filter" | "sort" },
+  fields: ListFields,
+  collection: string
+): { code: ListFieldCode; message: string } | undefined {
+  const uses = named.use === "filter" ? "filters by" : "sorts by";
+  const judged = readableField(named.field, fields, { uses, collection });
+  if (!("shape" in judged)) return judged;
+  if (named.use === "sort" && judged.shape.hasMany === true) {
+    return {
+      code: "list-field-unsortable",
+      message: `This list sorts by "${named.field}", which holds more than one value, so it has no one value to order by.`,
+    };
+  }
+  return undefined;
+}
+
+/** The judgement of the fields a list filters and sorts by. */
+function fieldFindings(
+  query: ListQuery,
+  fields: ListFields,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  const found: Finding[] = [];
+  const seen = new Set<string>();
+  for (const named of namedFields(query)) {
+    const key = `${named.use}\u0000${named.field}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const finding = namedFieldFinding(named, fields, query.collection ?? "");
+    if (finding === undefined) continue;
+    found.push({
+      path: at(named.use === "filter" ? "filters" : "sort"),
+      nodeId,
+      ...finding,
+    });
+  }
+  return found;
+}
+
+/** Whether a field shape is a to-many relation to one collection. */
+function toManyTarget(shape: BindingFieldShape): string | undefined {
+  return (shape.type === "relationship" || shape.type === "upload") &&
+    shape.hasMany === true &&
+    typeof shape.relationTo === "string"
+    ? shape.relationTo
+    : undefined;
+}
+
+/** Where a related list's relation field lives, or why it has none. */
+function relationSource(
+  relation: ListRelation,
+  outer: EnclosingList | undefined,
+  judgement: ListQueryJudgement
+): { collection: string | undefined } | { problem: string; deep: boolean } {
+  if (relation.of === "entry") {
+    return { collection: judgement.entryCollection };
+  }
+  if (outer === undefined) {
+    return {
+      problem:
+        "This list shows related entries of the outer item, but it is not inside another list. Choose a collection, or move this list into a list.",
+      deep: false,
+    };
+  }
+  if (outer.query.relation !== undefined) {
+    return {
+      problem: `Too deep for a related field. This list is inside a list that already shows each ${outer.query.relation.of === "entry" ? "entry's" : "item's"} ${outer.query.relation.field}, and related entries go one level deep. Choose a collection, or move this list out of that list.`,
+      deep: true,
+    };
+  }
+  return { collection: outer.query.collection };
+}
+
+/**
+ * Why a related list's relation field cannot be its source, judged against
+ * the fields of the collection it lives in; nothing when it can be.
+ */
+function relationFieldProblem(
+  query: ListQuery,
+  relation: ListRelation,
+  fields: ListFields,
+  source: string
+): { prop: ListQueryProp; code: ListFieldCode; message: string } | undefined {
+  const judged = readableField(relation.field, fields, {
+    uses: "shows the entries of",
+    collection: source,
+  });
+  if (!("shape" in judged)) return { prop: "relation", ...judged };
+  const target = toManyTarget(judged.shape);
+  if (target === undefined) {
+    return {
+      prop: "relation",
+      code: "list-relation-unsuitable",
+      message: `"${relation.field}" is not a relation holding several entries of one collection, so a list cannot show its entries.`,
+    };
+  }
+  if (target !== query.collection) {
+    return {
+      prop: "collection",
+      code: "list-relation-unsuitable",
+      message: `"${relation.field}" holds entries of ${target}, but this list's collection is ${query.collection ?? "not set"}.`,
+    };
+  }
+  return undefined;
+}
+
+/** The judgement of a list's related source: where it sits, and its field. */
+function relationFindings(
+  query: ListQuery,
+  outer: EnclosingList | undefined,
+  judgement: ListQueryJudgement,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  const relation = query.relation;
+  if (relation === undefined) return [];
+  const source = relationSource(relation, outer, judgement);
+  if ("problem" in source) {
+    return [
+      {
+        path: at("relation"),
+        nodeId,
+        code: source.deep ? "list-too-deep" : "list-relation-invalid",
+        message: source.problem,
+      },
+    ];
+  }
+  const fields =
+    source.collection === undefined
+      ? undefined
+      : judgement.fields?.fieldsOf(source.collection);
+  if (fields === undefined || source.collection === undefined) return [];
+  const problem = relationFieldProblem(
+    query,
+    relation,
+    fields,
+    source.collection
+  );
+  return problem === undefined
+    ? []
+    : [
+        {
+          path: at(problem.prop),
+          nodeId,
+          code: problem.code,
+          message: problem.message,
+        },
+      ];
+}
+
+/** Everything found about one list node. */
+function findingsFor(
+  node: Readonly<Record<string, unknown>>,
+  path: string,
+  outer: EnclosingList | undefined,
+  judgement: ListQueryJudgement
+): { findings: Finding[]; list: EnclosingList } {
+  const { query, problems } = readListQuery(node.props);
+  const at = (prop: ListQueryProp) => pointer(`${path}/props`, prop);
+  const nodeId = typeof node.id === "string" ? node.id : "";
+  const findings: Finding[] = problems.map(problem => ({
+    path: at(problem.prop),
+    nodeId,
+    code: problem.code,
+    message: problem.message,
+  }));
+  findings.push(...relationFindings(query, outer, judgement, at, nodeId));
+  const fields =
+    query.collection === undefined || judgement.fields === undefined
+      ? undefined
+      : judgement.fields.fieldsOf(query.collection);
+  if (fields !== undefined) {
+    findings.push(...fieldFindings(query, fields, at, nodeId));
+  }
+  return { findings, list: { query } };
+}
+
+/** One node on the walk's stack, with the list it sits in. */
+interface Visit {
+  readonly node: unknown;
+  readonly path: string;
+  readonly outer: EnclosingList | undefined;
+}
+
+/**
+ * Every finding about the lists in a forest, in document order. Iterative,
+ * bounded by `maxNodes`, and reading only plain records, because a stored
+ * document is whatever the database returned.
+ */
+function walkFindings(
+  nodes: readonly unknown[],
+  judgement: ListQueryJudgement
+): Finding[] {
+  const findings: Finding[] = [];
+  const budget = { left: judgement.maxNodes ?? Number.MAX_SAFE_INTEGER };
+  const stack: Visit[] = [];
+  const pushChildren = (
+    list: readonly unknown[],
+    base: string,
+    outer: EnclosingList | undefined
+  ) => {
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      stack.push({
+        node: list[index],
+        path: pointer(base, index),
+        outer,
+      });
+    }
+  };
+  pushChildren(nodes, "/nodes", undefined);
+  for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
+    if (budget.left <= 0) break;
+    budget.left -= 1;
+    const { node, path } = visit;
+    if (!isPlainRecord(node)) continue;
+    let outer = visit.outer;
+    if (node.type === COLLECTION_LIST_TYPE) {
+      const judged = findingsFor(node, path, outer, judgement);
+      findings.push(...judged.findings);
+      outer = judged.list;
+    }
+    const slots = node.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const name of Object.keys(slots).reverse()) {
+      const children = slots[name];
+      if (Array.isArray(children)) {
+        pushChildren(children, pointer(`${path}/slots`, name), outer);
+      }
+    }
+  }
+  return findings;
+}
+
+/** What makes two findings the same problem on the same block. */
+function signature(finding: Finding): string {
+  return `${finding.nodeId}\u0000${finding.code}\u0000${finding.message}`;
+}
+
+/**
+ * The problems of every list in a document, as validation issues.
+ *
+ * Its shape is always judged: the bounds of `limit` and `offset`, each
+ * filter row, the sort, the related source and how deep related lists nest.
+ * The fields it names are judged when `judgement.fields` is given: one the
+ * collection does not have, one the public may not read, a list-valued sort
+ * key, and a related source that is not a to-many relation to the list's
+ * collection. Each is an error, except one a stored form already held on
+ * the same block, which is a warning.
+ */
+export function listQueryIssues(
+  nodes: readonly unknown[],
+  judgement: ListQueryJudgement = {}
+): {
+  readonly path: string;
+  readonly code: ListShapeCode | ListFieldCode;
+  readonly message: string;
+  readonly severity: "error" | "warning";
+}[] {
+  const findings = walkFindings(nodes, judgement);
+  if (findings.length === 0) return [];
+  const held = new Set(
+    (judgement.stored ?? []).flatMap(form =>
+      isPlainRecord(form) && Array.isArray(form.nodes)
+        ? walkFindings(form.nodes, judgement).map(signature)
+        : []
+    )
+  );
+  return findings.map(finding => ({
+    path: finding.path,
+    code: finding.code,
+    message: finding.message,
+    severity: held.has(signature(finding)) ? "warning" : "error",
+  }));
+}
+
+/** The codes only a schema can decide, so a caller judging twice can tell them apart. */
+export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
+  "list-field-unknown",
+  "list-field-protected",
+  "list-field-unsortable",
+  "list-relation-unsuitable",
+]);
