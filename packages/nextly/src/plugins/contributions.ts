@@ -98,6 +98,18 @@ export interface ScheduledTask {
 }
 
 /**
+ * @experimental A webhook event type a plugin declares: `contributes.webhookEvents`.
+ */
+export interface PluginWebhookEventType {
+  /** The type's id, in the plugin's namespace, e.g. `"acme-shop.order.paid"`. */
+  type: string;
+  /** What the admin's webhook form calls it; the id when absent. */
+  label?: string;
+  /** One line on when the event fires. */
+  description?: string;
+}
+
+/**
  * @experimental A plugin-contributed email provider.
  *
  * The value produced by `defineEmailProvider(...)`, not the definition literal.
@@ -811,6 +823,18 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
+  /**
+   * @experimental Webhook event types this plugin declares, which an
+   * endpoint may subscribe to beside core's. Distinct from `events`, which are
+   * the plugin's own in-process bus events and never leave the server.
+   *
+   * Each `type` begins with the plugin's admin slug and a dot, and is written
+   * as lower-case segments separated by dots, such as `"acme-shop.order.paid"`
+   * for `@acme/shop`.
+   * Checked at startup, which refuses a type outside that namespace, one of
+   * core's, one declared twice, or one that is malformed.
+   */
+  webhookEvents?: PluginWebhookEventType[];
   /**
    * @public HTTP routes, namespaced under `/plugins/<name>` beneath wherever the
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).

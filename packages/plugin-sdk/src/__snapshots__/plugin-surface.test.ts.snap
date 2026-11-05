@@ -531,6 +531,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginVersionPinHolder (type)",
   "PluginVersionPins (type)",
   "PluginVersionsService (type)",
+  "PluginWebhookEventType (type)",
   "PluginWriteExpectation (type)",
   "Principal (type)",
   "PrincipalAnswer (type)",
