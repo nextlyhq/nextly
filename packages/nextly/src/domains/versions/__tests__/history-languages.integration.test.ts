@@ -275,6 +275,22 @@ const outcome = (read: Promise<unknown>) =>
     () => "refused"
   );
 
+/** The version a read of this document in this language gives. */
+async function revIn(
+  t: TestNextly,
+  collection: string,
+  id: string,
+  locale?: string
+): Promise<string> {
+  const read = (await t.nextly.findByID({
+    collection: collection as never,
+    id,
+    ...(locale === undefined ? {} : { locale }),
+    overrideAccess: true,
+  } as never)) as { _rev?: unknown };
+  return String(read._rev);
+}
+
 /**
  * A regional document: created in English, saved twice in Spanish, its
  * shared field saved alone, then saved in English again. A save of the shared
@@ -292,20 +308,24 @@ async function regionalDocument(t: TestNextly): Promise<string> {
     await t.nextly.update({
       collection: "regional",
       id,
-      data: { title, region: "closed", _overwrite: true },
+      data: {
+        title,
+        region: "closed",
+        _rev: await revIn(t, "regional", id, "es"),
+      },
       locale: "es",
     });
   }
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { code: "c2", _overwrite: true },
+    data: { code: "c2", _rev: await revIn(t, "regional", id, "en") },
     locale: "en",
   });
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { title: "hello again", _overwrite: true },
+    data: { title: "hello again", _rev: await revIn(t, "regional", id, "en") },
     locale: "en",
   });
   return id;
@@ -488,7 +508,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id: plainId,
-        data: { title: "two", _overwrite: true },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       // Its versions are of no language, which the readable languages do not
       // name.
@@ -898,7 +921,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id,
-        data: { title: "two", _overwrite: true },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       const subject = { kind: "collection" as const, slug: "plain", id };
       const repo = new VersionsRepository(

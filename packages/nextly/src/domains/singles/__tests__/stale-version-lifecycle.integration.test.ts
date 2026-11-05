@@ -136,8 +136,14 @@ async function lifecycleOf(t: TestNextly, slug: string) {
 
 /** The banner as a draft in English and Spanish, with the version of a read of every language. */
 async function translatedBanner(t: TestNextly): Promise<string> {
-  await save(t, BANNER, "en", { headline: "hello", _overwrite: true });
-  await save(t, BANNER, "es", { headline: "hola", _overwrite: true });
+  await save(t, BANNER, "en", {
+    headline: "hello",
+    _rev: await readRev(t, BANNER, "en"),
+  });
+  await save(t, BANNER, "es", {
+    headline: "hola",
+    _rev: await readRev(t, BANNER, "es"),
+  });
   return readRev(t, BANNER, "*");
 }
 
@@ -168,7 +174,7 @@ async function englishBehindSpanish(t: TestNextly): Promise<void> {
         siteName: "EN",
         articleCount: 10,
         status: "published",
-        _overwrite: true,
+        _rev: await readRev(t, SITE, "en"),
       })
     ).success
   ).toBe(true);
@@ -177,20 +183,33 @@ async function englishBehindSpanish(t: TestNextly): Promise<void> {
       await save(t, SITE, "es", {
         siteName: "ES",
         status: "published",
-        _overwrite: true,
+        _rev: await readRev(t, SITE, "es"),
       })
     ).success
   ).toBe(true);
   expect(
-    (await save(t, SITE, "en", { siteName: "EN edited", _overwrite: true }))
-      .success
+    (
+      await save(t, SITE, "en", {
+        siteName: "EN edited",
+        _rev: await readRev(t, SITE, "en"),
+      })
+    ).success
   ).toBe(true);
   expect(
-    (await save(t, SITE, "es", { articleCount: 13, _overwrite: true })).success
+    (
+      await save(t, SITE, "es", {
+        articleCount: 13,
+        _rev: await readRev(t, SITE, "es"),
+      })
+    ).success
   ).toBe(true);
   expect(
-    (await save(t, SITE, "es", { status: "published", _overwrite: true }))
-      .success
+    (
+      await save(t, SITE, "es", {
+        status: "published",
+        _rev: await readRev(t, SITE, "es"),
+      })
+    ).success
   ).toBe(true);
 }
 
@@ -293,7 +312,7 @@ describe.each(getConfiguredTestDialects())(
           t,
           BANNER,
           "es",
-          { headline: "hola otra vez", _rev: read },
+          { headline: "hola otra vez", _rev: await readRev(t, BANNER, "es") },
           ANA
         );
         const published = await publishAll(t, {

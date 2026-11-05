@@ -107,17 +107,20 @@ describe.each(getConfiguredTestDialects())(
         { title: "a", status: "draft" }
       );
       const id = (created.data as { id: string }).id;
-      await t.handler.updateEntry(
+      /** The version a write's result carries, for the next write. */
+      const revOf = (result: { data?: unknown }) =>
+        String((result.data as { _rev: string })._rev);
+      const saved = await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "b", _overwrite: true }
+        { title: "b", _rev: revOf(created) }
+      );
+      const published = await t.handler.updateEntry(
+        { collectionName: "posts", entryId: id, ...as },
+        { status: "published", _rev: revOf(saved) }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "published", _overwrite: true }
-      );
-      await t.handler.updateEntry(
-        { collectionName: "posts", entryId: id, ...as },
-        { status: "draft", _overwrite: true }
+        { status: "draft", _rev: revOf(published) }
       );
       await t.handler.deleteEntry({
         collectionName: "posts",
@@ -258,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "a", _overwrite: true }
+        { title: "a", _rev: String((created.data as { _rev: string })._rev) }
       );
 
       expect((await t.eventsOf(id)).map(e => e.kind)).toEqual(["created"]);
