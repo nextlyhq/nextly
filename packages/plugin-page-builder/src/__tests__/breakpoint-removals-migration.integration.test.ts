@@ -237,6 +237,42 @@ async function openAdapter(database: Database): Promise<{
   }
 }
 
+/**
+ * Rows written and read with SQL. An adapter made outside a booted site has
+ * no registry of the plugin's tables, so its typed `insert` and `selectOne`
+ * cannot address them. Every name here is a constant of this file; values
+ * travel as parameters, and identifiers are quoted because MySQL reserves
+ * `before`.
+ */
+function rowsOn(
+  dialect: TestDialect,
+  adapter: Awaited<ReturnType<typeof createAdapter>>
+): {
+  insert: (table: string, row: Record<string, string | null>) => Promise<void>;
+  column: (table: string, id: string, column: string) => Promise<unknown>;
+} {
+  const quote = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const slot = (index: number) =>
+    dialect === "postgresql" ? `$${String(index + 1)}` : "?";
+  return {
+    insert: async (table, row) => {
+      const names = Object.keys(row);
+      await adapter.executeQuery(
+        `INSERT INTO ${quote(table)} (${names.map(quote).join(", ")}) VALUES (${names.map((_, index) => slot(index)).join(", ")})`,
+        names.map(name => row[name] ?? null)
+      );
+    },
+    column: async (table, id, column) => {
+      const found = await adapter.executeQuery<Record<string, unknown>>(
+        `SELECT ${quote(column)} AS ${quote("read")} FROM ${quote(table)} WHERE ${quote("id")} = ${slot(0)}`,
+        [id]
+      );
+      return found[0]?.read;
+    },
+  };
+}
+
 /** A module's ledger name. */
 const ledgerName = (name: string) =>
   `plugin:${PAGE_BUILDER_PLUGIN_NAME}/${name}`;
@@ -270,7 +306,7 @@ describe.each(getConfiguredTestDialects())(
         let { adapter } = opened;
         // CONTROL: the previous release has no removal table.
         expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(false);
-        await adapter.insert(OPTIONS_TABLE, {
+        await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
           id: "kept-option",
           name: "upgrade-probe",
           value: "kept",
@@ -296,23 +332,23 @@ describe.each(getConfiguredTestDialects())(
           started_by: "user:upgrade",
           open_key: openKey,
         });
-        await adapter.insert(REMOVALS_TABLE, row("open-1", "site"));
+        const rows = rowsOn(dialect, adapter);
+        await rows.insert(REMOVALS_TABLE, row("open-1", "site"));
         await expect(
-          adapter.insert(REMOVALS_TABLE, row("open-2", "site"))
+          rows.insert(REMOVALS_TABLE, row("open-2", "site"))
         ).rejects.toBeDefined();
-        await adapter.insert(REMOVALS_TABLE, row("done-1", null));
-        await adapter.insert(REMOVALS_TABLE, row("done-2", null));
-        const openRow = await adapter.selectOne<{ phase: string }>(
-          REMOVALS_TABLE,
-          { where: { and: [{ column: "id", op: "=", value: "open-1" }] } }
+        await rows.insert(REMOVALS_TABLE, row("done-1", null));
+        await rows.insert(REMOVALS_TABLE, row("done-2", null));
+        expect(await rows.column(REMOVALS_TABLE, "done-2", "open_key")).toBe(
+          null
         );
-        expect(openRow?.phase).toBe("converting");
+        expect(await rows.column(REMOVALS_TABLE, "open-1", "phase")).toBe(
+          "converting"
+        );
         // The row stored before the upgrade is as it was.
-        const option = await adapter.selectOne<{ value: string }>(
-          OPTIONS_TABLE,
-          { where: { and: [{ column: "id", op: "=", value: "kept-option" }] } }
+        expect(await rows.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
+          "kept"
         );
-        expect(option?.value).toBe("kept");
 
         // The earlier modules' records untouched, the new one applied once.
         const after = await ledger(site.nextly);
