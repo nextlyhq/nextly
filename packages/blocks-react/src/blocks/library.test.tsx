@@ -142,6 +142,15 @@ describe("the container presets", () => {
 });
 
 describe("core/collection-loop", () => {
+  it("is named Collection list for authors, under its stored type", () => {
+    // The name an author reads changes; the type a stored page names does
+    // not, so every page that holds one still finds its block.
+    expect(collectionLoop.editor?.label).toBe("Collection list");
+    expect(collectionLoop.name).toBe("core/collection-loop");
+    // A search for the old name still finds it.
+    expect(collectionLoop.editor?.keywords).toContain("loop");
+  });
+
   it("repeats its template once per entry", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(

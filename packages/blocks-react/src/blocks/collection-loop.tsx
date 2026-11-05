@@ -234,11 +234,14 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
+    // Named "Collection list" for authors; the stored type keeps its old
+    // name, so pages already saved still name this block, and "loop" stays a
+    // keyword so a search for the old name finds it.
     editor: {
-      label: "Collection loop",
+      label: "Collection list",
       icon: "loop",
       category: CONTENT,
-      keywords: ["repeat", "query", "entries", "dynamic"],
+      keywords: ["repeat", "query", "entries", "dynamic", "loop"],
     },
     props: {
       // Still text, as stored: `display` asks the editor to offer the site's
