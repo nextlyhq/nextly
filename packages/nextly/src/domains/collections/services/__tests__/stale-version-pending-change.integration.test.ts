@@ -245,6 +245,28 @@ describe.each(getConfiguredTestDialects())(
         expect(pending.articleCount).toBe(10);
       });
 
+      it("answers taking the live values with no pending change as before, whatever version it names", async () => {
+        const t = await boot(dialect);
+        const created = await entriesOf(t).createEntry(
+          { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+          { title: "en title", status: "published" }
+        );
+        const id = String((created.data as Doc).id);
+        const read = await englishRev(t, id);
+        // Published straight away: the version read is out of date, and
+        // English holds no pending change.
+        expect(
+          (await save(t, id, "en", { title: "en again", status: "published" }))
+            .success
+        ).toBe(true);
+
+        const unversioned = await takeLive(t, id);
+        expect(unversioned.success, JSON.stringify(unversioned)).toBe(false);
+        const old = await takeLive(t, id, { _rev: read });
+        expect(old.code, JSON.stringify(old)).toBe(unversioned.code);
+        expect(old.code).not.toBe("STALE_VERSION");
+      });
+
       it("takes the live values from the current version", async () => {
         const t = await boot(dialect);
         const id = await englishBehindSpanish(t);
