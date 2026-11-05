@@ -226,6 +226,10 @@ const archived = await nextly.update({
 
 **Returns:** `MutationResult<T>` (`{ message, item }`). Throws `NextlyError` (`NOT_FOUND`) when the where clause matches nothing.
 
+To have the update judged by the version you read, put that `_rev` in `data` and update by `id`
+(see [Versions and conflicts](#versions-and-conflicts)). An update by `where` refuses a `_rev`,
+since one version can't speak for every document the clause could match.
+
 ### delete
 
 Delete by ID or by `where`. The two paths return different shapes because a multi-row delete cannot collapse into a single mutation envelope, and the return type is the union either way — narrow it before reading a path-specific field:
@@ -865,6 +869,53 @@ const c = await nextly.find({ collection: "posts", richTextFormat: "both" });
 c.items[0].content; // { json: {...}, html: "<p>Hello world</p>" }
 ```
 
+## Versions and conflicts
+
+Every entry and Single carries a version, `_rev`, on every result that returns it: `find`,
+`findByID`, `findSingle`, and the `item` of `create`, `update` and `updateSingle`. Pass it back in
+`data`, and the update is applied only if nobody has saved the document since you read it:
+
+```typescript
+const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+
+const { item } = await nextly.update({
+  collection: "posts",
+  id: "abc-123",
+  data: { title: "Hello again", _rev: post._rev },
+});
+
+item._rev; // the new version, for the next save
+```
+
+The version is judged the same way as over REST, including with `overrideAccess: true`: a trusted
+call skips access checks, never the version. See the REST API's
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts) for what `_rev`
+covers, which writes are judged, and how each language is judged.
+
+An out-of-date save throws a `NextlyError` with the code `STALE_VERSION` (409), and nothing is
+written. Its `publicData` carries `currentVersion`, and, where the caller may read the document,
+`changedBy` and `changedAt` (a trusted call may):
+
+```typescript
+try {
+  await nextly.update({
+    collection: "posts",
+    id: "abc-123",
+    data: { title: "Hello again", _rev: post._rev },
+  });
+} catch (err) {
+  if (NextlyError.isCode(err, "STALE_VERSION")) {
+    // Someone saved first. Read the post again and reapply the change,
+    // or save over theirs with `_overwrite: true`.
+    console.log(err.publicData); // { currentVersion, changedBy?, changedAt?, historyVersion? }
+  }
+  throw err;
+}
+```
+
+To save whatever the current version, add `_overwrite: true` to `data`. The update is applied,
+and the document's history records the overwrite. An update with no `_rev` is applied as before.
+
 ## Errors
 
 Every Direct API failure throws a single `NextlyError` class. The error carries a public payload (safe to surface) and a log payload (for the server logger). Type guards let you narrow without `instanceof` (which can fail at package boundaries):
@@ -897,9 +948,9 @@ async function getPost() {
 }
 ```
 
-Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`.
+Available type guards: `NextlyError.is`, `NextlyError.isCode`, `NextlyError.isNotFound`, `NextlyError.isValidation`, `NextlyError.isAuthRequired`, `NextlyError.isForbidden`, `NextlyError.isConflict`, `NextlyError.isRateLimited`. `isConflict` matches `CONFLICT` only; check an out-of-date save with `NextlyError.isCode(err, "STALE_VERSION")`.
 
-Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409), `DUPLICATE` (409), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
+Common `code` values you will see: `VALIDATION_ERROR` (400), `INVALID_INPUT` (422), `AUTH_REQUIRED` (401), `AUTH_INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIED` (403), `FORBIDDEN` (403), `NOT_FOUND` (404), `STALE_VERSION` (409), `CONFLICT` (409), `DUPLICATE` (409), `VERSION_REQUIRED` (428), `PAYLOAD_TOO_LARGE` (413), `RATE_LIMITED` (429), `DATABASE_ERROR` (500), `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503).
 
 The same `NextlyError` is what the route handler serialises into the HTTP error envelope (`{ error: { code, message, requestId, ... } }`) — see the [REST API error response section](/docs/api-reference/rest-api#errors) for the wire format.
 

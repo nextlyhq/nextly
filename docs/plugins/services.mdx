@@ -228,6 +228,10 @@ When the patch does NOT change what the filter matches, page with
 `pagination: { page: n }` instead and stop when `pagination.hasMore` is false, or the
 loop above would re-read the same rows.
 
+Each row of `updateMany` may carry its own `_rev` in its `data`, and is then judged by it on its
+own (see [Versions and conflicts](#versions-and-conflicts)): a row saved since you read it comes
+back in `errors` with the code `STALE_VERSION` and writes nothing, and the other rows are applied.
+
 Neither takes a `locale`: the bulk pipeline writes in one pass and cannot store a
 translation, so both refuse one by name rather than filing every row under the default
 language. Write the rows one at a time with `createEntry` or `updateEntry` when a
@@ -255,6 +259,36 @@ if (warnings) {
 ```
 
 `deleteEntry` reports `item` as `{ id }`, since there is no row left to return.
+
+## Versions and conflicts
+
+Every entry carries a version, `_rev`, on what `findEntryById` and `listEntries` return and on the
+`item` of every create and update. Pass it back in the update's `data`, and the update is applied
+only if nobody has saved the entry since you read it:
+
+```ts
+const post = await ctx.services.collections.findEntryById(slug, id, {
+  as: "system",
+});
+
+const { item } = await ctx.services.collections.updateEntry(
+  slug,
+  id,
+  { title: "Hello again", _rev: post._rev },
+  { as: "system" }
+);
+// item._rev is the new version, for the next save
+```
+
+An out-of-date save throws a `NextlyError` with the code `STALE_VERSION` (409), and writes nothing:
+check it with `NextlyError.isCode(err, "STALE_VERSION")`. `updateEntryInTransaction` is judged the
+same way, so a refused update leaves the rest of your transaction to you. To save whatever the
+current version, add `_overwrite: true` to `data`; the entry's history records the overwrite. An
+update with no `_rev` is applied as before.
+
+What `_rev` covers and which writes are judged are the same for every caller; see the REST API's
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts). `ctx.services`
+reads no Single's content, so a plugin has no `_rev` to send for a Single.
 
 ## Collection transactions
 

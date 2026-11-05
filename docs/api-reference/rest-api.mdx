@@ -174,7 +174,9 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `403`  | `EMAIL_NOT_VERIFIED`                        | Login with the correct password for an address not yet verified.                                                                                                                                                                                                                    |
 | `403`  | `API_KEY_ROLE_ABOVE_CREATOR`                | Creating an API key (or its summary) with a role that allows more than you can.                                                                                                                                                                                                     |
 | `404`  | `NOT_FOUND`                                 | Resource does not exist.                                                                                                                                                                                                                                                            |
-| `409`  | `CONFLICT`, `DUPLICATE`                     | Concurrent edit, duplicate email, etc.                                                                                                                                                                                                                                              |
+| `409`  | `STALE_VERSION`                             | The document changed since the `_rev` you sent. See [Versions and conflicts](#versions-and-conflicts).                                                                                                                                                                              |
+| `409`  | `CONFLICT`, `DUPLICATE`                     | A state that refuses the request, a duplicate email, etc.                                                                                                                                                                                                                           |
+| `428`  | `VERSION_REQUIRED`                          | A bulk update by ids gave a version for some ids and not for others.                                                                                                                                                                                                                |
 | `413`  | `PAYLOAD_TOO_LARGE`                         | Upload bigger than configured cap.                                                                                                                                                                                                                                                  |
 | `415`  | `UNSUPPORTED_MEDIA_TYPE`                    | Wrong `Content-Type`.                                                                                                                                                                                                                                                               |
 | `422`  | `INVALID_INPUT`                             | Semantic validation failed.                                                                                                                                                                                                                                                         |
@@ -182,6 +184,121 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `500`  | `INTERNAL_ERROR`, `DATABASE_ERROR`          | Server-side failure.                                                                                                                                                                                                                                                                |
 | `503`  | `SERVICE_UNAVAILABLE`                       | Health probe / dependency outage.                                                                                                                                                                                                                                                   |
 | `503`  | `DATABASE_BUSY`                             | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
+
+## Versions and conflicts
+
+Every entry and Single carries a version, returned as `_rev`. Send it back with an update, and
+the update is applied only if nobody has saved the document since you read it. Otherwise it is
+refused, so a save never silently replaces someone else's.
+
+### The version, `_rev`
+
+`_rev` is on every read of an entry or a Single (by id, in a list, in any language) and on the
+answer to every create and update. Treat it as opaque: send back exactly what you read, and don't
+parse, compare or store it. Reads never change it, every save does, and two saves in the same
+second get different versions.
+
+It covers the fields every language shares and, for a read in one language, that language: a
+read in Spanish gives something like `7.es:3`, and a read of every language (`locale=all`) names
+each one. It is not a version number in the document's [history](/docs/versions).
+
+### Sending it back
+
+Put `_rev` in the update's body, beside the values you change:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Hello again","_rev":"7"}'
+```
+
+The answer carries the new `_rev`, which the next save sends. Code that reads a document once and
+then saves it several times takes `_rev` from each save's answer. An update with no `_rev` is
+applied as before.
+
+A save in one language is judged on that language and on the shared fields, never on another
+language's translations. A version read in every language is accepted for a save of one of them.
+A `_rev` that isn't one a read returned, or that names no version of the language you save, is a
+`400 VALIDATION_ERROR`.
+
+### When the document changed
+
+A save from an out-of-date version is refused with `409 STALE_VERSION`, and nothing is written:
+no history, no hook after the change, no webhook. The document lock stays as it was.
+
+```json
+{
+  "error": {
+    "code": "STALE_VERSION",
+    "message": "This document changed since the version you gave. Its current version is 8.",
+    "requestId": "req_nlwxzwtnlvqsu3lc",
+    "data": {
+      "currentVersion": "8",
+      "changedBy": { "kind": "person", "name": "Ana Ruiz" },
+      "changedAt": "2026-11-04T10:42:00.000Z",
+      "historyVersion": { "version": 12, "locale": null }
+    }
+  }
+}
+```
+
+- `currentVersion` is always there, spelled for the languages your save is judged on.
+- `changedBy` and `changedAt` are there only when you may read the document in those languages,
+  as a read of it would decide, read rules included. Anonymous visitors never get them.
+  - `kind` is `person`, `apiKey`, `release`, `agent`, `principal` or `system`.
+  - A person is named by the name on their account, never by email, and `name` is `null` once
+    the account is gone.
+  - A plugin-defined person (`principal`) is given by `principalKind`, such as `member`, never by
+    name.
+  - A document not saved since its versions began has no recorded changer, so neither field is
+    there.
+- `historyVersion` is there when the document keeps [history](/docs/versions) and you may read
+  it: the newest recorded version of what you saved, to
+  [compare](/docs/versions#comparing-two-versions) with.
+
+To go on, read the document again, apply your change to what you get, and save with the new
+`_rev`, or [overwrite](#choosing-to-overwrite). Nextly never retries a `STALE_VERSION` for you.
+
+### Choosing to overwrite
+
+Send `"_overwrite": true` with the values, beside the `_rev` you read, and the update is applied
+whatever the document's current version:
+
+```bash
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
+  -H "Authorization: Bearer $NEXTLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Hello again","_rev":"7","_overwrite":true}'
+```
+
+It needs no permission beyond the update itself. Every overwrite is recorded in the document's
+history, whether or not it keeps versions: when the `_rev` was out of date the history names whose
+changes it replaced ("Overwrote changes by Ana"), and otherwise it says the save was an overwrite.
+`_overwrite` is never stored, and any value other than `true` or `false` is a
+`400 VALIDATION_ERROR`.
+
+### Which writes are judged
+
+| Write | How it is judged |
+|---|---|
+| `PATCH` an entry or a Single | On the shared fields and the language it saves. |
+| Publish or unpublish every language (`.../publish-all`, `.../unpublish-all`), and an update with `locale=*` | On every language. The `_rev` must come from a read of every language; one that doesn't name each is a `400`. |
+| Restore a version (`.../versions/<n>/restore`) | In the version's language. The answer carries the new `_rev`. |
+| Take a working draft live (`.../versions/working-draft/take-live`) | On the shared fields and the language of the pending change, once there is one. |
+| Discard a working draft (`DELETE .../versions/working-draft`) | Before anything is removed. `_rev` and `_overwrite` go in the query string: `?locale=en&_rev=7`. |
+| Bulk update by ids (`.../entries/bulk-update`) | Each id on its own, through `"revs": { "<id>": "<_rev>" }`. An out-of-date id comes back in `errors` with `STALE_VERSION`, and the others are applied. A `revs` that leaves out an id is a `428 VERSION_REQUIRED`. |
+| Bulk update by query (`PATCH` on `.../entries` with a `where`) | Not by version: a `_rev` or `revs` there is a `400`, since one version can't speak for every document the query matches. |
+| Create, delete, a [release](/docs/releases)'s scheduled run, an autosave | Not judged. |
+
+An entry's paths sit under `/admin/api/collections/<slug>/entries/<id>`, and a Single's under
+`/admin/api/singles/<slug>`.
+
+### The document lock doesn't change any of this
+
+The [document lock](#document-locks) tells editors in the admin who is working on a document, and
+refuses no write. A save that sends the current `_rev` succeeds while someone else holds the
+document, and one that sends an out-of-date `_rev` is refused even while you hold it.
 
 ## Endpoint inventory
 
@@ -564,7 +681,8 @@ curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
 The admin claims an entry or a Single while someone has it open, so that a colleague who opens
 it is told who is editing (see [Editing with others](/docs/admin/editing-together)). The claim is
 advisory: no write is refused because someone else holds the document, through this API or any
-other.
+other. Saves are kept from replacing each other by the document's version instead (see
+[Versions and conflicts](#versions-and-conflicts)).
 
 A document is named by three values: `scopeKind` (`collection` or `single`), `slug` (the
 collection's or Single's slug) and `entryId` (the entry's id, or the `id` a Single's content read
