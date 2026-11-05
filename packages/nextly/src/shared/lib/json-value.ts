@@ -44,24 +44,35 @@ function comesBackEqual(value: unknown, read: unknown): boolean {
   );
 }
 
+/** Whether `value` is an array or a plain object, not a class's instance. */
+function hasPlainShape(value: object): boolean {
+  if (Array.isArray(value)) return true;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Whether `key` is a property JSON writes as it is: an enumerable data
+ * property under a string key, and for an array, one of its indices.
+ */
+function isWrittenProperty(value: object, key: string | symbol): boolean {
+  if (typeof key !== "string") return false;
+  if (Array.isArray(value)) {
+    if (key === "length") return true;
+    if (String(Number(key)) !== key) return false;
+  }
+  const property = Object.getOwnPropertyDescriptor(value, key);
+  return property?.enumerable === true && "value" in property;
+}
+
 /**
  * Whether `value` holds only what JSON writes: an array or a plain object
- * whose own properties are all enumerable data properties under string keys,
- * and, for an array, its indices and nothing else.
+ * whose own properties are all written as they are, and, for an array, no
+ * hole, which JSON writes as null.
  */
 function isPlainContainer(value: object): boolean {
-  if (!Array.isArray(value)) {
-    const proto: unknown = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) return false;
-  }
+  if (!hasPlainShape(value)) return false;
   const own = Reflect.ownKeys(value);
-  for (const key of own) {
-    if (typeof key !== "string") return false;
-    if (Array.isArray(value) && key === "length") continue;
-    const property = Object.getOwnPropertyDescriptor(value, key);
-    if (!property?.enumerable || !("value" in property)) return false;
-    if (Array.isArray(value) && String(Number(key)) !== key) return false;
-  }
-  // Every index present: JSON writes a hole as null.
+  if (!own.every(key => isWrittenProperty(value, key))) return false;
   return !Array.isArray(value) || own.length === value.length + 1;
 }
