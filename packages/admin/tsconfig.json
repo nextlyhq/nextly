@@ -42,6 +42,10 @@
       "nextly/reserved-filter-keys": [
         "../nextly/src/domains/collections/query/reserved-filter-keys.ts"
       ],
+      // Same reason: the one deprecation notice, said once per process.
+      "nextly/deprecation-notice": [
+        "../nextly/src/shared/lib/deprecation-notice.ts"
+      ],
       // Same reason: the kinds and keys Needs attention's answer is written in.
       "nextly/attention-keys": [
         "../nextly/src/domains/widgets/attention-keys.ts"

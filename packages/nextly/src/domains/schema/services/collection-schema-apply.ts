@@ -957,7 +957,10 @@ async function companionUniqueNamesHeld(
   if (collection.localized !== true) return [];
   const companionTable = `${collection.tableName}_locales`;
   const wanted = uniqueTranslatedColumns({
-    fields: collection.fields,
+    // Only a named field has a column; a group's name is optional, and an unnamed one holds none.
+    fields: collection.fields.filter(
+      (f): f is typeof f & { name: string } => typeof f.name === "string"
+    ),
     entityLocalized: true,
     dialect: adapter.dialect,
     builtBy: builtByFor("collection", collection.builderOwned),
