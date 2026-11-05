@@ -11,7 +11,6 @@ import { CORE_ADMIN_PLACES } from "../admin-places";
 import {
   assertPlacesExist,
   collectAdminPlaces,
-  getDeclaredAdminPlaces,
 } from "../admin-places-registry";
 import type { PluginDefinition } from "../plugin-context";
 import { resolveDeclaredPlugins, resolveTransformedPlugins } from "../resolve";
@@ -361,40 +360,20 @@ describe("at start", () => {
     });
   });
 
-  it("refuses two plugins sharing a slug for the slug, and publishes none of their places", () => {
-    load([]);
+  it("refuses two plugins sharing a slug for the slug, before their places could collide", () => {
     expect(
       refusalOf(() =>
         load([
-          plugin("@acme/crm", ["acme-crm.contact"]),
           plugin("@acme/billing", ["acme-billing.invoice"]),
-          plugin("acme-billing", ["acme-billing.receipt"]),
+          plugin("acme-billing", ["acme-billing.invoice"]),
         ])
       )
     ).toMatchObject({ reason: "duplicate-admin-slug" });
-    // A start refused by any check, not only the places', publishes none.
-    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
   });
 
-  it("publishes no places from a list a later check refuses", () => {
-    load([]);
-    // Every manifest check passes; the dependency sort, after them, refuses.
-    expect(
-      refusalOf(() =>
-        load([
-          plugin("@acme/crm", ["acme-crm.contact"], {
-            dependsOn: { "@acme/absent": "*" },
-          }),
-        ])
-      )
-    ).toMatchObject({ reason: "missing-dependency" });
-    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
-  });
-
-  it("publishes no places when the list a setup transformer returns is refused", () => {
-    load([]);
+  it("refuses a bad place in the list a setup transformer returns", () => {
     // The declared list passes; the transformed one, which adds a plugin
-    // under core's segment, does not.
+    // under core's segment, is checked again and refused.
     expect(
       refusalOf(() =>
         load(
@@ -406,30 +385,38 @@ describe("at start", () => {
         )
       )
     ).toMatchObject({ reason: "admin-place-reserved" });
-    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
   });
 
-  it("publishes the places once every declaration passes, and keeps the last good set when one fails", () => {
-    load([plugin("@acme/billing", ["acme-billing.invoice"])]);
-    expect(getDeclaredAdminPlaces().get("acme-billing.invoice")?.owner).toBe(
-      "@acme/billing"
-    );
-
+  it("starts with good places in both the declared and the transformed list", () => {
     expect(
-      refusalOf(() =>
-        load([
-          plugin("@acme/crm", ["acme-crm.contact"]),
-          plugin("@acme/bad", ["collection.badge"]),
-        ])
-      )
-    ).toMatchObject({ reason: "admin-place-reserved" });
-    // Nothing of the refused set was published.
-    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
-    expect(getDeclaredAdminPlaces().has("acme-billing.invoice")).toBe(true);
+      refusalOf(() => load([plugin("@acme/billing", ["acme-billing.invoice"])]))
+    ).toBe("not refused");
   });
 });
 
 describe("in the CLI", () => {
+  it("tells a plugin whose places are not a list to declare a list, not to rename a place", () => {
+    let thrown: unknown;
+    try {
+      collectAdminPlaces([
+        {
+          name: "@acme/billing",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            admin: { places: { name: "acme-billing.x" } as never },
+          },
+        },
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+    const cli = toCliError(thrown);
+    expect(cli.code).toBe("PLUGIN_RESOLUTION_ERROR");
+    expect(cli.next).toContain("as a list of places");
+    expect(cli.next).not.toMatch(/rename/i);
+  });
+
   it.each<[string, () => unknown]>([
     [
       "admin-place-malformed",

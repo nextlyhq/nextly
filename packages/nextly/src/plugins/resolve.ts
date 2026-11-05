@@ -12,10 +12,7 @@ import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schem
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
-import {
-  collectAdminPlaces,
-  publishAdminPlaces,
-} from "./admin-places-registry";
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -173,8 +170,8 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // namespace or core's, or one declared twice, would otherwise surface as a
   // contribution rendered in the wrong place or nowhere. Last, so two plugins
   // sharing a slug are refused for the slug before their places collide on
-  // it. Checked here; published by `resolveTransformedPlugins`, once the list
-  // the app will run has resolved.
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
   collectAdminPlaces(plugins);
 }
 
@@ -313,12 +310,6 @@ export function resolveTransformedPlugins<
     opts
   );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
-  // The admin places of the list the app runs, published only now that it has
-  // passed every check, the declared list's and the transformed one's: a load
-  // refused anywhere, a \`setup\` transformer that throws included, leaves the
-  // last resolved places for whoever reads them meanwhile, as in a
-  // development reload.
-  publishAdminPlaces(collectAdminPlaces(plugins));
   // Decided here, once, from the copies every check above read: the grants
   // travel beside the config to whatever builds a plugin context, and a
   // manifest changed after this point grants nothing.

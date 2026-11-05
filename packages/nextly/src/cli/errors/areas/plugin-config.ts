@@ -418,11 +418,21 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
           next: `Execute "${field(error, "point")}" as a ${field(error, "declared")}, the kind its plugin declares.`,
         };
       }),
-      ...resolved("admin-place-malformed", error => ({
-        what: detail(error),
-        why: "An admin place is named by its plugin's slug and a dot, so where it belongs can be read from the name.",
-        next: `Rename the place in "${field(error, "plugin")}" to lower-case letters, digits and single dashes, starting with the plugin's admin slug and a dot.`,
-      })),
+      ...resolved("admin-place-malformed", error =>
+        // No place at all: the declarations themselves were not a list, so no
+        // rename can help.
+        field(error, "place") === "" && field(error, "declared") !== ""
+          ? {
+              what: detail(error),
+              why: "A plugin declares its admin places as a list, one entry for each place.",
+              next: `Declare \`contributes.admin.places\` in "${field(error, "plugin")}" as a list of places, each \`{ name }\`.`,
+            }
+          : {
+              what: detail(error),
+              why: "An admin place is named by its plugin's slug and a dot, so where it belongs can be read from the name.",
+              next: `Rename the place in "${field(error, "plugin")}" to lower-case letters, digits and single dashes, starting with the plugin's admin slug and a dot.`,
+            }
+      ),
       ...resolved("admin-place-reserved-slug", error => ({
         what: detail(error),
         why: `Admin places under "${field(error, "slug")}" are Nextly's own, and every place a plugin declares starts with its slug.`,

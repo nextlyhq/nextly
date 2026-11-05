@@ -1,12 +1,16 @@
 /**
- * The admin places this process knows: core's, and the ones enabled plugins
- * declare, checked when the app starts.
+ * The admin places a plugin list holds: core's, and the ones its enabled
+ * plugins declare, checked when the app starts.
  *
  * A place that exists only as a string in one plugin's code cannot be found by
  * the plugin that wants to add to it, and two plugins can choose the same name
  * without either noticing. Declaring them, and refusing to start on a bad
  * name, makes both visible at boot rather than as a contribution that quietly
  * renders nowhere.
+ *
+ * No copy of them is kept. A reader computes them from the plugin list the
+ * app committed, where it reads them, so there is no second record to fall
+ * out of step with that list when a load is refused or reloaded.
  *
  * @module plugins/admin-places-registry
  * @experimental
@@ -34,28 +38,6 @@ function corePlaces(): Map<string, DeclaredAdminPlace> {
   return new Map(
     Object.keys(CORE_ADMIN_PLACES).map(name => [name, { name }] as const)
   );
-}
-
-/**
- * The places this process has resolved. Module-level because they are
- * collected once at resolve, and every later reader asks the same question.
- * Core's alone until a resolve publishes more.
- */
-let declaredPlaces: ReadonlyMap<string, DeclaredAdminPlace> = corePlaces();
-
-/** Publish a checked set of places, replacing the last. */
-export function publishAdminPlaces(
-  places: ReadonlyMap<string, DeclaredAdminPlace>
-): void {
-  declaredPlaces = places;
-}
-
-/** @experimental The places the last resolve published. */
-export function getDeclaredAdminPlaces(): ReadonlyMap<
-  string,
-  DeclaredAdminPlace
-> {
-  return declaredPlaces;
 }
 
 /**
@@ -158,7 +140,11 @@ export function collectAdminPlaces(
       throw resolutionError(
         "admin-place-malformed",
         `Plugin "${plugin.name}" declares \`contributes.admin.places\` as something other than a list of places.`,
-        { plugin: plugin.name, place: undefined }
+        {
+          plugin: plugin.name,
+          place: undefined,
+          declared: "contributes.admin.places",
+        }
       );
     }
     for (const place of declared as readonly unknown[]) {
