@@ -502,7 +502,8 @@ describe("webhook outbox capture (integration)", () => {
     await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { title: "bulk-updated" },
+      // The acting identity is under test, not versions.
+      data: { title: "bulk-updated", _overwrite: true },
       overrideAccess: true,
       actor,
     });

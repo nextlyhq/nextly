@@ -424,7 +424,8 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateEntries",
         { collectionName: x.collection },
-        { ids: [x.entryId], data: { headline: "Bulk" } }
+        // Removal from code is under test, not versions.
+        { ids: [x.entryId], data: { headline: "Bulk", _overwrite: true } }
       ),
   },
   {
@@ -444,7 +445,10 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateByQuery",
         { collectionName: x.collection },
-        { where: { id: { equals: x.entryId } }, data: { headline: "Query" } }
+        {
+          where: { id: { equals: x.entryId } },
+          data: { headline: "Query", _overwrite: true },
+        }
       ),
   },
   {
@@ -454,7 +458,10 @@ const OPERATIONS: Operation[] = [
       restCollection(
         "bulkUpdateByQuery",
         { collectionName: x.collection },
-        { where: MATCHES_NOTHING, data: { headline: "Query" } }
+        {
+          where: MATCHES_NOTHING,
+          data: { headline: "Query", _overwrite: true },
+        }
       ),
   },
   {
