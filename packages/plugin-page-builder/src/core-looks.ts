@@ -7,8 +7,9 @@
  * only once the site edits one, as any code-supplied style is. A class the
  * site's own config states with a look's id is the site's copy and wins.
  *
- * Looks of blocks other plugins declare are not here: those blocks register
- * at init, after the code tier is resolved.
+ * The core blocks' looks are known at config time. Blocks other plugins
+ * declare register at init, and the plugin refreshes the code tier with
+ * every registered block's looks then, before any request reads it.
  *
  * @module core-looks
  */
@@ -18,12 +19,31 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { SiteStyleData } from "./site-style";
 
-/** The site's config style with the core looks among its classes. */
-export function withCoreLooks(
-  siteStyle: SiteStyleData | undefined
+/** What a look reads from a block definition. */
+type LookSource =
+  Parameters<typeof blockLooks>[0] extends Iterable<infer T> ? T : never;
+
+/**
+ * The site's config style with the given blocks' looks among its classes.
+ * Appended after the site's own classes, so the read cap, which counts looks
+ * apart anyway, never reaches past one of them first.
+ */
+export function withBlockLooks(
+  siteStyle: SiteStyleData | undefined,
+  definitions: Iterable<LookSource>
 ): SiteStyleData {
   const own = siteStyle?.classes ?? [];
   const stated = new Set(own.map(entry => entry.id));
-  const looks = blockLooks(coreBlocks).filter(look => !stated.has(look.id));
-  return { ...siteStyle, classes: [...looks, ...own] };
+  const looks = blockLooks(definitions).filter(look => !stated.has(look.id));
+  return { ...siteStyle, classes: [...own, ...looks] };
+}
+
+/**
+ * The site's config style with the core blocks' looks: what the code tier
+ * holds at config time, before other plugins' blocks register.
+ */
+export function withCoreLooks(
+  siteStyle: SiteStyleData | undefined
+): SiteStyleData {
+  return withBlockLooks(siteStyle, coreBlocks);
 }

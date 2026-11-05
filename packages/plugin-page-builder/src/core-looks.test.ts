@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withCoreLooks } from "./core-looks";
+import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { classOverrideOf } from "./site-style";
 
 describe("the core blocks' looks in the site's code tier", () => {
@@ -39,5 +39,26 @@ describe("the core blocks' looks in the site's code tier", () => {
     const moved = { ...outline, blockType: "core/text" };
     expect(classOverrideOf(configured, [moved])).toEqual([moved]);
     expect(classOverrideOf(configured, [outline])).toEqual([]);
+  });
+});
+
+describe("looks of blocks another plugin declares", () => {
+  it("join the code tier once their definitions are known", () => {
+    const hero = {
+      name: "acme/hero",
+      editor: {
+        variations: [
+          {
+            name: "dark",
+            label: "Dark",
+            styles: { base: { base: { color: "white" } } },
+          },
+        ],
+      },
+    };
+    const ids = (withBlockLooks(undefined, [hero]).classes ?? []).map(
+      each => each.id
+    );
+    expect(ids).toEqual(["look:acme/hero:dark"]);
   });
 });

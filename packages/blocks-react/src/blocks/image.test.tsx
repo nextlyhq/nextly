@@ -19,7 +19,7 @@ import { renderImage } from "./image";
 
 const TYPE_CLASS = "nx-bt-core--image";
 
-async function draw(caption: string) {
+async function draw(caption: string, extra = "") {
   const { container } = render(
     await renderImage({
       props: {
@@ -27,7 +27,7 @@ async function draw(caption: string) {
         alt: "a wide asset",
         ...(caption === "" ? {} : { caption }),
       },
-      className: `nx-pb-node1 ${TYPE_CLASS}`,
+      className: `nx-pb-node1 ${TYPE_CLASS}${extra}`,
       // Required by the render contract; these fixtures declare no parts.
       partClass: () => "",
     } as never)
@@ -50,6 +50,18 @@ describe("core/image, whichever branch it renders", () => {
     const container = await draw("a caption");
     expect(container.querySelector("figure")).not.toBeNull();
     expect(container.querySelector("img")?.className).toContain(TYPE_CLASS);
+  });
+
+  it("puts the image's look on the IMG when there IS a caption, a shared style on the figure", async () => {
+    // Rounded and Circle style the picture itself: on the figure, the corners
+    // and the fit would miss the image and catch the caption instead.
+    const container = await draw("a caption", " nx-c-image-rounded nx-c-card");
+    expect(container.querySelector("img")?.className).toContain(
+      "nx-c-image-rounded"
+    );
+    const figure = container.querySelector("figure")?.className ?? "";
+    expect(figure).not.toContain("nx-c-image-rounded");
+    expect(figure).toContain("nx-c-card");
   });
 
   it("leaves the node's own classes on the figure, which is the root", async () => {

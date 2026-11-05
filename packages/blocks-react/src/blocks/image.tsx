@@ -14,8 +14,10 @@
  */
 import {
   type BlockDefinition,
+  blockLooks,
   blockTypeClassName,
   defineBlock,
+  namedClassName,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -120,7 +122,11 @@ export async function renderImage({
        * the wrapper around it looks correct. Handing the figure the whole
        * class string put the rule one element above the thing it constrains.
        */
-      className={caption === "" ? className : blockTypeClassName(IMAGE_BLOCK)}
+      className={
+        caption === ""
+          ? className
+          : [blockTypeClassName(IMAGE_BLOCK), ...looksIn(className)].join(" ")
+      }
       src={src}
       alt={alt}
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
@@ -136,7 +142,7 @@ export async function renderImage({
   // The block's own class moves to the figure, because that is then the root.
   if (caption === "") return image;
   return (
-    <figure className={className}>
+    <figure className={withoutLooks(className)}>
       {image}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
     </figure>
@@ -172,6 +178,30 @@ export async function renderImage({
  * two spellings, and the rule that missed would simply not apply.
  */
 const IMAGE_BLOCK = "core/image";
+
+/**
+ * The class names of this block's own looks. A look styles the picture
+ * itself (its corners, its fit), so on a captioned image it rides the
+ * `<img>`, not the figure; a site's edit of a look keeps its name.
+ */
+const IMAGE_LOOK_CLASSES: ReadonlySet<string> = new Set(
+  blockLooks([{ name: IMAGE_BLOCK, editor: { variations: imageLooks() } }]).map(
+    look => namedClassName(look.slug)
+  )
+);
+
+/** The image's own look classes among a class string. */
+function looksIn(className: string): string[] {
+  return className.split(/\s+/).filter(name => IMAGE_LOOK_CLASSES.has(name));
+}
+
+/** A class string without the image's own look classes. */
+function withoutLooks(className: string): string {
+  return className
+    .split(/\s+/)
+    .filter(name => name !== "" && !IMAGE_LOOK_CLASSES.has(name))
+    .join(" ");
+}
 
 const IMAGE_BASE_STYLES = {
   base: {
