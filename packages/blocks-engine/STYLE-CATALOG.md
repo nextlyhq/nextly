@@ -178,7 +178,7 @@ the catalog.
 
 `background.overlay` (a colour) and `background.overlayStrength` (0 to 100) lay
 a colour over the image, under the content. Each compiles to its own custom
-property, registered as not inherited, and every image `background.url` or
+property, reset on every element of the page so neither inherits, and every image `background.url` or
 `backgroundGradient` writes carries one more layer in front that reads them, so
 an overlay set at one device covers an image set at another.
 

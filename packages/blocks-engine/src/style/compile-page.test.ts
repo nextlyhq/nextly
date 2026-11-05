@@ -2281,22 +2281,22 @@ describe("the space a container puts between its children", () => {
 });
 
 describe("the overlay's two properties", () => {
-  it("are registered as not inherited where a page uses them", () => {
+  it("are reset on every element of a page that uses them, so none inherits", () => {
     // Inherited, a section's overlay would darken every image nested in it.
+    // The reset has no specificity, so a block's own value beats it.
     const used = css(
       doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
     );
-    expect(used).toContain(
-      '@property --nx-pb-overlay { syntax: "<color>"; inherits: false; initial-value: transparent; }'
-    );
-    expect(used).toContain(
-      '@property --nx-pb-overlay-strength { syntax: "<number>"; inherits: false; initial-value: 50; }'
-    );
+    expect(
+      used.startsWith(
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; }\n"
+      )
+    ).toBe(true);
   });
 
-  it("are not registered on a page with no background to lay one over", () => {
+  it("are not reset on a page with no background to lay one over", () => {
     expect(
       css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
-    ).not.toContain("@property");
+    ).not.toContain("--nx-pb-overlay");
   });
 });

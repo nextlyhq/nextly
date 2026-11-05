@@ -9,12 +9,16 @@
  * has to cover an image set at a narrower device, and each value keeps its
  * own entry in the trace.
  *
- * Registered as NOT inherited, so a section's overlay never darkens an image
- * nested inside it; each `var()` carries a fallback, so where the
- * registration is absent the image still paints.
+ * NOT inherited, so a section's overlay never darkens an image nested inside
+ * it: every element in the page resets both to `initial` under a rule of no
+ * specificity, which any block's own value beats, and each `var()` carries a
+ * fallback, so an element with neither set paints its image uncovered. A reset
+ * rather than an `@property` registration, which is not yet widely available.
  *
  * @module style/overlay
  */
+
+import { PAGE_ROOT_CLASS } from "./node-class";
 
 /** The overlay's colour, as its custom property. */
 export const OVERLAY_COLOR = "--nx-pb-overlay";
@@ -36,8 +40,5 @@ export function overlaid(image: string): string {
   return `${OVERLAY_LAYER}, ${image}`;
 }
 
-/** The registrations a sheet using the overlay carries, once. */
-export const OVERLAY_REGISTRATION: string = [
-  `@property ${OVERLAY_COLOR} { syntax: "<color>"; inherits: false; initial-value: transparent; }`,
-  `@property ${OVERLAY_STRENGTH} { syntax: "<number>"; inherits: false; initial-value: ${DEFAULT_STRENGTH}; }`,
-].join("\n");
+/** The reset a sheet using the overlay carries, once: what stops it inheriting. */
+export const OVERLAY_RESET: string = `:where(.${PAGE_ROOT_CLASS} *) { ${OVERLAY_COLOR}: initial; ${OVERLAY_STRENGTH}: initial; }`;

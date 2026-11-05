@@ -8677,14 +8677,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: transparent;
 }
 
-.nx-columns-layout__stack {
+.nx-segment {
   display: inline-flex;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
 
-.nx-columns-layout__stack-option {
+.nx-segment__option {
   block-size: var(--nx-builder-control-height);
   padding: 0 0.625rem;
   border: 0;
@@ -8695,16 +8695,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   cursor: pointer;
 }
 
-.nx-columns-layout__stack-option:last-child {
+.nx-segment__option:last-child {
   border-inline-end: 0;
 }
 
-.nx-columns-layout__stack-option[aria-checked="true"] {
+.nx-segment__option[aria-checked="true"] {
   background: var(--nx-muted);
   font-weight: 600;
 }
 
-.nx-columns-layout__stack-option:focus-visible {
+.nx-segment__option:focus-visible {
   outline: 2px solid var(--nx-accent);
   outline-offset: -2px;
 }

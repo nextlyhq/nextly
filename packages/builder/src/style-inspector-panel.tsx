@@ -83,6 +83,7 @@ import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
+import { BlockShortcutsControl } from "./block-shortcuts-field";
 import {
   breakpointQueries,
   editedTierLive,
@@ -1171,6 +1172,9 @@ function SectionFields({
         {sectionKey === "layout" ? (
           <ColumnsLayoutFields surroundings={surroundings} />
         ) : null}
+        {sectionKey === "size" ? (
+          <BlockShortcutsFields surroundings={surroundings} />
+        ) : null}
         {rings === undefined ? null : (
           <SpacingBox
             margin={rings.margin}
@@ -1181,7 +1185,7 @@ function SectionFields({
         {(rings?.rest ?? shown).map(property => (
           <StylePropertyFields
             key={`${surroundings.nodeId}:${property.property}`}
-            property={property}
+            property={withOverlayOffered(property, surroundings)}
             namesSection={property.property === sectionKey}
             {...surroundings}
           />
@@ -1279,6 +1283,96 @@ function appliedAtReader({
       own: entry.origin.kind === "node" && entry.origin.id === nodeId,
     };
   };
+}
+
+/**
+ * A Section's Height and a Button's Size and Full width, at the top of its
+ * Size section. Only for the block itself: a shared style's values are not
+ * the block's to size.
+ */
+function BlockShortcutsFields({
+  surroundings,
+}: {
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  if (target.kind !== "block") return null;
+  return (
+    <BlockShortcutsControl
+      editor={surroundings.editor}
+      nodeId={surroundings.nodeId}
+      state={surroundings.state}
+      breakpoint={surroundings.breakpoint}
+    />
+  );
+}
+
+/** The background's overlay fields, offered only over an image. */
+const OVERLAY_FIELDS: ReadonlySet<string> = new Set([
+  "overlay",
+  "overlayStrength",
+]);
+
+/** The leaf an image or a gradient is traced by. */
+const BACKGROUND_IMAGE_LEAF: StyleLeaf = {
+  kind: "cssValue",
+  cssProperty: "background-image",
+  tokenKinds: [],
+};
+
+/**
+ * The background's controls without its overlay while there is nothing for
+ * one to cover: no image or gradient reaching the block (from the cascade
+ * where it answers, else from what the block stores anywhere), and no
+ * overlay of its own to clear.
+ */
+function withOverlayOffered(
+  property: InspectedStyleProperty,
+  surroundings: StyleFieldSurroundings
+): InspectedStyleProperty {
+  if (property.property !== "background") return property;
+  if (overlayCovers(surroundings)) return property;
+  return {
+    ...property,
+    controls: property.controls.filter(
+      control => !OVERLAY_FIELDS.has(control.path[0] ?? "")
+    ),
+  };
+}
+
+/** Whether an image or a gradient, or an overlay itself, reaches the block. */
+function overlayCovers(surroundings: StyleFieldSurroundings): boolean {
+  const node = findNode(
+    surroundings.editor.document.nodes,
+    surroundings.nodeId
+  );
+  if (storesBackgroundImage(node?.styles)) return true;
+  const answer = surroundings.provenanceOf(BACKGROUND_IMAGE_LEAF);
+  return answer !== undefined && answer.provenance.kind !== "unset";
+}
+
+/**
+ * Whether a block stores, at any state or device, an image, a gradient or an
+ * overlay: what keeps the overlay offered where no cascade answers.
+ */
+function storesBackgroundImage(styles: NodeStyles | undefined): boolean {
+  for (const byBreakpoint of Object.values(styles ?? {})) {
+    for (const values of Object.values(byBreakpoint ?? {})) {
+      if (values?.backgroundGradient !== undefined) return true;
+      const background = values?.background;
+      if (
+        typeof background === "object" &&
+        background !== null &&
+        !Array.isArray(background) &&
+        ["url", ...OVERLAY_FIELDS].some(field =>
+          Object.hasOwn(background, field)
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** The catalog's leaf for a row's column template, which the trace records. */
@@ -2816,6 +2910,7 @@ function ControlValue({
         labelledBy={labelledBy}
         leaf={variableLeafOf(control.leaf, fold)}
         identity={stored.$token}
+        times={stored.times}
         actionName={actionName}
         tokens={tokens}
         compact={compact}
@@ -2863,6 +2958,7 @@ function HeldVariable({
   labelledBy,
   leaf,
   identity,
+  times,
   actionName,
   tokens,
   compact,
@@ -2874,6 +2970,8 @@ function HeldVariable({
   /** The leaf the field's variables are offered for; see `variableLeafOf`. */
   leaf: StyleLeaf;
   identity: string;
+  /** The factor the variable is scaled by, if it is. */
+  times?: number | undefined;
   actionName: string;
   tokens: SiteTokenSet | undefined;
   compact: boolean;
@@ -2897,6 +2995,7 @@ function HeldVariable({
         leaf={leaf}
         tokens={tokens}
         identity={identity}
+        times={times}
         label={actionName}
         labelledBy={labelledBy}
         onClear={clear}

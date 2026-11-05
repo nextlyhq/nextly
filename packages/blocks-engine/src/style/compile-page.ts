@@ -71,7 +71,7 @@ import {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
-import { OVERLAY_COLOR, OVERLAY_REGISTRATION } from "./overlay";
+import { OVERLAY_COLOR, OVERLAY_RESET } from "./overlay";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { SpacingMode } from "./spacing-mode";
@@ -2632,7 +2632,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: withOverlayRegistration(rules),
+    css: withOverlayReset(rules),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -2645,15 +2645,15 @@ export function compilePageCss(
 }
 
 /**
- * The page's rules, preceded by the overlay's registrations when a rule reads
- * them: not inherited, so a section's overlay stops at its own image.
+ * The page's rules, preceded by the overlay's reset when a rule reads it: so a
+ * section's overlay stops at its own image rather than reaching nested ones.
  */
-function withOverlayRegistration(rules: readonly CssRule[]): string {
+function withOverlayReset(rules: readonly CssRule[]): string {
   const css = serializeRules(rules);
   const reads = rules.some(rule =>
     rule.declarations.some(declaration =>
       declaration.value.includes(`var(${OVERLAY_COLOR}`)
     )
   );
-  return reads ? `${OVERLAY_REGISTRATION}\n${css}` : css;
+  return reads ? `${OVERLAY_RESET}\n${css}` : css;
 }
