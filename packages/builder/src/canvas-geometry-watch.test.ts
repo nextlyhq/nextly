@@ -228,6 +228,28 @@ describe("a block an authored state rule moves", () => {
     vi.unstubAllGlobals();
   });
 
+  it("hears a custom control that reports its own value change", () => {
+    // A custom element can keep its value in script and dispatch input and
+    // change on itself, with no mutation and no resize to say so.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const control = block.ownerDocument.createElement("x-rating");
+    block.append(control);
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    for (const type of ["input", "change"]) {
+      control.dispatchEvent(new Event(type, { bubbles: true }));
+      for (const run of frames.splice(0)) run(0);
+    }
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
   it("measures a keystroke that resizes its block by the text and the resize, and no more", async () => {
     /*
      * The mutation is measured as it is delivered, and a resize it causes is

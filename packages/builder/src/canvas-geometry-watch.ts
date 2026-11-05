@@ -37,7 +37,7 @@
  * @module canvas-geometry-watch
  */
 
-import { isTextEntry } from "./canvas-escape";
+import { isEditableText, isTextEntry } from "./canvas-escape";
 import { isElement, isFormField } from "./dom-kind";
 import {
   overlaySpaceOf,
@@ -232,24 +232,27 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   /*
-   * A form field's value changes with no DOM mutation, and can change what
-   * `:valid`, `:invalid` or `:placeholder-shown` styles. Typing into editable
-   * text mutates the DOM as well, which the mutation watch already measures,
-   * and hearing its `input` too would measure every character twice — but
-   * only text in the canvas's own tree: an edit inside a custom element's
-   * shadow root is a mutation no observer on the root sees, so its `input` is
-   * the one signal there is.
+   * A value can change with no DOM mutation: a form field's, or a custom
+   * element's kept in script, and either can change what `:valid`,
+   * `:invalid`, `:placeholder-shown` or a custom state styles. So every
+   * `input` and `change` re-measures, with ONE exception: editable text in
+   * the canvas's own tree, whose edits mutate the DOM, which the mutation
+   * watch already measures — hearing its `input` too would measure every
+   * character twice. An edit inside a custom element's shadow root is a
+   * mutation no observer on the root sees, so it is not the exception.
    *
    * Read from the composed path, whose first entry is the element the edit
    * reached: `target` is retargeted to the shadow host by the time the event
-   * reaches the root, which would hide a field inside one.
+   * reaches the root.
    */
   const valueChanged = (event: Event): void => {
     const origin = event.composedPath()[0] ?? event.target;
-    if (!isElement(origin)) return;
-    if (isFormField(origin) || origin.getRootNode() !== root.getRootNode()) {
-      restated();
-    }
+    const mutatesOurTree =
+      isElement(origin) &&
+      !isFormField(origin) &&
+      origin.getRootNode() === root.getRootNode() &&
+      isEditableText(origin);
+    if (!mutatesOurTree) restated();
   };
   root.addEventListener("input", valueChanged);
   root.addEventListener("change", valueChanged);

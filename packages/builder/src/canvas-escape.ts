@@ -81,7 +81,7 @@ export function isTextEntry(element: Element | null): boolean {
    * "no" for most of the time an author is actually typing. `closest` follows
    * the inheritance the same way the browser does.
    */
-  if (editability(element)) return true;
+  if (isEditableText(element)) return true;
   if (!isInput(element)) return false;
   // Buttons, checkboxes and radios are inputs that nobody types into, and
   // Escape over one of those is an ordinary "clear the selection".
@@ -98,7 +98,7 @@ export function isTextEntry(element: Element | null): boolean {
  * it is how the canvas's own line editor is. Any other value is the inherit
  * state, so the walk carries on outwards past it.
  */
-function editability(element: Element): boolean {
+export function isEditableText(element: Element): boolean {
   for (
     let host = element.closest("[contenteditable]");
     host !== null;
