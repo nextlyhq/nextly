@@ -39,7 +39,7 @@ import {
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { staleVersionOf } from "@admin/lib/document-version";
+import { refusedAsChangedSince } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -321,7 +321,7 @@ export function VersionHistorySheet({
       // simply not having registered.
       setConfirmingRestore(false);
       toast.error(
-        staleVersionOf(error)
+        refusedAsChangedSince(error)
           ? "Someone changed this document since you opened it. Load its current version, then restore again."
           : apiErrorMessage(error) || "Could not restore this version."
       );

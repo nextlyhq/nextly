@@ -23,7 +23,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { staleVersionOf } from "@admin/lib/document-version";
+import { refusedAsChangedSince } from "@admin/lib/document-version";
 import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
@@ -435,7 +435,7 @@ export function useRestoreVersion({
       refreshRemovedFromCodeSchema(queryClient, error);
       // A refusal because the document changed since reads it again, so the
       // editor shows the version a second restore would write over.
-      if (staleVersionOf(error)) {
+      if (refusedAsChangedSince(error)) {
         void queryClient.invalidateQueries({ queryKey: entryKeys.all });
         void queryClient.invalidateQueries({
           queryKey: singleDocumentKeys.all(),
