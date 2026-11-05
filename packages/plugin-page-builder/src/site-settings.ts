@@ -39,7 +39,11 @@ import {
   PENDING_DRAFT,
   type BreakpointRemovalService,
 } from "./breakpoint-removal/service";
-import { stripClass, stripClasses } from "./breakpoint-removal/strip";
+import {
+  removalOf,
+  stripClass,
+  stripClasses,
+} from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
@@ -56,6 +60,8 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteBreakpointRemoval,
   type SiteBreakpointRemovalRequest,
+  type SiteBreakpointRemovalStatus,
+  type SiteBreakpointsDryRun,
   type SiteBreakpointsRequest,
   type SiteBreakpointsSaved,
   type SiteLayoutOption,
@@ -174,17 +180,22 @@ export function removedBreakpoints(
   after: BreakpointSet | undefined
 ): Map<string, string> {
   const kept = new Set(breakpointContexts(after).map(context => context.id));
-  const labels = new Map(
-    [...(before?.viewport ?? []), ...(before?.container ?? [])].map(def => [
-      def.id,
-      def.label ?? def.id,
-    ])
-  );
+  const labels = breakpointLabels(before);
   const removed = new Map<string, string>();
   for (const { id } of breakpointContexts(before)) {
     if (!kept.has(id)) removed.set(id, labels.get(id) ?? id);
   }
   return removed;
+}
+
+/** What the author knows each breakpoint of `set` by, by id. */
+function breakpointLabels(set: BreakpointSet | undefined): Map<string, string> {
+  return new Map(
+    [...(set?.viewport ?? []), ...(set?.container ?? [])].map(def => [
+      def.id,
+      def.label ?? def.id,
+    ])
+  );
 }
 
 /** How the installed plugin counts, and carries out, a removal. */
@@ -286,17 +297,6 @@ function breakpointsAfter(
       breakpoints: breakpoints ?? undefined,
     })
   );
-}
-
-/** What a dry run answers with. */
-interface SiteBreakpointsDryRun extends RemovalDryRun {
-  readonly dryRun: true;
-  readonly breakpoints: SiteBreakpointsRequest["breakpoints"];
-  /**
-   * The version of the site style this was counted from, which a confirmed
-   * removal sends back; absent where the site issues no versions.
-   */
-  readonly version?: string;
 }
 
 /**
@@ -1006,6 +1006,66 @@ export function siteBreakpointRemovalRoute(
   };
 }
 
+/** How many removals the Site tab is told about at most. */
+const REMOVALS_SHOWN = 3;
+
+/**
+ * The removals still holding what they removed, as the Site tab shows them:
+ * the open one first, then the newest done ones that left documents. Run ids
+ * are UUIDv7 (`breakpointRemovals`), so they sort by when each was opened.
+ *
+ * `undefined` where the site carries no removals out, or the runs could not
+ * be read. The tab then shows none, and nothing is lost: a save is still
+ * judged against the runs by the route, which refuses what an open removal
+ * forbids.
+ */
+async function removalStatuses(
+  removal: BreakpointRemoval | undefined
+): Promise<SiteBreakpointRemovalStatus[] | undefined> {
+  const cascade = removal?.cascade;
+  if (removal === undefined || cascade === undefined) return undefined;
+  let holding: readonly HoldingRun[];
+  try {
+    holding = await cascade.service().holding();
+  } catch (error) {
+    cascade.logError?.(
+      "[page-builder] the breakpoint removals could not be read for Settings.",
+      { error }
+    );
+    return undefined;
+  }
+  return (
+    holding
+      // A run whose every id the site defines again holds nothing of them.
+      .filter(held => held.run.removedIds.length > 0)
+      .sort(
+        (a, b) =>
+          Number(b.run.open) - Number(a.run.open) ||
+          (a.run.id < b.run.id ? 1 : a.run.id > b.run.id ? -1 : 0)
+      )
+      .slice(0, REMOVALS_SHOWN)
+      .map(held => removalStatusOf(held, removal.defaults))
+  );
+}
+
+/** One removal as the Site tab shows it, named from the set it removed from. */
+function removalStatusOf(
+  { run, leftReasons }: HoldingRun,
+  defaults: SiteStyleData | undefined
+): SiteBreakpointRemovalStatus {
+  const labels = breakpointLabels(removalOf(run, defaults).before);
+  return {
+    runId: run.id,
+    labels: run.removedIds.map(id => labels.get(id) ?? id),
+    open: run.open,
+    // The run's progress keeps one row per document (`host-rewrite/progress`).
+    left: leftReasons.length,
+    waitingOnDrafts:
+      leftReasons.length > 0 &&
+      leftReasons.every(reason => reason === PENDING_DRAFT),
+  };
+}
+
 /** What a caller who may not manage the site is told: nothing about it. */
 const NOTHING: SiteSettingsRead = {
   mayManageSite: false,
@@ -1030,7 +1090,9 @@ export async function readSiteSettings(
   ctx: SiteSettingsRouteContext,
   nextly: Pick<DefaultLayoutDirectApi, "find" | "findSingle">,
   /** The configured site style, which the stored breakpoints sit over. */
-  defaults?: SiteStyleData
+  defaults?: SiteStyleData,
+  /** How the installed plugin carries removals out, to report the open ones. */
+  removal?: BreakpointRemoval
 ): Promise<SiteSettingsRead> {
   const { caller } = ctx;
   if (caller === null) return NOTHING;
@@ -1090,12 +1152,14 @@ export async function readSiteSettings(
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     ...(defaults === undefined ? {} : { defaults }),
   });
+  const removals = await removalStatuses(removal);
   return {
     mayManageSite: true,
     breakpoints: breakpoints ?? null,
     mayChooseDefaultLayout,
     defaultLayout,
     layouts,
+    ...(removals === undefined ? {} : { removals }),
   };
 }
 
@@ -1104,7 +1168,10 @@ export async function readSiteSettings(
  * required permission: the permission is what it reports on, and gating the
  * question on the answer would refuse exactly the authors it tells "no".
  */
-export function siteSettingsRoute(defaults?: SiteStyleData): {
+export function siteSettingsRoute(
+  defaults?: SiteStyleData,
+  removal?: BreakpointRemoval
+): {
   method: "GET";
   path: string;
   handler: (req: Request, ctx: SiteSettingsRouteContext) => Promise<Response>;
@@ -1114,7 +1181,7 @@ export function siteSettingsRoute(defaults?: SiteStyleData): {
     path: SITE_SETTINGS_ROUTE_PATH,
     handler: async (_req, ctx) =>
       Response.json(
-        await readSiteSettings(ctx, await getCachedNextly(), defaults)
+        await readSiteSettings(ctx, await getCachedNextly(), defaults, removal)
       ),
   };
 }

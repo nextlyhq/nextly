@@ -1,0 +1,304 @@
+"use client";
+
+/**
+ * The breakpoint removal's steps, drawn in Settings' Site tab in place of the
+ * breakpoint list (`RemovalStepPanel`: checking, confirm, removing, refused)
+ * or above it (`RemovalStatusRow`: resumed, done, left). Inline rather than a
+ * dialog over Settings, so there is never a modal on a modal.
+ *
+ * Every sentence comes from `breakpoint-removal-flow`; this draws them.
+ *
+ * @module admin/editor/breakpoint-removal-step
+ * @experimental
+ */
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import { Button } from "@nextlyhq/ui";
+import { Check, Loader2, TriangleAlert } from "lucide-react";
+import type { JSX } from "react";
+
+import {
+  checkingWords,
+  confirmWords,
+  doneWords,
+  leftWords,
+  removingWords,
+  resumedWords,
+  type RemovalNote,
+} from "./breakpoint-removal-flow";
+import type { BreakpointRemoval } from "./use-breakpoint-removal";
+
+/** A note, its lead in the foreground. */
+function Note({ note }: { note: RemovalNote }): JSX.Element {
+  return (
+    <p className="rounded-md bg-muted px-3 py-2.5 text-sm text-muted-foreground">
+      <strong className="font-medium text-foreground">{note.lead}</strong>{" "}
+      {note.rest}
+    </p>
+  );
+}
+
+/** The buttons under a step, at its right. */
+function Actions({ children }: { children: JSX.Element[] }): JSX.Element {
+  return <div className="flex justify-end gap-2">{children}</div>;
+}
+
+/** The rows a save keeps, with the ones it drops struck through. */
+function CheckedRows({
+  current,
+  next,
+}: {
+  current: BreakpointSet;
+  next: BreakpointSet;
+}): JSX.Element {
+  const kept = new Set(
+    [...next.viewport, ...next.container].map(def => def.id)
+  );
+  const rows = [...current.viewport, ...current.container].filter(
+    def => def.maxWidth !== undefined
+  );
+  return (
+    <ul className="divide-y divide-border rounded-md border border-border">
+      {rows.map(def => {
+        const dropped = !kept.has(def.id);
+        return (
+          <li
+            key={def.id}
+            className={
+              dropped
+                ? "flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground line-through"
+                : "flex items-center gap-2 px-3 py-2 text-sm"
+            }
+          >
+            <span className="font-medium">{def.label}</span>
+            <span className="text-muted-foreground">
+              up to {def.maxWidth} pixels
+            </span>
+            {dropped ? <span className="sr-only">(removed)</span> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * The step that takes the breakpoint list's place: checking, confirm,
+ * removing or refused. Nothing for any other.
+ */
+export function RemovalStepPanel({
+  removal,
+  current,
+  baseLabel,
+  onClose,
+}: {
+  removal: BreakpointRemoval;
+  current: BreakpointSet;
+  /** What the base breakpoint is called on the device buttons. */
+  baseLabel: string;
+  /** Close Settings: the removal carries on without it. */
+  onClose: () => void;
+}): JSX.Element | null {
+  const { step } = removal;
+  if (step.kind === "checking") {
+    return (
+      <div className="space-y-3" data-breakpoint-removal="checking">
+        <CheckedRows current={current} next={step.next} />
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          {checkingWords(step.labels)}
+        </p>
+        <Actions>
+          <Button type="button" variant="outline" onClick={removal.back}>
+            Cancel
+          </Button>
+          <Button type="button" disabled>
+            Save breakpoints
+          </Button>
+        </Actions>
+      </div>
+    );
+  }
+  if (step.kind === "confirm") {
+    const words = confirmWords(step.dryRun, current, step.next, baseLabel);
+    return (
+      <div className="space-y-3" data-breakpoint-removal="confirm">
+        <section
+          aria-labelledby="breakpoint-removal-title"
+          className="space-y-3 rounded-md border border-border p-4"
+        >
+          <h4 id="breakpoint-removal-title" className="text-base font-semibold">
+            {words.title}
+          </h4>
+          <p className="text-sm text-muted-foreground">{words.intro}</p>
+          {words.removed.map(removed => (
+            <div key={removed.id} className="space-y-3">
+              {words.removed.length > 1 ? (
+                <h5 className="text-sm font-medium">{removed.label}</h5>
+              ) : null}
+              <dl className="divide-y divide-border border-y border-border text-sm">
+                {removed.rows.map(row => (
+                  <div key={row.label} className="flex justify-between py-1.5">
+                    <dt className="text-muted-foreground">{row.label}</dt>
+                    <dd className="tabular-nums">
+                      {row.count}
+                      {row.drafts === undefined ? null : (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          · {row.drafts} with drafts
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {removed.totals === null ? null : (
+                <p className="text-sm text-muted-foreground">
+                  {removed.totals}
+                </p>
+              )}
+              {removed.notes.map(note => (
+                <Note key={note.lead} note={note} />
+              ))}
+            </div>
+          ))}
+          {words.notes.map(note => (
+            <Note key={note.lead} note={note} />
+          ))}
+          <p className="text-sm text-muted-foreground">{words.undo}</p>
+        </section>
+        <Actions>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={step.sending}
+            onClick={removal.back}
+          >
+            Back
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={step.sending}
+            onClick={removal.remove}
+          >
+            {step.sending ? "Removing…" : words.confirm}
+          </Button>
+        </Actions>
+      </div>
+    );
+  }
+  if (step.kind === "removing") {
+    const words = removingWords(step.labels);
+    return (
+      <div className="space-y-3" data-breakpoint-removal="removing">
+        <section
+          aria-labelledby="breakpoint-removal-title"
+          className="space-y-2 rounded-md border border-border p-4"
+        >
+          <h4 id="breakpoint-removal-title" className="text-base font-semibold">
+            {words.title}
+          </h4>
+          <p className="text-sm text-muted-foreground">{words.body}</p>
+          {/* Indeterminate: the route reports finished or not, not a total. */}
+          <div
+            role="progressbar"
+            aria-label={words.title}
+            className="relative h-1.5 overflow-hidden rounded-full bg-muted"
+          >
+            <div className="absolute inset-y-0 left-1/4 w-1/3 rounded-full bg-foreground motion-safe:animate-pulse" />
+          </div>
+          <p className="text-sm text-muted-foreground">{words.hint}</p>
+        </section>
+        <Actions>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          <Button type="button" disabled>
+            Removing…
+          </Button>
+        </Actions>
+      </div>
+    );
+  }
+  if (step.kind === "refused") {
+    return (
+      <div className="space-y-3" data-breakpoint-removal="refused">
+        <section
+          role="alert"
+          aria-labelledby="breakpoint-removal-title"
+          className="space-y-2 rounded-md border border-border p-4"
+        >
+          <h4
+            id="breakpoint-removal-title"
+            className="text-base font-semibold text-destructive"
+          >
+            Nothing was removed
+          </h4>
+          <p className="text-sm text-muted-foreground">{step.message}</p>
+        </section>
+        <Actions>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={removal.cancelRefused}
+          >
+            Cancel
+          </Button>
+          <Button type="button" onClick={removal.reload}>
+            Reload breakpoints
+          </Button>
+        </Actions>
+      </div>
+    );
+  }
+  return null;
+}
+
+/** A status row above the breakpoint list: resumed, done or left. */
+export function RemovalStatusRow({
+  removal,
+}: {
+  removal: BreakpointRemoval;
+}): JSX.Element | null {
+  const { step } = removal;
+  const row =
+    step.kind === "resumed"
+      ? { icon: "going" as const, words: resumedWords(step.labels) }
+      : step.kind === "done"
+        ? { icon: "done" as const, words: doneWords(step.labels, step.counted) }
+        : step.kind === "left"
+          ? { icon: "left" as const, words: leftWords(step.status) }
+          : null;
+  if (row === null) return null;
+  return (
+    <div
+      role="status"
+      data-breakpoint-removal={step.kind}
+      className="flex items-start gap-2.5 rounded-md border border-border px-3.5 py-3 text-sm"
+    >
+      {row.icon === "going" ? (
+        <Loader2
+          className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground"
+          aria-hidden="true"
+        />
+      ) : row.icon === "done" ? (
+        <Check
+          className="mt-0.5 size-4 shrink-0 text-success"
+          aria-hidden="true"
+        />
+      ) : (
+        <TriangleAlert
+          className="mt-0.5 size-4 shrink-0 text-warning"
+          aria-hidden="true"
+        />
+      )}
+      <div className="space-y-0.5">
+        <p className="font-medium">{row.words.title}</p>
+        <p className="text-muted-foreground">{row.words.hint}</p>
+      </div>
+    </div>
+  );
+}

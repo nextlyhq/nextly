@@ -1,0 +1,469 @@
+"use client";
+
+/**
+ * Removing a breakpoint from Settings' Site tab, step by step.
+ *
+ * A save of a set that drops breakpoints asks the route's dry run first
+ * (`checking`). Where nothing at all is stored under them it saves straight
+ * on; otherwise it shows what would go (`confirm`), and only Remove saves,
+ * with the dry run's version so the server removes exactly what was shown.
+ * A removal the save did not finish is followed (`removing`) by calling its
+ * route until it has; one Settings finds still open when it opens is followed
+ * the same way (`resumed`), with editing held until it ends. It ends `done`,
+ * or `left` where documents keep their values for now. A refusal at any point
+ * is `refused`, with the server's words.
+ *
+ * The breakpoint editor stays mounted, hidden, under the steps that take its
+ * place, and its save is answered only when the step ends: `undefined` once
+ * the set is stored, `null` to go back to the draft as it was, or a refusal
+ * to show beside it.
+ *
+ * @module admin/editor/use-breakpoint-removal
+ * @experimental
+ */
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import type { RemovedBreakpoint } from "../../breakpoint-removal/dry-run";
+import type {
+  SiteBreakpointRemovalStatus,
+  SiteBreakpointsDryRun,
+  SiteBreakpointsSaved,
+} from "../../library-contract";
+import {
+  askBreakpointRemoval,
+  carryOnBreakpointRemoval,
+  confirmBreakpointRemoval,
+  readBreakpointRemoval,
+} from "../breakpoint-removal-client";
+
+import {
+  droppedIds,
+  nothingStored,
+  resumedWords,
+} from "./breakpoint-removal-flow";
+
+/** Where a removal is. */
+export type RemovalStep =
+  | { readonly kind: "idle" }
+  | {
+      readonly kind: "checking";
+      readonly next: BreakpointSet;
+      readonly labels: readonly string[];
+    }
+  | {
+      readonly kind: "confirm";
+      readonly next: BreakpointSet;
+      readonly dryRun: SiteBreakpointsDryRun;
+      /** Whether the confirmed save is out. */
+      readonly sending: boolean;
+    }
+  | {
+      readonly kind: "removing";
+      readonly runId: string;
+      readonly labels: readonly string[];
+      /** What the dry run counted, to say once it is done. */
+      readonly counted: readonly RemovedBreakpoint[];
+    }
+  | {
+      readonly kind: "resumed";
+      readonly runId: string;
+      readonly labels: readonly string[];
+    }
+  | {
+      readonly kind: "done";
+      readonly labels: readonly string[];
+      readonly counted?: readonly RemovedBreakpoint[];
+    }
+  | {
+      readonly kind: "left";
+      readonly status: Pick<
+        SiteBreakpointRemovalStatus,
+        "labels" | "left" | "waitingOnDrafts"
+      >;
+    }
+  | {
+      readonly kind: "refused";
+      readonly message: string;
+    };
+
+/** What the steps are handed. */
+export interface BreakpointRemovalOptions {
+  /** The site's breakpoints as the tab shows them. */
+  readonly current: BreakpointSet;
+  /** An ordinary save of the set, for one that removes nothing. */
+  readonly save: (next: BreakpointSet) => Promise<string | null | undefined>;
+  /** The removals the tab's read reports, or `undefined` where it reports none. */
+  readonly removals: readonly SiteBreakpointRemovalStatus[] | undefined;
+  /** Read the tab again. */
+  readonly reread: () => void;
+  /** Read the site's style again, so the canvas draws the stored set. */
+  readonly refreshStyle: () => void;
+}
+
+/** How long to wait between calls carrying a removal on. */
+const FOLLOW_MS = 1000;
+/** How long to wait after a call carrying a removal on failed. */
+const FOLLOW_AFTER_TROUBLE_MS = 5000;
+
+/** A refusal's own words, or a plain fallback. */
+function reasonOf(error: unknown): string {
+  return error instanceof Error && error.message !== ""
+    ? error.message
+    : "The breakpoints could not be saved.";
+}
+
+/**
+ * The step a finished removal ended on, from the tab's read of it: `null`
+ * when it holds nothing (done), its status when it left documents, and
+ * `undefined` when the read could not say. Then the last call's own count of
+ * what it left decides, since doubt is never reported as done.
+ */
+function endedOn(
+  status: SiteBreakpointRemovalStatus | null | undefined,
+  fallback: { readonly labels: readonly string[]; readonly left: number },
+  counted: readonly RemovedBreakpoint[] | undefined
+): RemovalStep {
+  if (status === undefined && fallback.left > 0) {
+    return {
+      kind: "left",
+      status: {
+        labels: fallback.labels,
+        left: fallback.left,
+        waitingOnDrafts: false,
+      },
+    };
+  }
+  if (status !== null && status !== undefined && status.left > 0) {
+    return { kind: "left", status };
+  }
+  return {
+    kind: "done",
+    labels: status?.labels ?? fallback.labels,
+    ...(counted === undefined ? {} : { counted }),
+  };
+}
+
+/**
+ * The step on screen: this tab's own while it has one, otherwise a removal
+ * the read reports open (followed, holding editing), then one that finished
+ * leaving documents (said until they are resolved).
+ */
+function shownStep(
+  own: RemovalStep,
+  removals: readonly SiteBreakpointRemovalStatus[] | undefined
+): RemovalStep {
+  if (own.kind !== "idle") return own;
+  const open = removals?.find(removal => removal.open);
+  if (open !== undefined) {
+    return { kind: "resumed", runId: open.runId, labels: open.labels };
+  }
+  const leftOver = removals?.find(removal => !removal.open && removal.left > 0);
+  return leftOver === undefined ? own : { kind: "left", status: leftOver };
+}
+
+/** What a dry run's answer leads to. */
+function afterDryRun(
+  dryRun: SiteBreakpointsDryRun
+): "save" | "remove" | "confirm" {
+  // The site drops nothing after all: an ordinary save.
+  if (dryRun.removed.length === 0) return "save";
+  return nothingStored(dryRun) ? "remove" : "confirm";
+}
+
+/** What the tab reads off a step. */
+function stepFacts(
+  step: RemovalStep
+): Pick<BreakpointRemoval, "blocked" | "inFlight" | "takesOver"> {
+  return {
+    blocked:
+      step.kind === "resumed" ? resumedWords(step.labels).hint : undefined,
+    inFlight:
+      step.kind === "checking" || (step.kind === "confirm" && step.sending),
+    takesOver:
+      step.kind === "checking" ||
+      step.kind === "confirm" ||
+      step.kind === "removing" ||
+      step.kind === "refused",
+  };
+}
+
+/** The steps, and what the tab does with them. */
+export interface BreakpointRemoval {
+  /** Where the removal is, the open run the tab's read reports included. */
+  readonly step: RemovalStep;
+  /** The editor's save: through the steps when the set drops breakpoints. */
+  readonly save: (next: BreakpointSet) => Promise<string | null | undefined>;
+  /** Back to the draft, from checking or confirm. */
+  readonly back: () => void;
+  /** Remove, from confirm. */
+  readonly remove: () => void;
+  /** Leave a refusal for the draft, which shows it. */
+  readonly cancelRefused: () => void;
+  /** Leave a refusal for the stored set: the editor is closed and re-read. */
+  readonly reload: () => void;
+  /** Told when editing starts, so a finished step's row gives way to it. */
+  readonly editing: (editing: boolean) => void;
+  /** Changes each time the editor must start again from the stored set. */
+  readonly generation: number;
+  /** Why the breakpoints cannot be edited now, if they cannot. */
+  readonly blocked: string | undefined;
+  /** Whether a request the step waits on is out. */
+  readonly inFlight: boolean;
+  /** Whether the step takes the breakpoint list's place, and the tab's. */
+  readonly takesOver: boolean;
+}
+
+/** What a followed removal's end is settled with. */
+type Finish = (
+  asked: number,
+  runId: string,
+  fallback: { labels: readonly string[]; left: number },
+  counted: readonly RemovedBreakpoint[] | undefined
+) => Promise<void>;
+
+/**
+ * Carry the removal on screen on through its route until it says it has
+ * finished, then settle it: this tab's (`removing`) or the one the read found
+ * open (`resumed`). A failed call is tried again later, since the removal job
+ * carries it on meanwhile.
+ */
+function useFollowRemoval(
+  step: RemovalStep,
+  turn: { readonly current: number },
+  finish: Finish
+): void {
+  const following =
+    step.kind === "removing" || step.kind === "resumed"
+      ? step.runId
+      : undefined;
+  // Kept beside the call rather than in its dependencies: a new read hands
+  // new arrays every time, and each would restart the call in flight.
+  const followed = useRef<{
+    labels: readonly string[];
+    counted: readonly RemovedBreakpoint[] | undefined;
+  }>({ labels: [], counted: undefined });
+  const labels =
+    step.kind === "removing" || step.kind === "resumed"
+      ? step.labels
+      : undefined;
+  const counted = step.kind === "removing" ? step.counted : undefined;
+  useEffect(() => {
+    if (labels !== undefined) followed.current = { labels, counted };
+  });
+  useEffect(() => {
+    if (following === undefined) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const asked = turn.current;
+    const call = async (): Promise<void> => {
+      let wait = FOLLOW_MS;
+      try {
+        const answered = await carryOnBreakpointRemoval(following);
+        if (stopped) return;
+        if (answered.finished) {
+          const known = followed.current;
+          await finish(
+            asked,
+            following,
+            { labels: known.labels, left: answered.left },
+            known.counted
+          );
+          return;
+        }
+      } catch {
+        wait = FOLLOW_AFTER_TROUBLE_MS;
+      }
+      if (!stopped) timer = setTimeout(() => void call(), wait);
+    };
+    void call();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [following, finish, turn]);
+}
+
+export function useBreakpointRemoval({
+  current,
+  save,
+  removals,
+  reread,
+  refreshStyle,
+}: BreakpointRemovalOptions): BreakpointRemoval {
+  const [own, setOwn] = useState<RemovalStep>({ kind: "idle" });
+  const [generation, setGeneration] = useState(0);
+  // Each step begun, numbered: an answer for an earlier one changes nothing.
+  const turn = useRef(0);
+  // The editor's save, answered when the step ends.
+  const answer = useRef<((value: string | null | undefined) => void) | null>(
+    null
+  );
+  const answerEditor = (value: string | null | undefined): void => {
+    const pending = answer.current;
+    answer.current = null;
+    pending?.(value);
+  };
+  const step = shownStep(own, removals);
+
+  /** Settle a removal its last call said has finished. */
+  const finish = useCallback<Finish>(
+    async (asked, runId, fallback, counted) => {
+      let status: SiteBreakpointRemovalStatus | null | undefined;
+      try {
+        status = await readBreakpointRemoval(runId);
+      } catch {
+        status = undefined;
+      }
+      reread();
+      if (turn.current !== asked) return;
+      // Still open: a write sent a document back to be stripped since.
+      setOwn(
+        status?.open === true
+          ? {
+              kind: "removing",
+              runId,
+              labels: status.labels,
+              counted: counted ?? [],
+            }
+          : endedOn(status, fallback, counted)
+      );
+    },
+    [reread]
+  );
+  useFollowRemoval(step, turn, finish);
+
+  /** Where a stored removal goes next: done, settled, or followed. */
+  const afterSave = (
+    asked: number,
+    saved: SiteBreakpointsSaved,
+    dryRun: SiteBreakpointsDryRun
+  ): void => {
+    const labels = dryRun.removed.map(removed => removed.label);
+    const removal = saved.removal;
+    if (removal === undefined) {
+      setOwn({ kind: "done", labels, counted: dryRun.removed });
+    } else if (removal.finished) {
+      void finish(
+        asked,
+        removal.runId,
+        { labels, left: removal.left },
+        dryRun.removed
+      );
+    } else {
+      setOwn({
+        kind: "removing",
+        runId: removal.runId,
+        labels,
+        counted: dryRun.removed,
+      });
+    }
+  };
+
+  const send = (
+    asked: number,
+    next: BreakpointSet,
+    dryRun: SiteBreakpointsDryRun
+  ): void => {
+    confirmBreakpointRemoval(next, dryRun.version).then(
+      saved => {
+        refreshStyle();
+        reread();
+        // Stored: the editor closes on the set it saved.
+        answerEditor(undefined);
+        if (turn.current === asked) afterSave(asked, saved, dryRun);
+      },
+      (error: unknown) => {
+        if (turn.current !== asked) return;
+        setOwn({ kind: "refused", message: reasonOf(error) });
+      }
+    );
+  };
+
+  /** Go on from a dry run's answer. */
+  const answered = (
+    asked: number,
+    next: BreakpointSet,
+    dryRun: SiteBreakpointsDryRun
+  ): void => {
+    const then = afterDryRun(dryRun);
+    if (then === "save") {
+      setOwn({ kind: "idle" });
+      save(next).then(answerEditor, (error: unknown) =>
+        answerEditor(reasonOf(error))
+      );
+    } else if (then === "remove") {
+      send(asked, next, dryRun);
+    } else {
+      setOwn({ kind: "confirm", next, dryRun, sending: false });
+    }
+  };
+
+  const saveThrough = (
+    next: BreakpointSet
+  ): Promise<string | null | undefined> => {
+    const dropped = droppedIds(current, next);
+    if (dropped.length === 0) return save(next);
+    const named = new Map(
+      [...current.viewport, ...current.container].map(def => [
+        def.id,
+        def.label,
+      ])
+    );
+    const asked = ++turn.current;
+    setOwn({
+      kind: "checking",
+      next,
+      labels: dropped.map(id => named.get(id) ?? id),
+    });
+    return new Promise(resolve => {
+      answer.current = resolve;
+      askBreakpointRemoval(next).then(
+        dryRun => {
+          if (turn.current === asked) answered(asked, next, dryRun);
+        },
+        (error: unknown) => {
+          if (turn.current !== asked) return;
+          setOwn({ kind: "refused", message: reasonOf(error) });
+        }
+      );
+    });
+  };
+
+  return {
+    step,
+    save: saveThrough,
+    back: () => {
+      turn.current += 1;
+      setOwn({ kind: "idle" });
+      answerEditor(null);
+    },
+    remove: () => {
+      if (own.kind !== "confirm" || own.sending) return;
+      setOwn({ ...own, sending: true });
+      send(turn.current, own.next, own.dryRun);
+    },
+    cancelRefused: () => {
+      if (own.kind !== "refused") return;
+      turn.current += 1;
+      setOwn({ kind: "idle" });
+      answerEditor(own.message);
+    },
+    reload: () => {
+      turn.current += 1;
+      setOwn({ kind: "idle" });
+      answerEditor(null);
+      // The editor starts again from the set read now, not the draft.
+      setGeneration(value => value + 1);
+      refreshStyle();
+      reread();
+    },
+    editing: now => {
+      if (now && (own.kind === "done" || own.kind === "left")) {
+        setOwn({ kind: "idle" });
+      }
+    },
+    generation,
+    ...stepFacts(step),
+  };
+}

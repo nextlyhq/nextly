@@ -91,8 +91,12 @@ export interface BreakpointEditorProps {
    *
    * Resolving with `undefined`, or returning nothing at all, means saved. A
    * synchronous host needs no change.
+   *
+   * Resolving with `null` means nothing was saved and there is nothing to
+   * say: the author went back from a step the host showed before saving (a
+   * confirmation, say), so the draft stays open as it was, with no refusal.
    */
-  onSave: (next: BreakpointSet) => void | Promise<string | undefined>;
+  onSave: (next: BreakpointSet) => void | Promise<string | null | undefined>;
 }
 
 /**
@@ -101,7 +105,9 @@ export interface BreakpointEditorProps {
  * `instanceof Promise` is a check about one global constructor, and the values
  * this has to recognise may not come from it.
  */
-function isThenable(value: unknown): value is PromiseLike<string | undefined> {
+function isThenable(
+  value: unknown
+): value is PromiseLike<string | null | undefined> {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -369,6 +375,8 @@ export function BreakpointEditor({
           onClose();
           return;
         }
+        // Kept: not saved, and nothing to report beside the draft.
+        if (message === null) return;
         setRefusal(message);
       })
       .catch((reason: unknown) => {

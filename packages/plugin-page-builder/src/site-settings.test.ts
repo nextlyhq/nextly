@@ -6,10 +6,13 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type { BreakpointRun, HoldingRun } from "./breakpoint-removal/run-store";
+import type { BreakpointRemovalService } from "./breakpoint-removal/service";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import {
   MANAGE_SITE_PERMISSION,
   readSiteSettings,
+  type BreakpointRemoval,
   writeSiteBreakpoints,
   type SiteSettingsDirectApi,
   type SiteSettingsRouteContext,
@@ -343,4 +346,137 @@ describe("what the Site tab reads", () => {
       await readSiteSettings(route({ caller: null }), data.nextly)
     ).toMatchObject({ mayManageSite: false, layouts: [] });
   });
+
+  it("reports the removals still holding what they removed: the open one first, then the newest done ones", async () => {
+    const { removal, holdingAsked } = removals([
+      held(run("0190a000-0000-7000-8000-000000000001", ["mobile"], false), [
+        "pending-draft",
+      ]),
+      // The oldest: a done run opened again to retry what it left.
+      held(run("0190a000-0000-7000-8000-000000000000", ["phone"], true), []),
+      held(run("0190a000-0000-7000-8000-000000000003", ["mobile"], false), [
+        "pending-draft",
+        "unreadable",
+      ]),
+      held(run("0190a000-0000-7000-8000-000000000002", ["tablet"], false), [
+        "pending-draft",
+      ]),
+      // Every id defined again: it holds none of them.
+      held(run("0190a000-0000-7000-8000-000000000005", [], false), [
+        "pending-draft",
+      ]),
+    ]);
+    const read = await readSiteSettings(
+      route({ caller: holding("manage-page-builder-site").caller }),
+      siteData("main").nextly,
+      undefined,
+      removal
+    );
+    expect(read.removals).toEqual([
+      {
+        runId: "0190a000-0000-7000-8000-000000000000",
+        labels: ["Phone"],
+        open: true,
+        left: 0,
+        waitingOnDrafts: false,
+      },
+      {
+        runId: "0190a000-0000-7000-8000-000000000003",
+        labels: ["Mobile"],
+        open: false,
+        left: 2,
+        waitingOnDrafts: false,
+      },
+      {
+        runId: "0190a000-0000-7000-8000-000000000002",
+        labels: ["Tablet"],
+        open: false,
+        left: 1,
+        waitingOnDrafts: true,
+      },
+    ]);
+    expect(holdingAsked()).toBe(1);
+  });
+
+  it("asks nothing about removals for a caller who may not manage the site", async () => {
+    const { removal, holdingAsked } = removals([]);
+    const read = await readSiteSettings(
+      route({ caller: holding().caller }),
+      siteData("main").nextly,
+      undefined,
+      removal
+    );
+    expect(read).not.toHaveProperty("removals");
+    expect(holdingAsked()).toBe(0);
+  });
+
+  it("still answers, with no removals and the failure logged, when the runs cannot be read", async () => {
+    const logError = vi.fn();
+    const { removal } = removals(new Error("runs unreadable"), logError);
+    const read = await readSiteSettings(
+      route({ caller: holding("manage-page-builder-site").caller }),
+      siteData("main").nextly,
+      undefined,
+      removal
+    );
+    expect(read).toMatchObject({ mayManageSite: true, breakpoints: SET });
+    expect(read).not.toHaveProperty("removals");
+    expect(logError).toHaveBeenCalledTimes(1);
+  });
 });
+
+/** The set every run here removed from, as the stylesheet was emitted then. */
+const EMITTED = {
+  viewport: [
+    { id: "tablet", label: "Tablet", maxWidth: 1024 },
+    { id: "mobile", label: "Mobile", maxWidth: 640 },
+    { id: "phone", label: "Phone", maxWidth: 400 },
+  ],
+  container: [],
+};
+
+/** A removal run, as the run store hands it out. */
+function run(id: string, removedIds: string[], open: boolean): BreakpointRun {
+  return {
+    id,
+    phase: open ? "converting" : "done",
+    cursor: null,
+    removedIds,
+    readdedIds: [],
+    before: null,
+    beforeEmitted: EMITTED,
+    startedBy: "user:user-1",
+    open,
+    preparing: false,
+  };
+}
+
+function held(r: BreakpointRun, leftReasons: string[]): HoldingRun {
+  return { run: r, leftReasons };
+}
+
+/** An installed removal whose runs are `runs`, or whose read throws it. */
+function removals(
+  runs: HoldingRun[] | Error,
+  logError?: (message: string, meta: Record<string, unknown>) => void
+) {
+  let asked = 0;
+  const service = {
+    holding: async () => {
+      asked += 1;
+      if (runs instanceof Error) throw runs;
+      return runs;
+    },
+  } as unknown as BreakpointRemovalService;
+  const removal = {
+    stored: async () => ({}),
+    count: async () => ({ removed: [], unreadable: 0, complete: true }),
+    cascade: {
+      service: () => service,
+      walkMs: 1000,
+      countMs: 1000,
+      ...(logError === undefined ? {} : { logError }),
+    },
+  } as unknown as BreakpointRemoval;
+  return { removal, holdingAsked: () => asked };
+}

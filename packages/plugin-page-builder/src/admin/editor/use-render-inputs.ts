@@ -62,6 +62,7 @@ import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { pageRenderInputs, type PageRenderInputs } from "../page-render-inputs";
 import { useSiteStyle } from "../site-style-client";
+import { useStoredSiteStyle } from "../site-style-read";
 
 import { useCanvasPageContext } from "./canvas-page-context";
 import { useSharedStyleVerb, type SharedStyleVerb } from "./shared-style-verb";
@@ -215,6 +216,12 @@ export function useSiteStyleInputs(
    * while a second is also refused fixes one and is refused again.
    */
   const saveBreakpoints = useBreakpointWriter(configSiteStyle);
+  // Read again after a breakpoint removal, which writes the site style
+  // through its own route rather than this editor's writes.
+  const { refetch: rereadSiteStyle } = useStoredSiteStyle();
+  const refreshSiteStyle = useCallback(() => {
+    void rereadSiteStyle();
+  }, [rereadSiteStyle]);
 
   return {
     configSiteStyle,
@@ -228,6 +235,7 @@ export function useSiteStyleInputs(
     remotePatterns,
     stylePolicy,
     saveBreakpoints,
+    refreshSiteStyle,
   };
 }
 
@@ -245,6 +253,8 @@ export type SiteStyleInputs = {
   remotePatterns: readonly RemotePattern[] | undefined;
   stylePolicy: HostFetchPolicy;
   saveBreakpoints: (next: BreakpointSet) => Promise<string | undefined>;
+  /** Read the stored site style again. */
+  refreshSiteStyle: () => void;
 };
 
 /** The canvas's render context, as `useCanvasRender` returns it. */

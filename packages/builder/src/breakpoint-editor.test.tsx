@@ -247,6 +247,25 @@ describe("saving", () => {
     expect(screen.getByDisplayValue("768")).toBeDefined();
   });
 
+  it("stays open with the draft, and says nothing, when the host KEPT it", async () => {
+    // `null`: the author went back from a step the host showed before saving.
+    // Neither a save (the editor would close) nor a refusal (a reason shown).
+    const onSave = vi.fn(() => Promise.resolve(null));
+    const onOpenChange = vi.fn();
+    open(stored(), onSave, onOpenChange);
+
+    fireEvent.change(screen.getByDisplayValue("991"), {
+      target: { value: "768" },
+    });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("768")).toBeDefined();
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
   it("treats a REJECTION as a refusal, not as a save", async () => {
     /*
      * A host that throws is not following the contract, and the author's draft
