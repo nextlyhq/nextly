@@ -770,6 +770,18 @@ The `item` is `{ "status": "renewed", "holder": …, "waiting": false }`, or `{ 
 when the claim lapsed or was taken over. A lost claim carries `holder` when someone else now holds
 the document.
 
+**Told of a change.** A claim or a renewal may also send `_rev`, the version the caller's copy of
+the document started from. When the document has changed since, an answer that holds it
+(`acquired` or `renewed`) carries `changed`, with the same fields as a refused save's
+`publicData`, under the same rules: `currentVersion` always, and who changed it, when, and the
+matching history version only for a caller who may read the document (see
+[Versions and conflicts](#versions-and-conflicts)). A copy read in one language is judged on the
+shared fields and that language. A `held` or `lost` answer never carries `changed`, and a claim
+without `_rev` is answered as before. A `_rev` that isn't one a read returned is a
+`400 VALIDATION_ERROR`, refused before anything is claimed. The admin sends its copy's `_rev`, so
+an editor hears of a colleague's change within one renewal, before saving, and an editor taking a
+document back learns it changed while they were away.
+
 Give it up with `DELETE` and the same body. The `item` is `{ "released": true }`, and releasing a
 claim already lost is not an error. A renewal or release without `claimToken` is a
 `400 VALIDATION_ERROR`.

@@ -34,6 +34,17 @@ While someone else holds the document, Save, Publish and the other actions that 
 | "This document could not be confirmed as yours for long enough that a colleague may now be editing it. Your unsaved changes are still here." | The admin could not reach the server for long enough that your claim may have lapsed. | Choose **Take it back** once you are online again. |
 | "We could not check whether anyone else is editing this document. You can keep working, but a colleague may be in it too." | The admin could not ask the server who is editing. | Keep working, but be aware that a colleague may have it open. |
 
+### When someone changes the document you are editing
+
+Someone can still change a document you are editing, for example a program or a scheduled release, since your claim doesn't stop them. The editor checks each time it renews your claim, about every 15 seconds, and tells you before you save. It names who changed it and when, as in "Ana changed this document at Nov 5, 2026, 10:42 AM", or says "This document changed" when there is nobody to name.
+
+| Message | What it means | What you can do |
+| --- | --- | --- |
+| "Ana changed this document at …, so it now shows the latest version." | You had nothing unsaved, so the editor loaded Ana's change at once. | Choose **Dismiss**, and carry on from the latest version. |
+| "Ana changed this document at …. Your unsaved edits are still here." | Your edits stay on screen, and nothing replaces them until you choose. When the document keeps no recovery points, it adds "Loading the current version discards them." | Choose **Load current version** to see Ana's change, with your edits kept as a recovery point you can restore where the document keeps them. Or choose **Keep editing**: your next save is refused, and the [conflict dialog](#when-your-save-is-refused) asks again. |
+| "Ana changed this document at …. Your unsaved edits are still here: they could not be kept as a recovery point, so the latest version was not loaded." | Loading the latest version would have lost your edits, so it did not happen. | Choose **Load current version** to try again, or **Keep editing**. |
+| "Ana changed this document at …. This copy could not be updated to the latest version." | You had nothing unsaved, but the latest version could not be loaded. A save from this copy is refused, so it can't replace Ana's change. | Choose **Try again**. |
+
 ### When you start editing a document someone else had
 
 | Message | What it means | What you can do |
@@ -48,7 +59,7 @@ Choose **Take over** when you need to edit a document now, for example because a
 - The latest version of the document loads before you can type.
 - Your colleague's editor turns read-only and tells them you took over. What they typed and had not saved stays on their screen, and their autosave keeps a copy (see [Your unsaved work](#your-unsaved-work)).
 - It is recorded in the document's history. Where [version history](/docs/versions) is on, the History panel shows it as "Took over from Ana".
-- Your colleague can take it back the same way.
+- Your colleague can take it back the same way. If you saved while they were away, their editor tells them when they take it back (see [Your unsaved work](#your-unsaved-work)).
 
 ## Asking for edit access
 
@@ -65,6 +76,8 @@ A reload gives the document back to you, not to someone waiting. When the editor
 ## Your unsaved work
 
 If someone takes over while you are typing, nothing you typed is thrown away. It stays on screen, read-only, so you can copy what you need. Your autosave also keeps it as a recovery point, and when you next open the document the editor offers to restore it.
+
+If you take the document back after someone changed it, the editor loads the latest version before you can type, and keeps your edits as a recovery point: "Ana changed this document at … while you were away. It now shows the latest version, and your unsaved edits are kept as a recovery point." Restore them from the recovery offer if you still want them. Where the document keeps no recovery points, the editor doesn't load the latest version until you choose: loading it discards your edits.
 
 ## When your save is refused
 
