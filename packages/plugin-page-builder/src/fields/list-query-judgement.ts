@@ -31,6 +31,8 @@ import {
   type PluginFieldValidateArgs,
 } from "@nextlyhq/plugin-sdk";
 
+import { pluralLabelOf } from "../collection-labels";
+
 import type { StoredForms } from "./added-undefined-ids";
 
 /** The fields of one collection, read when asked. */
@@ -72,7 +74,11 @@ export function listFieldsFrom(reads: {
       if (typeof field.name === "string") declared.add(field.name);
     }
     const shapes = await reads.readable(collection);
+    // The name the editor's Source menu shows, so a finding names the
+    // collection as the author reads it.
+    const { pluralLabel } = pluralLabelOf(found as Record<string, unknown>);
     return {
+      ...(pluralLabel === undefined ? {} : { label: pluralLabel }),
       declared,
       // A collection the public may read none of has no readable field, so
       // every field a list names on it is refused as one visitors can't see.

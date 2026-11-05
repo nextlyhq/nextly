@@ -449,7 +449,10 @@ describe("a list's sort", () => {
       })
     ).toBeDefined();
     expect(
-      screen.getByText(/sorts by "rating", which posts does not have/)
+      // The collection by the name authors read it by, not its slug.
+      screen.getByText(
+        /sorts by "rating", which Posts doesn.t have\. Choose another field\./
+      )
     ).toBeDefined();
   });
 });

@@ -222,6 +222,57 @@ describe("a collection list's query at save", () => {
     ]);
   });
 
+  it("names a collection in its words by the name authors read it by", () => {
+    const named: ListFieldSource = {
+      fieldsOf: collection => {
+        const found = FIELDS[collection];
+        return found === undefined
+          ? undefined
+          : {
+              ...found,
+              label: collection === "posts" ? "Posts" : "Categories",
+            };
+      },
+    };
+    const [unknown] = listIssues(
+      validate(page(list("l", { collection: "posts", sort: "-rating" })), {
+        ...shapeOnly,
+        listFields: named,
+      })
+    );
+    expect(unknown?.message).toBe(
+      'This list sorts by "rating", which Posts doesn\'t have. Choose another field.'
+    );
+    // Absent a name, the slug stands in.
+    const [bare] = listIssues(
+      validate(
+        page(list("l", { collection: "posts", sort: "-rating" })),
+        withSchema
+      )
+    );
+    expect(bare?.message).toBe(
+      'This list sorts by "rating", which posts doesn\'t have. Choose another field.'
+    );
+    const [other] = listIssues(
+      validate(
+        page(
+          list("c", {
+            collection: "posts",
+            relation: { of: "entry", field: "categories" },
+          })
+        ),
+        {
+          ...shapeOnly,
+          listFields: named,
+          bindingEntry: { collection: "posts" },
+        }
+      )
+    );
+    expect(other?.message).toBe(
+      '"categories" holds entries of Categories, not of Posts. Choose the list\'s source again.'
+    );
+  });
+
   it("refuses a sort naming something that is not a field name", () => {
     const issues = listIssues(
       validate(

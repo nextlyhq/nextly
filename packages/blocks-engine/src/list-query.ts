@@ -539,6 +539,11 @@ export interface ListFields {
    * public may read none of the collection.
    */
   readonly readable: readonly BindingFieldShape[];
+  /**
+   * The collection's name as authors read it ("Posts"), for the words of a
+   * finding; its slug stands in when absent.
+   */
+  readonly label?: string;
 }
 
 /**
@@ -611,7 +616,7 @@ function readableField(
       }
     : {
         code: "list-field-unknown",
-        message: `This list ${words.uses} "${field}", which ${words.collection} does not have.`,
+        message: `This list ${words.uses} "${field}", which ${words.collection} doesn't have. Choose another field.`,
       };
 }
 
@@ -652,7 +657,11 @@ function fieldFindings(
     const key = `${named.use}\u0000${named.field}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const finding = namedFieldFinding(named, fields, query.collection ?? "");
+    const finding = namedFieldFinding(
+      named,
+      fields,
+      fields.label ?? query.collection ?? ""
+    );
     if (finding === undefined) continue;
     found.push({
       path: at(named.use === "filter" ? "filters" : "sort"),
@@ -774,11 +783,12 @@ function relationFieldProblem(
   query: ListQuery,
   relation: ListRelation,
   fields: ListFields,
-  source: string
+  source: string,
+  nameOf: (collection: string) => string
 ): { prop: ListQueryProp; code: ListFieldCode; message: string } | undefined {
   const judged = readableField(relation.field, fields, {
     uses: "shows the entries of",
-    collection: source,
+    collection: nameOf(source),
   });
   if (!("shape" in judged)) return { prop: "relation", ...judged };
   const target = listRelationTarget(judged.shape);
@@ -793,7 +803,7 @@ function relationFieldProblem(
     return {
       prop: "collection",
       code: "list-relation-unsuitable",
-      message: `"${relation.field}" holds entries of ${target}, but this list's collection is ${query.collection ?? "not set"}.`,
+      message: `"${relation.field}" holds entries of ${nameOf(target)}, not of ${query.collection === undefined ? "the list's collection" : nameOf(query.collection)}. Choose the list's source again.`,
     };
   }
   return undefined;
@@ -825,11 +835,15 @@ function relationFindings(
       ? undefined
       : judgement.fields?.fieldsOf(source.collection);
   if (fields === undefined || source.collection === undefined) return [];
+  // Each collection by the name authors read it by, its slug standing in.
+  const nameOf = (collection: string) =>
+    judgement.fields?.fieldsOf(collection)?.label ?? collection;
   const problem = relationFieldProblem(
     query,
     relation,
     fields,
-    source.collection
+    source.collection,
+    nameOf
   );
   return problem === undefined
     ? []

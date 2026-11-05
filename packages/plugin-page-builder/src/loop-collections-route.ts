@@ -65,9 +65,8 @@ import {
   type LoopListFieldItem,
   type LoopRelationItem,
 } from "./loop-collections-contract";
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import {
-  labelOf,
-  pluralLabelOf,
   registryRecords,
   schemaIsLive,
   slugOf,

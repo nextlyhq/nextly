@@ -96,6 +96,7 @@ describe.each(getConfiguredTestDialects())(
           }),
           defineCollection({
             slug: ARTICLES,
+            labels: { singular: "Article", plural: "Articles" },
             access: { read: () => true },
             fields: [
               text({ name: "title" }),
@@ -273,6 +274,22 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    it("names a collection in a refusal as authors read it", async () => {
+      const t = await boot();
+      const id = await homePage(t);
+      const { cookie } = await holding(t, AUTHOR);
+      const dry = await change(
+        cookie,
+        { collection: "pages", id },
+        { collection: ARTICLES, sort: "-rating" },
+        { dryRun: true }
+      );
+      // The plural name the editor's Source menu shows, never the slug.
+      expect((dry.body.item as PageActionResult).refusals).toContain(
+        'This list sorts by "rating", which Articles doesn\'t have. Choose another field.'
+      );
+    });
 
     it("refuses a related list nested a third level deep", async () => {
       const t = await boot();

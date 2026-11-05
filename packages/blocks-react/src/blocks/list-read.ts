@@ -374,14 +374,13 @@ function refusedSortFields(error: unknown): string[] {
 }
 
 /** The words for a sort that fell back to id order. */
-function sortFallback(
-  fields: readonly string[],
-  collection: string
-): ListDiagnostic {
+function sortFallback(fields: readonly string[]): ListDiagnostic {
   const named = fields.map(field => `"${field}"`).join(", ");
   return {
     kind: "sort-fallback",
-    message: `This list's sort names ${named}, which ${collection} no longer has or visitors can't see. It shows entries in ID order.`,
+    // The collection goes unnamed: the renderer holds only its slug, and the
+    // author is looking at the list, whose collection the Source shows.
+    message: `This list sorts by ${named}, which its collection no longer has or visitors can't see. It shows entries in ID order.`,
   };
 }
 
@@ -404,8 +403,7 @@ interface ListReads {
 async function readSorted(
   reads: ListReads,
   query: BlocksQuery,
-  sort: readonly string[],
-  collection: string
+  sort: readonly string[]
 ): Promise<{
   items: readonly Record<string, unknown>[];
   diagnostic?: ListDiagnostic;
@@ -421,8 +419,7 @@ async function readSorted(
     return {
       items: await reads.find({ ...query, sort: [] }),
       diagnostic: sortFallback(
-        named.length > 0 ? named : sort.map(key => key.replace(/^-/, "")),
-        collection
+        named.length > 0 ? named : sort.map(key => key.replace(/^-/, ""))
       ),
     };
   }
@@ -650,7 +647,7 @@ async function readSource(
   diagnostic?: ListDiagnostic;
 }> {
   if (ids === undefined) {
-    return readSorted(reads, base, sort, base.collection);
+    return readSorted(reads, base, sort);
   }
   if (ids.length === 0) return { items: [] };
   if (sort.length === 0) {
@@ -663,7 +660,6 @@ async function readSource(
       ...base,
       filters: [...(base.filters ?? []), { field: "id", op: "in", value: ids }],
     },
-    sort,
-    base.collection
+    sort
   );
 }

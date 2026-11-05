@@ -195,6 +195,8 @@ function fieldSourceOf(
           ...readable.map(shape => shape.name),
         ]),
         readable,
+        // The name the Source menu shows, for the engine's words.
+        label: found.label,
       };
     },
   };
