@@ -35,7 +35,10 @@ import {
   type RemovedBreakpoint,
 } from "./breakpoint-removal/dry-run";
 import type { BreakpointRun, HoldingRun } from "./breakpoint-removal/run-store";
-import type { BreakpointRemovalService } from "./breakpoint-removal/service";
+import {
+  PENDING_DRAFT,
+  type BreakpointRemovalService,
+} from "./breakpoint-removal/service";
 import { stripClass, stripClasses } from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
@@ -43,11 +46,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
-import {
-  documentKeyOf,
-  type LeftReason,
-  type RewriteReport,
-} from "./host-rewrite/contract";
+import { documentKeyOf, type RewriteReport } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import { inCauses } from "./judged-writes";
 import {
@@ -354,9 +353,6 @@ const READDED_UNDER_A_DRAFT =
 /** What a save defining a breakpoint other left content still holds is told. */
 const READDED_UNDER_LEFT_CONTENT =
   "Some content still holds styles for that breakpoint that could not be removed yet. Once that content can be saved, finish the breakpoint's removal, then add it again.";
-
-/** The left reason a published page with a pending draft is recorded with. */
-const PENDING_DRAFT: LeftReason = "pending-draft";
 
 /** What a run still holding `readded` tells the person saving. */
 function readdedMessage(held: HoldingRun): string {
@@ -698,6 +694,7 @@ async function saveBreakpoints(
   // values under a removed breakpoint stay, inert, as they always have.
   if (removed.size === 0 || !confirmed) {
     await writeSiteStyle(nextly, ctx, { breakpoints }, versionToWrite(stored));
+    await retireReadded(removal, service, now, after);
     return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
       breakpoints,
     });
@@ -711,6 +708,7 @@ async function saveBreakpoints(
     stored,
     removed,
   });
+  await retireReadded(removal, service, now, after);
   await auditRemoval(ctx, req, run.id, counted);
   let report: RewriteReport;
   try {
@@ -735,6 +733,36 @@ async function saveBreakpoints(
     run.id,
     report
   );
+}
+
+/**
+ * Give up earlier removals' claims on the ids a stored set defines again, so
+ * a later removal of the same id (confirmed or not) is never carried out with
+ * an old run's set. Run once the set is stored, never before: a refused write
+ * defines nothing. A failure is logged rather than answered, since the set is
+ * stored; the old run then keeps its claim, which only a write bringing
+ * values back under an id the site does not define could act on.
+ */
+async function retireReadded(
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade },
+  service: BreakpointRemovalService,
+  now: BreakpointSet | undefined,
+  after: BreakpointSet | undefined
+): Promise<void> {
+  const before = new Set(breakpointContexts(now).map(context => context.id));
+  const readded = breakpointContexts(after)
+    .map(context => context.id)
+    .filter(id => !before.has(id));
+  if (readded.length === 0) return;
+  try {
+    await service.retire(readded);
+  } catch (error) {
+    removal.cascade.logError?.(
+      "[page-builder] breakpoints defined again were stored, but the earlier " +
+        "removals of them could not be marked as given up.",
+      { readded, error }
+    );
+  }
 }
 
 /** A walk that did not run: nothing done, and not finished. */

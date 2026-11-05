@@ -527,6 +527,34 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
 }
 
 /**
+ * Whether a document has a pending working draft in any of the site's
+ * languages, read as the system. A document that cannot be read, or that is
+ * not there, answers `true`: the caller then leaves alone what waits on the
+ * draft, rather than acting on a guess.
+ */
+export async function documentHasWorkingDraft(
+  site: Pick<RewriteSite, "nextly" | "locales">,
+  document: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<boolean> {
+  try {
+    const nextly = await site.nextly();
+    const locales = site.locales();
+    for (const locale of locales.length === 0 ? [undefined] : locales) {
+      const host: HostAddress = {
+        ...document,
+        path: [],
+        ...(locale === undefined ? {} : { locale }),
+      };
+      const row = await readRow(nextly, host, "draft");
+      if (row === null || row._isWorkingDraft === true) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * One read of a host's row, or `null` when there is none: `all` reads the
  * main row in any state, `public` only in a state the workflow calls public,
  * and `draft` overlays a pending working draft where there is one.

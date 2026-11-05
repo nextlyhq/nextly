@@ -43,6 +43,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
+import { group, text } from "nextly/config";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
@@ -57,7 +58,9 @@ import {
   type BreakpointRemovalService,
 } from "../breakpoint-removal/service";
 import { asDocument } from "../component-store-source";
+import { blocks } from "../fields/blocksHelper";
 import { documentKeyOf, type RewriteReport } from "../host-rewrite/contract";
+import { documentHasWorkingDraft } from "../host-rewrite/site";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { BREAKPOINT_REMOVED_AUDIT } from "../site-settings";
@@ -202,6 +205,7 @@ describe.each(getConfiguredTestDialects())(
       cookie: string;
       runs: () => RemovalRunStore;
       jobPass: () => Promise<unknown>;
+      owner: string;
     }> {
       const plugin = pageBuilder();
       const probe: { runs?: RemovalRunStore } = {};
@@ -209,13 +213,24 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [plugin, probePlugin(probe)],
         seedPublic: true,
+        // Entries whose blocks sit inside a group, which the walk reads but
+        // does not write.
+        collections: [
+          {
+            slug: "features",
+            fields: [
+              text({ name: "title" }),
+              group({ name: "hero", fields: [blocks({ name: "body" })] }),
+            ],
+          } as never,
+        ],
       });
       // After the boot, which starts the block registry afresh.
       registerSealedCard();
       const t = current;
       // The site's first user is its owner, granted everything. Made first, so
       // the person below holds only what the test gives them.
-      await t.nextly.users.create({
+      const owner = await t.nextly.users.create({
         email: "owner@example.com",
         password: "Password123!",
         data: { name: "Owner", isActive: true },
@@ -258,6 +273,7 @@ describe.each(getConfiguredTestDialects())(
           return probe.runs;
         },
         jobPass: removalJobPass(plugin),
+        owner: await sessionOf(owner.item.id, owner.item.email, "Owner"),
       };
     }
 
@@ -281,11 +297,20 @@ describe.each(getConfiguredTestDialects())(
         t.adapter
       ).userRoles.assignRoleToUser(userId, role.item.id);
       expect(assigned.success).toBe(true);
+      return sessionOf(userId, created.item.email, "Manager");
+    }
+
+    /** A signed-in session cookie for a user. */
+    async function sessionOf(
+      userId: string,
+      email: string,
+      name: string
+    ): Promise<string> {
       const token = await signAccessToken(
         buildClaims({
           userId,
-          email: created.item.email,
-          name: "Manager",
+          email,
+          name,
           image: null,
           roleIds: [],
           sessionEpoch: 0,
@@ -293,6 +318,31 @@ describe.each(getConfiguredTestDialects())(
         process.env.NEXTLY_SECRET ?? ""
       );
       return `nextly_session=${token}`;
+    }
+
+    /** Discard a page's working draft, as the editor does, through core's route. */
+    async function discardDraft(cookie: string, id: string): Promise<number> {
+      const path = [
+        "collections",
+        "pages",
+        "entries",
+        id,
+        "versions",
+        "working-draft",
+      ];
+      const response = await createDynamicHandlers().DELETE(
+        new Request(`${ORIGIN}/api/${path.join("/")}`, {
+          method: "DELETE",
+          headers: {
+            cookie: `${cookie}; nextly_csrf=${CSRF}`,
+            "x-csrf-token": CSRF,
+            origin: ORIGIN,
+          },
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      await response.text();
+      return response.status;
     }
 
     /** One of the plugin's site routes, through the real dispatcher. */
@@ -1105,6 +1155,143 @@ describe.each(getConfiguredTestDialects())(
         before: { viewport: [TABLET, MOBILE], container: [] },
         beforeEmitted: { viewport: [TABLET, MOBILE], container: [] },
       });
+    });
+
+    it("keeps a page saving with what it held after an unconfirmed removal", async () => {
+      const { t, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await post(cookie, ["site", "breakpoints"], {
+        breakpoints: { viewport: [TABLET], container: [] },
+      });
+      expect(saved.status).toBe(200);
+
+      // The author saves the page as it is, Mobile's values and all, and
+      // copies the style onto another block: none of it is new to the page.
+      const written = await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: doc("page", [
+            heading("a", styledAtMobile),
+            heading("b", styledAtMobile),
+          ]),
+        },
+        overrideAccess: true,
+      });
+      expect(written.item).toMatchObject({ id });
+    });
+
+    it("re-queues a page whose blocks sit in a group once a write clears what a removal left there", async () => {
+      const { t, svc, cookie, jobPass } = await boot();
+      const fid = await create(t, "features", {
+        title: "Feature",
+        hero: { body: doc("page", [heading("a", styledAtMobile)]) },
+      });
+      await save(cookie, [TABLET]);
+      // CONTROL: the walk could not write the group's blocks, so the entry is
+      // left and the breakpoint refused.
+      expect(await svc.holding()).toHaveLength(1);
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(409);
+
+      // The author clears the value; the write holds no blocks at its top
+      // level.
+      await t.nextly.update({
+        collection: "features",
+        id: fid,
+        data: { hero: { body: doc("page", [heading("a")]) } },
+        overrideAccess: true,
+      });
+      await jobPass();
+
+      expect(await svc.holding()).toEqual([]);
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+    });
+
+    it("strips nothing with an old run once its breakpoint was defined again and removed unconfirmed", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      // Mobile defined again: the run gives up its claim on it.
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+      expect(await svc.runById(runId)).toMatchObject({
+        removedIds: [],
+        readdedIds: ["mobile"],
+      });
+      // The author styles at Mobile again, then Mobile is removed without
+      // confirming, which promises to leave those values alone.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { content: doc("page", [heading("a", styledAtMobile)]) },
+        overrideAccess: true,
+      });
+      const unconfirmed = await post(cookie, ["site", "breakpoints"], {
+        breakpoints: { viewport: [TABLET], container: [] },
+      });
+      expect(unconfirmed.status).toBe(200);
+
+      // A save carrying them is no reason to open the old run.
+      await writeBackInATransaction(t, id);
+
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+    });
+
+    it("lets a breakpoint a discarded draft resolved be added again once the removal job has run", async () => {
+      const { t, svc, cookie, jobPass, owner } = await boot();
+      const id = await create(t, "pages", {
+        title: "Pending",
+        slug: "pending",
+        status: "published",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+        },
+        overrideAccess: true,
+      });
+      const saved = await save(cookie, [TABLET]);
+      expect(saved.body.item).toMatchObject({
+        removal: { finished: true, left: 1 },
+      });
+      // CONTROL: a pass with the draft still there opens nothing.
+      await jobPass();
+      expect(await svc.openRun()).toBeNull();
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(409);
+      // What the pass asks of the page, read as the system.
+      const site = {
+        nextly: async () => t.nextly as never,
+        locales: () => [] as string[],
+      };
+      const page = { kind: "collection" as const, slug: "pages", id };
+      expect(await documentHasWorkingDraft(site, page)).toBe(true);
+
+      // The author throws the draft away, which runs no write hook.
+      expect(await discardDraft(owner, id)).toBe(200);
+      expect(await documentHasWorkingDraft(site, page)).toBe(false);
+      await jobPass();
+
+      expect(await svc.holding()).toEqual([]);
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+      // The live row, written once its draft was gone.
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
     });
 
     it("refuses a save of the site style from a version another save replaced", async () => {

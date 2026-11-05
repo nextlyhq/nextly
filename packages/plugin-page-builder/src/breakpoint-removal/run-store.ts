@@ -35,8 +35,18 @@ const ANOTHER_REMOVAL_RUNNING =
 
 /** One removal, as its row stores it. */
 export interface BreakpointRun extends WalkedRun {
-  /** The breakpoint ids removed. */
+  /**
+   * The breakpoint ids the run still claims: those it removed that the site
+   * has not defined again since it was done. Every check of what a run holds,
+   * strips or re-queues reads these.
+   */
   readonly removedIds: readonly string[];
+  /**
+   * The ids it removed that the site defined again after it was done: no
+   * longer its claim, so a later removal of the same id, confirmed or not, is
+   * never stripped with this run's set.
+   */
+  readonly readdedIds: readonly string[];
   /**
    * The breakpoint set the site stored before the removal, as stored: `null`
    * where it stored none and the configured set applied.
@@ -109,6 +119,20 @@ export interface RemovalRunStore extends RunStore {
    * conflict while another run is open.
    */
   reopen(runId: string): Promise<boolean>;
+  /**
+   * The site defines `ids` again: every done run claiming one gives the
+   * claim up (`readdedIds`). An open run is never changed here; a set
+   * defining an id an open run claims is refused before it is stored.
+   */
+  retire(ids: readonly string[]): Promise<void>;
+  /**
+   * Documents done runs left for `reason`, with the run each waits on, at
+   * most `limit` of them.
+   */
+  leftFor(
+    reason: string,
+    limit: number
+  ): Promise<{ runId: string; documentKey: string }[]>;
 }
 
 /** A run that still holds what it removed, and why. */
@@ -129,20 +153,39 @@ function phaseOf(value: string): RunPhase {
   return value === "final" || value === "done" ? value : "converting";
 }
 
+/** The `removed_ids` column's record: every id removed, and those re-added. */
+interface StoredIds {
+  readonly ids: readonly string[];
+  readonly readded: readonly string[];
+}
+
+/** A list of strings, or `undefined`. */
+function stringsOf(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every(id => typeof id === "string")
+    ? (value as string[])
+    : undefined;
+}
+
 /**
- * The stored ids, read strictly. A list that cannot be read is refused rather
- * than read as empty: an empty list would strip nothing and report the run
- * finished.
+ * The stored ids, read strictly. A record that cannot be read is refused
+ * rather than read as empty: an empty list would strip nothing and report the
+ * run finished.
  */
-function removedIdsOf(text: string, runId: string): string[] {
+function storedIdsOf(text: string, runId: string): StoredIds {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
   } catch {
     parsed = undefined;
   }
-  if (Array.isArray(parsed) && parsed.every(id => typeof id === "string")) {
-    return parsed as string[];
+  const record =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const ids = stringsOf(record.ids);
+  const readded = stringsOf(record.readded);
+  if (ids !== undefined && ids.length > 0 && readded !== undefined) {
+    return { ids, readded };
   }
   throw NextlyError.internal({
     logContext: { reason: "breakpoint-removal-unreadable-ids", runId },
@@ -178,9 +221,12 @@ function runOf(row: {
   openKey: string | null;
 }): BreakpointRun {
   const before = beforeOf(row.before);
+  const stored = storedIdsOf(row.removedIds, row.id);
+  const readded = new Set(stored.readded);
   return {
     id: row.id,
-    removedIds: removedIdsOf(row.removedIds, row.id),
+    removedIds: stored.ids.filter(id => !readded.has(id)),
+    readdedIds: stored.readded,
     before: before.stored,
     beforeEmitted: before.emitted,
     startedBy: row.startedBy,
@@ -240,7 +286,10 @@ export function removalRunStore(
       try {
         const row = await db.transaction(tx =>
           tx.insertReturning(breakpointRemovals, {
-            removedIds: JSON.stringify(removedIds),
+            removedIds: JSON.stringify({
+              ids: removedIds,
+              readded: [],
+            } satisfies StoredIds),
             before: JSON.stringify({
               stored: before.stored ?? null,
               emitted: before.emitted ?? null,
@@ -331,6 +380,57 @@ export function removalRunStore(
         await markLeft(db, runId, documentKey, WRITTEN_BACK);
         return "left";
       }
+    },
+    retire: async ids => {
+      if (ids.length === 0) return;
+      const asked = new Set(ids);
+      await db.transaction(async tx => {
+        const t = tx.table(breakpointRemovals);
+        // Done runs only: the open key is null on every one of them.
+        const rows = await tx
+          .select(breakpointRemovals)
+          .where(eq(t.phase, "done"))
+          .all();
+        for (const row of rows) {
+          if (row.openKey !== null) continue;
+          const stored = storedIdsOf(row.removedIds, row.id);
+          const readded = new Set(stored.readded);
+          const fresh = stored.ids.filter(
+            id => asked.has(id) && !readded.has(id)
+          );
+          if (fresh.length === 0) continue;
+          // Conditional on the record read, so two saves re-adding at once
+          // cannot drop each other's ids.
+          await tx
+            .update(breakpointRemovals, {
+              removedIds: JSON.stringify({
+                ids: stored.ids,
+                readded: [...stored.readded, ...fresh],
+              } satisfies StoredIds),
+            })
+            .where(both(eq(t.id, row.id), eq(t.removedIds, row.removedIds)));
+        }
+      });
+    },
+    leftFor: async (reason, limit) => {
+      const h = db.table(componentDeletionHosts);
+      const done = (await runs()).filter(run => !run.open).map(run => run.id);
+      if (done.length === 0) return [];
+      const where = and(
+        inArray(h.deletionId, done),
+        eq(h.state, "left"),
+        eq(h.reason, reason)
+      );
+      if (where === undefined) return [];
+      const rows = await db
+        .select(componentDeletionHosts)
+        .where(where)
+        .limit(limit)
+        .all();
+      return rows.map(row => ({
+        runId: row.deletionId,
+        documentKey: row.hostKey,
+      }));
     },
     leftWith: async (documentKey, runIds) => {
       if (runIds.length === 0) return new Set<string>();

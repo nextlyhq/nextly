@@ -21,10 +21,15 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
-import type { RewriteReport } from "../host-rewrite/contract";
+import {
+  documentAddressOf,
+  type LeftReason,
+  type RewriteReport,
+} from "../host-rewrite/contract";
 import { progressStore } from "../host-rewrite/progress";
 import { rewriteHosts } from "../host-rewrite/rewrite";
 import {
+  documentHasWorkingDraft,
   siteHostReader,
   siteWalkSource,
   systemHostWriter,
@@ -103,11 +108,18 @@ export interface BreakpointRemovalService {
    */
   openRemovalAsSaved(): Promise<Removal | null>;
   /**
-   * Carry on whatever removal is owed a walk, within `budget`: the open one,
+   * Carry on whatever removal is owed a walk, within `budget`: the open one;
    * or else a done one a write brought values back to while another was open
-   * (`WRITTEN_BACK`). Nothing when neither is.
+   * (`WRITTEN_BACK`); or else a done one that left a page for its pending
+   * draft, once that draft is gone (discarded, which runs no write hook).
+   * Nothing when none is.
    */
   carryOn(budget: WalkBudget): Promise<void>;
+  /**
+   * The site defines `ids` again: the done runs that removed them give up
+   * their claim on them (`readdedIds`).
+   */
+  retire(ids: readonly string[]): Promise<void>;
 }
 
 /** What the installed plugin hands the service. */
@@ -149,6 +161,37 @@ async function removalNow(
     await installed.definedBreakpoints()
   );
 }
+
+/** How many pages left for a pending draft one pass checks. */
+const DRAFT_CHECKS_PER_PASS = 20;
+
+/**
+ * A done run that left a page for its pending draft, where that draft is gone
+ * now, re-queued for it (which opens the run again); `undefined` when there
+ * is none. Publishing the draft is a write the report sees; discarding it is
+ * not, so this is how a discard is noticed. A page whose draft is still there,
+ * or that cannot be read, is left alone, so a pass never opens a run it would
+ * only leave the page on again.
+ */
+async function resolvedDraftRun(
+  store: ReturnType<typeof removalRunStore>,
+  site: RemovalInstall["site"]
+): Promise<BreakpointRun | undefined> {
+  const waiting = await store.leftFor(PENDING_DRAFT, DRAFT_CHECKS_PER_PASS);
+  for (const { runId, documentKey } of waiting) {
+    const document = documentAddressOf(documentKey);
+    if (document === undefined) continue;
+    if (await documentHasWorkingDraft(site, document)) continue;
+    const queued = await store.requeueDocument(runId, documentKey);
+    if (queued === "reopened" || queued === "requeued") {
+      return (await store.runById(runId)) ?? undefined;
+    }
+  }
+  return undefined;
+}
+
+/** The left reason a published page with a pending draft is recorded with. */
+export const PENDING_DRAFT: LeftReason = "pending-draft";
 
 /** The service over the installed plugin, resolved per call. */
 export function breakpointRemovalService(
@@ -233,9 +276,11 @@ export function breakpointRemovalService(
         (await store.openRun()) ??
         (await store.holding()).find(held =>
           held.leftReasons.includes(WRITTEN_BACK)
-        )?.run;
+        )?.run ??
+        (await resolvedDraftRun(store, install().site));
       if (owed === null || owed === undefined) return;
       await walk(owed.id, budget);
     },
+    retire: ids => runs().retire(ids),
   };
 }

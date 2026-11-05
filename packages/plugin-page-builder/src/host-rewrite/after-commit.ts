@@ -57,20 +57,20 @@ export function registerFencedWriteReport(args: FencedWriteReportArgs): void {
 }
 
 /** One committed write, as a report after it reads it. */
-export interface CommittedWrite {
+interface CommittedWrite {
   /** The collection written, or the Single's hook namespace and slug. */
   readonly collection: string;
   /** Every blocks document the write holds, as values of its data. */
   readonly documents: readonly unknown[];
   /** Which document was written, as the walk keys it; unknown without an id. */
-  readonly at: ReturnType<typeof documentOf>;
+  readonly at: ReturnType<typeof hookDocumentOf>;
 }
 
 /**
  * What a committed create or update holds: `undefined` for a write carrying no
  * blocks document, which is most of them, so its report reads nothing.
  */
-export function committedWrite(context: unknown): CommittedWrite | undefined {
+function committedWrite(context: unknown): CommittedWrite | undefined {
   const fields = context as { collection?: unknown; data?: unknown };
   const data = fields.data;
   if (typeof fields.collection !== "string" || !isPlainRecord(data)) {
@@ -84,7 +84,7 @@ export function committedWrite(context: unknown): CommittedWrite | undefined {
   return {
     collection: fields.collection,
     documents,
-    at: documentOf(fields.collection, data),
+    at: hookDocumentOf(fields.collection, data),
   };
 }
 
@@ -130,7 +130,7 @@ function fencedReferences(
 }
 
 /** Which document a hook's write is to, as the walk keys it. */
-function documentOf(
+export function hookDocumentOf(
   collection: string,
   data: Record<string, unknown>
 ):

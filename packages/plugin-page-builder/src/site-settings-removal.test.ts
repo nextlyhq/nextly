@@ -115,6 +115,7 @@ function fakeService(over: Partial<BreakpointRemovalService> = {}) {
     openRemoval: async () => null,
     openRemovalAsSaved: async () => null,
     carryOn: async () => {},
+    retire: async () => {},
     ...over,
   };
   return { service, abandon };

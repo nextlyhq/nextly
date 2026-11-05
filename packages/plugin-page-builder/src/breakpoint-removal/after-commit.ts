@@ -38,8 +38,11 @@
  *
  * @module breakpoint-removal/after-commit
  */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
+
+import { asDocument } from "../component-store-source";
 import {
-  committedWrite,
+  hookDocumentOf,
   type FencedWriteReportContext,
 } from "../host-rewrite/after-commit";
 import { documentKeyOf } from "../host-rewrite/contract";
@@ -70,8 +73,8 @@ async function reportWrite(
   args: RemovalWriteReportArgs,
   context: unknown
 ): Promise<void> {
-  const written = committedWrite(context);
-  if (written === undefined || written.at === undefined) return;
+  const written = writtenDocument(context);
+  if (written === undefined) return;
   try {
     // The runs first: a short table, and with no removal recorded, or none
     // whose ids the write holds, nothing else is read. A run's removed ids
@@ -80,6 +83,9 @@ async function reportWrite(
     const runs = await args.runs().runs();
     if (runs.length === 0) return;
     const key = documentKeyOf(written.at);
+    // Every write naming a document is asked about, holding blocks at its
+    // top level or not: a run may have left a document whose blocks sit in
+    // a group or a repeater, or one the write has just cleared.
     const held = heldIds(written.documents, runs);
     const defined =
       held.size === 0 ? new Set<string>() : await args.definedBreakpoints();
@@ -106,6 +112,58 @@ async function reportWrite(
       { collection: written.collection, error }
     );
   }
+}
+
+/** How many values one write's row is searched through for documents. */
+const MOST_VALUES_SEARCHED = 20_000;
+
+/**
+ * A committed create or update as this report reads it: the document written,
+ * and every blocks document its row holds wherever it sits, at the top level
+ * or inside groups and repeaters, as the walk finds them. `undefined` for a
+ * write that names no document.
+ */
+function writtenDocument(context: unknown):
+  | {
+      readonly collection: string;
+      readonly at: NonNullable<ReturnType<typeof hookDocumentOf>>;
+      readonly documents: readonly unknown[];
+    }
+  | undefined {
+  const fields = context as { collection?: unknown; data?: unknown };
+  const data = fields.data;
+  if (typeof fields.collection !== "string" || !isPlainRecord(data)) {
+    return undefined;
+  }
+  const at = hookDocumentOf(fields.collection, data);
+  if (at === undefined) return undefined;
+  return { collection: fields.collection, at, documents: documentsIn(data) };
+}
+
+/**
+ * Every blocks document in a row, searched through its records and lists,
+ * a document's own nodes not searched again. The search is bounded; what it
+ * does not reach, the removal's final walk reads.
+ */
+function documentsIn(row: Record<string, unknown>): unknown[] {
+  const found: unknown[] = [];
+  const stack: unknown[] = Object.values(row);
+  for (
+    let seen = 0;
+    stack.length > 0 && seen < MOST_VALUES_SEARCHED;
+    seen += 1
+  ) {
+    const value = stack.pop();
+    const document = asDocument(value);
+    if (document !== null) {
+      found.push(document);
+    } else if (Array.isArray(value)) {
+      stack.push(...value);
+    } else if (isPlainRecord(value)) {
+      stack.push(...Object.values(value));
+    }
+  }
+  return found;
 }
 
 /** The removed ids these documents keep anything under, read structurally. */
