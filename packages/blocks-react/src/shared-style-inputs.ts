@@ -56,7 +56,7 @@
  * @module shared-style-inputs
  */
 import {
-  MAX_NAMED_CLASSES,
+  namedClassesRead,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
   MAX_VALUE_LENGTH,
@@ -627,7 +627,8 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // Imported rather than restated: a comparator copied here would drift from
     // the one that decides the output, and the drift would be silent in both
     // directions.
-    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(entry =>
+    // The slice the compiler reads, looks under their own cap included.
+    orderedNamedClasses(namedClassesRead(library)).map(entry =>
       classParts(entry, reading)
     ),
     // The block-type defaults, which the renderer resolves beside the other

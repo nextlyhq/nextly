@@ -71,6 +71,18 @@ describe("core/image, whichever branch it renders", () => {
     expect(figure).toContain("nx-c-image-circle");
   });
 
+  it("puts any look the image wears on the IMG, a renamed one included", async () => {
+    // An imported look can arrive renamed; the compiler applies a look only to
+    // its own block type, so every look class here is the image's.
+    const container = await draw("a caption", " nx-l-image-rounded-2");
+    expect(container.querySelector("img")?.className).toContain(
+      "nx-l-image-rounded-2"
+    );
+    expect(container.querySelector("figure")?.className ?? "").not.toContain(
+      "nx-l-"
+    );
+  });
+
   it("leaves the node's own classes on the figure, which is the root", async () => {
     // The type class rides both; the per-node class must not, or two elements
     // answer to one node's identity.

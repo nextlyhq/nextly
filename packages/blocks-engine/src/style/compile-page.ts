@@ -2353,7 +2353,14 @@ export function compilePageCss(
         newStyleIssueBudget(),
         warningAllowance,
         {
-          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          origin: {
+            kind: "class",
+            id: cls.id,
+            slug: cls.slug,
+            // A look reaches only its own block type, so a reader of the
+            // trace can refuse it on any other, as the compiler does.
+            ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+          },
           previewStates,
           trace,
           mayFetchUrl,

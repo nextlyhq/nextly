@@ -165,15 +165,15 @@ export async function renderImage({
  * only when the look is bound to the node's own type, so every look class on
  * an image is one of the image's looks, whatever its name.
  */
-function looksIn(className: string): string[] {
-  return className
+function looksIn(className: string | undefined): string[] {
+  return (className ?? "")
     .split(/\s+/)
     .filter(name => name.startsWith(LOOK_CLASS_PREFIX));
 }
 
 /** A class string without its look classes. */
-function withoutLooks(className: string): string {
-  return className
+function withoutLooks(className: string | undefined): string {
+  return (className ?? "")
     .split(/\s+/)
     .filter(name => name !== "" && !name.startsWith(LOOK_CLASS_PREFIX))
     .join(" ");

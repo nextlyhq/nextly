@@ -75,3 +75,27 @@ describe("a look's binding in a stored sheet's stamp", () => {
     );
   });
 });
+
+describe("the stamp over a library at the cap", () => {
+  it("moves when a look past the 2,000 shared styles changes", () => {
+    const shared = Array.from({ length: 2000 }, (_, index) => ({
+      id: `c-${index}`,
+      slug: `s${index}`,
+      orderIndex: index,
+      styles: {},
+    }));
+    const look = (color: string) => ({
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: { base: { base: { color } } } as never,
+    });
+    const id = (color: string) =>
+      sharedStyleInputsId({
+        breakpoints: BREAKPOINTS,
+        namedClasses: [...shared, look(color)],
+      });
+    expect(id("red")).not.toBe(id("blue"));
+  });
+});
