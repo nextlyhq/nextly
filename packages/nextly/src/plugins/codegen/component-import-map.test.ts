@@ -1118,3 +1118,42 @@ describe("the map's entries: each component with who declared it and what it is 
     ]);
   });
 });
+
+describe("a plugin collection's own views", () => {
+  // A collection replaces its edit or list screen by naming a component, and
+  // the admin resolves that name through the same registry a page uses. The
+  // map is the only importer of the module behind it once nothing loads
+  // modules by name at run time.
+  const forms = {
+    name: "@acme/forms",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      collections: [
+        {
+          slug: "forms",
+          fields: [],
+          admin: {
+            components: {
+              views: {
+                Edit: { Component: "@acme/forms/admin#FormEditor" },
+                List: { Component: "@acme/forms/admin#FormList" },
+              },
+            },
+          },
+        },
+      ],
+    },
+  } as unknown as PluginDefinition;
+
+  // The map does not collect a collection's own views yet, so this fails
+  // today and is held as an expected failure: it turns red, and becomes a
+  // plain \`it\`, the moment the generator collects them.
+  it.fails("registers the edit and list views the collection names", () => {
+    const code = buildComponentImportMap([forms]);
+
+    expect(code).toContain('import * as _p0 from "@acme/forms/admin";');
+    expect(code).toContain('"@acme/forms/admin#FormEditor": _p0.FormEditor');
+    expect(code).toContain('"@acme/forms/admin#FormList": _p0.FormList');
+  });
+});

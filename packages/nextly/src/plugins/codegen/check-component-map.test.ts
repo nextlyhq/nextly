@@ -425,3 +425,46 @@ describe("a list read back", () => {
     ).toBeUndefined();
   });
 });
+
+describe("a plugin collection's own views", () => {
+  // The map does not collect a collection's own views yet, so this fails
+  // today and is held as an expected failure: it turns red, and becomes a
+  // plain \`it\`, the moment the generator collects them.
+  it.fails(
+    "does not agree when a collection view is added without regenerating",
+    async () => {
+      await generate([shop]);
+      // The same plugin, now replacing a collection's edit screen.
+      const withView = {
+        ...shop,
+        contributes: {
+          ...shop.contributes,
+          collections: [
+            {
+              slug: "orders",
+              fields: [],
+              admin: {
+                components: {
+                  views: {
+                    Edit: { Component: "@acme/shop/admin#OrderEditor" },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as unknown as PluginDefinition;
+
+      const found = await checkComponentMapFiles(
+        [withView],
+        TYPES,
+        root,
+        undefined
+      );
+
+      expect(found.missing.map(each => each.path)).toEqual([
+        "@acme/shop/admin#OrderEditor",
+      ]);
+    }
+  );
+});

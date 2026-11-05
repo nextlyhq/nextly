@@ -42,6 +42,7 @@ import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
+import { isDevelopmentRuntime } from "@admin/lib/development-runtime";
 
 import {
   componentRegistry,
@@ -245,7 +246,7 @@ export function registerComponents(
  * Get a component from the registry by its path.
  *
  * Returns undefined if the component is not registered.
- * Logs a warning to help debug misconfiguration.
+ * Logs a warning naming the path, in development, to help debug misconfiguration.
  *
  * @param path - Component path to resolve
  * @returns The registered React component, or undefined if not found
@@ -267,7 +268,10 @@ export function getComponent<P = Record<string, unknown>>(
 
   const component = componentRegistry.get(path);
 
-  if (!component) {
+  // Development only: a missing component is a fault in the app's own map, so
+  // it is the developer who can act on it, and the caller already draws its
+  // fallback for whoever is using the admin.
+  if (!component && isDevelopmentRuntime()) {
     console.warn(
       `[ComponentRegistry] Component not found for path: "${path}". ` +
         `Make sure the plugin is installed and its components are registered. ` +

@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as publicSurface from "./component-registry";
 
 import {
   autoRegisterPluginComponents,
   clearRegistry,
+  getComponent,
   hasComponent,
   registerComponent,
   registerKnownPlugin,
@@ -167,5 +168,33 @@ describe("bulk clearing cannot take core's components with it", () => {
     clearRegistry();
 
     expect(hasComponent("@acme/p/admin#Card")).toBe(false);
+  });
+});
+
+describe("a path nothing registered", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("is named in a warning in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(getComponent("@acme/missing/admin#Gone")).toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      '"@acme/missing/admin#Gone"'
+    );
+  });
+
+  it("is not warned about in production, where the caller's fallback is all a visitor sees", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(getComponent("@acme/missing/admin#Gone")).toBeUndefined();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });
