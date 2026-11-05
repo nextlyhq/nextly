@@ -425,8 +425,18 @@ describe("the icon strip", () => {
     );
     expect(disabled).toContain("opacity: 0.5");
     expect(disabled).toContain("cursor: not-allowed");
-    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled):hover");
+    expect(FLAT).toContain(".nx-icon-choice__option:not(:disabled)");
     expect(FLAT).not.toMatch(/\.nx-icon-choice__option:hover/);
+  });
+
+  it("keeps a chosen icon's fill under the pointer", () => {
+    // The hover fill is an unchosen option's; on a chosen one it would hide
+    // which is chosen, since an icon has no label to carry the weight.
+    const hover = FLAT.match(
+      /\.nx-icon-choice__option:not\(:disabled\)[^{,]*:hover/
+    )?.[0];
+    expect(hover).toBeDefined();
+    expect(hover).toContain(':not([aria-checked="true"])');
   });
 });
 

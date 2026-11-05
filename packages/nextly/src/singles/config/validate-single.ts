@@ -43,6 +43,7 @@ import {
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldTypeShared,
+  validateIconDefaultShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validatePluginFieldOptionsShared,
@@ -112,6 +113,7 @@ export type SingleValidationErrorCode =
   | "DECIMAL_PRECISION_INVALID"
   | "DECIMAL_SCALE_INVALID"
   | "DECIMAL_SCALE_EXCEEDS_PRECISION"
+  | "ICON_DEFAULT_INVALID"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -268,6 +270,10 @@ function validateField(
 
     case "number":
       validateNumberDecimalDimensionsShared(f, path, errsBase);
+      break;
+
+    case "icon":
+      validateIconDefaultShared(f, path, errsBase);
       break;
   }
 }
