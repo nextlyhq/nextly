@@ -24,6 +24,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import { writeLayoutSettings } from "../default-layout/store";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import {
@@ -488,6 +490,52 @@ describe.each(getConfiguredTestDialects())(
         layout: null,
       });
       expect(res.status).toBe(400);
+    });
+
+    it("names the header of the site's default Layout for a page that names none", async () => {
+      // A page with no Layout of its own, still drawing its header and
+      // footer, is drawn inside the site's default: that default's header
+      // component is one it needs, and the default itself is not offered.
+      const crest = idOf(
+        await direct.create({
+          collection: COMPONENTS_SLUG,
+          data: {
+            title: "Crest",
+            slug: "crest",
+            content: componentDocument("crest"),
+            status: "draft",
+          },
+          overrideAccess: true,
+        })
+      );
+      const site = idOf(
+        await direct.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Site",
+            slug: "site",
+            areas: [{ area: "header", component: crest }],
+            status: "published",
+          },
+          overrideAccess: true,
+        })
+      );
+      await writeLayoutSettings(
+        t.nextly as unknown as Parameters<typeof writeLayoutSettings>[0],
+        { layouts: LAYOUTS_SLUG, settings: PAGE_BUILDER_SETTINGS_SLUG },
+        { defaultLayout: site }
+      );
+      const res = await route(PUBLISH_READINESS_ROUTE_PATH, siteEditor, {
+        documents: [pageDocument([])],
+        layout: null,
+        siteDefault: true,
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect(
+        ((await res.json()) as PublishReadinessResponse).dependencies
+      ).toEqual([
+        { kind: "component", id: crest, title: "Crest", mayPublish: true },
+      ]);
     });
 
     it("refuses a body it does not accept, naming nothing", async () => {
