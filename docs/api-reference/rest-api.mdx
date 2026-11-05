@@ -176,7 +176,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `404`  | `NOT_FOUND`                                 | Resource does not exist.                                                                                                                                                                                                                                                            |
 | `409`  | `STALE_VERSION`                             | The document changed since the `_rev` you sent. See [Versions and conflicts](#versions-and-conflicts).                                                                                                                                                                              |
 | `409`  | `CONFLICT`, `DUPLICATE`                     | A state that refuses the request, a duplicate email, etc.                                                                                                                                                                                                                           |
-| `428`  | `VERSION_REQUIRED`                          | A bulk update by ids gave a version for some ids and not for others.                                                                                                                                                                                                                |
+| `428`  | `VERSION_REQUIRED`                          | An update sent neither the `_rev` from your last read nor `"_overwrite": true`. See [Versions and conflicts](#versions-and-conflicts).|
 | `413`  | `PAYLOAD_TOO_LARGE`                         | Upload bigger than configured cap.                                                                                                                                                                                                                                                  |
 | `415`  | `UNSUPPORTED_MEDIA_TYPE`                    | Wrong `Content-Type`.                                                                                                                                                                                                                                                               |
 | `422`  | `INVALID_INPUT`                             | Semantic validation failed.                                                                                                                                                                                                                                                         |
@@ -214,8 +214,23 @@ curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123
 ```
 
 The answer carries the new `_rev`, which the next save sends. Code that reads a document once and
-then saves it several times takes `_rev` from each save's answer. An update with no `_rev` is
-applied as before.
+then saves it several times takes `_rev` from each save's answer.
+
+Every update must say which version it changes. One that sends neither `_rev` nor
+`"_overwrite": true` (see [Choosing to overwrite](#choosing-to-overwrite)) is refused, and nothing
+is written:
+
+```json
+{
+  "error": {
+    "code": "VERSION_REQUIRED",
+    "message": "This update must say which version of the document it changes. Send back the `_rev` from your last read of it, or set `_overwrite: true` to replace whatever is stored.",
+    "data": { "versionKey": "_rev", "overwriteKey": "_overwrite" }
+  }
+}
+```
+
+The status is `428`. Creates, deletes and autosave send neither.
 
 A save in one language is judged on that language and on the shared fields, never on another
 language's translations. A version read in every language is accepted for a save of one of them.
@@ -263,7 +278,8 @@ To go on, read the document again, apply your change to what you get, and save w
 ### Choosing to overwrite
 
 Send `"_overwrite": true` with the values, beside the `_rev` you read, and the update is applied
-whatever the document's current version:
+whatever the document's current version. Code that never read the document sends `_overwrite`
+alone:
 
 ```bash
 curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
@@ -287,9 +303,12 @@ changes it replaced ("Overwrote changes by Ana"), and otherwise it says the save
 | Restore a version (`.../versions/<n>/restore`) | In the version's language. The answer carries the new `_rev`. |
 | Take a working draft live (`.../versions/working-draft/take-live`) | On the shared fields and the language of the pending change, once there is one. |
 | Discard a working draft (`DELETE .../versions/working-draft`) | Before anything is removed. `_rev` and `_overwrite` go in the query string: `?locale=en&_rev=7`. |
-| Bulk update by ids (`.../entries/bulk-update`) | Each id on its own, through `"revs": { "<id>": "<_rev>" }`. An out-of-date id comes back in `errors` with `STALE_VERSION`, and the others are applied. A `revs` that leaves out an id is a `428 VERSION_REQUIRED`. |
-| Bulk update by query (`PATCH` on `.../entries` with a `where`) | Not by version: a `_rev` or `revs` there is a `400`, since one version can't speak for every document the query matches. |
+| Bulk update by ids (`.../entries/bulk-update`) | Each id on its own, through `"revs": { "<id>": "<_rev>" }`. An out-of-date id comes back in `errors` with `STALE_VERSION`, and the others are applied. A `revs` that leaves out an id is a `428 VERSION_REQUIRED`. To write them whatever they hold, send `"_overwrite": true` in `data` instead; `revs` and `_overwrite` together are a `400`. |
+| Bulk update by query (`PATCH` on `.../entries` with a `where`) | Not by version: a `_rev` or `revs` there is a `400`, since one version can't speak for every document the query matches. It needs `"_overwrite": true` in `data`. |
 | Create, delete, a [release](/docs/releases)'s scheduled run, an autosave | Not judged. |
+
+Every write above the last row needs `_rev` (or `revs`) or `_overwrite: true`, and one that sends
+neither is a `428 VERSION_REQUIRED`.
 
 An entry's paths sit under `/admin/api/collections/<slug>/entries/<id>`, and a Single's under
 `/admin/api/singles/<slug>`.
@@ -586,13 +605,14 @@ curl -X POST "http://localhost:3000/admin/api/collections/posts/entries" \
 }
 ```
 
-Update (PATCH a single field set; everything not in the body is left alone):
+Update (PATCH a single field set; everything not in the body is left alone), with the `_rev`
+your last read returned (see [Versions and conflicts](#versions-and-conflicts)):
 
 ```bash
 curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"status":"published"}'
+  -d '{"status":"published","_rev":"7"}'
 ```
 
 Delete:
@@ -641,7 +661,7 @@ Bulk update by IDs:
 curl -X POST "http://localhost:3000/admin/api/collections/posts/entries/bulk-update" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"ids":["post-1","post-2"],"data":{"status":"archived"}}'
+  -d '{"ids":["post-1","post-2"],"data":{"status":"archived"},"revs":{"post-1":"7","post-2":"3"}}'
 ```
 
 Bulk update by query (PATCH on the collection root with a `where` clause in the body):
@@ -650,7 +670,7 @@ Bulk update by query (PATCH on the collection root with a `where` clause in the 
 curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived"}}'
+  -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived","_overwrite":true}}'
 ```
 
 ### Singles
@@ -673,7 +693,7 @@ Update content:
 curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
-  -d '{"siteName":"My New Site","maintenanceMode":false}'
+  -d '{"siteName":"My New Site","maintenanceMode":false,"_rev":"4"}'
 ```
 
 ### Document locks
