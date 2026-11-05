@@ -177,8 +177,12 @@ const LACKS: Record<OldBuilderSignaturePart, string> = {
  * lacks say why it is not ignored.
  */
 export function partialBuilderFileLine(file: PartialBuilderFile): string {
-  const lacks = file.lacks.map(part => LACKS[part]).join("; it ");
-  return `${file.file} has the name of an earlier Schema Builder's file but is checked as a migration: it ${lacks}.`;
+  return `${file.file} has the name of an earlier Schema Builder's file but is checked as a migration: it ${partialBuilderFileLacks(file)}.`;
+}
+
+/** What a partial file lacks of the signature, as a clause: "has a snapshot beside it". */
+export function partialBuilderFileLacks(file: PartialBuilderFile): string {
+  return file.lacks.map(part => LACKS[part]).join("; it ");
 }
 
 /**
@@ -384,6 +388,7 @@ export function builderMigrationRemedy(filename: string): string {
     `(meta/${filename.replace(/\.sql$/, "")}.snapshot.json), so nothing ` +
     `says what the database should look like once it has run. Replace it with the ` +
     `migration \`nextly migrate:create\` writes for that change: delete ${filename}, ` +
-    `run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.`
+    `run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot; ` +
+    `or delete it, if the change is already in a migration or not wanted.`
   );
 }

@@ -161,7 +161,9 @@ import {
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   migrationFilesInRunOrder,
+  builderMigrationRemedy,
   oldBuilderFileLine,
+  partialBuilderFileLacks,
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
@@ -436,6 +438,9 @@ export async function runMigrate(
         // convention, and such a table is in no snapshot — so the drift check
         // has to be told about it or it reports a difference no migration can
         // resolve.
+        // A file with a Builder name the signature does not recognise is
+        // refused, never run as written.
+        refuseUnrecognisedBuilderFiles: true,
         knownJunctions: resolvedSchema.knownJunctions,
         declared: {
           junctions: resolvedSchema.knownJunctions,
@@ -770,6 +775,17 @@ export interface MigrateCoreDeps {
    * newly translates.
    */
   beforeMetadata?: () => Promise<void>;
+  /**
+   * Refuse, before anything changes, a pending file with a Schema Builder
+   * name and no snapshot that is not recognised as an earlier Builder's
+   * (`refuseUnrecognisedBuilderFiles`), rather than run it as written.
+   *
+   * `nextly migrate` and the production boot pass it. Off by default because
+   * the development boot runs this core too, over the files the Builder
+   * writes into the project as it saves: there the Builder has already made
+   * the change.
+   */
+  refuseUnrecognisedBuilderFiles?: boolean;
 }
 
 export interface MigrateCoreResult {
@@ -889,6 +905,16 @@ export async function previewMigrate(args: {
     previewPendingFile(m, dialect, logger);
   }
   await nameOldBuilderFiles({ ...args, logger });
+  // A real run refuses a pending file with a Builder name it does not
+  // recognise before it applies anything, whatever `--step` allows.
+  try {
+    await refuseUnrecognisedBuilderFiles({ ...args, logger });
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    logger.info(
+      `  ✖ a real run would refuse before applying anything: ${error.publicMessage}`
+    );
+  }
   // An applied file edited since it ran stops a real run before it applies
   // anything (`assertAppliedFilesUnchanged`), so the preview names it.
   if (hasLedger) {
@@ -1639,6 +1665,11 @@ export async function migrateCore(
   // merely carries the signature never vanishes without a word. Information:
   // the run does what it would without the file. The boot hands its own log.
   await nameOldBuilderFiles(deps);
+  // Before the lock: taking it creates the lock's own table on a database
+  // that has none, and a refused run leaves the schema as it was.
+  if (deps.refuseUnrecognisedBuilderFiles === true) {
+    await refuseUnrecognisedBuilderFiles(deps);
+  }
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1956,6 +1987,55 @@ export async function refuseChangedOldBuilderFiles(
   if (history !== undefined && history.oldBuilder.changed.length > 0) {
     throw oldBuilderFilesChanged(args.command, history.oldBuilder.changed);
   }
+}
+
+/**
+ * Refuses a pending file that has a Schema Builder name and no snapshot but
+ * is not recognised as an earlier Builder's (`classifyMigrationFile`'s
+ * "partial"), naming each with the part of the signature it lacks and the
+ * fix. Its statements are old Builder SQL that no snapshot checks, and the
+ * signature cannot know every file an earlier Builder wrote, so a file it
+ * does not recognise stops the run rather than running unchecked. One with a
+ * snapshot, or an ordinary name, is judged as any migration.
+ */
+async function refuseUnrecognisedBuilderFiles(
+  deps: AppHistoryArgs
+): Promise<void> {
+  const folder = await readMigrationFolder(
+    deps.migrationsDir,
+    deps.dialect,
+    deps.declared
+  );
+  const snapshotless = folder.partialBuilderFiles.filter(
+    file => !file.lacks.includes("snapshot")
+  );
+  if (snapshotless.length === 0) return;
+  // The pending files as the run and the dry run find them, so all agree.
+  const pending = new Set(
+    (
+      await findPendingFiles(
+        deps.adapter,
+        deps.db,
+        deps.dialect,
+        deps.migrationsDir,
+        deps.logger,
+        deps.declared
+      )
+    ).map(m => `${m.name}.sql`)
+  );
+  const refused = snapshotless.filter(file => pending.has(file.file));
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+    publicMessage:
+      `nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: ` +
+      refused
+        .map(file => `${file.file}, which ${partialBuilderFileLacks(file)}`)
+        .join("; ") +
+      ". " +
+      refused.map(file => builderMigrationRemedy(file.file)).join(" "),
+    logContext: { files: refused.map(file => file.file) },
+  });
 }
 
 /** Names each old Schema Builder file in the folder (`oldBuilderFileLine`). */

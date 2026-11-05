@@ -56,6 +56,8 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
+    refuseUnrecognisedBuilderFiles?: boolean;
     /** See `MigrateCoreDeps.declared`. */
     declared?: {
       junctions?: ReadonlySet<string>;
@@ -251,6 +253,9 @@ async function applyBootMigrations(
     ...(args.lockWaitMs !== undefined ? { lockWaitMs: args.lockWaitMs } : {}),
     ttlSeconds: args.config.db.migrateLockTtlSeconds,
     knownJunctions: resolvedSchema.knownJunctions,
+    // A file with a Builder name the signature does not recognise is refused
+    // here as `nextly migrate` refuses it: this boot runs the same files.
+    refuseUnrecognisedBuilderFiles: true,
     // What the declared schema names, which old Builder files are judged
     // against as `nextly migrate` judges them.
     declared: {

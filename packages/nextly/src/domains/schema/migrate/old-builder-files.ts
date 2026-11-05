@@ -25,7 +25,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { getTableName } from "../../collections/services/collection-utils";
-import { parseEntityHeaders } from "../migrate-create/format-file";
+import { parseEntityHeaders } from "../migrate-create/entity-headers";
 import { MANAGED_TABLE_PREFIXES } from "../pipeline/managed-tables";
 import {
   indexNameForColumn,
@@ -283,8 +283,8 @@ function writesOwnRegistryRow(
 /**
  * (d): whether every statement changes only the entity's own tables, drops
  * an index traced to one of them by name, or writes its own registry row; an
- * `_i18n_` file may also keep the entity's own translated values in the
- * shared archive (`keepsOwnValues`). A drop file is held to more: every
+ * `_i18n_` or `_update_` file may also keep the entity's own translated
+ * values in the shared archive (`keepsOwnValues`). A drop file is held to more: every
  * statement must be a DROP TABLE, since that is all the Builder ever wrote
  * into one.
  */
@@ -304,7 +304,9 @@ function staysInEntity(
   }
   return statements.every(statement => {
     if (writesOwnRegistryRow(entity, statement, file.dialect)) return true;
-    if (verb === "i18n" && keepsOwnValues(entity, statement, file, owns)) {
+    // `_i18n_` turned translation off; `_update_` moved a field out of it.
+    const archives = verb === "i18n" || verb === "update";
+    if (archives && keepsOwnValues(entity, statement, file, owns)) {
       return true;
     }
     const indexes =
@@ -322,8 +324,8 @@ function staysInEntity(
 
 /**
  * Whether `statement` keeps the entity's own translated values in the shared
- * archive, as an earlier Builder's `_i18n_` file did before dropping a
- * translation: the archive created if absent, or the values copied into it
+ * archive, as an earlier Builder's `_i18n_` or `_update_` file did before
+ * dropping a translation: the archive created if absent, or the values copied into it
  * under the entity's own slug from its own tables (and the archive itself,
  * which the copy reads to skip a value already kept).
  */

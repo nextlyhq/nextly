@@ -315,6 +315,30 @@ describe.each(getConfiguredTestDialects())(
       expect((await state(instance!, dialect)).tables).toContain("dc_keep");
     });
 
+    // A file with a Builder name that the classifier cannot recognise as an
+    // earlier Builder's, and no snapshot, is refused as before this release:
+    // its statements are old Builder SQL nothing checks. Here a custom
+    // junction renamed by an update, a name nothing declares any more.
+    it("refuses a Builder-named file it cannot recognise, naming it and the fix", async () => {
+      const t = instance!;
+      const file = "1761732000000_update_posts.sql";
+      writeFileSync(
+        join(dir, "migrations", file),
+        `ALTER TABLE ${q}post_tag_links${q} RENAME TO ${q}post_tag_refs${q};\n`
+      );
+      const before = await state(t, dialect);
+
+      const { code, said } = await migrate();
+
+      expect(code, said.join("\n")).toBe(1);
+      const refusal = said.join("\n");
+      expect(refusal).toContain(file);
+      expect(refusal).toMatch(/not its own entity's/);
+      expect(refusal).toContain("nextly migrate:create");
+      expect(refusal).toMatch(/or delete it/);
+      expect(await state(t, dialect)).toEqual(before);
+    });
+
     it("a hand-written file with no snapshot still applies as written", async () => {
       const t = instance!;
       const file = "20261028_120000_000_hand_written.sql";

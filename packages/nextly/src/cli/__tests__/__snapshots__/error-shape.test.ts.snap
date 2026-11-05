@@ -478,9 +478,9 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
 `;
 
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
-"✗ nextly migrate does not apply a Schema Builder migration file with no snapshot.
+"✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
-  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.
+  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot; or delete it, if the change is already in a migration or not wanted.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-migration-snapshot-missing  (BUILDER_MIGRATION_SNAPSHOT_MISSING)"
 `;
 

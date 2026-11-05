@@ -325,7 +325,7 @@ function updatedRow(cursor: StatementCursor): RegistryRowWrite | undefined {
 const ARCHIVE_TABLE = "nextly_i18n_archive";
 
 /**
- * A statement an earlier Builder wrote into an `_i18n_` file to keep a
+ * A statement an earlier Builder wrote into an `_i18n_` or `_update_` file to keep a
  * translation's values: the archive created if absent, or the values copied
  * into it, with the slug the rows are kept under and every table read.
  */

@@ -211,13 +211,13 @@ export const MIGRATION_CASES = {
         "The migrate lock was released without resolving the migration. " +
         "Nothing was written; retry once no other schema operation is running.",
     }),
-  // As `nextly migrate` threw it before old Builder files were ignored: the code is
-  // released, so its mapping stays while an earlier version can still raise it.
+  // As `refuseUnrecognisedBuilderFiles` in `cli/commands/migrate.ts` throws it.
   BUILDER_MIGRATION_SNAPSHOT_MISSING: () =>
     new NextlyError({
       code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
       publicMessage:
-        `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+        `nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: ` +
+        `${BUILDER_FILE}, which has a statement on a table that is not its own entity's, or one that cannot be read. ` +
         builderMigrationRemedy(BUILDER_FILE),
       logContext: { files: [BUILDER_FILE] },
     }),

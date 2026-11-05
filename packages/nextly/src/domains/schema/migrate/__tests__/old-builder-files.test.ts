@@ -540,13 +540,15 @@ describe("an old _i18n_ file that archives translations", () => {
   const classify = (name: string, content: string) =>
     classifyMigrationFile(facts({ name, content, dialect: "postgresql" }));
 
-  it("ignores the archive of the entity's own values", () => {
-    expect(
-      classify(
-        "1730000000015_i18n_posts.sql",
-        archive("posts", "dc_posts_locales")
-      )
-    ).toEqual({ kind: "old-builder", entity: "posts" });
+  it.each([
+    ["an _i18n_ file", "1730000000015_i18n_posts.sql"],
+    // A field moved out of translation while localization stays on.
+    ["an _update_ file", "1730000000015_update_posts.sql"],
+  ])("ignores the archive of the entity's own values in %s", (_n, name) => {
+    expect(classify(name, archive("posts", "dc_posts_locales"))).toEqual({
+      kind: "old-builder",
+      entity: "posts",
+    });
   });
 
   it.each([
@@ -561,8 +563,8 @@ describe("an old _i18n_ file that archives translations", () => {
       archive("posts", "dc_comments_locales"),
     ],
     [
-      "in a file that is not an _i18n_ one",
-      "1730000000015_update_posts.sql",
+      "in a create file",
+      "1730000000015_create_posts.sql",
       archive("posts", "dc_posts_locales"),
     ],
   ])("is partial for an archive %s", (_n, name, content) => {
