@@ -173,6 +173,27 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select role_inherits",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select roles",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select users",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/domains/users/services/plaintext-password-cleanup.ts#PlainTextPasswordCleanup.clear (opened the transaction) \u00b7 insert users",
     witness:
       "packages/nextly/src/domains/users/__tests__/plaintext-password-cleanup.integration.test.ts",
@@ -285,6 +306,27 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     witness:
       "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
     reason: PIPELINE,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select role_inherits",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select roles",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts#askedWhileOpen (opened the transaction) \u00b7 select users",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/role-caches-after-the-outer-commit.integration.test.ts",
+    reason: CALLER,
   },
   {
     dialect: "postgresql",

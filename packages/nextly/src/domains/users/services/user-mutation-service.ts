@@ -1742,11 +1742,13 @@ export class UserMutationService extends BaseService {
 
       // The grant and the roles were written in the insert's transaction; the
       // role caches that answered for this account before it existed are
-      // flushed now.
+      // flushed once they commit. Inside an enclosing transaction that is its
+      // commit: flushed before it, a permission check on another connection
+      // could cache the account as holding no role, and keep that answer.
       if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
-        await (
-          await serviceContainerFor(this.adapter)
-        ).userRoles.invalidateRoleCaches(String(user.id));
+        const userRoles = (await serviceContainerFor(this.adapter)).userRoles;
+        const createdId = String(user.id);
+        await this.afterCommit(() => userRoles.invalidateRoleCaches(createdId));
       }
 
       // Hand the invite link back to the admin. The token was committed with
