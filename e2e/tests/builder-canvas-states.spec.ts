@@ -204,17 +204,22 @@ async function attachAxeUndecided(page: Page, testInfo: TestInfo) {
     ),
     contentType: "application/json",
   });
+  // The control: the scan reached the layer's text at all, judged or not, so
+  // an empty list of violations is not an empty scan.
+  const reached =
+    undecided.length +
+    [...results.passes, ...results.violations].reduce(
+      (count, rule) => count + rule.nodes.length,
+      0
+    );
+  expect(
+    reached,
+    "axe's contrast rule reached the layer's text"
+  ).toBeGreaterThan(0);
   // A violation axe COULD judge is still a failure.
   expect(results.violations, "axe's contrast violations in the layer").toEqual(
     []
   );
-}
-
-/** The canvas ground a mark is drawn over: the frame's page background. */
-async function canvasGround(page: Page): Promise<string> {
-  return canvasFrame(page)
-    .locator(".nx-canvas")
-    .evaluate(element => getComputedStyle(element).backgroundColor);
 }
 
 /**
@@ -225,7 +230,8 @@ async function canvasGround(page: Page): Promise<string> {
  */
 async function groundBehind(
   page: Page,
-  part: Locator
+  part: Locator,
+  at: { inset?: number } = {}
 ): Promise<{ own: string | null; page: string }> {
   const own = await part.evaluate(element => {
     for (
@@ -248,7 +254,11 @@ async function groundBehind(
     element => (element as HTMLElement).offsetWidth
   );
   const zoom = frameBox.width / laidOutWidth;
-  const x = (box.x + box.width / 2 - frameBox.x) / zoom;
+  // The part's centre, or a point just inside its left edge.
+  const x =
+    ((at.inset === undefined ? box.x + box.width / 2 : box.x + at.inset) -
+      frameBox.x) /
+    zoom;
   const y = (box.y + box.height / 2 - frameBox.y) / zoom;
   // Every background from the element at that point out to the root, each
   // possibly translucent (an editor tint over the page's own), composited
@@ -290,6 +300,16 @@ async function groundBehind(
   return { own, page: beneath };
 }
 
+/**
+ * The page's colour beneath a mark's ring: sampled just inside the block's
+ * edge, where the ring is drawn, so a block painting a background of its own
+ * is the ground its ring is judged against rather than the canvas's.
+ */
+async function groundUnder(page: Page, selector: string): Promise<string> {
+  const mark = canvasLayer(page).locator(selector).first();
+  return (await groundBehind(page, mark, { inset: 3 })).page;
+}
+
 /** A mark's outline colour, and a pseudo-element tag's colours if asked. */
 async function markColours(
   page: Page,
@@ -327,12 +347,15 @@ for (const theme of ["light", "dark"] as const) {
     }) => {
       const { id } = await seed(page);
       await open(page, id, theme);
-      const ground = await canvasGround(page);
 
       await canvasBlock(page, HEADING).click();
       const selected = await markColours(page, `${MARK}[data-mark="selected"]`);
       expect(
-        await contrast(page, selected.outline, ground),
+        await contrast(
+          page,
+          selected.outline,
+          await groundUnder(page, `${MARK}[data-mark="selected"]`)
+        ),
         "the selection ring against the page"
       ).toBeGreaterThanOrEqual(3);
 
@@ -361,7 +384,14 @@ for (const theme of ["light", "dark"] as const) {
         "::before"
       );
       expect(
-        await contrast(page, hovered.outline, ground),
+        await contrast(
+          page,
+          hovered.outline,
+          await groundUnder(
+            page,
+            `${MARK}[data-mark="hovered"][data-hover-label]`
+          )
+        ),
         "the hover outline against the page"
       ).toBeGreaterThanOrEqual(3);
       expect(
@@ -375,7 +405,6 @@ for (const theme of ["light", "dark"] as const) {
     }, testInfo) => {
       const { id } = await seed(page);
       await open(page, id, theme);
-      const ground = await canvasGround(page);
 
       await canvasFrame(page)
         .locator(`[data-nx-instance="${PLACED}"]`)
@@ -387,7 +416,14 @@ for (const theme of ["light", "dark"] as const) {
         "::before"
       );
       expect(
-        await contrast(page, placement.outline, ground),
+        await contrast(
+          page,
+          placement.outline,
+          await groundUnder(
+            page,
+            `${MARK}[data-mark="selected"][data-placement-label]`
+          )
+        ),
         "the component's frame against the page"
       ).toBeGreaterThanOrEqual(3);
       expect(
@@ -499,6 +535,15 @@ test.describe("the canvas while an author works", () => {
     // The control: the probe sees the image's own request at all.
     expect(first, "the image's first request is counted").toBeGreaterThan(0);
 
+    // The recovery point the edits below schedule, written after its
+    // debounce: the quiet is judged once that write and the renders after it
+    // have run, not before them.
+    const checkpoint = page.waitForResponse(
+      response =>
+        response.request().method() !== "GET" &&
+        new URL(response.url()).pathname.endsWith("/autosave"),
+      { timeout: 30_000 }
+    );
     // Select, hover, act from the toolbar, and edit text and leave it by
     // Escape: none changes the image.
     await canvasBlock(page, HEADING).click();
@@ -509,6 +554,9 @@ test.describe("the canvas while an author works", () => {
     await page.keyboard.type(" again");
     await page.keyboard.press("Escape");
     await expect(canvasBlock(page, HEADING)).toContainText("again");
+    expect((await checkpoint).ok(), "the recovery point was written").toBe(
+      true
+    );
     await page.waitForTimeout(500);
 
     expect(fetched.length, "the image is not fetched again").toBe(first);
