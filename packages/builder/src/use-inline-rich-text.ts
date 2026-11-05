@@ -136,17 +136,38 @@ function caretOffsetAt(
 ): number | undefined {
   const found = caretRangeAt(element.ownerDocument, point);
   if (found === undefined) return undefined;
-  if (!element.contains(found.container)) return undefined;
+  return characterOffsetIn(element, found.container, found.offset);
+}
+
+/**
+ * How many characters of `element`'s text come before a position in it, or
+ * `undefined` when the position is outside it or no range can end there. The
+ * one measure both a pointer's caret and the selection's are taken by.
+ */
+function characterOffsetIn(
+  element: HTMLElement,
+  container: Node,
+  offset: number
+): number | undefined {
+  if (!element.contains(container)) return undefined;
   const upToCaret = element.ownerDocument.createRange();
   upToCaret.selectNodeContents(element);
   try {
-    upToCaret.setEnd(found.container, found.offset);
+    upToCaret.setEnd(container, offset);
   } catch {
     // The located node is not one this range can end in — an offset past its
     // length, or a node type the range refuses. The editor's own answer stands.
     return undefined;
   }
   return upToCaret.toString().length;
+}
+
+/** Where the selection's caret is in `element`, as a character offset. */
+function selectionOffsetIn(element: HTMLElement): number | undefined {
+  const selection = element.ownerDocument.getSelection();
+  const at = selection?.focusNode;
+  if (selection === null || at === null || at === undefined) return undefined;
+  return characterOffsetIn(element, at, selection.focusOffset);
 }
 
 /** Which passage is being edited. */
@@ -227,6 +248,49 @@ interface LoadedEditor {
 export type InlineRichTextFinished = (outcome: InlineEditOutcome) => void;
 
 /**
+ * A passage carried across a frame's page replacement: its words as typed and
+ * the baselines it opened with, for the next attach to take up.
+ */
+interface CarriedPassage {
+  readonly editing: InlineRichTextEditing;
+  readonly words: unknown;
+  readonly opened: unknown;
+  readonly baseline: unknown;
+  /** Where the caret was, so the passage resumes there. */
+  readonly caret?: number;
+}
+
+/**
+ * Finish a carried passage that cannot go on in a page: written, as finishing
+ * the edit would write it, unless the document moved on meanwhile or the
+ * value can no longer be stored, which loses the words and is said.
+ */
+function settleCarried(
+  editor: EditorState,
+  carry: CarriedPassage
+): InlineEditOutcome {
+  if (!richTextChanged(carry.baseline, carry.words)) {
+    return INLINE_EDIT_UNCHANGED;
+  }
+  const { nodeId, prop } = carry.editing;
+  if (richTextMovedOn(editor.document, nodeId, prop, carry.opened)) {
+    return INLINE_EDIT_DISCARDED;
+  }
+  const op = richInlineTextOp(
+    editor.document,
+    nodeId,
+    prop,
+    carry.words,
+    carry.baseline,
+    carry.opened
+  );
+  const written = op === null ? null : editor.apply(op);
+  return written === null
+    ? INLINE_EDIT_DISCARDED
+    : { status: "written", document: written };
+}
+
+/**
  * How the editor is fetched.
  *
  * A parameter rather than a hard import so the rules of this hook can be
@@ -293,12 +357,7 @@ export function useInlineRichText(
    * and the baselines it opened with, for the next attach to take up, so the
    * replacement neither writes an unfinished edit nor loses a refused one.
    */
-  const carried = useRef<{
-    editing: InlineRichTextEditing;
-    words: unknown;
-    opened: unknown;
-    baseline: unknown;
-  } | null>(null);
+  const carried = useRef<CarriedPassage | null>(null);
 
   /**
    * The element a pointer handed over, used in place of searching for one,
@@ -337,6 +396,12 @@ export function useInlineRichText(
     opened: unknown;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
+    /**
+     * Where the caret last was, as a character offset, kept as the author
+     * moves it: by the time a frame replaces its page, the old page's
+     * selection may be gone with it.
+     */
+    caret?: number;
     /**
      * The passage as it was when its write was last refused, while it stays
      * open. A second deliberate Escape over the SAME passage lets it go; one
@@ -384,9 +449,18 @@ export function useInlineRichText(
     const live = mounted.current;
     if (live === null) {
       // No session, but possibly a pending one: `editing` is set from the
-      // moment the passage is requested and the editor arrives later.
+      // moment the passage is requested and the editor arrives later. A
+      // passage carried across a page replacement is the edit's outcome
+      // while its editor loads, and is settled NOW: a host asking before it
+      // saves or closes must not be told nothing changed.
+      const pending = carried.current;
+      carried.current = null;
       letGo();
-      return report(INLINE_EDIT_UNCHANGED);
+      return report(
+        pending === null
+          ? INLINE_EDIT_UNCHANGED
+          : settleCarried(editorRef.current, pending)
+      );
     }
     /*
      * Let go only once the write is SETTLED, never before.
@@ -481,6 +555,8 @@ export function useInlineRichText(
   }, [letGo, report]);
 
   const cancel = useCallback(() => {
+    // Cancelling lets the words go, carried ones included.
+    carried.current = null;
     letGo();
   }, [letGo]);
 
@@ -552,22 +628,43 @@ export function useInlineRichText(
     // Read once, here, rather than depended on — see `latest`. A host that
     // supplies no loader edits plain text and simply never opens a passage.
     const fetch = latest.current.load;
-    if (fetch === undefined) return;
+    if (fetch === undefined) {
+      // No editor to resume a carried passage in: it is finished here.
+      const pending = carried.current;
+      if (pending !== null) {
+        carried.current = null;
+        setEditing(null);
+        report(settleCarried(editorRef.current, pending));
+      }
+      return;
+    }
     // The element the gesture landed on, when there was one. Searching the
     // canvas's document is the fallback for a keyboard caller, which has no
     // element: the frame's when the canvas is in one.
     const { element: given, point } = handed.current;
     handed.current = NO_HANDOVER;
-    const carry = carried.current?.editing === editing ? carried.current : null;
-    carried.current = null;
+    /*
+     * The carry stays where it is until a session takes it up: a second page
+     * replacement before the editor arrives runs this again, and the words
+     * must still be there. One carried for a different passage cannot go on.
+     */
+    const pending = carried.current;
+    const carry = pending?.editing === editing ? pending : null;
+    if (pending !== null && carry === null) {
+      carried.current = null;
+      report(settleCarried(editorRef.current, pending));
+    }
     const element = given ?? passageIn(canvasDocument, editing);
     if (element === null) {
       // Nothing on screen carries this passage. The node may have been removed
       // between the request and this effect; dropping the edit is the honest
       // answer, and leaving `editing` set would show a caret nobody can see.
-      // Words carried from a replaced page have nowhere to go, which is said.
+      // Words carried from a replaced page have nowhere to go here.
       setEditing(null);
-      if (carry !== null) report(INLINE_EDIT_DISCARDED);
+      if (carry !== null) {
+        carried.current = null;
+        report(settleCarried(editorRef.current, carry));
+      }
       return;
     }
 
@@ -629,8 +726,8 @@ export function useInlineRichText(
         ).find(t => t.prop === editing.prop);
         if (target === undefined) {
           // The passage stopped being editable while the chunk was loading.
+          // A carry is settled by the cleanup this sets off.
           setEditing(null);
-          if (carry !== null) report(INLINE_EDIT_DISCARDED);
           return;
         }
         /*
@@ -668,8 +765,10 @@ export function useInlineRichText(
           return;
         }
         const session = attachment.session;
+        // Taken up: the session holds the words now.
+        carried.current = null;
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-        session.focus(caret);
+        session.focus(carry?.caret ?? caret);
         mounted.current = {
           session,
           element,
@@ -738,6 +837,11 @@ export function useInlineRichText(
      */
     const onBlur = () => commit();
 
+    const trackCaret = () => {
+      const live = mounted.current;
+      if (live?.element === element) live.caret = selectionOffsetIn(element);
+    };
+    element.ownerDocument.addEventListener("selectionchange", trackCaret);
     element.addEventListener("keydown", onKeyDown);
     element.addEventListener("blur", onBlur);
     element.addEventListener("pointerdown", swallow);
@@ -762,11 +866,10 @@ export function useInlineRichText(
        * navigation nobody warned about takes the work with it.
        */
       const live = mounted.current;
-      if (
-        live !== null &&
+      const replaced =
         latest.current.canvasDocument !== canvasDocument &&
-        editingRef.current === editing
-      ) {
+        editingRef.current === editing;
+      if (live !== null && replaced) {
         /*
          * The frame REPLACED its page under the open passage, and this effect
          * runs again for the new one. Carried rather than committed: the
@@ -778,6 +881,7 @@ export function useInlineRichText(
           words: live.session.read(),
           opened: live.opened,
           baseline: live.baseline,
+          caret: live.caret,
         };
         mounted.current = null;
         live.session.detach();
@@ -792,7 +896,14 @@ export function useInlineRichText(
          * state until some later passage displaces it. Released explicitly.
          */
         if (mounted.current !== null) letGo();
+      } else if (!replaced && carried.current !== null) {
+        // A carry no session took up — the passage closed, the canvas went,
+        // or the editor never arrived — is finished here, never dropped.
+        const pending = carried.current;
+        carried.current = null;
+        report(settleCarried(editorRef.current, pending));
       }
+      element.ownerDocument.removeEventListener("selectionchange", trackCaret);
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", onBlur);
       element.removeEventListener("pointerdown", swallow);
