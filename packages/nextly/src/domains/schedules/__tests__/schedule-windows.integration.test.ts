@@ -143,6 +143,10 @@ function hourly(): CollectedSchedule {
 describe.each(getConfiguredTestDialects())(
   "a plugin's schedule runs once per window (%s)",
   dialect => {
+    it("refuses to start with a schedule that cannot run, naming the plugin", async () => {
+      await expect(boot(dialect, "every hour")).rejects.toThrow(PLUGIN);
+    });
+
     it("enqueues a due window's job once, and not again in the same window after the job has finished", async () => {
       const ran: unknown[] = [];
       const t = await boot(dialect, "0 * * * *", ran);
