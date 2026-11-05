@@ -1689,6 +1689,18 @@ function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * What an update wrote, as an in-transaction handler is shown it: the pending
+ * draft, marked, when the edit was held as one, else the document the write
+ * left. One answer for both update paths.
+ */
+function writtenByUpdate(
+  updated: Record<string, unknown>,
+  draft: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  return draft ? markedDraft(draft) : updated;
+}
+
+/**
  * The update's patch without the stamp the write adds to it: `updatedAt` is
  * set by the write, never sent, so a validator is not shown it as sent.
  */
@@ -14425,7 +14437,7 @@ export class CollectionMutationService extends BaseService {
 
         // What the in-transaction phase is handed: the document this attempt
         // leaves, set below once the row is re-read. Undefined when the row
-        // is gone, and then nothing was written and the phase does not run.
+        // is gone: then nothing was written, and the phase is not run.
         let writtenDocument: Record<string, unknown> | undefined;
 
         // Capture a version snapshot of the post-update document atomically
@@ -14769,9 +14781,10 @@ export class CollectionMutationService extends BaseService {
             const updatedDocument = assembleDocument(documentParts);
             // A held edit left the live row as it was, so what this write
             // produced is the pending draft, marked as the hooks see it.
-            writtenDocument = workingDraftDocument
-              ? markedDraft(workingDraftDocument)
-              : updatedDocument;
+            writtenDocument = writtenByUpdate(
+              updatedDocument,
+              workingDraftDocument
+            );
             if (!storeAsWorkingDraft) {
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
@@ -15095,17 +15108,15 @@ export class CollectionMutationService extends BaseService {
         // Last in the transaction, and so again on each retried attempt,
         // which is why every handler's writes go through this `tx`: a
         // discarded attempt's roll back with it.
-        if (writtenDocument) {
-          await this.runInTransactionPhase(tx, {
-            collection: params.collectionName,
-            operation: "update",
-            id: params.entryId,
-            data: writtenDocument,
-            originalData: previousDocument ?? undefined,
-            user: params.user,
-            context: sharedContext,
-          });
-        }
+        await this.runInTransactionPhase(tx, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: writtenDocument,
+          originalData: previousDocument,
+          user: params.user,
+          context: sharedContext,
+        });
       }, versionConflictRetries());
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
@@ -18051,14 +18062,22 @@ export class CollectionMutationService extends BaseService {
    */
   private async runInTransactionPhase(
     tx: TransactionContext,
-    input: InTransactionPhaseInput
+    input: Omit<InTransactionPhaseInput, "data" | "originalData"> & {
+      /** Undefined when the write found no row: nothing was written. */
+      data: Record<string, unknown> | undefined;
+      originalData?: Record<string, unknown> | null;
+    }
   ): Promise<void> {
+    if (input.data === undefined) return;
     const registry = this.hookService.hookRegistry;
     if (!registry.hasInTransaction(input.collection)) return;
     const { runInTransactionPhase } = await import(
       "../../../hooks/in-transaction-phase"
     );
-    await runInTransactionPhase(registry, tx, input);
+    await runInTransactionPhase(registry, tx, {
+      ...input,
+      originalData: input.originalData ?? undefined,
+    });
   }
 
   /**
@@ -19419,10 +19438,8 @@ export class CollectionMutationService extends BaseService {
         collection: params.collectionName,
         operation: "update",
         id: entryId,
-        data: workingDraftDocument
-          ? markedDraft(workingDraftDocument)
-          : updatedDocument,
-        originalData: previousDocument ?? undefined,
+        data: writtenByUpdate(updatedDocument, workingDraftDocument),
+        originalData: previousDocument,
         user: params.user,
         context: sharedContext,
       });
