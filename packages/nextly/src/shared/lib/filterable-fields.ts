@@ -623,6 +623,15 @@ function namesHidden(key: string, hidden: ReadonlySet<string>): boolean {
 }
 
 /**
+ * The declared paths of the fields a read leaves out of its rows, resolved
+ * only when asked. A read hands this rather than the paths so the declarations
+ * (a registry read and its components') are reached only once the read gate
+ * has let the caller through: a caller refused by the gate costs no schema
+ * read, and is answered by the gate whatever the registry would have said.
+ */
+export type HiddenFieldPaths = () => Promise<ReadonlySet<string>>;
+
+/**
  * Refuse a filter, a sort or a group key naming a field this read leaves out
  * of its rows (`showHiddenFields: false`, by the declared hidden paths it
  * resolved).
@@ -640,24 +649,34 @@ export function assertNoHiddenFieldQueried(
     readonly sort?: readonly string[];
     readonly groupBy?: unknown;
     /**
-     * Where the caller named the group key: a timeline's `dateField` travels
-     * as `groupBy`, and is reported under the argument the caller supplied.
+     * The argument a position is reported under where the caller named it
+     * otherwise, so a refusal points at what the caller supplied: a users
+     * read's one `sortBy` travels as `sort`, and a timeline's `dateField` as
+     * `groupBy`. A position with no label is reported under its own name.
      */
-    readonly groupByAt?: "groupBy" | "dateField";
+    readonly labels?: {
+      readonly sort?: "sortBy";
+      readonly groupBy?: "dateField";
+    };
   },
   hidden: ReadonlySet<string> | undefined
 ): void {
   if (hidden === undefined || hidden.size === 0) return;
-  const named: ReadonlyArray<readonly [Position, readonly string[]]> = [
-    ["where", [...filterKeys(query.where)]],
-    ["sort", query.sort ?? []],
-    ["groupBy", typeof query.groupBy === "string" ? [query.groupBy] : []],
+  const { labels } = query;
+  const named: ReadonlyArray<readonly [Position, string, readonly string[]]> = [
+    ["where", "where", [...filterKeys(query.where)]],
+    ["sort", labels?.sort ?? "sort", query.sort ?? []],
+    [
+      "groupBy",
+      labels?.groupBy ?? "groupBy",
+      typeof query.groupBy === "string" ? [query.groupBy] : [],
+    ],
   ];
-  const errors = named.flatMap(([at, keys]) =>
+  const errors = named.flatMap(([at, label, keys]) =>
     keys
       .filter(key => key !== "" && namesHidden(key, hidden))
       .map(key => ({
-        path: `${at === "groupBy" ? (query.groupByAt ?? at) : at}.${key}`,
+        path: `${label}.${key}`,
         code: REFUSALS[at].code,
         message: `"${key}" is hidden from this read, so it cannot be used to ${REFUSALS[at].verb}.`,
       }))

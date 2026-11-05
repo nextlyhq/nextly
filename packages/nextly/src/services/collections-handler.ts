@@ -36,6 +36,7 @@ import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../shared/lib/filterable-fields";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionFileManager } from "./collection-file-manager";
@@ -614,7 +615,7 @@ export class CollectionsHandler {
      * Fields the read leaves out of its rows: a filter or sort naming one is
      * refused, after the read gate. See the query service's `hiddenFields`.
      */
-    hiddenFields?: ReadonlySet<string>;
+    hiddenFields?: HiddenFieldPaths;
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
@@ -895,7 +896,7 @@ export class CollectionsHandler {
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
     /** Fields the read leaves out, refused in its filter after the read gate. */
-    hiddenFields?: ReadonlySet<string>;
+    hiddenFields?: HiddenFieldPaths;
   }) {
     return this.entryService.countEntries(params);
   }

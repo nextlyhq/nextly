@@ -63,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -361,7 +362,7 @@ export class CollectionEntryService extends BaseService {
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
     /** Fields the read leaves out, refused in its filter; see the query service. */
-    hiddenFields?: ReadonlySet<string>;
+    hiddenFields?: HiddenFieldPaths;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??

@@ -84,7 +84,11 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       // not match one, since which users match would.
       const hidden = hiddenUserFields(args);
       assertNoHiddenFieldQueried(
-        { sort: args.sortBy === undefined ? [] : [args.sortBy] },
+        {
+          sort: args.sortBy === undefined ? [] : [args.sortBy],
+          // Reported under the argument the caller sorted with.
+          labels: { sort: "sortBy" },
+        },
         hidden
       );
 

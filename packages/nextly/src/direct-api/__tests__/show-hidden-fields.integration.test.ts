@@ -21,7 +21,38 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+/**
+ * Each read of a source's declarations (the registry's fields, its components
+ * expanded), by slug. Both readers are wrapped, so a read reached through
+ * either is seen; each still answers from the real registry.
+ */
+const declarationReads = vi.hoisted((): string[] => []);
+
+vi.mock("../../runtime/routing/declared-fields", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../runtime/routing/declared-fields")
+    >();
+  return {
+    ...actual,
+    expandedFields: (source: {
+      kind: "collection" | "single";
+      slug: string;
+    }) => {
+      declarationReads.push(source.slug);
+      return actual.expandedFields(source);
+    },
+    hiddenFieldPaths: (source: {
+      kind: "collection" | "single";
+      slug: string;
+    }) => {
+      declarationReads.push(source.slug);
+      return actual.hiddenFieldPaths(source);
+    },
+  };
+});
 
 import {
   date,
@@ -544,6 +575,62 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(fieldCodes(trustedHidden)).toEqual(["FIELD_NOT_FILTERABLE"]);
       });
+
+      it("is refused before any of the collection's declarations are read", async () => {
+        const plain = await refusal(
+          visitor.find({ collection: "hlocked" } as never)
+        );
+        declarationReads.length = 0;
+        const answers = [
+          await refusal(
+            visitor.find({
+              collection: "hlocked",
+              where: { secret: { equals: "s-1" } },
+              showHiddenFields: false,
+            } as never)
+          ),
+          await refusal(
+            visitor.count({
+              collection: "hlocked",
+              where: { secret: { equals: "s-1" } },
+              showHiddenFields: false,
+            } as never)
+          ),
+          await refusal(
+            visitor.group({
+              collection: "hlocked",
+              groupBy: "secret",
+              showHiddenFields: false,
+            } as never)
+          ),
+          await refusal(
+            visitor.timeseries({
+              collection: "hlocked",
+              dateField: "createdAt",
+              interval: "day",
+              showHiddenFields: false,
+            } as never)
+          ),
+        ];
+        const deniedReads = [...declarationReads];
+        // The control: the same count by a caller past the gate reads them,
+        // so the empty list above is the gate's doing and not a spy unwired.
+        await refusal(
+          trusted.count({
+            collection: "hlocked",
+            where: { secret: { equals: "s-1" } },
+            showHiddenFields: false,
+          } as never)
+        );
+
+        for (const answer of answers) {
+          expect((answer as NextlyError).code).toBe(
+            (plain as NextlyError).code
+          );
+        }
+        expect(deniedReads).toEqual([]);
+        expect(declarationReads).toContain("hlocked");
+      });
     });
 
     describe("a user's custom fields", () => {
@@ -628,6 +715,8 @@ describe.each(getConfiguredTestDialects())(
 
         expect(unsorted).toBeUndefined();
         expect(fieldCodes(sorted)).toEqual(["FIELD_NOT_SORTABLE"]);
+        // Under the argument the caller supplied: a users read has no `sort`.
+        expect(fieldPaths(sorted)).toEqual(["sortBy.badge"]);
         expect(NextlyError.is(visitorPlain)).toBe(true);
         expect((visitorSorted as NextlyError).code).toBe(
           (visitorPlain as NextlyError).code

@@ -18,8 +18,9 @@
  * fields the user services read and write.
  *
  * A filter, a sort or a group key naming a hidden field is refused by core's
- * read pipeline (`assertNoHiddenFieldQueried`), handed the paths resolved
- * here, so the refusal comes after the read gate.
+ * read pipeline (`assertNoHiddenFieldQueried`), handed a lookup of the paths
+ * resolved here (`pathsOf`) that it resolves only past the read gate, so a
+ * caller the gate refuses never reaches the declarations.
  *
  * @module direct-api/namespaces/hidden-fields
  */
@@ -30,7 +31,7 @@ import {
 } from "../../domains/webhooks/sensitive-fields";
 import {
   expandedFields,
-  hiddenFieldPaths,
+  hiddenPathsOf,
   withoutHidden,
   type SourceEntity,
 } from "../../runtime/routing/declared-fields";
@@ -79,19 +80,28 @@ function once<V>(
  * few sources, and each read goes to the registry. The promise is kept, so
  * rows stripped side by side share one read in flight. Per call, never module
  * wide: declarations change at runtime.
+ *
+ * One snapshot per source: the hidden paths are derived from the same expanded
+ * fields the walk to related documents follows, so the registry and the
+ * component definitions are read once, and the paths stripped and the fields
+ * walked cannot come from two different reads of a changing schema.
  */
 class Declarations {
   private readonly hidden = new Map<string, Promise<ReadonlySet<string>>>();
   private readonly fields = new Map<
     string,
-    Promise<readonly WalkedField[] | undefined>
+    Promise<readonly SensitiveFieldSource[] | undefined>
   >();
 
   hiddenOf(source: SourceEntity): Promise<ReadonlySet<string>> {
-    return once(this.hidden, source, hiddenFieldPaths);
+    return once(this.hidden, source, async known =>
+      hiddenPathsOf(await this.fieldsOf(known))
+    );
   }
 
-  fieldsOf(source: SourceEntity): Promise<readonly WalkedField[] | undefined> {
+  fieldsOf(
+    source: SourceEntity
+  ): Promise<readonly SensitiveFieldSource[] | undefined> {
     return once(this.fields, source, expandedFields);
   }
 }

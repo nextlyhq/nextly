@@ -122,6 +122,7 @@ import {
   assertSortableField,
   filterKeys,
   filterSearchableFields,
+  type HiddenFieldPaths,
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
@@ -802,7 +803,7 @@ interface FilteredReadParams {
    */
   groupBy?: string;
   /** See `listEntries`' `hiddenFields`: the same refusal, for an aggregate. */
-  hiddenFields?: ReadonlySet<string>;
+  hiddenFields?: HiddenFieldPaths;
 }
 
 /**
@@ -1354,7 +1355,7 @@ export class CollectionQueryService extends BaseService {
     fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
     /** Declared paths of the fields this read leaves out of its rows. */
-    hiddenFields?: ReadonlySet<string>;
+    hiddenFields?: HiddenFieldPaths;
     /** Set for a timeline, whose `groupBy` is the caller's `dateField`. */
     requireTimestampGroupKey?: boolean;
   }): Promise<void> {
@@ -1433,15 +1434,19 @@ export class CollectionQueryService extends BaseService {
     // read the collection is refused for that alone and learns nothing of
     // which of its fields are hidden; and before the read hooks, as every
     // refusal here is. Whatever the caller's trust: the read asked for them
-    // to be left out.
+    // to be left out. The paths are resolved here and not by the caller, so a
+    // read the gate refused never reads the declarations they come from.
     assertNoHiddenFieldQueried(
       {
         where: params.where,
         sort: sortFields,
         groupBy: params.groupBy,
-        groupByAt: params.requireTimestampGroupKey ? "dateField" : "groupBy",
+        // A timeline's `dateField` travels as `groupBy`.
+        ...(params.requireTimestampGroupKey
+          ? { labels: { groupBy: "dateField" } }
+          : {}),
       },
-      params.hiddenFields
+      await params.hiddenFields?.()
     );
   }
 
@@ -3127,10 +3132,11 @@ export class CollectionQueryService extends BaseService {
      * API read passing `showHiddenFields: false`). A `where`, `sort` or group
      * key naming one is refused after the collection read gate and before any
      * read hook, since which rows match, their order and the buckets would
-     * each reveal the value. Absent or empty, nothing is refused on this
-     * ground.
+     * each reveal the value. Resolved only there, past the gate, so a read
+     * the gate refuses never reaches the declarations. Absent or resolving
+     * to an empty set, nothing is refused on this ground.
      */
-    hiddenFields?: ReadonlySet<string>;
+    hiddenFields?: HiddenFieldPaths;
     /**
      * Number of documents per page.
      * Maximum allowed is 500 to prevent abuse.

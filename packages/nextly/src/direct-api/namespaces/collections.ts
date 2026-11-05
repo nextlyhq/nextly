@@ -11,6 +11,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -72,8 +73,10 @@ export async function find<TSlug extends CollectionSlug>(
     offset: args.offset,
     unknownSort: args.unknownSort,
     // A filter or a sort on a field this read leaves out is refused past the
-    // read gate, since the rows it keeps would reveal the value.
-    hiddenFields: await hiding.pathsOf(source),
+    // read gate, since the rows it keeps would reveal the value. Handed as a
+    // lookup the read resolves past its gate, so a refused caller costs no
+    // declaration read.
+    hiddenFields: () => hiding.pathsOf(source),
     limit: args.limit,
     where: args.where,
     // From `args`, never from `config`: an exemption that `mergeConfig` could
@@ -413,17 +416,16 @@ export async function deleteEntry<
 /**
  * The fields an aggregate refuses in its filter or its key, where its call
  * passes `showHiddenFields: false`: the count, the buckets or the timeline
- * would reveal the value a read leaves out. Refused past the read gate, as
- * `find` refuses them.
+ * would reveal the value a read leaves out. A lookup, not the paths: the read
+ * resolves it past its gate, as `find`'s, so a caller the gate refuses never
+ * reaches the declarations.
  */
 function aggregateHiddenFields(
   config: Parameters<typeof hiddenFieldRead>[0],
   collection: string
-): Promise<ReadonlySet<string>> {
-  return hiddenFieldRead(config).pathsOf({
-    kind: "collection",
-    slug: collection,
-  });
+): HiddenFieldPaths {
+  const hiding = hiddenFieldRead(config);
+  return () => hiding.pathsOf({ kind: "collection", slug: collection });
 }
 
 /**
@@ -441,7 +443,7 @@ export async function count(
 
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
-    hiddenFields: await aggregateHiddenFields(config, args.collection),
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     where: args.where,
     // From `args`, never `config` -- same reason as `find`: an inheritable
     // exemption would reach nested reads a caller's own `where` travels into.
@@ -482,7 +484,7 @@ export async function group(
 
   const result = await ctx.collectionsHandler.groupEntries({
     collectionName: args.collection,
-    hiddenFields: await aggregateHiddenFields(config, args.collection),
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     groupBy: args.groupBy,
     where: args.where,
     // From `args`, never `config`, for the reason `count` takes it from
@@ -547,7 +549,7 @@ export async function timeseries(
 
   const result = await ctx.collectionsHandler.timeseriesEntries({
     collectionName: args.collection,
-    hiddenFields: await aggregateHiddenFields(config, args.collection),
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     dateField: args.dateField,
     interval: args.interval,
     where: args.where,

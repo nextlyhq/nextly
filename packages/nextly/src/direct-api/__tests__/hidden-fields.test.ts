@@ -10,33 +10,15 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-/** Each source's hidden paths and declared fields, as the registry would give them. */
-const HIDDEN: Record<string, string[]> = {
-  pages: [],
-  authors: ["staffNote"],
-  tags: ["internal"],
-};
-
+/**
+ * Each source's declared fields as the registry holds them, and the components
+ * a dynamic zone references. The declarations module runs for real over these,
+ * expanding the zone and reading the hidden paths off `admin.hidden`.
+ */
 const FIELDS: Record<string, unknown[]> = {
   pages: [
     { name: "title", type: "text" },
-    {
-      name: "sections",
-      type: "component",
-      fields: [
-        {
-          name: "#hero",
-          fields: [
-            { name: "heading", type: "text" },
-            { name: "author", type: "relationship", relationTo: "authors" },
-          ],
-        },
-        {
-          name: "#quote",
-          fields: [{ name: "text", type: "text" }],
-        },
-      ],
-    },
+    { name: "sections", type: "component", components: ["hero", "quote"] },
     {
       name: "related",
       type: "relationship",
@@ -46,30 +28,46 @@ const FIELDS: Record<string, unknown[]> = {
   ],
   authors: [
     { name: "name", type: "text" },
-    { name: "staffNote", type: "text" },
+    { name: "staffNote", type: "text", admin: { hidden: true } },
   ],
   tags: [
     { name: "label", type: "text" },
-    { name: "internal", type: "text" },
+    { name: "internal", type: "text", admin: { hidden: true } },
   ],
 };
 
-/** The registry reads, by source slug: each mocked lookup records its source. */
-const reads = { hidden: [] as string[], fields: [] as string[] };
+const COMPONENTS: Record<string, unknown[]> = {
+  hero: [
+    { name: "heading", type: "text" },
+    { name: "author", type: "relationship", relationTo: "authors" },
+  ],
+  quote: [{ name: "text", type: "text" }],
+};
 
-vi.mock("../../runtime/routing/declared-fields", () => ({
-  hiddenFieldPaths: async (source: { slug: string }) => {
-    reads.hidden.push(source.slug);
-    return new Set(HIDDEN[source.slug] ?? []);
+/** Each registry lookup of a collection's fields, by slug. */
+const registryReads: string[] = [];
+
+// The service lookups the declarations module reads through, so its own
+// functions run unmocked and each registry read is seen where it happens.
+vi.mock("../../di/service-access", () => ({
+  isServicesRegistered: () => true,
+  getService: (name: string) => {
+    if (name === "collectionRegistryService") {
+      return {
+        getCollectionBySlug: async (slug: string) => {
+          registryReads.push(slug);
+          const fields = FIELDS[slug];
+          return fields === undefined ? null : { slug, fields };
+        },
+      };
+    }
+    if (name === "fieldGroupDataService") {
+      return {
+        getComponentFields: async (slug: string) => COMPONENTS[slug] ?? null,
+      };
+    }
+    throw new Error(`No service "${name}" in this test`);
   },
-  expandedFields: async (source: { slug: string }) => {
-    reads.fields.push(source.slug);
-    return FIELDS[source.slug];
-  },
-  withoutHidden: (document: Record<string, unknown>, hidden: Set<string>) =>
-    Object.fromEntries(
-      Object.entries(document).filter(([key]) => !hidden.has(key))
-    ),
 }));
 
 const { hiddenFieldRead } = await import("../namespaces/hidden-fields");
@@ -183,14 +181,20 @@ describe("a read's declarations", () => {
     const ctx = {
       defaultConfig: {},
       collectionsHandler: {
-        listEntries: async () => ({
-          success: true,
-          data: { docs: [row(1), row(2), row(3)], totalDocs: 3 },
-        }),
+        // Resolves the hidden paths as the query service does past its read
+        // gate, so the refusal's read is part of the call counted below.
+        listEntries: async (params: {
+          hiddenFields?: () => Promise<ReadonlySet<string>>;
+        }) => {
+          await params.hiddenFields?.();
+          return {
+            success: true,
+            data: { docs: [row(1), row(2), row(3)], totalDocs: 3 },
+          };
+        },
       },
     } as unknown as Parameters<typeof find>[0];
-    reads.hidden.length = 0;
-    reads.fields.length = 0;
+    registryReads.length = 0;
 
     const result = await find(ctx, {
       collection: "pages",
@@ -208,7 +212,8 @@ describe("a read's declarations", () => {
       });
       expect(item.related[1]?.value).not.toHaveProperty("internal");
     }
-    expect(reads.hidden.sort()).toEqual(["authors", "pages", "tags"]);
-    expect(reads.fields.sort()).toEqual(["authors", "pages", "tags"]);
+    // One registry read per source: the hidden paths and the walk to related
+    // documents come from the same expanded declarations.
+    expect(registryReads.sort()).toEqual(["authors", "pages", "tags"]);
   });
 });

@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The Direct API now honours `showHiddenFields: false` on `find`, `findByID`, `findSingle` and the `users` reads: it leaves `admin.hidden` fields out, and refuses a filter or a sort on one, and a `count`, `group` or `timeseries` naming one, after the caller passes the read gate. Before, the option was ignored. Reads that leave it out are unchanged, and password values are never returned.
+The Direct API now honours `showHiddenFields: false` on `find`, `findByID`, `findSingle` and the `users` reads: it leaves `admin.hidden` fields out, and refuses a filter or a sort on one, and a `count`, `group` or `timeseries` naming one, after the caller passes the read gate. Before, the option was ignored. Reads that leave it out are unchanged, and password values are never returned. A `url` or `phone` user field now accepts `admin: { hidden: true }` in its type, as the other user fields do.

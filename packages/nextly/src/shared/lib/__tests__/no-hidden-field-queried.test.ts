@@ -39,11 +39,28 @@ describe("a query naming a hidden field", () => {
     expect(
       refusedPaths(() =>
         assertNoHiddenFieldQueried(
-          { groupBy: "internal_code", groupByAt: "dateField" },
+          { groupBy: "internal_code", labels: { groupBy: "dateField" } },
           hidden
         )
       )
     ).toEqual(["dateField.internal_code"]);
+  });
+
+  it("is reported under the argument the caller sorted with, where that is not `sort`", () => {
+    // A users read takes one `sortBy`; the read parses it as a sort key. The
+    // filter beside it keeps its own position, so a label names one only.
+    expect(
+      refusedPaths(() =>
+        assertNoHiddenFieldQueried(
+          {
+            where: { internalCode: { equals: "x" } },
+            sort: ["internalCode"],
+            labels: { sort: "sortBy" },
+          },
+          hidden
+        )
+      )
+    ).toEqual(["where.internalCode", "sortBy.internalCode"]);
   });
 
   it("passes a visible field and a zone field that is not hidden", () => {
