@@ -247,9 +247,14 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    */
   const valueChanged = (event: Event): void => {
     const origin = event.composedPath()[0] ?? event.target;
+    // The editing host itself, the element carrying `contenteditable`, is
+    // where a browser fires an edit's `input`. A control nested in editable
+    // text that dispatches on itself inherits editability without being one,
+    // and its value can change with no mutation at all.
     const mutatesOurTree =
       isElement(origin) &&
       !isFormField(origin) &&
+      origin.hasAttribute("contenteditable") &&
       origin.getRootNode() === root.getRootNode() &&
       isEditableText(origin);
     if (!mutatesOurTree) restated();

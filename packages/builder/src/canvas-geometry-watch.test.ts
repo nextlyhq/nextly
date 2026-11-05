@@ -237,15 +237,23 @@ describe("a block an authored state rule moves", () => {
       return frames.length;
     });
     const { layer, block } = canvas();
+    // On its own, and nested in editable text, whose editability it inherits
+    // without being where an edit's input is fired.
     const control = block.ownerDocument.createElement("x-rating");
-    block.append(control);
+    const words = block.ownerDocument.createElement("p");
+    words.setAttribute("contenteditable", "true");
+    const nested = block.ownerDocument.createElement("x-rating");
+    words.append(nested);
+    block.append(control, words);
     const moved = vi.fn();
     const stop = watchCanvasFor(() => layer, moved);
-    for (const type of ["input", "change"]) {
-      control.dispatchEvent(new Event(type, { bubbles: true }));
-      for (const run of frames.splice(0)) run(0);
+    for (const reporter of [control, nested]) {
+      for (const type of ["input", "change"]) {
+        reporter.dispatchEvent(new Event(type, { bubbles: true }));
+        for (const run of frames.splice(0)) run(0);
+      }
     }
-    expect(moved).toHaveBeenCalledTimes(2);
+    expect(moved).toHaveBeenCalledTimes(4);
     stop?.();
     vi.unstubAllGlobals();
   });
