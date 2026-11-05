@@ -27,6 +27,7 @@ import { RestartProvider } from "../context/RestartContext";
 import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
+import { I18nProvider } from "../lib/i18n/I18nProvider";
 import { cn } from "../lib/utils";
 
 import "../styles/globals.css";
@@ -175,13 +176,16 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       className={cn("nextly-admin", isDark && "dark")}
       suppressHydrationWarning
     >
-      <PortalProvider container={portalRoot}>
-        <BrandingProvider>
-          {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
-          <PluginPageRegistrar />
-          {/* Registers the widget preview page on the server's development answer alone. */}
-          <WidgetPreviewsRegistrar />
-          {/* The settings sync applies the admin timezone to date rendering,
+      {/* The interface language every screen's strings are read in: the
+          browser's, where the admin has a catalog for it, else English. */}
+      <I18nProvider>
+        <PortalProvider container={portalRoot}>
+          <BrandingProvider>
+            {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
+            <PluginPageRegistrar />
+            {/* Registers the widget preview page on the server's development answer alone. */}
+            <WidgetPreviewsRegistrar />
+            {/* The settings sync applies the admin timezone to date rendering,
                 and mounting it starts the ["generalSettings"] query — an
                 endpoint gated by settings permissions, so on the signed-out
                 screens (login, register, forgot password, setup) the query
@@ -189,21 +193,22 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                 it needs. It renders nothing and sits beside the subtree
                 rather than around it, for the load-bearing reasons recorded
                 on GeneralSettingsSync itself. */}
-          {routeType !== "public" && <GeneralSettingsSync />}
-          {/* Names the browser tab after the routed screen and the site. Inside
+            {routeType !== "public" && <GeneralSettingsSync />}
+            {/* Names the browser tab after the routed screen and the site. Inside
               branding, which supplies the site's name, and around the screen,
               whose detail pages add the name of the item they show. Rendered
               only once a route is resolved, so the host's own title stands
               until the admin knows which screen it is on. */}
-          <DocumentTitleProvider route={route} pathname={pathname}>
-            {/* The address the router drew this screen for, which a screen
+            <DocumentTitleProvider route={route} pathname={pathname}>
+              {/* The address the router drew this screen for, which a screen
                 writing the address compares with the bar's. */}
-            <RoutedPathnameContext.Provider value={pathname}>
-              {content}
-            </RoutedPathnameContext.Provider>
-          </DocumentTitleProvider>
-        </BrandingProvider>
-      </PortalProvider>
+              <RoutedPathnameContext.Provider value={pathname}>
+                {content}
+              </RoutedPathnameContext.Provider>
+            </DocumentTitleProvider>
+          </BrandingProvider>
+        </PortalProvider>
+      </I18nProvider>
     </div>
   );
 }

@@ -18,6 +18,11 @@ import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
+  DOCUMENT_VERSION_KEY,
+  versionOf,
+  type StaleVersion,
+} from "@admin/lib/document-version";
+import {
   versionApi,
   type AutosaveDetail,
   type VersionScope,
@@ -146,7 +151,18 @@ function holdsStored(
   defaultLocale: string | null
 ): boolean {
   if (!recordedIn(point, locale, defaultLocale)) return false;
-  return canonicalJson(point.snapshot) === canonicalJson(stored);
+  return canonicalJson(pointValues(point.snapshot)) === canonicalJson(stored);
+}
+
+/**
+ * A point's values: its snapshot without the version its edits began from,
+ * which says where they came from rather than what they are.
+ */
+function pointValues(snapshot: unknown): unknown {
+  if (typeof snapshot !== "object" || snapshot === null) return snapshot;
+  const { [DOCUMENT_VERSION_KEY]: _startedFrom, ...values } =
+    snapshot as Record<string, unknown>;
+  return values;
 }
 
 /**
@@ -226,6 +242,12 @@ export interface UseAutosaveRecoveryOptions {
    * which is why the offer is read only once.
    */
   savedCount?: number;
+  /**
+   * Told, when an offer is taken, the version the point's edits began from,
+   * or undefined for a point saved before versions: a save of the restored
+   * edits is judged by it.
+   */
+  onRestored?: (startedFrom: string | undefined) => void;
 }
 
 export interface AutosaveRecoveryOffer {
@@ -239,6 +261,15 @@ export interface AutosaveRecoveryOffer {
    * those changes, and the offer says so.
    */
   olderVersion: boolean;
+  /**
+   * The version the point's edits began from, which a save of them is judged
+   * by once restored; undefined for a point saved before versions.
+   */
+  startedFrom?: string;
+  /** What changed since that version, as a refused save says it. */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version. */
+  startingVersionUnknown: boolean;
 }
 
 export interface UseAutosaveRecoveryResult {
@@ -281,6 +312,11 @@ export interface UseAutosaveRecoveryResult {
    * confirmed, and calls `take` itself.
    */
   restore: (apply?: () => void) => void;
+  /**
+   * Read the author's point again and offer it, once edits were just kept as
+   * one: an editor that loads the current version over its refused edits.
+   */
+  recheck: () => void;
   /** Write the offered values into the form now, unasked: see `restore`. */
   take: () => void;
 }
@@ -346,6 +382,7 @@ function useRestoreOffer({
   setDismissed,
   locale,
   defaultLocale,
+  onRestored,
 }: {
   offer: AutosaveRecoveryOffer | null;
   /** The stored point the offer was drawn from. */
@@ -357,6 +394,7 @@ function useRestoreOffer({
   /** The language the editor shows now. */
   locale: string | null;
   defaultLocale: string | null;
+  onRestored?: (startedFrom: string | undefined) => void;
 }): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
   const queryClient = useQueryClient();
   // The language the editor shows when the re-read below answers, which may
@@ -374,11 +412,14 @@ function useRestoreOffer({
      * values are not what the server holds, and treating them as the new
      * baseline would let the reader navigate away believing they were stored.
      */
-    form.reset(offer.snapshot as Record<string, unknown>, {
+    // Without the version it began from, which is not a value of the form:
+    // the editor judges the next save by it instead.
+    form.reset(pointValues(offer.snapshot) as Record<string, unknown>, {
       keepDefaultValues: true,
     });
+    onRestored?.(offer.startedFrom);
     setDismissed(true);
-  }, [offer, form, setDismissed]);
+  }, [offer, form, setDismissed, onRestored]);
 
   // Written since, or gone: the offer is drawn again from this answer.
   const redraw = useCallback(
@@ -403,6 +444,60 @@ function useRestoreOffer({
 }
 
 /**
+ * The offer a stored point makes, or null when it makes none: dismissed, put
+ * off in this tab, unreadable, or holding what the document already stores.
+ */
+function offerOf(
+  data: AutosaveDetail | null | undefined,
+  dismissed: boolean,
+  isPutOff: (identity: string) => boolean,
+  stored: Parameters<typeof holdsStored>[1],
+  locale: string | null,
+  defaultLocale: string | null
+): AutosaveRecoveryOffer | null {
+  if (dismissed || !data) return null;
+  // Offered only in the language it was typed in: see `recordedIn`.
+  if (!recordedIn(data, locale, defaultLocale)) return null;
+  const savedAt = new Date(data.updatedAt);
+  if (Number.isNaN(savedAt.getTime())) return null;
+  // Put off in this tab already: see `dismiss`.
+  if (isPutOff(pointIdentity(data))) return null;
+  // A recovery point holding what the document already stores is no unsaved
+  // work: an author who undid back to the saved document left one behind,
+  // and offering it back on every load restores nothing.
+  if (holdsStored(data, stored, locale, defaultLocale)) return null;
+  const startedFrom = versionOf(data.snapshot);
+  return {
+    savedAt,
+    snapshot: data.snapshot,
+    // Written since the point began, by anyone, the author included, or by
+    // a write the server cannot name: offered, and said to be from an older
+    // version. Not withheld when the later writes were all the author's
+    // own: a save of theirs deletes the point, so one still here outlived
+    // a write that did not store it, such as publishing every language,
+    // and it is the only copy of that work.
+    olderVersion: data.superseded !== undefined,
+    ...(startedFrom === undefined ? {} : { startedFrom }),
+    ...(data.changedSince ? { changedSince: data.changedSince } : {}),
+    startingVersionUnknown: data.startingVersionUnknown === true,
+  };
+}
+
+/**
+ * The key a document's recovery point is read under. Keyed by the document,
+ * so switching entries asks again rather than reusing the previous document's
+ * answer; memoised on those fields, so the restore, which writes the answer
+ * back under it, is not rebuilt on every render.
+ */
+function useRecoveryQueryKey(scope: VersionScope | null): readonly unknown[] {
+  const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
+  return useMemo(
+    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
+    [scope?.kind, scope?.slug, scopeId]
+  );
+}
+
+/**
  * @param options - the document to read for, and the form an offer restores into
  * @returns the offer to present, and ways to accept it or stop presenting it
  */
@@ -411,19 +506,12 @@ export function useAutosaveRecovery({
   form,
   locale = null,
   savedCount = 0,
+  onRestored,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
   // Recovery points are each author's own, so a "Not now" is too: another
   // account signed in to this tab is offered its own point.
   const author = useCurrentUserId();
-  // Keyed by the document, so switching entries asks again rather than
-  // reusing the previous document's answer.
-  // Memoised on those fields, so the restore below, which writes the answer
-  // back under it, is not rebuilt on every render.
-  const scopeId = scope?.kind === "single" ? scope.documentId : scope?.entryId;
-  const queryKey = useMemo(
-    () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
-    [scope?.kind, scope?.slug, scopeId]
-  );
+  const queryKey = useRecoveryQueryKey(scope);
   // Which language "no language" is, so the two spellings of the default
   // language name one language.
   const { defaultLocale } = useLocalization();
@@ -481,30 +569,11 @@ export function useAutosaveRecovery({
   // Computed rather than returned from an early exit so the accept action below
   // can close over it: hooks run unconditionally, and a `useCallback` cannot sit
   // after a `return`.
-  const offer = useMemo<AutosaveRecoveryOffer | null>(() => {
-    if (dismissed || !data) return null;
-    // Offered only in the language it was typed in: see `recordedIn`.
-    if (!recordedIn(data, locale, defaultLocale ?? null)) return null;
-    const savedAt = new Date(data.updatedAt);
-    if (Number.isNaN(savedAt.getTime())) return null;
-    // Put off in this tab already: see `dismiss`.
-    if (isPutOff(pointIdentity(data))) return null;
-    // A recovery point holding what the document already stores is no unsaved
-    // work: an author who undid back to the saved document left one behind,
-    // and offering it back on every load restores nothing.
-    if (holdsStored(data, stored, locale, defaultLocale ?? null)) return null;
-    return {
-      savedAt,
-      snapshot: data.snapshot,
-      // Written since the point began, by anyone, the author included, or by
-      // a write the server cannot name: offered, and said to be from an older
-      // version. Not withheld when the later writes were all the author's
-      // own: a save of theirs deletes the point, so one still here outlived
-      // a write that did not store it, such as publishing every language,
-      // and it is the only copy of that work.
-      olderVersion: data.superseded !== undefined,
-    };
-  }, [dismissed, data, stored, locale, defaultLocale, isPutOff]);
+  const offer = useMemo(
+    () =>
+      offerOf(data, dismissed, isPutOff, stored, locale, defaultLocale ?? null),
+    [dismissed, data, stored, locale, defaultLocale, isPutOff]
+  );
 
   const { restore, take } = useRestoreOffer({
     offer,
@@ -516,7 +585,16 @@ export function useAutosaveRecovery({
     setDismissed,
     locale,
     defaultLocale: defaultLocale ?? null,
+    onRestored,
   });
 
-  return { offer, isResolved, dismiss, restore, take };
+  // Read again, offered again: once edits were just kept as a point, the
+  // offer to restore them shows at once rather than on the next open.
+  const queryClient = useQueryClient();
+  const recheck = useCallback(() => {
+    setDismissed(false);
+    void queryClient.invalidateQueries({ queryKey });
+  }, [queryClient, queryKey]);
+
+  return { offer, isResolved, dismiss, restore, take, recheck };
 }

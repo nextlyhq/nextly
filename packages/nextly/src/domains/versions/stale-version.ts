@@ -11,7 +11,9 @@
  * differently: the decision at the boundary (`versionCheckFor`), the read of
  * the counters and who moved them (`readDocumentRevision`), the comparison
  * (`staleParts`), the one source of "when" (`changedAtOf`), the picker of who
- * changed it last (`lastChangerOf`), and the refusal (`staleVersionRefusal`).
+ * changed it last (`lastChangerOf`), and what a caller is told of a change
+ * (`staleVersionData`): by a refused save (`staleVersionErrorFor`) and by a
+ * recovery point's read (`changesSinceVersion`) alike.
  *
  * @module domains/versions/stale-version
  * @experimental
@@ -645,8 +647,7 @@ async function shownChanger(
  *
  * @experimental
  */
-async function staleVersionRefusal(args: {
-  state: DocumentRevisionState;
+interface StaleVersionDataArgs {
   given: DecodedVersion;
   /** The current version, as a read of the save's language spells it. */
   currentVersion: string;
@@ -660,8 +661,19 @@ async function staleVersionRefusal(args: {
    * may read that part's history; asked only once `mayRead` allows.
    */
   historyVersion?: () => Promise<StaleVersionPublicData["historyVersion"]>;
-  logContext: Record<string, unknown>;
-}): Promise<NextlyError> {
+}
+
+/**
+ * What a document changed since `given`, as a caller is told it: the
+ * current version always; who or what changed it last, and when, only where
+ * `mayRead` says the caller may read the document, the same decision a read
+ * of it gets. A person is named as their account names them now, never by
+ * email, and nobody once the account is gone; a plugin-defined person by
+ * their kind alone. No value of the document.
+ */
+async function staleVersionData(
+  args: StaleVersionDataArgs
+): Promise<StaleVersionPublicData> {
   const data: StaleVersionPublicData = { currentVersion: args.currentVersion };
   if (await args.mayRead()) {
     const changer = lastChangerOf(args.parts, args.given);
@@ -673,14 +685,7 @@ async function staleVersionRefusal(args: {
     const history = await args.historyVersion?.();
     if (history) data.historyVersion = history;
   }
-  return NextlyError.staleVersion({
-    data,
-    logContext: {
-      ...args.logContext,
-      given: args.given,
-      current: args.currentVersion,
-    },
-  });
+  return data;
 }
 
 /**
@@ -1027,26 +1032,62 @@ export function judgedLanguageStates(
  */
 export async function staleVersionErrorFor(
   db: RevisionReader,
-  args: {
-    dialect: SupportedDialect;
-    scopeKind: "collection" | "single";
-    slug: string;
-    id: string;
-    given: DecodedVersion;
-    at: StaleWrite;
-    /**
-     * Read inside a transaction the write shares with others: the read gate
-     * and the people lookup read on the pool, which waits behind that
-     * transaction on SQLite, so only a trusted caller is told who and when,
-     * and the changer is not named.
-     */
-    inSharedTransaction?: boolean;
-    reader: Omit<
-      Parameters<typeof callerMayReadDocument>[0],
-      "scopeKind" | "slug" | "entryId"
-    >;
-  }
+  args: ChangeSinceArgs
 ): Promise<NextlyError> {
+  const reading = await changeReading(db, args);
+  if (!reading) {
+    return NextlyError.notFound({
+      logContext: {
+        reason: "stale-version-document-gone",
+        slug: args.slug,
+        id: args.id,
+      },
+    });
+  }
+  const data = await staleVersionData(reading);
+  return NextlyError.staleVersion({
+    data,
+    logContext: {
+      reason: "stale-version",
+      scopeKind: args.scopeKind,
+      slug: args.slug,
+      id: args.id,
+      given: args.given,
+      current: reading.currentVersion,
+    },
+  });
+}
+
+/** What a change since a given version is read from: the document, and who is asking. */
+export interface ChangeSinceArgs {
+  dialect: SupportedDialect;
+  scopeKind: "collection" | "single";
+  slug: string;
+  id: string;
+  given: DecodedVersion;
+  at: StaleWrite;
+  /**
+   * Read inside a transaction the write shares with others: the read gate
+   * and the people lookup read on the pool, which waits behind that
+   * transaction on SQLite, so only a trusted caller is told who and when,
+   * and the changer is not named.
+   */
+  inSharedTransaction?: boolean;
+  reader: Omit<
+    Parameters<typeof callerMayReadDocument>[0],
+    "scopeKind" | "slug" | "entryId"
+  >;
+}
+
+/**
+ * The document as it now is, in the parts `args.at` covers, with what a
+ * description of its change since `args.given` needs. Undefined when the
+ * document is gone.
+ */
+async function changeReading(
+  db: RevisionReader,
+  args: ChangeSinceArgs
+): Promise<(StaleVersionDataArgs & { stale: boolean }) | undefined> {
   const locales = args.at.languages?.locales ?? [];
   const state = await readDocumentRevision(db, {
     dialect: args.dialect,
@@ -1056,23 +1097,15 @@ export async function staleVersionErrorFor(
       ? { languages: { table: args.at.languages.table, locales } }
       : {}),
   });
-  if (!state) {
-    return NextlyError.notFound({
-      logContext: {
-        reason: "stale-version-document-gone",
-        slug: args.slug,
-        id: args.id,
-      },
-    });
-  }
+  if (!state) return undefined;
   const languages = locales.flatMap(code =>
     state.languages[code] ? [state.languages[code]] : []
   );
   // The part a one-language save writes, for the history version: a save of
   // every language, or of none, writes the part with no language.
   const locale = locales.length === 1 ? locales[0] : undefined;
-  return staleVersionRefusal({
-    state,
+  return {
+    stale: staleParts(args.given, { main: state.main, languages }).length > 0,
     given: args.given,
     currentVersion: encodeDocumentVersion(
       state.main.counter,
@@ -1105,13 +1138,40 @@ export async function staleVersionErrorFor(
               reader: args.reader,
             }),
         }),
-    logContext: {
-      reason: "stale-version",
-      scopeKind: args.scopeKind,
-      slug: args.slug,
-      id: args.id,
-    },
-  });
+  };
+}
+
+/**
+ * What changed in a document since `args.given`, in the parts `args.at`
+ * covers, described exactly as a refused save would describe it
+ * (`staleVersionErrorFor`): null when nothing it covers moved, and "gone"
+ * when the document no longer exists.
+ *
+ * @experimental
+ */
+export async function changesSinceVersion(
+  db: RevisionReader,
+  args: ChangeSinceArgs
+): Promise<StaleVersionPublicData | null | "gone"> {
+  const reading = await changeReading(db, args);
+  if (!reading) return "gone";
+  if (!reading.stale) return null;
+  return staleVersionData(reading);
+}
+
+/**
+ * The version a client sent, decoded, or undefined when it sent none or one
+ * that is not a version: for a reader that compares a stored version rather
+ * than judging a write, which refuses a malformed one instead.
+ */
+export function storedVersionOf(raw: unknown): DecodedVersion | undefined {
+  if (typeof raw !== "string") return undefined;
+  try {
+    return decodeDocumentVersion(raw);
+  } catch (error) {
+    if (NextlyError.is(error)) return undefined;
+    throw error;
+  }
 }
 
 /**
