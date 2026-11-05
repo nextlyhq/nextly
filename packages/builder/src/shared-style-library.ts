@@ -182,7 +182,10 @@ export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
 }
 
 /** A style's name: its label, or its slug for a style made before labels. */
-function sharedStyleName(entry: Pick<NamedClass, "slug" | "label">): string {
+/** A class's name as the surfaces show it: its label, or its slug when blank. */
+export function sharedStyleName(
+  entry: Pick<NamedClass, "slug" | "label">
+): string {
   const label = entry.label?.trim();
   return label === undefined || label === "" ? entry.slug : label;
 }

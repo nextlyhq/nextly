@@ -1,7 +1,8 @@
-import type {
-  NamedClass,
-  NodeStyles,
-  SiteTokenSet,
+import {
+  MAX_NAMED_CLASSES,
+  type NamedClass,
+  type NodeStyles,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
@@ -65,6 +66,29 @@ describe("a block's look tiles", () => {
     ).toEqual([null, secondary.id]);
   });
 
+  it("keep the looks a site at its shared-style cap still renders", () => {
+    // Looks are read under a cap of their own, so a full library of shared
+    // styles leaves every look rendering, and offered.
+    const full = Array.from({ length: MAX_NAMED_CLASSES }, (_, index) => ({
+      id: `c-${index}`,
+      slug: `style-${index}`,
+      orderIndex: index,
+      styles: {},
+    }));
+    expect(
+      lookTiles([...full, outline, secondary], "core/button", "Primary").map(
+        tile => tile.id
+      )
+    ).toEqual([null, secondary.id, outline.id]);
+  });
+
+  it("name a look with a blank label by its slug, as the shared styles list does", () => {
+    const blank = { ...secondary, label: "  " };
+    expect(
+      lookTiles([blank], "core/button", "Primary").map(tile => tile.name)
+    ).toEqual(["Primary", "button-secondary"]);
+  });
+
   it("are none for a type with no looks", () => {
     expect(lookTiles(library, "core/text", "Plain")).toEqual([]);
   });
@@ -75,6 +99,14 @@ describe("wearing a look", () => {
     const looks = [outline, secondary];
     expect(wornLook([card.id, outline.id], looks)).toBe(outline.id);
     expect(wornLook([card.id], looks)).toBe(null);
+  });
+
+  it("is the look that wins, when a block lists more than one", () => {
+    // Written in library order, so the later one is what the canvas shows,
+    // whatever order the block lists them in.
+    const looks = [secondary, outline];
+    expect(wornLook([outline.id, secondary.id], looks)).toBe(outline.id);
+    expect(wornLook([secondary.id, outline.id], looks)).toBe(outline.id);
   });
 
   it("swaps the look and keeps the shared style", () => {
@@ -106,6 +138,29 @@ describe("how a tile draws a look", () => {
     });
     expect(lookTileStyle(base, outline.styles, tokens, "dark").color).toBe(
       "#60a5fa"
+    );
+  });
+
+  it("resolves a token by its identity, not a name it no longer answers to", () => {
+    // The canvas declares a token under its id, so a look naming the old
+    // display name is unresolved there, and the tile must not resolve it.
+    const renamed = {
+      tokens: [
+        {
+          id: "brand-ink",
+          name: "Brand ink",
+          kind: "color",
+          values: { light: "#7c3aed", dark: "#a78bfa" },
+        },
+      ],
+    } as unknown as SiteTokenSet;
+    const byName = values({ color: { $token: "Brand ink" } });
+    const byId = values({ color: { $token: "brand-ink" } });
+    expect(
+      lookTileStyle(undefined, byName, renamed, "light").color
+    ).toBeUndefined();
+    expect(lookTileStyle(undefined, byId, renamed, "light").color).toBe(
+      "#7c3aed"
     );
   });
 

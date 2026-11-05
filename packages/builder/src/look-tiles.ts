@@ -15,6 +15,7 @@ import {
   isPlainRecord,
   isTokenRef,
   resolveSiteTokens,
+  tokenIdentity,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -23,6 +24,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { classDeclarations, usableSiteClasses } from "./class-library";
+import { sharedStyleName } from "./shared-style-library";
 
 /** One tile: a look of the block's type, or the block's own (`id: null`). */
 export interface LookTile {
@@ -63,19 +65,24 @@ export function lookTiles(
     { id: null, name: ownName ?? "Default", styles: undefined },
     ...looks.map(look => ({
       id: look.id,
-      name: look.label ?? look.slug,
+      name: sharedStyleName(look),
       styles: look.styles,
     })),
   ];
 }
 
-/** The look a block wears among these, or `null` for its own look. */
+/**
+ * The look a block wears among these, or `null` for its own look. A block
+ * listing more than one (stored or imported that way) shows the one written
+ * last, in library order, as the canvas does; choosing a tile leaves one.
+ */
 export function wornLook(
   classes: readonly string[] | undefined,
   looks: readonly NamedClass[]
 ): string | null {
-  const ids = new Set(looks.map(look => look.id));
-  return (classes ?? []).find(id => ids.has(id)) ?? null;
+  const listed = new Set(classes ?? []);
+  const worn = looks.filter(look => listed.has(look.id));
+  return worn.at(-1)?.id ?? null;
 }
 
 /**
@@ -99,9 +106,9 @@ function tokenValue(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
 ): StyleValue {
-  const token = tokens?.tokens.find(
-    each => (each.id ?? each.name) === ref.$token || each.name === ref.$token
-  );
+  // By identity alone, as the canvas declares a token: a renamed token's
+  // old display name resolves nothing there, so it resolves nothing here.
+  const token = tokens?.tokens.find(each => tokenIdentity(each) === ref.$token);
   const value = token?.values[mode] ?? token?.values.light;
   return value === undefined ? ref : value;
 }

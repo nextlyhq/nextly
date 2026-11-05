@@ -33,6 +33,8 @@ export interface LookTilesProps {
   /** Why the block's design is held, when it is: the tiles are held too. */
   readonly held: string | undefined;
   readonly tokens: SiteTokenSet | undefined;
+  /** Says why a chosen look was not applied, through the shell's notices. */
+  readonly onRefused: (reason: string) => void;
 }
 
 /** What a specimen is drawn as, by the kind of block it stands for. */
@@ -76,6 +78,7 @@ export function LookTiles({
   library,
   held,
   tokens,
+  onRefused,
 }: LookTilesProps): React.JSX.Element | null {
   const nodeId = editor.selectedId;
   const node =
@@ -94,7 +97,15 @@ export function LookTiles({
   const base = getBlock(node.type)?.baseStyles;
   const choose = (tile: LookTile): void => {
     if (held !== undefined || tile.id === worn) return;
-    editor.applyAll([lookOp(node.id, node.classes, looks, tile.id)]);
+    // A page at its limits takes nothing, and the radio stays where it was:
+    // said, so the click does not read as ignored.
+    if (
+      editor.applyAll([lookOp(node.id, node.classes, looks, tile.id)]) === null
+    ) {
+      onRefused(
+        `${tile.name} could not be applied to this block: the page could not take the change.`
+      );
+    }
   };
   const kind = specimenKind(node.type);
   return (

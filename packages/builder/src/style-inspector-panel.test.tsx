@@ -767,6 +767,16 @@ describe("the shared style target", () => {
       ]);
     });
 
+    it("says through the shell when the page refuses the chosen look", () => {
+      const raise = vi.fn();
+      const { editor } = mountTarget({ library: [card, outline], raise });
+      editor.applyAll.mockReturnValue(null);
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(raise).toHaveBeenCalledWith(
+        "Outline could not be applied to this block: the page could not take the change."
+      );
+    });
+
     it("keeps Apply on offer while the block wears only a look", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
       expect(

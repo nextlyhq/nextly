@@ -421,6 +421,7 @@ export function StyleTargetBar({
         library={library}
         held={held}
         tokens={tokens}
+        onRefused={report}
       />
       <EditingBar
         target={editTargetOf(target, reach)}
