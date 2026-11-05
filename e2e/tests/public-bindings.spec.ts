@@ -3,8 +3,13 @@
  *
  * A published page reads every binding as an anonymous visitor would, so:
  *
- * 1. It is the same page for every visitor: the HTML served to a visitor with
- *    no session and to a signed-in author is identical.
+ * 1. It is the same page for every visitor. On a production build the HTML
+ *    served to a visitor with no session and to a signed-in author is
+ *    identical, nonces aside: the page is pre-rendered, so identical bytes is
+ *    the strongest proof. `next dev` streams each request its own flight data
+ *    and chunk scripts, so there the whole document differs by design, and
+ *    the check is the page itself: every page root's markup, as a browser
+ *    holds it once the page has loaded, is identical for both.
  * 2. A field the public may not read is shown to nobody: its value is absent
  *    from the HTML, its head and the payload the client is sent, signed in or
  *    not, and the binding shows its fallback.
@@ -15,14 +20,16 @@
  *
  * Meant for a production build (`E2E_SERVER=production`), where the public
  * route is pre-rendered and cached. Under `next dev` nothing is, so there the
- * build-output check is skipped and the rest holds as it does in production.
+ * build-output check is skipped, the page check above replaces the
+ * whole-document one, and the rest holds as it does in production.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext, type Browser } from "@playwright/test";
 
+import type { StorageState } from "./support/accounts";
 import { olderPreviewToken } from "./support/preview-links";
 import { fileAccount, test } from "./support/test";
 
@@ -139,6 +146,34 @@ async function created(
   return ((await response.json()) as { item: { id: string } }).item.id;
 }
 
+/** Whether the suite runs against a production build rather than `next dev`. */
+const PRODUCTION = process.env.E2E_SERVER === "production";
+
+/**
+ * Every page root's markup, as a browser holds it once the page has loaded:
+ * the page itself, without the document around it.
+ */
+async function pageRootsOf(
+  browser: Browser,
+  baseURL: string,
+  storageState: StorageState | undefined
+): Promise<string> {
+  const context = await browser.newContext({
+    baseURL,
+    ...(storageState === undefined ? {} : { storageState }),
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(`/blocks/${PAGE_SLUG}`);
+    await expect(page.getByText(VISIBLE_TITLE)).toBeVisible();
+    return await page
+      .locator(".nx-pb-page")
+      .evaluateAll(roots => roots.map(root => root.outerHTML).join("\n"));
+  } finally {
+    await context.close();
+  }
+}
+
 /** The served markup with what legitimately differs per response removed. */
 function comparable(html: string): string {
   return html.replace(/ nonce="[^"]*"/g, "");
@@ -146,6 +181,7 @@ function comparable(html: string): string {
 
 test("a published page shows every visitor the same public values, and nothing the public may not read", async ({
   playwright,
+  browser,
 }, testInfo) => {
   const baseURL = testInfo.project.use.baseURL;
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
@@ -227,8 +263,21 @@ test("a published page shows every visitor the same public values, and nothing t
       expect(body).not.toContain(SENTINEL);
     }
 
-    // 1. The same page for everyone.
-    expect(comparable(authorHtml)).toBe(comparable(anonymousHtml));
+    // 1. The same page for everyone: the whole document on a production
+    // build, the page itself under `next dev` (see the header).
+    if (PRODUCTION) {
+      expect(comparable(authorHtml)).toBe(comparable(anonymousHtml));
+    } else {
+      const anonymousPage = await pageRootsOf(browser, baseURL, undefined);
+      const authorPage = await pageRootsOf(
+        browser,
+        baseURL,
+        await fileAccount(baseURL, testInfo)
+      );
+      // The control: this is the page, carrying its public values.
+      expect(anonymousPage).toContain(VISIBLE_TITLE);
+      expect(authorPage).toBe(anonymousPage);
+    }
   } finally {
     await signedIn.dispose();
     await visitor.dispose();
