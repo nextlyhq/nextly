@@ -102,6 +102,7 @@ import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
   listWebhooks,
+  listWebhookEventTypes,
   getWebhookById,
   createWebhook,
   updateWebhook,
@@ -416,6 +417,8 @@ async function handleWebhookRequest(
   switch (method) {
     case "listWebhooks":
       return listWebhooks(req);
+    case "listWebhookEventTypes":
+      return listWebhookEventTypes(req);
     case "getWebhookById":
       return getWebhookById(req, id);
     case "createWebhook":

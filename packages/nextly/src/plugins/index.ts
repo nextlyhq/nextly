@@ -103,6 +103,7 @@ export type {
   PluginFieldCodegenImport,
   FieldSurface,
   ScheduledTask,
+  PluginWebhookEventType,
   PermissionSlug,
 } from "./contributions";
 

@@ -1,11 +1,11 @@
 /**
- * The webhook request schemas must preserve event-type literals.
+ * The webhook request schemas hand the endpoint service a subscription list
+ * it accepts without a cast.
  *
- * Runtime validation is identical whether the enum is built from the literal
- * tuple or a widened `string[]`, so nothing at runtime can catch the widening.
- * It only shows up at the request-to-service boundary: a parsed body whose
- * `eventTypes` is `string[]` cannot be handed to the endpoint service without
- * a cast, which is exactly the check that should be doing the work there.
+ * An entry is the wildcard, one of core's types or a type a plugin declares,
+ * so the parsed list is strings. Which strings are accepted is decided when
+ * the request is judged, against the event-type registry, not by the type: a
+ * cast at the request-to-service boundary is what this guards against.
  */
 import { expectTypeOf } from "vitest";
 
@@ -13,17 +13,16 @@ import type { WebhookEventSubscription } from "../../domains/webhooks/types";
 
 import type { CreateWebhookInput, UpdateWebhookInput } from "./webhooks";
 
-// The parsed subscription list preserves its literals — each entry is a
-// specific event type or the wildcard, never a widened `string`.
-expectTypeOf<CreateWebhookInput["eventTypes"]>().toEqualTypeOf<
+// The parsed subscription list is what the service takes, with no cast.
+expectTypeOf<CreateWebhookInput["eventTypes"]>().toMatchTypeOf<
   WebhookEventSubscription[]
 >();
 
-expectTypeOf<UpdateWebhookInput["eventTypes"]>().toEqualTypeOf<
+expectTypeOf<UpdateWebhookInput["eventTypes"]>().toMatchTypeOf<
   WebhookEventSubscription[] | undefined
 >();
 
-// Stated explicitly: this is the shape the widening cast produced, and it is
-// assignable from the correct type in one direction, so equality alone could
-// pass for the wrong reason if the literals ever collapsed to `string`.
-expectTypeOf<CreateWebhookInput["eventTypes"]>().not.toEqualTypeOf<string[]>();
+// And the service's own subscription type still names core's types and the
+// wildcard, so code that builds one by hand is checked against them.
+expectTypeOf<"entry.created">().toMatchTypeOf<WebhookEventSubscription>();
+expectTypeOf<"*">().toMatchTypeOf<WebhookEventSubscription>();

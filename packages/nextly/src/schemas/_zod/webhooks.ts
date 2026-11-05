@@ -20,34 +20,34 @@
 
 import { z } from "zod";
 
+import { isSubscribableEventType } from "../../domains/webhooks/event-type-registry";
 import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../domains/webhooks/secret-entries";
 import {
   REDACTED_HEADER_VALUE,
-  WEBHOOK_EVENT_TYPES,
   WEBHOOK_EVENT_WILDCARD,
 } from "../../domains/webhooks/types";
 
 /**
- * The event types an endpoint may subscribe to.
+ * One subscription entry: an event type an endpoint may subscribe to now, or
+ * the wildcard for all-and-future. The wildcard is accepted only in the
+ * subscription list, never in the finer `FilterSpec`.
  *
- * Bound to the same constant the fan-out matches against, so a type that
- * cannot be delivered cannot be subscribed to either — a silently-never-firing
- * subscription is worse than a rejected one.
- *
- * Passed directly rather than widened to `[string, ...string[]]`: the literal
- * members survive inference, so a parsed request body carries
- * `WebhookEventType[]` and reaches the service without a cast at the boundary.
+ * Judged against the one list of event types, core's and every enabled
+ * plugin's, read when the request is checked rather than fixed when this
+ * module loads: plugins declare theirs at startup, after it. A type nobody
+ * declares, or whose plugin is disabled, is refused and named, rather than
+ * stored as a subscription nothing may ever send.
  */
-export const WebhookEventTypeSchema = z.enum(WEBHOOK_EVENT_TYPES);
-
-/**
- * One subscription entry: a concrete event type or the wildcard for
- * all-and-future. The wildcard is accepted only in the subscription list, never
- * in the finer `FilterSpec`.
- */
-export const WebhookEventSubscriptionSchema = z.union([
+const WebhookEventSubscriptionSchema = z.union([
   z.literal(WEBHOOK_EVENT_WILDCARD),
-  WebhookEventTypeSchema,
+  z.string().superRefine((type, ctx) => {
+    if (!isSubscribableEventType(type)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `"${type}" is not an event type an endpoint can subscribe to.`,
+      });
+    }
+  }),
 ]);
 
 /**

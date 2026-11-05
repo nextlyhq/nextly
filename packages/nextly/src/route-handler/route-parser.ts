@@ -2632,6 +2632,19 @@ function parseWebhookRoutes(
     };
   }
 
+  // GET /api/webhooks/event-types → the event types an endpoint may subscribe
+  // to. A reserved path like `drain`, matched before `GET /webhooks/:id` so it
+  // is never read as an endpoint id (ids are generated UUIDs).
+  if (id === "event-types" && !subresource) {
+    if (httpMethod !== "GET") return null;
+    return {
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhookEventTypes",
+      routeParams,
+    };
+  }
+
   // GET or POST /api/webhooks/drain → run one drain pass. "drain" is a reserved
   // operation path, not an endpoint id: endpoint ids are generated UUIDs and
   // cannot collide with it. GET is accepted because Vercel Cron triggers with a

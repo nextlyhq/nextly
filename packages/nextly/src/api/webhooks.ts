@@ -42,6 +42,7 @@ import {
   type WebhookDrainDatabase,
 } from "../domains/webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../domains/webhooks/endpoint-registry";
+import { webhookEventTypes } from "../domains/webhooks/event-type-registry";
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -254,6 +255,42 @@ export const listWebhooks = withErrorHandler(
       total: endpoints.length,
       page: 1,
       limit: endpoints.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
+  }
+);
+
+/**
+ * List the event types an endpoint may subscribe to: core's and every enabled
+ * plugin's, each with its owner, from the one list subscriptions are judged
+ * against.
+ *
+ * Auth: session or API key + `read-webhooks`, `create-webhooks` or
+ * `update-webhooks`, through the permission gate every webhook route passes.
+ * Create is among them because the form that registers an endpoint offers
+ * these types, and a role that may only create must still be able to choose
+ * one; the list names types and owners, nothing about any endpoint.
+ *
+ * Response: `{ items: WebhookEventTypeEntry[], meta: PaginationMeta }`.
+ */
+export const listWebhookEventTypes = withErrorHandler(
+  async (req: Request): Promise<Response> => {
+    const authResult = await requireAnyPermission(req, [
+      { action: "read", resource: "webhooks" },
+      { action: "create", resource: "webhooks" },
+      { action: "update", resource: "webhooks" },
+    ]);
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    // Booted first, so the list includes the types plugins declare at boot.
+    await getCachedNextly();
+    const items = [...webhookEventTypes()];
+    return respondList(items, {
+      total: items.length,
+      page: 1,
+      limit: items.length,
       totalPages: 1,
       hasNext: false,
       hasPrev: false,
@@ -478,6 +515,10 @@ export const createWebhook = withErrorHandler(
 
     if (authResult.authMethod !== "session") denySessionOnly("create");
 
+    // Booted before the body is judged, and only once the caller is: the event
+    // types an endpoint may subscribe to include the ones plugins declare at
+    // boot, so a cold process would otherwise refuse a plugin's type.
+    await getCachedNextly();
     const body = await readJsonBody(req);
 
     let validated: z.infer<typeof CreateWebhookSchema>;
@@ -521,6 +562,10 @@ export function updateWebhook(req: Request, id: string): Promise<Response> {
 
     if (authResult.authMethod !== "session") denySessionOnly("update");
 
+    // Booted before the body is judged, and only once the caller is: the event
+    // types an endpoint may subscribe to include the ones plugins declare at
+    // boot, so a cold process would otherwise refuse a plugin's type.
+    await getCachedNextly();
     const body = await readJsonBody(request);
 
     let validated: z.infer<typeof UpdateWebhookSchema>;
