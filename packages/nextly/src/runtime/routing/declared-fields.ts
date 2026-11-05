@@ -66,6 +66,19 @@ export async function expandedFields(
 const NONE: ReadonlySet<string> = new Set();
 
 /**
+ * The dotted paths of the hidden and password fields among a source's
+ * expanded fields (`expandedFields`), by core's sensitive-field rule; none for
+ * a source the registry does not hold. The one derivation of hidden paths from
+ * declarations, so a reader that already holds the expanded fields derives
+ * them without a second registry read.
+ */
+export function hiddenPathsOf(
+  fields: readonly SensitiveFieldSource[] | undefined
+): ReadonlySet<string> {
+  return fields === undefined ? NONE : new Set(sensitiveFieldPaths(fields));
+}
+
+/**
  * The dotted paths of the source's hidden and password fields, inside its
  * components and dynamic zones too, by core's sensitive-field rule. None for
  * a source the registry does not hold: the read itself answers for that.
@@ -85,8 +98,7 @@ export async function hiddenFieldPaths(
       logContext: { reason: "public-read-schema-unavailable" },
     });
   }
-  const fields = await expandedFields(source);
-  return fields === undefined ? NONE : new Set(sensitiveFieldPaths(fields));
+  return hiddenPathsOf(await expandedFields(source));
 }
 
 /**

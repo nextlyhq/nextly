@@ -1,4 +1,5 @@
 import {
+  allBlocks,
   breakpointContexts,
   DEFAULT_LIMITS,
   type DocumentLimits,
@@ -88,6 +89,7 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   defaultLayoutJob,
@@ -284,7 +286,8 @@ function pagePreviewBreakpoints(
         const nextly = await getCachedNextly();
         return { findSingle: args => nextly.findSingle(args) };
       },
-      ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+      // The code tier, which always holds the core blocks' looks.
+      defaults: configStyle,
     }),
   };
 }
@@ -612,6 +615,24 @@ export interface PageBuilderOptions {
 }
 
 /**
+ * The code tier refreshed with every registered block's looks, other
+ * plugins' among them, once they have all registered at init. Updated in
+ * place: every reader holds this one object and this one set, and none has
+ * read them yet.
+ */
+function refreshCodeTier(
+  configStyle: SiteStyleData,
+  configClassIds: Set<string>,
+  siteStyle: SiteStyleData | undefined
+): void {
+  configStyle.classes = resolveSiteStyle(
+    withBlockLooks(siteStyle, allBlocks())
+  ).classes;
+  configClassIds.clear();
+  for (const entry of configStyle.classes ?? []) configClassIds.add(entry.id);
+}
+
+/**
  * What the plugin publishes to the editor in the browser, as the admin's
  * `clientConfig`, or nothing when the host stated none of it.
  *
@@ -655,7 +676,9 @@ function adminClientConfig(
     // the validator read one answer. Plain data: tokens, fonts, classes and
     // breakpoints all serialize, and none of it is secret — a published page
     // emits it as CSS.
-    ...(opts.siteStyle === undefined ? {} : { siteStyle: configStyle }),
+    // Always stated: the code tier holds the core blocks' looks even when the
+    // host states no site style of its own.
+    siteStyle: configStyle,
     /*
      * The bounds the renderer draws under, so the admin asks the same question
      * the page answers. The classes manager walks the open document to say
@@ -1222,7 +1245,14 @@ export const pageBuilder = (
   // read, so what the factory can wire into the validator and the canvas is
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
-  const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The core blocks' looks join the code tier, so the site receives them as
+  // shared styles its code supplies.
+  const configStyle = resolveSiteStyle(withCoreLooks(opts.siteStyle));
+  // The code tier's class ids, for the routes that refuse to rename or remove
+  // what code supplies. One set, refreshed in place with the code tier.
+  const configClassIds = new Set(
+    (configStyle.classes ?? []).map(entry => entry.id)
+  );
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
@@ -1347,6 +1377,9 @@ export const pageBuilder = (
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // Every registered block is known now, other plugins' among them, so
+      // the code tier takes all their looks.
+      refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
       // Class-usage maintenance. Registered here rather than beside the
       // collection, because it is a property of the plugin being INSTALLED: the
       // index table exists whether or not anything maintains it, and a host
@@ -1810,7 +1843,8 @@ export const pageBuilder = (
           // what consumers actually compile. Without it a stored class whose
           // slug a config class already holds is accepted and then dropped at
           // render, and the node referencing it gets no rule at all.
-          ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+          // The code tier, which always holds the core blocks' looks.
+          defaults: configStyle,
         }),
         // Where the site's default Layout is recorded. Contributed whether or
         // not any Layout exists yet, because the repair writes it on a site
@@ -2082,9 +2116,7 @@ export const pageBuilder = (
         // each is used and where, and removing the unused. Usage is read from
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
-          configClassIds: new Set(
-            (configStyle.classes ?? []).map(entry => entry.id)
-          ),
+          configClassIds,
           usage: ctx => {
             const index =
               ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??

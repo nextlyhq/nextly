@@ -86,6 +86,33 @@ function postgresReferenceScalarExpression(
 }
 
 /**
+ * MySQL's middle step of the list conversion: the column, already widened to `text`, has each
+ * stored value rewritten as a JSON list, so the retype that follows reads every row as JSON.
+ *
+ * Its own export so a caller that widens and retypes the column its own way (the repair's
+ * conversion, which restates the column's whole definition around each retype) runs this same
+ * rewrite rather than a copy of it.
+ */
+export function mysqlReferenceListRewrite(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "mysql");
+  const c = quoteIdent(columnName, "mysql");
+  // A JSON list stays as it is; any other value is one reference and becomes a one-item list.
+  // Nested so JSON_TYPE only ever reads a value JSON_VALID has accepted.
+  // A JSON scalar (a single id the serializer wrote as a JSON string) is wrapped as JSON, so its
+  // quotes are not kept as part of the id.
+  return (
+    `UPDATE ${table} SET ${c} = CASE ` +
+    `WHEN TRIM(${c}) = '' THEN JSON_ARRAY() ` +
+    `WHEN JSON_VALID(${c}) THEN CASE WHEN JSON_TYPE(${c}) = 'ARRAY' THEN ${c} ELSE JSON_ARRAY(CAST(${c} AS JSON)) END ` +
+    `ELSE JSON_ARRAY(${c}) END ` +
+    `WHERE ${c} IS NOT NULL`
+  );
+}
+
+/**
  * The statements that convert `op`'s column, in order: forward into the list column for a
  * `referenceList` conversion, back to the scalar type for its `referenceScalar` DOWN.
  *
@@ -117,15 +144,7 @@ export function referenceConversionStatements(
     return [
       // Wide enough for a list: a JSON list of one uuid is already longer than varchar(36).
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
-      // A JSON list stays as it is; any other value is one reference and becomes a one-item list.
-      // Nested so JSON_TYPE only ever reads a value JSON_VALID has accepted.
-      // A JSON scalar (a single id the serializer wrote as a JSON string) is wrapped as JSON, so its
-      // quotes are not kept as part of the id.
-      `UPDATE ${table} SET ${c} = CASE ` +
-        `WHEN TRIM(${c}) = '' THEN JSON_ARRAY() ` +
-        `WHEN JSON_VALID(${c}) THEN CASE WHEN JSON_TYPE(${c}) = 'ARRAY' THEN ${c} ELSE JSON_ARRAY(CAST(${c} AS JSON)) END ` +
-        `ELSE JSON_ARRAY(${c}) END ` +
-        `WHERE ${c} IS NOT NULL`,
+      mysqlReferenceListRewrite(op.tableName, op.columnName),
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
     ];
   }

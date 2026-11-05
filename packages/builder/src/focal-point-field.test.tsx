@@ -17,7 +17,9 @@ afterEach(cleanup);
 
 function mount(
   stored?: string,
-  frame: { picture?: string; fit?: string } = { fit: "cover" }
+  frame: { picture?: string; fit?: string; position?: string } = {
+    fit: "cover",
+  }
 ) {
   const onCommit = vi.fn(() => "applied" as const);
   render(
@@ -145,6 +147,20 @@ describe("FocalPointField", () => {
       ".nx-focal__picture"
     ) as HTMLImageElement | null;
     expect(backdrop?.style.objectPosition).toBe("right top");
+  });
+
+  it("previews a contextual point where the canvas resolves it", () => {
+    // `inherit` or a variable means nothing in the inspector's own document;
+    // the canvas has already resolved it for the picture it draws.
+    mount("var(--image-focus)", {
+      picture: "/team.png",
+      fit: "cover",
+      position: "100% 0%",
+    });
+    const backdrop = document.querySelector(
+      ".nx-focal__picture"
+    ) as HTMLImageElement | null;
+    expect(backdrop?.style.objectPosition).toBe("100% 0%");
   });
 
   it("shows an exact point as written, and writes one as CSS", () => {

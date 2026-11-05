@@ -50,12 +50,27 @@
  * publishing the draft beside it; a live row naming a removed Layout already
  * draws the site default.
  *
+ * ## A publish naming a Layout that no longer exists
+ *
+ * So the live row stops naming a deleted Layout the next time the page is
+ * published: `beforeChange` on a write whose status is `published` (the status
+ * core's own publish gate reads, after every `beforeUpdate` hook) writes
+ * `layout: null` when the Layout the published row would name has no row any
+ * more. That Layout is the one the write sets, else the one the page carries
+ * forward: its working draft's, which a publish promotes, else its row's.
+ * Only a deleted Layout is cleared: an unpublished one exists and is the
+ * page's choice, and one being removed still exists and is the fence's to
+ * judge. A draft save publishes nothing and is left as sent. Inside a caller's
+ * transaction it is left too, since the Layouts can only be read there through
+ * the pool; such a page keeps the reference and draws the site default.
+ *
  * @module layout-removal/page-reference-guard
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
-import { relationId } from "../default-layout/store";
+import { layoutExists, relationId } from "../default-layout/store";
+import { statusOf } from "../unpublish-write";
 
 import {
   confirmedGone,
@@ -67,6 +82,9 @@ import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
 /** Why a page's Layout was cleared, as the server log records it. */
 export const IN_FLIGHT_CLEARED = "layout-being-removed";
+
+/** Why a published page's Layout was cleared, as the server log records it. */
+const DELETED_LAYOUT_CLEARED = "layout-deleted";
 
 /** The plugin context this needs, named structurally. */
 export interface PageReferenceGuardContext {
@@ -97,6 +115,8 @@ export interface PageReferenceGuardArgs {
   ctx: PageReferenceGuardContext;
   /** The RESOLVED pages slug: a host may rename it. */
   pages: string;
+  /** The RESOLVED Layouts slug, where a published page's Layout is looked up. */
+  layouts: string;
   store: () => LayoutRemovalStore;
   /**
    * The fence read on a caller's transaction, from the executor core hands the
@@ -370,6 +390,76 @@ async function clearInFlight(
   }
 }
 
+/**
+ * The Layout a publishing write leaves on the live row: the one it sets, when
+ * it sets `layout`; otherwise the one the page carries forward, read as the
+ * before-write check reads it.
+ */
+async function publishedLayoutOf(
+  hook: PageHookContext,
+  data: Record<string, unknown>,
+  pages: string
+): Promise<string | null> {
+  if (Object.hasOwn(data, "layout")) return relationId(data.layout);
+  return storedLayoutOf(hook, pages);
+}
+
+/**
+ * The data a publishing write sends and the Direct API to look its Layout up
+ * with, or null for a write this leaves as sent: one that publishes nothing,
+ * one inside a caller's transaction, or one carrying no Direct API.
+ */
+function publishingWrite(
+  hook: PageHookContext
+): { sent: Record<string, unknown>; nextly: PageReads } | null {
+  if (hook.executor !== undefined) return null;
+  const data = hook.data;
+  if (typeof data !== "object" || data === null) return null;
+  if (statusOf(data) !== "published") return null;
+  const nextly = directApiOf(hook);
+  if (nextly === null) return null;
+  return { sent: data as Record<string, unknown>, nextly };
+}
+
+/**
+ * The before-write clear for a publish, by the rule in the module docblock.
+ * Answers the data to write with `layout: null`, or `undefined` to leave it as
+ * sent. Never throws: a Layout that cannot be looked up is left named, which
+ * draws the site default if it is gone, rather than refusing the publish.
+ */
+async function clearDeletedOnPublish(
+  hook: PageHookContext,
+  args: PageReferenceGuardArgs
+): Promise<Record<string, unknown> | undefined> {
+  const write = publishingWrite(hook);
+  if (write === null) return undefined;
+  const { sent, nextly } = write;
+  const pageId = relationId(hook.originalData) ?? relationId(sent);
+  let named: string | null = null;
+  try {
+    named = await publishedLayoutOf(hook, sent, args.pages);
+    if (named === null) return undefined;
+    if (await layoutExists(nextly, { layouts: args.layouts }, named)) {
+      return undefined;
+    }
+  } catch (error) {
+    args.warn(
+      "[page-builder] could not check a published page's Layout; it keeps its choice, which draws the site default if that Layout is gone",
+      {
+        pageId,
+        layoutId: named,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+    return undefined;
+  }
+  args.warn(
+    "[page-builder] a page was published without its Layout because that Layout no longer exists; it uses the site default",
+    { pageId, layoutId: named, reason: DELETED_LAYOUT_CLEARED }
+  );
+  return { ...sent, layout: null };
+}
+
 /** Register the page side on the pages collection, by its RESOLVED slug. */
 export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
   const { ctx, pages } = args;
@@ -380,6 +470,12 @@ export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
     await refuseStaleClear(context as PageHookContext, args);
     return refuseAddedReference(context as PageHookContext, args, false);
   });
+  // `beforeChange`, not `beforeUpdate`: it runs after every `beforeUpdate`
+  // hook, so a status another hook sets is the status judged, and after the
+  // check above has dropped an unchanged `layout`.
+  ctx.hooks.on("beforeChange", pages, context =>
+    clearDeletedOnPublish(context as PageHookContext, args)
+  );
   ctx.hooks.on("afterCreate", pages, context =>
     clearInFlight(context as PageHookContext, args, "afterCreate")
   );

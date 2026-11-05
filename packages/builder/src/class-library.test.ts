@@ -411,6 +411,22 @@ describe("whether a name can become a class", () => {
     });
   });
 
+  it("leaves the looks out of the count: they have a cap of their own", () => {
+    // One short of full in shared styles, plus code's looks: still room, as
+    // the engine reads the two apart.
+    const nearly = Array.from({ length: MAX_NAMED_CLASSES - 1 }, (_, index) =>
+      cls(`id-fill-${index}`, `fill-${index}`, index)
+    );
+    const looks = Array.from({ length: 6 }, (_, index) => ({
+      ...cls(`look:core/button:l${index}`, `button-l${index}`, index),
+      blockType: "core/button",
+    }));
+    expect(newClassName("call-to-action", [...nearly, ...looks])).toEqual({
+      ok: true,
+      slug: "call-to-action",
+    });
+  });
+
   it("reports the fixable problem first when a name is BOTH bad and late", () => {
     // Capacity is about the library; a malformed name is about the input the
     // author just typed, and that is the one they can act on.
@@ -845,5 +861,20 @@ describe("persisted class styles that are not the shape the type promises", () =
         { id: "c1", slug: "hero", styles: { base: { base: null } } },
       ] as never)
     ).toHaveLength(1);
+  });
+});
+
+describe("an applied look's class name", () => {
+  it("is the one the compiler writes, under the look prefix", () => {
+    const [choice] = siteClasses([
+      {
+        id: "look:core/button:outline",
+        slug: "button-outline",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: {},
+      },
+    ]);
+    expect(choice?.className).toBe("nx-l-button-outline");
   });
 });
