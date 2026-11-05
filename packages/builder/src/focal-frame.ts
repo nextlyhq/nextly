@@ -13,6 +13,11 @@ import * as React from "react";
 export interface FocalFrameValue {
   /** The picture's address, as the canvas shows it; none for no picture. */
   readonly picture?: string | undefined;
+  /**
+   * Where the canvas places the picture, resolved there: what a contextual
+   * point (`inherit`, a variable) comes to, which the inspector cannot read.
+   */
+  readonly position?: string | undefined;
   /** The `object-fit` keyword in force here, lowercased; none when unset. */
   readonly fit?: string | undefined;
 }
