@@ -96,11 +96,11 @@ async function heldDraft(
     { siteName: "Live", status: "published", _overwrite: true },
     { overrideAccess: true }
   );
-  const held = await singles.update(slug, change, {
-    routeAuthorized: true,
-    user: EDITOR,
-    _overwrite: true,
-  });
+  const held = await singles.update(
+    slug,
+    { ...change, _overwrite: true },
+    { routeAuthorized: true, user: EDITOR }
+  );
   expect(held.success, JSON.stringify(held)).toBe(true);
 }
 

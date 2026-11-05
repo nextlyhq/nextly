@@ -173,10 +173,13 @@ describeEachDialect("a field that stops being translated", dialect => {
     for (const locale of LOCALES) {
       const written = await singles.update(
         "hero",
-        locale === "en"
-          ? { heading: VALUES.en, views: 7 }
-          : { heading: VALUES[locale] },
-        { locale, overrideAccess: true, _overwrite: true }
+        {
+          ...(locale === "en"
+            ? { heading: VALUES.en, views: 7 }
+            : { heading: VALUES[locale] }),
+          _overwrite: true,
+        },
+        { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }

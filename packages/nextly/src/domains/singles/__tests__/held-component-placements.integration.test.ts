@@ -181,10 +181,11 @@ async function boot(dialect: TestDialect, placement: Placement) {
 type Singles = Awaited<ReturnType<typeof boot>>;
 
 async function hold(singles: Singles, data: Record<string, unknown>) {
-  const result = await singles.update("home", data, {
-    overrideAccess: true,
-    _overwrite: true,
-  });
+  const result = await singles.update(
+    "home",
+    { ...data, _overwrite: true },
+    { overrideAccess: true }
+  );
   expect(result.success, JSON.stringify(result)).not.toBe(false);
 }
 

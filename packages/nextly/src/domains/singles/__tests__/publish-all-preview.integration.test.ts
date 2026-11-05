@@ -79,11 +79,11 @@ async function save(
   locale: string,
   data: Record<string, unknown>
 ): Promise<void> {
-  const saved = await singles.update(SLUG, data, {
-    locale,
-    overrideAccess: true,
-    _overwrite: true,
-  });
+  const saved = await singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
 

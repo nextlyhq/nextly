@@ -184,8 +184,11 @@ describeEachDialect(
       const [value] = english;
       const written = await singles.update(
         "hero",
-        value === undefined ? { views: 1 } : { code: value, views: 1 },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        {
+          ...(value === undefined ? { views: 1 } : { code: value, views: 1 }),
+          _overwrite: true,
+        },
+        { locale: "en", overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }
