@@ -26,11 +26,20 @@ import type * as LucideSet from "./lucide-data";
  * The set itself, loaded on first use and kept for the life of the process.
  * Imported statically, every server render and every cold start would parse
  * the whole set, on a site that never draws an icon as much as on one that
- * does.
+ * does. A load that fails is not kept: in a browser the set is a chunk
+ * fetched over the network, and a fetch that failed once may succeed when
+ * the next search or resolve tries again.
  */
 let loaded: Promise<typeof LucideSet> | undefined;
-const lucideSet = (): Promise<typeof LucideSet> =>
-  (loaded ??= import("./lucide-data"));
+function lucideSet(): Promise<typeof LucideSet> {
+  if (loaded !== undefined) return loaded;
+  const loading = import("./lucide-data");
+  loaded = loading;
+  loading.catch(() => {
+    if (loaded === loading) loaded = undefined;
+  });
+  return loading;
+}
 
 /** The set prefix every Lucide id carries: `lucide:star`. */
 export const LUCIDE_PREFIX = "lucide";
