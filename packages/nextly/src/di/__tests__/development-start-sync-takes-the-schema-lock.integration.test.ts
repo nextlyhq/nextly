@@ -1,13 +1,16 @@
 /**
- * A development start's schema sync holds the schema lock, on PostgreSQL, MySQL and SQLite.
+ * A development start's schema writes hold the schema lock, on PostgreSQL, MySQL and SQLite.
  *
- * `registerServices` runs the Builder reconcile and the code-first sync inside
- * `withDevelopmentStartSchemaLock` (`development-start-sync-inside-the-lock.test.ts` holds it to
- * that). Here the lock itself is driven against a real database with a second process holding it,
- * as a `nextly migrate` in another terminal would:
+ * `registerServices` runs the schema registry's initialisation, the Builder reconcile, the
+ * code-first sync and the extension tables' preparation inside `withDevelopmentStartSchemaLock`
+ * (`development-start-sync-inside-the-lock.test.ts` holds it to that). Here the lock itself is
+ * driven against a real database with a second process holding it, as a `nextly migrate` in
+ * another terminal would:
  *
  * - outside production the start waits for the holder, its sync does not start while the holder
  *   works, and once the holder releases the sync runs holding the lock itself;
+ * - the first start's own lock, which the registry's initialisation takes inside that hold, runs
+ *   in the start's claim rather than waiting for it;
  * - in production the start takes no lock here, so it neither waits for the holder nor disturbs
  *   its claim.
  *
@@ -20,6 +23,7 @@ import { randomBytes } from "node:crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { firstStartSchemaLock } from "../../init/first-run";
 import {
   DEVELOPMENT_START_SYNC_COMMAND,
   withDevelopmentStartSchemaLock,
@@ -129,6 +133,26 @@ describe.each(LOCK_DIALECTS)(
       await expect(start).resolves.toBe(DEVELOPMENT_START_SYNC_COMMAND);
       expect(started).toBe(true);
       // And gave the lock back when it finished.
+      expect(await lockCommand(adapter)).toBeNull();
+    });
+
+    it("runs the first start's own lock, taken inside the hold, in the start's claim", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+
+      const startedAt = Date.now();
+      const claimInsideFirstStart = await withDevelopmentStartSchemaLock(
+        adapter,
+        silentLogger,
+        () =>
+          firstStartSchemaLock(
+            adapter,
+            silentLogger
+          )(() => lockCommand(adapter))
+      );
+
+      // Not a wait for its own holder: that would last a lease and then refuse.
+      expect(claimInsideFirstStart).toBe(DEVELOPMENT_START_SYNC_COMMAND);
+      expect(Date.now() - startedAt).toBeLessThan(WHILE_HELD_MS);
       expect(await lockCommand(adapter)).toBeNull();
     });
 

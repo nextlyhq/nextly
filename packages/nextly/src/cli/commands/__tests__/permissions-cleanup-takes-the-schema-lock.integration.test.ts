@@ -22,6 +22,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
+import { hashManifest } from "../../../domains/field-groups/migration/manifest";
+import { beginMigration } from "../../../domains/field-groups/migration/state";
+import { MetaService } from "../../../domains/meta/services/meta-service";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
 import {
   LOCK_DIALECTS,
@@ -33,12 +36,20 @@ import {
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { Logger } from "../../../shared/types";
+import { toCliError } from "../../errors";
 import { createLogger } from "../../utils/logger";
 import { migrateCore } from "../migrate";
 import { cleanupOrphanedPermissionsUnderLock } from "../permissions-cleanup";
 
 /** A collection slug the registry does not hold until a case registers it. */
 const GHOST = "pclk_ghost";
+
+/** Every table a lock keeps its row in, as `world.reset` drops them. */
+const LOCK_TABLES = [
+  "nextly_schema_lock",
+  "nextly_field_group_lock",
+  "nextly_migrate_lock",
+];
 
 const logger = createLogger({ quiet: true });
 const serviceLogger: Logger = {
@@ -123,6 +134,13 @@ describe.each(LOCK_DIALECTS)(
       return { tables, permissions, grants };
     }
 
+    /** The lock tables this database has, the earlier ones included. */
+    async function lockTables(): Promise<string[]> {
+      return (await adapter.listTables())
+        .filter(name => LOCK_TABLES.includes(name))
+        .sort();
+    }
+
     async function holdTheLock(): Promise<void> {
       holder = startHolder(world, {
         command: "nextly db:sync",
@@ -164,6 +182,38 @@ describe.each(LOCK_DIALECTS)(
       expect(await databaseState()).toEqual(before);
     }, 90_000);
 
+    it("is refused while a field-group storage migration has stalled, as db:sync is, changing nothing", async () => {
+      // A migration that renamed some of its tables and stopped: mid-way, the registry's slugs can
+      // name storage neither layout matches, so the orphans cannot be judged.
+      const entries = [
+        { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+        {
+          kind: "registry" as const,
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ];
+      await beginMigration(new MetaService(adapter, logger), {
+        direction: "up",
+        migrationId: "pcl-stalled",
+        plan: { registryHash: "pcl", manifestHash: hashManifest(entries) },
+        appliedManifest: entries,
+      });
+      const before = await databaseState();
+      expect(before.permissions).toEqual(
+        expect.arrayContaining(await ghostPermissions())
+      );
+      const error = await cleanup(1_000).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect(NextlyError.is(error) ? error.code : error).toBe(
+        "SERVICE_UNAVAILABLE"
+      );
+      expect(toCliError(error).code).toBe("FIELD_GROUP_MIGRATION_IN_FLIGHT");
+      expect(await databaseState()).toEqual(before);
+    }, 90_000);
+
     it("reads the registry once it holds the lock, keeping a collection registered while it waited", async () => {
       await holdTheLock();
       const ghost = await ghostPermissions();
@@ -186,6 +236,20 @@ describe.each(LOCK_DIALECTS)(
 
       await run;
       expect(await ghostPermissions()).toEqual(ghost);
+    }, 90_000);
+
+    it("creates no lock table on a database that has none, and still deletes", async () => {
+      // An installation from before the schema lock: every system table, no lock table.
+      await world.reset(adapter);
+      expect(await lockTables()).toEqual([]);
+      expect(await ghostPermissions()).not.toEqual([]);
+
+      const result = await cleanup(1_000);
+
+      expect(result.created).toBeGreaterThan(0);
+      expect(await ghostPermissions()).toEqual([]);
+      // The cleanup deletes rows and issues no DDL, so a role without DDL rights can run it.
+      expect(await lockTables()).toEqual([]);
     }, 90_000);
   }
 );

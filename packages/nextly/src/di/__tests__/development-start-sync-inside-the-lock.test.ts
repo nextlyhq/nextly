@@ -1,11 +1,13 @@
 /**
- * The boot runs its Builder reconcile and its code-first sync inside the development start's
- * schema lock, both of them, and neither outside it.
+ * The boot runs every development schema write inside the development start's schema lock, in one
+ * hold, and none of them outside it: the schema registry's initialisation, which creates a
+ * translated entity's missing translation table, the Builder reconcile, the code-first sync, and
+ * the extension tables' preparation.
  *
  * `development-start-sync-takes-the-schema-lock.integration.test.ts` shows what the lock does to
  * work run inside `withDevelopmentStartSchemaLock`; this holds `registerServicesOnce` to running
- * the two steps as that work. Read from the parsed source, because the two steps need a whole
- * configured boot to run, and what matters here is where the calls sit.
+ * the steps as that work. Read from the parsed source, because the steps need a whole configured
+ * boot to run, and what matters here is where the calls sit.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -62,6 +64,14 @@ const registerServicesOnce = [...walk(registerAst.program.body)].find(
     (node.id as { name?: string } | undefined)?.name === "registerServicesOnce"
 );
 
+/** Every step of the boot that changes the schema outside production, in the order it runs. */
+const SCHEMA_WRITE_STEPS = [
+  "initializeSchemaRegistry",
+  "reconcileBuilderTargets",
+  "syncCodeFirstEntities",
+  "prepareExtensionTablesForInit",
+] as const;
+
 const within = (inner: Node, outer: Node): boolean =>
   inner.start >= outer.start && inner.end <= outer.end;
 
@@ -91,15 +101,12 @@ describe("the development start's schema sync in registerServicesOnce", () => {
   it("is read from the function itself", () => {
     expect(registerServicesOnce).toBeDefined();
     // A positive control on the reading: the steps are found as calls where they are known to be.
-    expect(
-      callsTo(registerServicesOnce, "reconcileBuilderTargets")
-    ).toHaveLength(1);
-    expect(callsTo(registerServicesOnce, "syncCodeFirstEntities")).toHaveLength(
-      1
-    );
+    for (const step of SCHEMA_WRITE_STEPS) {
+      expect(callsTo(registerServicesOnce, step), step).toHaveLength(1);
+    }
   });
 
-  it("runs the Builder reconcile and the code-first sync as the locked work, and only there", () => {
+  it("runs every development schema write as the locked work, and only there", () => {
     const locks = callsTo(
       registerServicesOnce,
       "withDevelopmentStartSchemaLock"
@@ -111,10 +118,13 @@ describe("the development start's schema sync in registerServicesOnce", () => {
     expect(work?.type).toBe("ArrowFunctionExpression");
     if (work === undefined) return;
 
-    for (const step of ["reconcileBuilderTargets", "syncCodeFirstEntities"]) {
+    // Soft, so a run names every step outside the work rather than only the first.
+    for (const step of SCHEMA_WRITE_STEPS) {
       const calls = callsTo(registerServicesOnce, step);
-      expect(calls, step).toHaveLength(1);
-      for (const call of calls) expect(within(call, work), step).toBe(true);
+      expect.soft(calls, step).toHaveLength(1);
+      for (const call of calls) {
+        expect.soft(within(call, work), step).toBe(true);
+      }
     }
   });
 
@@ -132,15 +142,14 @@ describe("the development start's schema sync in registerServicesOnce", () => {
     const work = ((lock.arguments ?? []) as Node[]).at(-1);
     if (work === undefined) return;
 
-    for (const step of ["reconcileBuilderTargets", "syncCodeFirstEntities"]) {
+    for (const step of SCHEMA_WRITE_STEPS) {
       const [call] = callsTo(work, step);
-      expect(call, step).toBeDefined();
+      expect.soft(call, step).toBeDefined();
       if (call === undefined) continue;
-      expect(awaited(call, work), `${step} is awaited`).toBe(true);
-      expect(
-        innermostFunction(call, work),
-        `${step} runs in the work itself`
-      ).toBe(work);
+      expect.soft(awaited(call, work), `${step} is awaited`).toBe(true);
+      expect
+        .soft(innermostFunction(call, work), `${step} runs in the work itself`)
+        .toBe(work);
     }
   });
 });

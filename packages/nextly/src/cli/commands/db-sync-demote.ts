@@ -109,38 +109,7 @@ export async function demoteCollection(
         });
       }
 
-      // Upsert the UI record. If the user ran --demote twice or the slug already exists, update
-      // rather than fail.
-      if (current) {
-        await registry.updateCollection(slug, {
-          fields: fields as DynamicCollectionInsert["fields"],
-          source: "ui",
-        });
-        logger.info(`Updated existing UI record for '${slug}'.`);
-        return;
-      }
-      // registerCollection expects a full DynamicCollectionInsert. The required fields beyond what
-      // the user's config carries are tableName (fall back to dc_<slug> convention), source
-      // (always "ui" here since we are handing ownership to the UI), and schemaHash (stable hash
-      // of fields JSON so future change detection works).
-      const tableName = collection.dbName ?? `dc_${slug}`;
-      const fieldsJson = JSON.stringify(fields);
-      const schemaHash = createHash("sha256").update(fieldsJson).digest("hex");
-      await registry.registerCollection({
-        slug,
-        labels: {
-          singular: collection.labels?.singular ?? collection.label ?? slug,
-          plural: collection.labels?.plural ?? slug,
-        },
-        tableName,
-        fields: fields as DynamicCollectionInsert["fields"],
-        source: "ui",
-        schemaHash,
-        ...(collection.description !== undefined && {
-          description: collection.description,
-        }),
-        configPath: "demoted-from-code",
-      });
+      await writeDemotedRecord(registry, collection, current, logger);
     }
   );
 
@@ -148,6 +117,59 @@ export async function demoteCollection(
     `Collection '${slug}' written to UI source. Remove its entry from your nextly.config.ts collections array, then restart dev server.`
   );
   return "demoted";
+}
+
+/**
+ * Write a demoted collection to the Schema Builder's registry: update the record already there
+ * (a second `--demote`, or a slug the registry already holds), or register a new one.
+ * Runs under the schema lock, after the record has been read again and found unchanged.
+ */
+async function writeDemotedRecord(
+  registry: CollectionRegistryService,
+  collection: DemotedCollection,
+  current: Awaited<
+    ReturnType<CollectionRegistryService["getCollectionBySlug"]>
+  >,
+  logger: Logger
+): Promise<void> {
+  const { slug } = collection;
+  const fields = (collection.fields ?? []) as DynamicCollectionInsert["fields"];
+  if (current) {
+    await registry.updateCollection(slug, { fields, source: "ui" });
+    logger.info(`Updated existing UI record for '${slug}'.`);
+    return;
+  }
+  await registry.registerCollection(newDemotedRecord(collection, fields));
+}
+
+/**
+ * The registry record a demoted collection is registered as. `registerCollection` expects a full
+ * DynamicCollectionInsert; beyond what the config carries it needs the table name (the `dc_<slug>`
+ * convention when the config names none), the source (always "ui": ownership passes to the
+ * Builder) and a hash of the fields JSON, so later change detection works.
+ */
+function newDemotedRecord(
+  collection: DemotedCollection,
+  fields: DynamicCollectionInsert["fields"]
+): DynamicCollectionInsert {
+  const { slug } = collection;
+  return {
+    slug,
+    labels: {
+      singular: collection.labels?.singular ?? collection.label ?? slug,
+      plural: collection.labels?.plural ?? slug,
+    },
+    tableName: collection.dbName ?? `dc_${slug}`,
+    fields,
+    source: "ui",
+    schemaHash: createHash("sha256")
+      .update(JSON.stringify(fields))
+      .digest("hex"),
+    ...(collection.description !== undefined && {
+      description: collection.description,
+    }),
+    configPath: "demoted-from-code",
+  };
 }
 
 /** The terminal's confirmation for a demote: what will be written, then a yes or no. */

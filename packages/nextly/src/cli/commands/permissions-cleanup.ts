@@ -5,8 +5,7 @@ import {
   PermissionSeedService,
   type SeedResult,
 } from "../../domains/auth/services/permission-seed-service";
-import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError } from "../../errors/nextly-error";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import type { Logger } from "../../shared/types";
 import { exitWithError } from "../errors";
 import { createContext } from "../program";
@@ -26,10 +25,22 @@ import {
  * resource. That is a judgement on the registry, so it is read under the same lock every schema
  * change takes: a migration, a sync or a promote that registers an entity while this runs would
  * otherwise have its fresh permissions judged against the registry as it stood before, and
- * deleted. The registry read and the deletes all happen inside `withMigrateLock`, never before it.
+ * deleted. The registry read and the deletes all happen inside the lock, never before it, taken as
+ * `db:sync` and a Schema Builder save take it (`withMigrationExcluded`).
  *
- * A held lock is waited for, about a minute, and then the run stops with
- * `NEXTLY_MIGRATE_LOCK_BUSY` naming the holder, having deleted nothing.
+ * - A held lock is waited for, about a minute, and then the run stops with
+ *   `NEXTLY_MIGRATE_LOCK_BUSY` naming the holder, having deleted nothing.
+ * - While a field-group storage migration has stopped part way, the run is refused, changing
+ *   nothing, with the message `db:sync` gives: mid-migration the registry's slugs can name storage
+ *   neither layout matches, so no permission can be judged orphaned.
+ * - The lock tables are never created: the cleanup deletes rows and issues no DDL, so a role with
+ *   SELECT and DELETE rights but none for DDL keeps the command. The lock is taken wherever its
+ *   table exists; a database without one has never run a schema change of this version.
+ * - An interrupt does not hand the claim away while the deletes run: the orphans are judged once
+ *   and then deleted row by row, each its grants and then itself, outside any one transaction, and
+ *   the signal does not stop that loop. Released early, a migration could register an entity and
+ *   seed its permissions while the remaining deletes still act on the judgement made before. A
+ *   killed process's claim lapses within one lease instead.
  */
 export async function cleanupOrphanedPermissionsUnderLock(args: {
   adapter: DrizzleAdapter;
@@ -38,32 +49,19 @@ export async function cleanupOrphanedPermissionsUnderLock(args: {
   lockWaitMs?: number;
 }): Promise<SeedResult> {
   const { adapter, logger } = args;
-  const outcome = await withMigrateLock(
-    adapter,
-    adapter.getCapabilities().dialect,
-    () =>
-      new PermissionSeedService(adapter, logger).cleanupOrphanedPermissions(),
+  return withMigrationExcluded(
     {
-      command: "nextly permissions:cleanup",
-      mode: "wait",
-      waitMs: args.lockWaitMs,
-      logger: {
-        warn: (m: string) => logger.warn(m),
-        info: (m: string) => logger.info(m),
-      },
-    }
+      adapter,
+      logger,
+      label: "nextly permissions:cleanup",
+      whenHeld: "wait",
+      mayCreateLock: false,
+      releaseOnInterrupt: false,
+      ...(args.lockWaitMs !== undefined ? { waitMs: args.lockWaitMs } : {}),
+    },
+    () =>
+      new PermissionSeedService(adapter, logger).cleanupOrphanedPermissions()
   );
-  // `ran: false` comes only from an `isSettled` wait, which this does not ask for: reporting a
-  // count here would claim a cleanup that never ran.
-  if (!outcome.ran) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "schema lock settled without a settle check",
-        command: "nextly permissions:cleanup",
-      },
-    });
-  }
-  return outcome.value;
 }
 
 /**
