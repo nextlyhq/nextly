@@ -768,8 +768,8 @@ describe("LanguagePanel", () => {
       },
     });
 
-    // The chip, not the state text: the phrase truncates in a 277px rail and
-    // this is the fact that must survive.
+    // The chip, not the state text: the chip is the mark that reads at a
+    // glance in a 277px rail, and this is the fact that must survive.
     expect(screen.getByText("changes")).toBeInTheDocument();
     // And the language WITHOUT pending work carries no chip — without this the
     // assertion above would pass against a panel that marked every row.
