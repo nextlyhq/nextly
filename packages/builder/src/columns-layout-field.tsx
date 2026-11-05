@@ -25,7 +25,9 @@ import {
   layoutOf,
   planLayout,
   planStack,
+  reachedStacks,
   stackOf,
+  type AppliedAt,
   stackTiers,
   type ColumnsLayout,
   type StackOn,
@@ -253,6 +255,7 @@ export function ColumnsLayoutControl({
   breakpoint,
   breakpoints,
   inherited: reaching,
+  applied,
 }: {
   editor: EditorState;
   nodeId: string;
@@ -261,6 +264,8 @@ export function ColumnsLayoutControl({
   breakpoints: BreakpointSet | undefined;
   /** The template reaching the row from elsewhere, as the cascade answers it. */
   inherited?: string | undefined;
+  /** What the cascade applies to the row at a tier, for a stack from elsewhere. */
+  applied?: AppliedAt | undefined;
 }): React.JSX.Element | null {
   const labelId = React.useId();
   const stackId = React.useId();
@@ -279,12 +284,13 @@ export function ColumnsLayoutControl({
   const inherited = stored === undefined ? reaching : undefined;
   const current = layoutOf(stored ?? inherited, defaultTemplate(row));
   const tiers = stackTiers(breakpoints);
-  const stack = stackOf(row, tiers, state);
+  const reached = reachedStacks(tiers, applied);
+  const stack = stackOf(row, tiers, state, reached);
   const options = (["tablet", "mobile", "never"] as const).filter(
     on => on === "never" || tiers[on] !== undefined
   );
   const restack = (on: StackOn, reversed: boolean) => {
-    const op = planStack(row, on, reversed, { tiers, state });
+    const op = planStack(row, on, reversed, { tiers, state, reached });
     if (op !== null) editor.apply(op);
   };
   return (

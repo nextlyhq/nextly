@@ -202,25 +202,36 @@ function propsAreDefaults(column: BlockNode): boolean {
   );
 }
 
+/** What a column is made of: the fields every node has, judged on their own. */
+const STRUCTURAL = new Set(["id", "type", "version", "props", "slots"]);
+
+/** Whether a stored value says nothing: absent, off, empty. */
+function saysNothing(value: unknown): boolean {
+  if (value === undefined || value === null || value === false) return true;
+  if (value === "") return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
 /**
  * Whether a column is blank, so removing it loses nothing: no blocks in it,
- * and nothing an author set on it, no props but its defaults, no styles,
- * classes, id or attributes. A styled column with nothing in it is still the
- * author's.
+ * no props but its defaults, and nothing else an author set on it.
+ *
+ * "Nothing else" is every other field the node carries, named or not, so a
+ * styled column, a named one, one with visibility rules or any field added
+ * to nodes later is still the author's: judged by what is stored rather than
+ * by a list that would have to keep up.
  */
 function isEmpty(column: BlockNode): boolean {
-  const node = column as BlockNode & {
-    classes?: readonly unknown[];
-    cssId?: unknown;
-    attributes?: Record<string, unknown>;
-  };
   return (
-    Object.values(node.slots ?? {}).every(children => children.length === 0) &&
+    Object.values(column.slots ?? {}).every(
+      children => children.length === 0
+    ) &&
     propsAreDefaults(column) &&
-    node.styles === undefined &&
-    (node.classes?.length ?? 0) === 0 &&
-    node.cssId === undefined &&
-    Object.keys(node.attributes ?? {}).length === 0
+    Object.entries(column).every(
+      ([key, value]) => STRUCTURAL.has(key) || saysNothing(value)
+    )
   );
 }
 
@@ -328,10 +339,16 @@ export function stackTiers(breakpoints: BreakpointSet | undefined): StackTiers {
     offeredTiers(breakpoints).find(tier => fits(tier.maxWidth))?.id;
   const tablet = widest(width => width > 640 && width <= 1024);
   const mobile = widest(width => width <= 640);
+  // Widest first, and of two at one width the later first: the order the
+  // browser lets them win in, so a stack is read where it is applied.
   const managed = (breakpoints?.viewport ?? [])
-    .filter(tier => tier.maxWidth !== undefined && tier.maxWidth <= 1024)
-    .sort((a, b) => (b.maxWidth ?? 0) - (a.maxWidth ?? 0))
-    .map(tier => ({
+    .map((tier, index) => ({ tier, index }))
+    .filter(({ tier }) => tier.maxWidth !== undefined && tier.maxWidth <= 1024)
+    .sort(
+      (a, b) =>
+        (b.tier.maxWidth ?? 0) - (a.tier.maxWidth ?? 0) || b.index - a.index
+    )
+    .map(({ tier }) => ({
       id: tier.id,
       on:
         (tier.maxWidth ?? 0) > 640 ? ("tablet" as const) : ("mobile" as const),
@@ -360,17 +377,91 @@ function stackAt(
   return { reversed: direction === "column-reverse" };
 }
 
-/** Where a row stacks, read from what it stores, and whether it is reversed. */
+/** A stack reaching the row at a tier from elsewhere (a shared style it wears). */
+export interface ReachedStack {
+  readonly id: string;
+  readonly reversed: boolean;
+}
+
+/**
+ * What the cascade applies to the row at a tier: the winning declaration of a
+ * CSS property there, where it was set, and whether the row set it itself.
+ */
+export type AppliedAt = (
+  tier: string,
+  cssProperty: "display" | "flex-direction"
+) => { value: string; breakpoint: string; own: boolean } | undefined;
+
+/**
+ * The stacks reaching the row from elsewhere, tier by tier, as the cascade
+ * applies them: a flex column set AT that tier by something other than the
+ * row. The row's own stacks are read from what it stores, which is what the
+ * control writes and clears.
+ */
+export function reachedStacks(
+  tiers: StackTiers,
+  applied: AppliedAt | undefined
+): ReachedStack[] {
+  if (applied === undefined) return [];
+  const reached: ReachedStack[] = [];
+  for (const tier of tiers.managed ?? []) {
+    const display = applied(tier.id, "display");
+    const direction = applied(tier.id, "flex-direction");
+    if (display?.value !== "flex" || display.breakpoint !== tier.id) continue;
+    if (display.own || direction === undefined || direction.own) continue;
+    if (direction.value !== "column" && direction.value !== "column-reverse")
+      continue;
+    reached.push({
+      id: tier.id,
+      reversed: direction.value === "column-reverse",
+    });
+  }
+  return reached;
+}
+
+/**
+ * Where a row stacks, and whether it is reversed: its own stack, else one
+ * reaching it from elsewhere, read widest tier first.
+ */
 export function stackOf(
   row: BlockNode,
   tiers: StackTiers,
-  state: StyleState
+  state: StyleState,
+  reached: readonly ReachedStack[] = []
 ): { on: StackOn; reversed: boolean } {
   for (const tier of tiers.managed ?? []) {
-    const stack = stackAt(row, tier.id, state);
+    const stack =
+      stackAt(row, tier.id, state) ?? reached.find(each => each.id === tier.id);
     if (stack !== undefined) return { on: tier.on, reversed: stack.reversed };
   }
   return { on: "never", reversed: false };
+}
+
+/** The display the block lays a row out with, from its own defaults. */
+function defaultDisplay(row: BlockNode): string {
+  const base = (
+    getBlock(row.type)?.baseStyles as
+      | { base?: { base?: Record<string, unknown> } }
+      | undefined
+  )?.base?.base?.display;
+  return typeof base === "string" ? base : "block";
+}
+
+/**
+ * The tiers where a stack reaching the row must be masked: every one for
+ * Never, else those wider than the chosen tier, where the row's own stack
+ * does not reach. Masked with the block's own display, set on the row.
+ */
+function maskedStacks(
+  tiers: StackTiers,
+  chosen: string | undefined,
+  reached: readonly ReachedStack[]
+): string[] {
+  const order = (tiers.managed ?? []).map(tier => tier.id);
+  const limit = chosen === undefined ? order.length : order.indexOf(chosen);
+  return reached
+    .filter(each => order.indexOf(each.id) < limit)
+    .map(each => each.id);
 }
 
 /**
@@ -382,7 +473,15 @@ export function planStack(
   row: BlockNode,
   on: StackOn,
   reversed: boolean,
-  { tiers, state }: { tiers: StackTiers; state: StyleState }
+  {
+    tiers,
+    state,
+    reached = [],
+  }: {
+    tiers: StackTiers;
+    state: StyleState;
+    reached?: readonly ReachedStack[];
+  }
 ): BuilderOp | null {
   const steps: { address: StyleAddress; value: StyleValue | null }[] = [];
   // Only a stack this control wrote is cleared: a display set at a tier for
@@ -397,6 +496,14 @@ export function planStack(
     }
   }
   const breakpoint = on === "never" ? undefined : tiers[on];
+  // A stack from a shared style is not the row's to clear: laid over instead,
+  // where the choice says the row should not stack.
+  for (const tier of maskedStacks(tiers, breakpoint, reached)) {
+    steps.push({
+      address: { state, breakpoint: tier, property: "display", path: [] },
+      value: defaultDisplay(row),
+    });
+  }
   if (breakpoint !== undefined) {
     steps.push(
       {

@@ -89,9 +89,10 @@ import {
 } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { breakpointsAtWidth } from "./canvas-width";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
-import { COLUMNS_ROW } from "./columns-layout";
+import { COLUMNS_ROW, type AppliedAt } from "./columns-layout";
 import { ColumnsLayoutControl } from "./columns-layout-field";
 import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
@@ -727,23 +728,33 @@ function StyleInspectorBody({
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <CanvasTokenModeProvider value={tokenMode}>
-        <div className="nx-style-inspector" data-style-target={target.kind}>
-          {showReadOnlyReason ? (
-            <ReadOnlyNote target={target} reason={readOnlyReason} />
-          ) : null}
-          <NoStyleProperties count={inspected.sections.length} />
-          <StyleSections
-            sections={inspected.sections}
-            nodeId={inspected.nodeId}
-            open={open}
-            onOpen={setOpenGroup}
-            readOnlyReason={readOnlyReason}
-            surroundings={surroundings}
-            fit={inspected.objectFit}
-          />
-        </div>
-      </CanvasTokenModeProvider>
+      <AppliedAtTier.Provider
+        value={appliedAtReader({
+          cascade,
+          subject,
+          state: inspected.state,
+          breakpoints,
+          nodeId: inspected.nodeId,
+        })}
+      >
+        <CanvasTokenModeProvider value={tokenMode}>
+          <div className="nx-style-inspector" data-style-target={target.kind}>
+            {showReadOnlyReason ? (
+              <ReadOnlyNote target={target} reason={readOnlyReason} />
+            ) : null}
+            <NoStyleProperties count={inspected.sections.length} />
+            <StyleSections
+              sections={inspected.sections}
+              nodeId={inspected.nodeId}
+              open={open}
+              onOpen={setOpenGroup}
+              readOnlyReason={readOnlyReason}
+              surroundings={surroundings}
+              fit={inspected.objectFit}
+            />
+          </div>
+        </CanvasTokenModeProvider>
+      </AppliedAtTier.Provider>
     </StyleTargetContext.Provider>
   );
 }
@@ -1195,6 +1206,7 @@ function ColumnsLayoutFields({
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
   if (
     target.kind !== "block" ||
     surroundings.editing.blockType !== COLUMNS_ROW
@@ -1209,8 +1221,63 @@ function ColumnsLayoutFields({
       breakpoint={surroundings.breakpoint}
       breakpoints={surroundings.breakpoints}
       inherited={reachingLayout(surroundings.provenanceOf)}
+      applied={applied}
     />
   );
+}
+
+/**
+ * What the cascade applies to the edited block at another tier, lent to a
+ * control that writes at tiers other than the one being edited (where a row
+ * stacks). Absent where the host compiles no cascade.
+ */
+const AppliedAtTier = React.createContext<AppliedAt | undefined>(undefined);
+
+/**
+ * The same provenance reading the dots use, asked at a tier: what a canvas at
+ * that tier's width applies, through the one ranking of the trace.
+ */
+function appliedAtReader({
+  cascade,
+  subject,
+  state,
+  breakpoints,
+  nodeId,
+}: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  state: StyleState;
+  breakpoints: BreakpointSet | undefined;
+  nodeId: string;
+}): AppliedAt | undefined {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return (tier, cssProperty) => {
+    const width = breakpoints?.viewport.find(
+      each => each.id === tier
+    )?.maxWidth;
+    const read = provenanceReader({
+      cascade,
+      subject,
+      live: breakpointsAtWidth(breakpoints, width),
+      state,
+      breakpoint: tier,
+      breakpoints,
+      onJumpToBreakpoint: undefined,
+    });
+    const provenance = read({
+      kind: "cssValue",
+      cssProperty,
+      tokenKinds: [],
+    })?.provenance;
+    if (provenance === undefined || provenance.kind === "unset")
+      return undefined;
+    const { entry } = provenance;
+    return {
+      value: entry.value,
+      breakpoint: entry.breakpoint,
+      own: entry.origin.kind === "node" && entry.origin.id === nodeId,
+    };
+  };
 }
 
 /** The catalog's leaf for a row's column template, which the trace records. */

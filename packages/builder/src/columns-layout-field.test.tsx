@@ -364,3 +364,58 @@ describe("a layout reaching the row from elsewhere", () => {
     ).toBe("true");
   });
 });
+
+describe("a stack reaching the row from a shared style", () => {
+  /** The row wearing a style that stacks it at Tablet and below. */
+  function mountStackedByStyle() {
+    const fromCard = (property: string, value: string) => ({
+      origin: { kind: "class", id: "cls-1", slug: "card" },
+      property,
+      value,
+      state: "base",
+      breakpoint: "md",
+    });
+    return mount([column("a"), column("b")], undefined, {
+      classes: ["cls-1"],
+      panel: {
+        target: {
+          kind: "block",
+          worn: [
+            {
+              id: "cls-1",
+              name: "Card",
+              styles: {
+                base: { md: { display: "flex", flexDirection: "column" } },
+              },
+            } as never,
+          ],
+        },
+        liveBreakpoints: [BASE_BREAKPOINT] as never,
+        cascade: {
+          nodes: [],
+          entries: [
+            fromCard("display", "flex"),
+            fromCard("flex-direction", "column"),
+          ],
+        } as never,
+      },
+    });
+  }
+
+  it("shows where the style stacks it", () => {
+    mountStackedByStyle();
+    expect(
+      screen.getByRole("radio", { name: "Tablet" }).getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("undoes it with Never, laying the row out as its block does there", () => {
+    // Nothing of the row's own to clear: Never writes the block's own display
+    // at the tier the style stacks it at, over the style's.
+    const editor = mountStackedByStyle();
+    fireEvent.click(screen.getByRole("radio", { name: "Never" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = JSON.stringify(editor.apply.mock.calls[0]?.[0]);
+    expect(op).toContain('"md":{"display":"grid"}');
+  });
+});

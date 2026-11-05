@@ -7,6 +7,7 @@
 import {
   clearBlocks,
   registerBlocks,
+  type BlockDocument,
   type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -19,6 +20,7 @@ import {
   stackOf,
   stackTiers,
 } from "./columns-layout";
+import { applyOp } from "./ops";
 
 beforeAll(() => {
   // The row and its column as the core pair declare them: a slot that admits
@@ -132,7 +134,23 @@ describe("planLayout", () => {
       "auto",
       at
     );
-    expect(plan.ok && JSON.stringify(plan.ops)).not.toContain(
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    // One op, which applied leaves the row with no template of its own.
+    expect(plan.ops).toHaveLength(1);
+    const after = plan.ops.reduce(
+      (document, op) => applyOp(document, op).document,
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          row([column("a"), column("b")], {
+            base: { base: { gridTemplateColumns: "1fr 2fr" } },
+          }),
+        ],
+      } as unknown as BlockDocument
+    );
+    expect(JSON.stringify(after.nodes[0]?.styles ?? {})).not.toContain(
       "gridTemplateColumns"
     );
   });
@@ -322,6 +340,88 @@ describe("round two: defaults and the devices offered", () => {
         .filter(op => op.kind === "remove")
         .map(op => op.kind === "remove" && op.id)
     ).toEqual(["c"]);
+  });
+
+  it("keeps a column carrying anything else an author set, its visibility or its name", () => {
+    for (const extra of [
+      { visibility: { hideOn: ["sm"] } },
+      { name: "Sidebar" },
+      { customCss: "& { outline: 1px solid; }" },
+    ]) {
+      const plan = planLayout(
+        row([
+          column("a", [text]),
+          { ...column("b"), ...extra } as BlockNode,
+          column("c"),
+        ]),
+        "50-50",
+        at
+      );
+      expect(plan.ok, JSON.stringify(extra)).toBe(true);
+      if (!plan.ok) continue;
+      // The blank one goes, though it came first and the other came last.
+      expect(
+        plan.ops
+          .filter(op => op.kind === "remove")
+          .map(op => op.kind === "remove" && op.id)
+      ).toEqual(["c"]);
+      const held = planLayout(
+        row([column("a", [text]), { ...column("b"), ...extra } as BlockNode]),
+        "4",
+        at
+      );
+      expect(held.ok).toBe(true);
+      const fewer = planLayout(
+        row([
+          column("a", [text]),
+          { ...column("c"), ...extra } as BlockNode,
+          column("d", [text]),
+        ]),
+        "50-50",
+        at
+      );
+      expect(fewer.ok, JSON.stringify(extra)).toBe(false);
+    }
+  });
+
+  it("reads the later of two equal-width tiers first, as the browser applies it", () => {
+    const devices: BreakpointSet = {
+      viewport: [
+        { id: "tab-a", label: "Tablet A", maxWidth: 1024 },
+        { id: "tab-b", label: "Tablet B", maxWidth: 1024 },
+        { id: "sm", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    };
+    const both = row([column("a")], {
+      base: {
+        "tab-a": { display: "flex", flexDirection: "column" },
+        "tab-b": { display: "flex", flexDirection: "column-reverse" },
+      },
+    });
+    expect(stackOf(both, stackTiers(devices), "base")).toEqual({
+      on: "tablet",
+      reversed: true,
+    });
+  });
+
+  it("masks a style's stack wider than the chosen tier, and none narrower", () => {
+    const plain = row([column("a")]);
+    const tiers = stackTiers(BREAKPOINTS);
+    const reached = [{ id: "md", reversed: false }];
+    expect(stackOf(plain, tiers, "base", reached).on).toBe("tablet");
+    const mobile = JSON.stringify(
+      planStack(plain, "mobile", false, { tiers, state: "base", reached })
+    );
+    expect(mobile).toContain('"md":{"display":"grid"}');
+    expect(mobile).toContain(
+      '"sm":{"display":"flex","flexDirection":"column"}'
+    );
+    // Chosen where the style already stacks: nothing of the style's to mask.
+    const tablet = JSON.stringify(
+      planStack(plain, "tablet", false, { tiers, state: "base", reached })
+    );
+    expect(tablet).not.toContain('"display":"grid"');
   });
 
   it("keeps a column whose props differ from its defaults", () => {
