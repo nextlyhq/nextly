@@ -1483,7 +1483,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: publishesPerLanguage(single),
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published Single its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: single.status,
+                }),
               });
               if (companion) {
                 getSchemaRegistryFromDI()?.registerDynamicSchema(

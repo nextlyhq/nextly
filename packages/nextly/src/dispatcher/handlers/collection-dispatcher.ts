@@ -1019,7 +1019,12 @@ const COLLECTIONS_METHODS: Record<
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: publishesPerLanguage(collection),
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published collection its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: (collection as { status?: unknown }).status,
+                }),
               });
               if (companion) {
                 getCollectionsHandlerFromDI()?.refreshCollectionSchema(
