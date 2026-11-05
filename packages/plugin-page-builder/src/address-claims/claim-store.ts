@@ -492,7 +492,7 @@ export async function claimOrWait(
     await insert(claims, tx, {
       ...columns(
         "waiting",
-        waitingKey(claim.holder, row.key),
+        waitingKey(claim.holder, claim.address, row.key),
         claim.address,
         claim.holder
       ),

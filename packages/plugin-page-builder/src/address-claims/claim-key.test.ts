@@ -97,9 +97,13 @@ describe("the keys of each kind", () => {
 
   it("keys a wait by who waits and on what, so each blocking claim is one row", () => {
     const blocking = claimKey("address", at("/blog/hello"));
-    expect(waitingKey({ collection: "posts", id: "p:1" }, blocking)).toBe(
-      "wait:posts:p%3A1|addr:en|/blog/hello"
-    );
+    expect(
+      waitingKey(
+        { collection: "posts", id: "p:1" },
+        at("/blog/hello"),
+        blocking
+      )
+    ).toBe("wait:posts:p%3A1|en|/blog/hello|addr:en|/blog/hello");
   });
 });
 

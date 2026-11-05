@@ -329,6 +329,32 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored(claims, "waiting")).toEqual([]);
     });
 
+    it("keeps a document waiting when it moves to another address the same claim blocks", async () => {
+      const claims = claimsOf(await boot());
+      await paginate(claims, "/news", page("list"));
+      await saving(claims, tx =>
+        claimOrWait(claims, tx, {
+          address: at("/news/page/2"),
+          holder: post("e1"),
+        })
+      );
+      // Moved in one transaction: wait for the new address, then let the
+      // old one go.
+      await saving(claims, async tx => {
+        await claimOrWait(claims, tx, {
+          address: at("/news/page/3"),
+          holder: post("e1"),
+        });
+        await releaseClaims(claims, tx, post("e1"), {
+          address: at("/news/page/2"),
+        });
+      });
+      expect(await stored(claims, "waiting")).toEqual([["/news/page/3", "e1"]]);
+
+      await release(claims, page("list"));
+      expect(await stored(claims, "address")).toEqual([["/news/page/3", "e1"]]);
+    });
+
     it("releases every claim a holder has, however many reads that takes", async () => {
       const claims = claimsOf(await boot());
       await saving(claims, async tx => {

@@ -18,7 +18,7 @@
  *
  * @module address-claims/claim-key
  */
-import { isReservedPath } from "nextly/runtime";
+import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
 /** An address a document is served at, in its canonical form. */
 export interface ServedAddress {
@@ -102,7 +102,9 @@ export function servedAddress(
     }
     segments.push(segment);
   }
-  if (isReservedPath(`/${segments.join("/")}`)) return null;
+  // The content route's own answer to which paths it serves, so a claim is
+  // never held on one it refuses (a reserved path among them).
+  if (slugToStaticParam(segments.join("/")) === null) return null;
   return { locale, segments };
 }
 
@@ -120,14 +122,17 @@ export function claimKey(
 }
 
 /**
- * The key of `waiter`'s wait on the claim keyed `blocking`: one per blocking
- * claim, so a document blocked twice is served only once both are released.
+ * The key of `waiter`'s wait for `address` on the claim keyed `blocking`: one
+ * per address and blocking claim, so a document blocked twice is served only
+ * once both are released, and one moving to another address the same claim
+ * blocks waits for the new one as well as the old.
  */
 export function waitingKey(
   waiter: { readonly collection: string; readonly id: string },
+  address: ServedAddress,
   blocking: string
 ): string {
-  return `${NAMESPACE.waiting}:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${blocking}`;
+  return `${NAMESPACE.waiting}:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${address.locale}|${pathOf(address)}|${blocking}`;
 }
 
 /**
