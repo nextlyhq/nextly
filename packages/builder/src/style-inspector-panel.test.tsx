@@ -36,9 +36,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
 import { NoticeSinkProvider } from "./builder-notices";
+import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
+  describedWithUnit,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
@@ -68,7 +70,8 @@ beforeAll(() => {
 });
 
 function register(
-  supports: Record<string, boolean | Record<string, boolean>>
+  supports: Record<string, boolean | Record<string, boolean>>,
+  variations?: readonly { name: string; label?: string; isDefault?: boolean }[]
 ): void {
   registerBlocks(
     [
@@ -77,7 +80,10 @@ function register(
         version: 1,
         description: "A box.",
         example: { props: {} },
-        editor: { label: "Box" },
+        editor: {
+          label: "Box",
+          ...(variations === undefined ? {} : { variations }),
+        },
         props: { text: { type: "text" } },
         supports,
         render: () => null,
@@ -262,9 +268,17 @@ describe("the shared style target", () => {
       supports?: Record<string, boolean>;
       /** Where a refusal that outlives its field is raised. */
       raise?: (message: string) => void;
+      /** The site's breakpoints, which Detach weighs. */
+      breakpoints?: BreakpointSet;
+      /** The block's variations, its own look among them. */
+      variations?: readonly {
+        name: string;
+        label?: string;
+        isDefault?: boolean;
+      }[];
     } = {}
   ) {
-    register(options.supports ?? { effects: true });
+    register(options.supports ?? { effects: true }, options.variations);
     const document = {
       formatVersion: 1,
       kind: "page",
@@ -289,6 +303,9 @@ describe("the shared style target", () => {
     const panelFor = (current: EditorState) => (
       <InspectorPanel
         editor={current}
+        {...(options.breakpoints === undefined
+          ? {}
+          : { breakpoints: options.breakpoints })}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
@@ -679,6 +696,198 @@ describe("the shared style target", () => {
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
+  });
+
+  it("holds Detach, saying why, when the look can't be kept on the block exactly", () => {
+    // Card's small-container value shows only where Promo's tablet value
+    // does not: a combined query the block's own rules can't say.
+    const early = {
+      ...card,
+      orderIndex: 0,
+      styles: { base: { "cq-sm": { color: "#aaaa00" } } } as NodeStyles,
+    };
+    const late = {
+      ...promo,
+      label: "Promo",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const { editor } = mountTarget({
+      classes: ["c-card", "c-promo"],
+      library: [early, late],
+      breakpoints: {
+        viewport: [
+          { id: BASE_BREAKPOINT, label: "Desktop" },
+          { id: "md", label: "Tablet", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      } as BreakpointSet,
+    });
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    const item = screen.getByRole("menuitem", {
+      name: /^Detach: keep the look/,
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "This look depends on screen and container width together, so it can't be detached yet."
+    );
+    fireEvent.click(item);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  describe("the Look row", () => {
+    const outline = {
+      id: "look:acme/box:outline",
+      slug: "box-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "acme/box",
+      styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
+    };
+    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+
+    it("offers the block's own look and its type's looks, its own chosen", () => {
+      mountTarget({ library: [card, outline] });
+      const radios = within(looks()).getAllByRole("radio");
+      // A type with no named own look calls it Default, said once.
+      expect(
+        radios.map(
+          radio => radio.querySelector(".nx-look-tile__name")?.textContent
+        )
+      ).toEqual(["Default", "Outline"]);
+      expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("wears the chosen look and keeps the block's shared style", () => {
+      const { editor } = mountTarget({
+        classes: ["c-card"],
+        library: [card, outline],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        {
+          kind: "update",
+          id: "a",
+          patch: { classes: [outline.id, "c-card"] },
+        },
+      ]);
+    });
+
+    it("says through the shell when the page refuses the chosen look", () => {
+      const raise = vi.fn();
+      const { editor } = mountTarget({ library: [card, outline], raise });
+      editor.applyAll.mockReturnValue(null);
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Outline/ }));
+      expect(raise).toHaveBeenCalledWith(
+        "Outline could not be applied to this block: the page could not take the change."
+      );
+    });
+
+    const filled = {
+      ...outline,
+      id: "look:acme/box:filled",
+      slug: "box-filled",
+      label: "Filled",
+      orderIndex: 1,
+    };
+
+    it("names the look the canvas applies when the block lists two", () => {
+      // Written in library order, Filled is the one drawn, so the bar's line
+      // and its action are about Filled, whatever order the block lists them.
+      mountTarget({
+        classes: [filled.id, outline.id],
+        library: [card, outline, filled],
+      });
+      expect(
+        within(bar()).getByRole("button", {
+          name: "Edit Filled for every box that uses it",
+        })
+      ).toBeDefined();
+    });
+
+    it("takes a look the library hides off when another is chosen", () => {
+      // A site's own style holds Outline's name, so Outline is not offered;
+      // the block still lists it, and choosing Filled must leave it behind.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Filled/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: { classes: [filled.id] } },
+      ]);
+    });
+
+    it("clears a look the library hides when the block's own look is chosen", () => {
+      // Default reads as chosen while Outline is hidden, and choosing it still
+      // takes Outline off, so it cannot return when the style holding its
+      // name goes.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Default/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: {}, unset: ["classes"] },
+      ]);
+    });
+
+    it("names the block's own look by its variation's name when it has no label", () => {
+      mountTarget({
+        library: [card, outline],
+        variations: [{ name: "plain", isDefault: true }],
+      });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual([
+        // Its own name, then the tag that says it is the block's own look.
+        "plainDefault",
+        "Outline",
+      ]);
+    });
+
+    it("keeps Apply on offer while the block wears only a look", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(
+        within(bar()).getByRole("button", { name: "Apply shared style" })
+      ).toBeDefined();
+    });
+
+    it("marks the chosen tile with a check, not by its ring alone", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      const chosen = within(looks()).getByRole("radio", { checked: true });
+      expect(chosen.textContent).toContain("Outline");
+      expect(chosen.querySelector(".nx-look-tile__check")).not.toBeNull();
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .filter(radio => radio.querySelector(".nx-look-tile__check") !== null)
+      ).toHaveLength(1);
+    });
+
+    it("says an edit changes this block only, and switches to the look everywhere", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(bar().textContent).toContain("Changes this box only");
+      fireEvent.click(
+        within(bar()).getByRole("button", {
+          name: "Edit Outline for every box that uses it",
+        })
+      );
+      expect(bar().textContent).toMatch(/Editing shared style Outline/);
+    });
+
+    it("draws no row for a type with no looks", () => {
+      mountTarget({ library: [card] });
+      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+    });
   });
 
   it("raises a refusal through the shell once the author has switched target", async () => {
@@ -3156,6 +3365,72 @@ describe("where a control's value came from", () => {
     ).toContain("overrides\u00a0Card");
   });
 
+  it("keeps the canvas's viewport tier when weighing Reset at a container tier", () => {
+    // Editing the small-container tier while the canvas is at tablet width:
+    // Reset there shows the block's own tablet value, not Card's, so the
+    // line names no style.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: { tablet: { opacity: 0.3 }, "cq-sm": { opacity: 0.2 } },
+          },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+          } as never
+        }
+        breakpoint={"cq-sm" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.3",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.2", breakpoint: "cq-sm" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
   it("names no style when the block's own wider value is what Reset would show", () => {
     register({ effects: true });
     const editor = editorFor({
@@ -5283,6 +5558,65 @@ describe("an aspect ratio", () => {
   });
 });
 
+describe("an image's focal point", () => {
+  /** An image with the given fit, drawn on the canvas as `img`. */
+  function mountImage(fit: string | undefined, picture?: string) {
+    register({ dimensions: true });
+    const styles =
+      fit === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { objectFit: fit } } } as NodeStyles);
+    const editor = editorFor(documentOf(styles));
+    render(
+      <FocalFrame.Provider value={{ picture }}>
+        <StyleInspectorPanel editor={editor} renderedTag="img" />
+      </FocalFrame.Provider>
+    );
+    return editor;
+  }
+
+  it("shows beside a fit that leaves a choice of where the picture sits", () => {
+    // Scale down is None or Contain, whichever is smaller: it sits too.
+    for (const fit of ["cover", "contain", "none", "scale-down"]) {
+      mountImage(fit);
+      expect(
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("waits behind More where the fit stretches the picture, or none is set", () => {
+    for (const fit of ["fill", undefined]) {
+      mountImage(fit);
+      expect(
+        screen.queryByRole("radiogroup", { name: "Focal point" })
+      ).toBeNull();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("is drawn over the block's own picture, and writes object-position", () => {
+    const editor = mountImage("cover", "/team.png");
+    expect(
+      document.querySelector(".nx-focal__picture")?.getAttribute("src")
+    ).toBe("/team.png");
+    expect(screen.getByText("Kept in view")).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Top" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"objectPosition":"center top"'
+    );
+  });
+
+  it("does not choose a point when its label is clicked", () => {
+    const editor = mountImage("cover");
+    fireEvent.click(screen.getByText("Focal point"));
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
 describe("an image's fit", () => {
   it("is named Fit, its CSS name in the label's tooltip", () => {
     // "Object fit" is how CSS names it. Plain "Fit", since the same row fits
@@ -5295,6 +5629,40 @@ describe("an image's fit", () => {
     expect(screen.getByText("Fit").closest("label")?.title).toMatch(
       /^Object fit/
     );
+  });
+});
+
+describe("opacity's unit in words", () => {
+  /** The ids describing the opacity field. */
+  const described = () =>
+    (
+      screen
+        .getByRole("textbox", { name: /^Opacity/ })
+        .getAttribute("aria-describedby") ?? ""
+    )
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("says percent while the value is a number", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    expect(described()).toContain("percent");
+  });
+
+  it("decides from what the field shows, an inherited keyword included", () => {
+    // Unset here, the field shows what reaches it as its hint; a keyword
+    // there has no unit either, and a number there does.
+    expect(describedWithUnit(undefined, "unit", "", "inherit")).toBeUndefined();
+    expect(describedWithUnit("err", "unit", "", "50")).toBe("err unit");
+    expect(describedWithUnit(undefined, "unit", "", undefined)).toBe("unit");
+    expect(describedWithUnit(undefined, "unit", "40", "inherit")).toBe("unit");
+  });
+
+  it("says no unit for a keyword, which has none", () => {
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(described()).not.toContain("percent");
   });
 });
 

@@ -83,6 +83,17 @@ describe("what it lists", () => {
     ).toEqual(["hero.nx-c-hero", "Card.nx-c-card"]);
   });
 
+  it("offers no look: a look is picked from the block's own tiles", () => {
+    const outline = {
+      ...cls("look:core/button:outline", "button-outline", 0, "Outline"),
+      blockType: "core/button",
+    };
+    draw({ library: [...LIBRARY, outline] });
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["hero.nx-c-hero", "badge.nx-c-badge", "Card.nx-c-card"]);
+  });
+
   it("cuts a long name or class name short rather than breaking it, the whole of it in a tooltip", () => {
     draw();
     const option = screen.getAllByRole("option")[2] as HTMLElement;

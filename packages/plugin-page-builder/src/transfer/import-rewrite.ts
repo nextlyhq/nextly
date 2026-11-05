@@ -102,6 +102,9 @@ export function rewriteClass(
     id,
     slug,
     orderIndex,
+    // A look stays bound to its block type, so it keeps its place in the
+    // cascade and stays a look where looks are kept apart.
+    ...(entry.blockType === undefined ? {} : { blockType: entry.blockType }),
     styles: rewriteStyles(entry.styles, maps) ?? {},
   };
 }

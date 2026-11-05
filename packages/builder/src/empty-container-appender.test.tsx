@@ -409,6 +409,17 @@ class FakeResizeObserver {
   }
 }
 
+/**
+ * The canvas watch's observer: the newest one watching a rendered block. Found
+ * by what it watches, not by being the last made, since the canvas makes
+ * others of its own (one watching its root's size).
+ */
+function watchObserver(): FakeResizeObserver | undefined {
+  return FakeResizeObserver.instances.findLast(observer =>
+    observer.observed.some(element => element.hasAttribute("data-nx-node"))
+  );
+}
+
 function withFakeResizeObserver() {
   FakeResizeObserver.instances = [];
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
@@ -499,7 +510,7 @@ describe("what it stays subscribed to", () => {
       />
     );
 
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     expect(observer?.observed).toContain(
       container.querySelector(`[${NODE_ID_ATTRIBUTE}="empty-container"]`)
     );
@@ -1074,7 +1085,7 @@ describe("which containers it actually draws a control on", () => {
     );
 
     layout(container, boxes);
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     if (observer === undefined) throw new Error("no observer subscribed");
     act(() => observer.fire());
     return container;

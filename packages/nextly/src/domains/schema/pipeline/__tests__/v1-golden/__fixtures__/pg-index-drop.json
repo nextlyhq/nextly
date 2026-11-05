@@ -1,6 +1,4 @@
 {
-  "sqlStatements": [
-    "DROP INDEX \"vg1_title_idx\";"
-  ],
+  "sqlStatements": ["DROP INDEX \"vg1_title_idx\";"],
   "hints": []
 }
