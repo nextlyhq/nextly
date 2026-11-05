@@ -341,6 +341,32 @@ describe("a list's filters", () => {
   });
 });
 
+describe("the judgement the group shows", () => {
+  it("is the save's: a public field it does not offer is no problem", async () => {
+    mount(
+      { collection: "notes", sort: "-body" },
+      {
+        listLoopCollections: vi.fn(async () => [
+          {
+            slug: "notes",
+            label: "Notes",
+            fields: [{ name: "title", label: "Title", kind: "text" as const }],
+            declared: ["id", "title", "body", "secret"],
+            readable: [
+              { name: "id", type: "text" },
+              { name: "title", type: "text" },
+              { name: "body", type: "richText" },
+            ],
+          },
+        ]),
+      }
+    );
+    await screen.findByRole("button", { name: "Source Notes" });
+    // Not offered, so marked as not in the list; but the save takes it.
+    expect(screen.queryByText(/visitors can't see|does not have/)).toBeNull();
+  });
+});
+
 describe("a list's sort", () => {
   it("names the direction in words for the field's kind", async () => {
     mount({ collection: "posts", sort: "-publishedAt,title,-views" });

@@ -557,6 +557,10 @@ describe("a collection list's notes and tag in the canvas frame", () => {
       '[data-nx-list-diagnostic="query-failed"]'
     );
     expect(declared(red, "background")).toContain("var(--nx-builder-danger");
+    // A note about the list spans its row, never one entry's cell.
+    const note = ruleIn(CANVAS_FRAME_SHEET, "[data-nx-list-diagnostic]");
+    expect(declared(note, "grid-column")).toBe("1 / -1");
+    expect(declared(note, "flex-basis")).toBe("100%");
     // Each is the theme's own, so it follows light and dark.
     expect(
       ruleFor(

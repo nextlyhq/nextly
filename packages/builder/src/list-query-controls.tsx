@@ -166,7 +166,12 @@ function GroupTitle({
   );
 }
 
-/** A collection's fields in the engine's terms, for judging a list against. */
+/**
+ * A collection's fields in the engine's terms, for judging a list against:
+ * the public's fields as the host read them for the save's own judgement,
+ * so what is said here is what a save would refuse. A host that names none
+ * is judged by what it offers, which a save may judge more widely.
+ */
 function fieldSourceOf(
   collections: readonly LoopCollection[]
 ): ListFieldSource {
@@ -175,23 +180,8 @@ function fieldSourceOf(
     fieldsOf: slug => {
       const found = bySlug.get(slug);
       if (found === undefined) return undefined;
-      // What the editor knows of the public's fields: the ones offered, and
-      // the to-many relations, which a related list names.
       const readable: BindingFieldShape[] = [
-        { name: "id", type: "text" },
-        ...found.fields.map(field => ({
-          name: field.name,
-          type: field.kind === "entry" ? "relationship" : field.kind,
-          ...(field.relationTo === undefined
-            ? {}
-            : { relationTo: field.relationTo }),
-        })),
-        ...(found.relations ?? []).map(relation => ({
-          name: relation.field,
-          type: "relationship",
-          hasMany: true,
-          relationTo: relation.collection,
-        })),
+        ...(found.readable ?? offeredShapes(found)),
       ];
       return {
         declared: new Set([
@@ -202,6 +192,26 @@ function fieldSourceOf(
       };
     },
   };
+}
+
+/** The shapes of what a collection offers, for a host naming no others. */
+function offeredShapes(found: LoopCollection): BindingFieldShape[] {
+  return [
+    { name: "id", type: "text" },
+    ...found.fields.map(field => ({
+      name: field.name,
+      type: field.kind === "entry" ? "relationship" : field.kind,
+      ...(field.relationTo === undefined
+        ? {}
+        : { relationTo: field.relationTo }),
+    })),
+    ...(found.relations ?? []).map(relation => ({
+      name: relation.field,
+      type: "relationship",
+      hasMany: true,
+      relationTo: relation.collection,
+    })),
+  ];
 }
 
 /** The list block around `id`, nearest first, if there is one. */
@@ -418,7 +428,7 @@ function sourceGroups(related: Related): { group: string; heading: string }[] {
 /** The Source menu's note where no related source can be offered. */
 const NO_RELATED = (
   <div className="nx-list-query__menu-note">
-    <p className="nx-list-query__menu-heading">Related entries</p>
+    <p className="nx-vars__group-name nx-font-pick__heading">Related entries</p>
     <p>
       Not available here. On a collection&apos;s entry, or inside another list,
       a list can show the entry&apos;s related entries, such as its categories
@@ -1984,18 +1994,20 @@ function SortGroup({
 function BoundField({
   id,
   prop,
-  label,
-  suffix,
+  words,
   stored,
+  fallback,
   disabled,
   problem: storedProblem,
   onBound,
 }: {
   id: string;
   prop: "limit" | "offset";
-  label: string;
-  suffix?: string;
+  /** The field's label, and what it counts, said after the number. */
+  words: { readonly label: string; readonly suffix?: string };
   stored: unknown;
+  /** What the list reads when nothing is stored, shown as the placeholder. */
+  fallback?: unknown;
   disabled: boolean;
   problem: string | undefined;
   onBound: (value: number | undefined) => void;
@@ -2024,10 +2036,10 @@ function BoundField({
   const errorId = `${id}-error`;
   return (
     <div className="nx-inspector__field" data-content-control="number">
-      <Label htmlFor={id}>{label}</Label>
+      <Label htmlFor={id}>{words.label}</Label>
       <div
         className="nx-list-query__bound"
-        data-suffixed={suffix === undefined ? undefined : ""}
+        data-suffixed={words.suffix === undefined ? undefined : ""}
       >
         <Input
           id={id}
@@ -2036,6 +2048,9 @@ function BoundField({
           min={prop === "limit" ? 1 : 0}
           max={prop === "limit" ? 100 : undefined}
           value={draft}
+          placeholder={
+            typeof fallback === "number" ? String(fallback) : undefined
+          }
           disabled={disabled}
           aria-invalid={shown === undefined ? undefined : true}
           aria-describedby={shown === undefined ? undefined : errorId}
@@ -2048,9 +2063,9 @@ function BoundField({
             }
           }}
         />
-        {suffix === undefined ? null : (
+        {words.suffix === undefined ? null : (
           <span className="nx-list-query__suffix" aria-hidden="true">
-            {suffix}
+            {words.suffix}
           </span>
         )}
       </div>
@@ -2074,12 +2089,15 @@ function codedIssues(issues: Issues, prop: string, code: string): string[] {
 function HowManyGroup({
   id,
   values,
+  limitFallback,
   issues,
   disabled,
   commit,
 }: {
   id: string;
   values: Readonly<Record<string, unknown>>;
+  /** The number of items the block reads when none is stored. */
+  limitFallback: unknown;
   issues: Issues;
   disabled: boolean;
   commit: (changes: Readonly<Record<string, unknown>>) => void;
@@ -2090,8 +2108,9 @@ function HowManyGroup({
       <BoundField
         id={`${id}-limit`}
         prop="limit"
-        label="Number of items"
+        words={{ label: "Number of items" }}
         stored={values.limit}
+        fallback={limitFallback}
         disabled={disabled}
         problem={issuesAt(issues, ["limit"])[0]}
         onBound={limit => commit({ limit })}
@@ -2099,8 +2118,7 @@ function HowManyGroup({
       <BoundField
         id={`${id}-offset`}
         prop="offset"
-        label="Skip the first"
-        suffix="entries"
+        words={{ label: "Skip the first", suffix: "entries" }}
         stored={values.offset}
         disabled={disabled}
         problem={issuesAt(issues, ["offset"])[0]}
@@ -2307,6 +2325,7 @@ export function ListQueryField({
       <HowManyGroup
         id={`${id}-many`}
         values={reading.values}
+        limitFallback={props.find(prop => prop.name === "limit")?.defaultValue}
         issues={issues}
         disabled={held}
         commit={commit}

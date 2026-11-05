@@ -171,6 +171,16 @@ export interface LoopCollection {
    * can't see is told apart from one on a field it no longer has.
    */
   readonly declared?: readonly string[];
+  /**
+   * Every field the public may read, as a save judges a list against them;
+   * {@link fields} is the narrower view of these an author is offered.
+   */
+  readonly readable?: readonly {
+    readonly name: string;
+    readonly type: string;
+    readonly hasMany?: boolean;
+    readonly relationTo?: string | readonly string[];
+  }[];
 }
 
 /**

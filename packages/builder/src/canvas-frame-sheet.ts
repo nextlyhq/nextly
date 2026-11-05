@@ -209,6 +209,10 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
    admin's scheme and face, which the frame hands these notes as values. A
    visitor's page never carries one. */
 [data-nx-list-diagnostic] {
+  /* The whole row of a list laid out as a grid or a wrapping row, so it
+     reads as a note about the list rather than one of its entries. */
+  grid-column: 1 / -1;
+  flex-basis: 100%;
   color-scheme: var(--nx-builder-scheme, light);
   margin-block-end: 0.5rem;
   padding: 0.5rem 0.75rem;

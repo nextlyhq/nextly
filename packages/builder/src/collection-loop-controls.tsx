@@ -156,7 +156,7 @@ export function LoopPicker<C extends ListedChoice>({
   list: PickerList<C>;
   /** Drawn in the open list above and below its rows. */
   around?: {
-    /** A group with nothing to offer, said where its rows would be. */
+    /** A group with nothing to offer, said under the search, above the rows. */
     readonly above?: React.ReactNode;
     /** What the list leaves out. */
     readonly below?: React.ReactNode;
@@ -191,7 +191,6 @@ export function LoopPicker<C extends ListedChoice>({
           onOpenAutoFocus={event => event.preventDefault()}
         >
           <div className="nx-font-pick__body">
-            {around?.above}
             <ChoiceList
               choices={choices}
               currentKey={currentKey}
@@ -199,7 +198,7 @@ export function LoopPicker<C extends ListedChoice>({
               searchLabel={searchLabel}
               noMatch={noMatch}
               // Given only where the caller said, so the list's own defaults hold.
-              {...definedOnly(optional)}
+              {...definedOnly({ ...optional, leading: around?.above })}
               onPick={choice => {
                 setOpen(false);
                 onPick(choice);
