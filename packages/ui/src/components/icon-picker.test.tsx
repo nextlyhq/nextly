@@ -83,35 +83,78 @@ const icon = (name: string): IconSourceIcon => ({
   tags: name === "truck" ? ["delivery", "van"] : [],
 });
 
-/** A fresh fake source per test, with its calls recorded. */
-function fakeSource(): {
+/** The icons a query matches, by substring. */
+const matching = (query: string): IconSourceIcon[] =>
+  NAMES.filter(name => name.includes(query.trim().toLowerCase())).map(icon);
+
+/**
+ * A fresh fake source per test, with its calls recorded. `aliases` maps a
+ * former name to the name the set draws it by now, as a set that renamed an
+ * icon resolves it; `search` replaces the substring search.
+ */
+function fakeSource(
+  options: {
+    aliases?: Readonly<Record<string, string>>;
+    search?: (query: string) => Promise<readonly IconSourceIcon[]>;
+  } = {}
+): {
   load: () => Promise<IconSource>;
   search: ReturnType<typeof vi.fn>;
 } {
-  const search = vi.fn(async (query: string) =>
-    NAMES.filter(name => name.includes(query.trim().toLowerCase())).map(icon)
+  const search = vi.fn(
+    options.search ?? (async (query: string) => matching(query))
   );
   const source: IconSource = {
     prefix: "fake",
     label: "Fake set",
     search,
     resolve: async id => {
-      const name = id.replace(/^fake:/, "");
+      const stored = id.replace(/^fake:/, "");
+      const name = options.aliases?.[stored] ?? stored;
       return id.startsWith("fake:") && NAMES.includes(name) ? icon(name) : null;
     },
   };
   return { load: async () => source, search };
 }
 
+/**
+ * A search that answers the whole set at once and holds every other query
+ * until the test answers it, so a test decides the order answers land in.
+ */
+function heldSearch(): {
+  search: (query: string) => Promise<readonly IconSourceIcon[]>;
+  answer: (query: string) => Promise<void>;
+} {
+  const held = new Map<string, (results: readonly IconSourceIcon[]) => void>();
+  return {
+    search: query =>
+      query === ""
+        ? Promise.resolve(matching(query))
+        : new Promise(resolve => held.set(query, resolve)),
+    answer: async query => {
+      const resolve = held.get(query);
+      if (resolve === undefined) throw new Error(`No search for “${query}”.`);
+      await act(async () => resolve(matching(query)));
+    },
+  };
+}
+
+/** The accessible name of the option the search box has highlighted. */
+const highlightedIn = (box: HTMLElement): string | null =>
+  document
+    .getElementById(box.getAttribute("aria-activedescendant") ?? "")
+    ?.getAttribute("aria-label") ?? null;
+
 function renderField(
-  props: Partial<React.ComponentProps<typeof IconField>> = {}
+  props: Partial<React.ComponentProps<typeof IconField>> = {},
+  source: ReturnType<typeof fakeSource> = fakeSource()
 ): {
   onChange: ReturnType<typeof vi.fn>;
   load: () => Promise<IconSource>;
   search: ReturnType<typeof vi.fn>;
 } {
   const onChange = vi.fn();
-  const { load, search } = fakeSource();
+  const { load, search } = source;
   render(
     <IconField
       value={null}
@@ -277,6 +320,92 @@ describe("IconField", () => {
     expect(
       screen.getByRole("option", { name: "Mail, current" }).dataset.current
     ).toBe("true");
+  });
+
+  it("marks and opens at a chosen icon stored by a name the set has since changed", async () => {
+    // `envelope` is the fake set's former name for `mail`: resolving
+    // `fake:envelope` answers the icon by its current id, `fake:mail`, and
+    // that is the id the grid lists it by.
+    renderField(
+      { value: "fake:envelope" },
+      fakeSource({ aliases: { envelope: "mail" } })
+    );
+    await screen.findByRole("button", { name: "Badge: Mail" });
+    const box = await openPicker(/^Badge: Mail/);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("option", { name: "Mail, current" }).dataset.current
+      ).toBe("true")
+    );
+    expect(highlightedIn(box)).toBe("Mail, current");
+  });
+
+  it("chooses nothing with Enter until the query typed is answered", async () => {
+    const held = heldSearch();
+    const { onChange } = renderField({}, fakeSource({ search: held.search }));
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "pack" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).not.toHaveBeenCalled();
+    // The browse results are still drawn, but are not the answer to "pack".
+    expect(screen.getAllByRole("option")).toHaveLength(NAMES.length);
+    expect(
+      screen.getByRole("listbox", { name: "Icons" }).getAttribute("aria-busy")
+    ).toBe("true");
+    expect(box.getAttribute("aria-activedescendant")).toBeNull();
+
+    await held.answer("pack");
+    expect(highlightedIn(box)).toBe("Package");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("fake:package");
+  });
+
+  it("keeps the latest query's answer when an earlier one lands after it", async () => {
+    const held = heldSearch();
+    const { onChange } = renderField({}, fakeSource({ search: held.search }));
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "p" } });
+    fireEvent.change(box, { target: { value: "pa" } });
+    await held.answer("pa");
+    await held.answer("p");
+    expect(
+      screen.getAllByRole("option").map(o => o.getAttribute("aria-label"))
+    ).toEqual(["Package", "Package check"]);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("fake:package");
+  });
+
+  it("says a failed search failed, and searches again on Try again", async () => {
+    // As a set's data does when the chunk holding it fails to download.
+    const search = vi
+      .fn<(query: string) => Promise<readonly IconSourceIcon[]>>()
+      .mockRejectedValueOnce(new Error("The data could not be fetched."))
+      .mockImplementation(async query => matching(query));
+    renderField({}, fakeSource({ search }));
+    fireEvent.click(screen.getByRole("button", { name: /^Badge/ }));
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(
+      screen.getByText("The icons could not be loaded.", {
+        selector: "p:not([role=status])",
+      })
+    ).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "The icons could not be loaded."
+    );
+    expect(screen.queryByText(/No icons match/)).toBeNull();
+
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(screen.getAllByRole("option")).toHaveLength(NAMES.length)
+    );
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status").textContent).toBe(
+      `${NAMES.length} icons.`
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: "Search icons" })
+    );
   });
 
   it("closes on Escape and returns focus to its button", async () => {

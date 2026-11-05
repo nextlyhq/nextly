@@ -188,61 +188,137 @@ function announcementFor(
   return query === "" ? `${icons}.` : `${icons} match “${query}”.`;
 }
 
+/** A search's answer, with the query and the attempt it answers. */
+type SearchAnswer =
+  | {
+      readonly status: "found";
+      readonly results: readonly IconSourceIcon[];
+      readonly query: string;
+      readonly attempt: number;
+    }
+  | {
+      readonly status: "failed";
+      readonly query: string;
+      readonly attempt: number;
+    };
+
+/** Where the highlight starts for an answer, for the grid to scroll to. */
+interface SearchStart {
+  readonly index: number;
+  /** The chosen icon, centred in view rather than at the top. */
+  readonly centred: boolean;
+}
+
 interface IconSearch {
+  /** The latest answer's icons, or `null` before one arrives or when it failed. */
   readonly results: readonly IconSourceIcon[] | null;
+  /** The query the results in hand answer, which may trail the one typed. */
+  readonly answered: string;
+  /** The latest search failed, and has not been tried again. */
+  readonly failed: boolean;
+  /**
+   * The query typed has not been answered yet, so the results in hand are an
+   * earlier query's: shown, but not what Enter may choose from.
+   */
+  readonly pending: boolean;
   readonly active: number;
   readonly setActive: (index: number) => void;
+  readonly start: SearchStart | null;
+  /** Runs the search again, after it failed. */
+  readonly retry: () => void;
 }
 
 /**
  * The results for a query, and the highlighted one among them.
  *
  * The latest search wins: results arrive asynchronously, so a slow answer to
- * "tr" must not replace the answer to "truck" that came back first. Browsing
- * (an empty query) highlights the chosen icon; a search highlights its best
- * match. `onResults` is told where the highlight starts, once results land.
+ * "tr" must not replace the answer to "truck" that came back first, and
+ * until the query typed is answered the search is `pending`. Browsing (an
+ * empty query) highlights the chosen icon, once `currentSettled` says which
+ * icon `currentId` is; a search highlights its best match.
  */
 function useIconSearch(
   source: IconSource | null,
   query: string,
-  value: string | null | undefined,
-  onResults: (start: number, centred: boolean) => void
+  currentId: string | null | undefined,
+  currentSettled: boolean
 ): IconSearch {
-  const [results, setResults] = React.useState<
-    readonly IconSourceIcon[] | null
-  >(null);
+  const [answer, setAnswer] = React.useState<SearchAnswer | null>(null);
+  const [attempt, setAttempt] = React.useState(0);
   const [active, setActive] = React.useState(0);
+  const [start, setStart] = React.useState<SearchStart | null>(null);
+  /* The answer the highlight was last placed for, so each is placed once. */
+  const placed = React.useRef<SearchAnswer | null>(null);
   /*
-   * Read when results land rather than watched: the chosen icon positions the
-   * highlight for the search in hand, and choosing one is no reason to search
-   * again.
+   * Read when an answer lands rather than watched: the chosen icon positions
+   * the highlight for the search in hand, and choosing one is no reason to
+   * search again.
    */
-  const show = React.useEffectEvent(
-    (found: readonly IconSourceIcon[], searched: string): void => {
-      setResults(found);
-      const chosen =
-        searched.trim() === "" && value
-          ? found.findIndex(icon => icon.id === value)
-          : -1;
-      const start = Math.max(0, chosen);
-      setActive(start);
-      onResults(start, chosen > 0);
-    }
-  );
+  const place = React.useEffectEvent((found: SearchAnswer): void => {
+    if (found.status !== "found" || !currentSettled) return;
+    placed.current = found;
+    const chosen =
+      found.query.trim() === "" && currentId
+        ? found.results.findIndex(icon => icon.id === currentId)
+        : -1;
+    const index = Math.max(0, chosen);
+    setActive(index);
+    setStart({ index, centred: chosen > 0 });
+  });
+  const land = React.useEffectEvent((found: SearchAnswer): void => {
+    setAnswer(found);
+    place(found);
+  });
+  /*
+   * An answer that landed before the chosen icon resolved is placed once it
+   * has: a renamed icon is found in the grid by the id it resolves to.
+   */
+  React.useEffect(() => {
+    if (answer !== null && placed.current !== answer) place(answer);
+  }, [answer, currentSettled]);
   const latest = React.useRef(0);
   React.useEffect(() => {
     if (source === null) return;
     const search = ++latest.current;
     source.search(query).then(
-      found => {
-        if (search === latest.current) show(found, query);
+      results => {
+        if (search === latest.current) {
+          land({ status: "found", results, query, attempt });
+        }
       },
       () => {
-        if (search === latest.current) show([], query);
+        if (search === latest.current) {
+          land({ status: "failed", query, attempt });
+        }
       }
     );
-  }, [source, query]);
-  return { results, active, setActive };
+  }, [source, query, attempt]);
+  const pending =
+    source !== null &&
+    (answer === null || answer.query !== query || answer.attempt !== attempt);
+  return {
+    results: answer?.status === "found" ? answer.results : null,
+    answered: answer?.query.trim() ?? "",
+    failed: answer?.status === "failed",
+    pending,
+    active,
+    setActive,
+    start,
+    retry: () => setAttempt(n => n + 1),
+  };
+}
+
+/**
+ * How results awaiting a newer answer are drawn: kept, and dimmed.
+ *
+ * Kept rather than cleared because most answers land within a frame or two,
+ * and a grid emptied on every keystroke would flash its loading line while
+ * the person types. Dimmed only after a short delay for the same reason, so
+ * a quick answer never visibly dims; a slow one fades the stale icons back
+ * to say they are not what Enter chooses. Brightening again has no delay.
+ */
+function pendingFade(pending: boolean): string {
+  return cn("transition-opacity", pending && "opacity-50 delay-150");
 }
 
 /** What stands in the grid while there is nothing to choose from. */
@@ -261,6 +337,7 @@ function PickerMessage({
   if (results === null && failed) {
     return (
       <div className="flex flex-col items-center gap-2 py-8 text-center text-muted-foreground">
+        <TriangleAlert className="size-5" aria-hidden="true" />
         <p>The icons could not be loaded.</p>
         <Button type="button" variant="outline" size="sm" onClick={onRetry}>
           Try again
@@ -326,12 +403,19 @@ function IconOption({
 /** The highlighted icon, large, with its name and the words it is found by. */
 function HighlightedIcon({
   icon,
+  className,
 }: {
   icon: IconSourceIcon | undefined;
+  className?: string;
 }): React.JSX.Element {
   const words = (icon?.tags ?? []).slice(0, 3).join(", ");
   return (
-    <div className="flex min-h-[57px] items-center gap-2.5 border-t border-border px-3 py-2">
+    <div
+      className={cn(
+        "flex min-h-[57px] items-center gap-2.5 border-t border-border px-3 py-2",
+        className
+      )}
+    >
       {icon === undefined ? null : (
         <>
           <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted">
@@ -363,7 +447,10 @@ export interface IconPickerProps {
    * than one created on each render.
    */
   loadIcons: () => Promise<IconSource>;
-  /** The id currently chosen, marked in the grid and scrolled to on open. */
+  /**
+   * The id currently chosen, marked in the grid and scrolled to on open. An
+   * id the set has since renamed is marked as the icon it resolves to.
+   */
   value?: string | null;
   /** An icon was chosen, by click or by Enter. */
   onChoose: (icon: IconSourceIcon) => void;
@@ -393,32 +480,44 @@ export function IconPicker({
   const base = React.useId();
   const listId = `${base}-icons`;
   const optionId = (index: number): string => `${base}-icon-${index}`;
-  const [sourceState, retry] = useIconSource(loadIcons, true);
+  const [sourceState, retryLoad] = useIconSource(loadIcons, true);
   const source = sourceState.status === "ready" ? sourceState.source : null;
   const [query, setQuery] = React.useState("");
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
   /*
-   * Where to scroll once a search's results are drawn. Scrolling as they
-   * arrive would measure the grid of the previous results.
+   * The chosen icon as the set knows it now. A stored id may name the icon by
+   * a former name, and the grid lists it by its current id, so the grid is
+   * compared with the id the stored one resolves to.
    */
-  const scrollOnResults = React.useRef<{
-    row: number;
-    align: "start" | "center";
-  } | null>(null);
-  const { results, active, setActive } = useIconSearch(
-    source,
-    query,
-    value,
-    (start, centred) => {
-      scrollOnResults.current = {
-        row: Math.floor(start / COLUMNS),
-        align: centred ? "center" : "start",
-      };
-    }
-  );
+  const current = useResolvedIcon(sourceState, value);
+  const currentId = current.status === "found" ? current.icon.id : value;
+  const {
+    results,
+    answered,
+    failed: searchFailed,
+    pending,
+    active,
+    setActive,
+    start,
+    retry: retrySearch,
+  } = useIconSearch(source, query, currentId, current.status !== "loading");
   const count = results?.length ?? 0;
-  const highlighted = results?.[active];
+  /*
+   * No option is active while the query typed is unanswered: the results in
+   * hand are an earlier query's, and Enter chooses the best match for what
+   * was typed, never one from the set before it. Their highlight stays
+   * drawn, dimmed with them, so the grid does not flicker while typing.
+   */
+  const highlighted = pending ? undefined : results?.[active];
   const trimmed = query.trim();
+  const failed = sourceState.status === "failed" || (searchFailed && !pending);
+  const retry = (): void => {
+    if (sourceState.status === "failed") retryLoad();
+    else retrySearch();
+    // The button goes once the icons arrive; typing carries on in the box.
+    inputRef.current?.focus();
+  };
 
   const virtualizer = useVirtualizer({
     count: Math.ceil(count / COLUMNS),
@@ -426,14 +525,23 @@ export function IconPicker({
     estimateSize: () => ROW_HEIGHT,
     overscan: 4,
   });
+  /*
+   * Scrolls once an answer's results are drawn, from an effect: scrolling as
+   * they arrive would measure the grid of the previous results.
+   */
   React.useEffect(() => {
-    const target = scrollOnResults.current;
-    if (target === null) return;
-    scrollOnResults.current = null;
-    virtualizer.scrollToIndex(target.row, { align: target.align });
-  }, [results, virtualizer]);
+    if (start === null) return;
+    virtualizer.scrollToIndex(Math.floor(start.index / COLUMNS), {
+      align: start.centred ? "center" : "start",
+    });
+  }, [start, virtualizer]);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (pending) {
+      // Enter must not submit a surrounding form while the answer is due.
+      if (event.key === "Enter") event.preventDefault();
+      return;
+    }
     const next = stepFrom(event.key, active, count);
     if (next !== undefined) {
       event.preventDefault();
@@ -463,6 +571,7 @@ export function IconPicker({
           aria-hidden="true"
         />
         <input
+          ref={inputRef}
           type="text"
           role="combobox"
           aria-label="Search icons"
@@ -489,15 +598,16 @@ export function IconPicker({
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2.5">
         <PickerMessage
           results={results}
-          failed={sourceState.status === "failed"}
-          query={trimmed}
+          failed={failed}
+          query={answered}
           onRetry={retry}
         />
         <div
           id={listId}
           role="listbox"
           aria-label="Icons"
-          className="relative w-full"
+          aria-busy={pending || undefined}
+          className={cn("relative w-full", pendingFade(pending))}
           style={{ height: virtualizer.getTotalSize() }}
         >
           {virtualizer.getVirtualItems().map(row => (
@@ -519,7 +629,7 @@ export function IconPicker({
                       index={index}
                       count={count}
                       isActive={index === active}
-                      isCurrent={icon.id === value}
+                      isCurrent={icon.id === currentId}
                       onHighlight={setActive}
                       onChoose={onChoose}
                     />
@@ -530,10 +640,14 @@ export function IconPicker({
         </div>
       </div>
 
-      <HighlightedIcon icon={highlighted} />
+      {/* Still the earlier answer's highlight while pending, dimmed with it. */}
+      <HighlightedIcon
+        icon={results?.[active]}
+        className={pendingFade(pending)}
+      />
 
       <p role="status" aria-live="polite" className="sr-only">
-        {announcementFor(results, sourceState.status === "failed", trimmed)}
+        {announcementFor(results, failed, answered)}
       </p>
     </div>
   );
