@@ -19,12 +19,15 @@ export interface RemovalHoldRequest {
   readonly slots: readonly string[];
   /** How many documents placing the component the designer was shown. */
   readonly confirmed: number;
+  /** Whether that count was the whole answer, rather than "at least". */
+  readonly confirmedComplete: boolean;
 }
 
 /**
  * The answer: `held` when the count is no larger than the one confirmed, and
- * no write may set a removed field until the publish lands; `recount` when
- * more documents place the component now, with how many, and nothing held.
+ * no less certain, and no write may set a removed field until the publish
+ * lands; `recount` when more documents place the component now, or the count
+ * is now only a floor where it was whole, with the count, and nothing held.
  */
 export interface RemovalHoldResult {
   readonly kind: "held" | "recount";

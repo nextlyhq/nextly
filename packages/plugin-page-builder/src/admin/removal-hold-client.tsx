@@ -117,6 +117,8 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
         id,
         ...removed,
         confirmed: said?.count ?? 0,
+        // A count of none told is held to as a whole one: a floor now asks.
+        confirmedComplete: said?.complete ?? true,
       });
       if (answer.kind === "held") return;
       const confirmed = said;
@@ -193,6 +195,10 @@ async function askHold(
 
 /** A count in words: "at least 4 documents" while it is a floor. */
 function documentsWord(reach: RemovalHoldResult["reach"]): string {
+  // A floor of none says nothing about how many there are.
+  if (!reach.complete && reach.count === 0) {
+    return "an unknown number of documents";
+  }
   const noun = reach.count === 1 ? "document" : "documents";
   return reach.complete
     ? `${String(reach.count)} ${noun}`

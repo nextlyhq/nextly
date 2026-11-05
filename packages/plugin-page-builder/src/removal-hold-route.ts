@@ -20,7 +20,7 @@ import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { readingAsUser, type ComponentStore } from "./library-route";
-import { HOLD_MS, type RemovalHoldStore } from "./removal-hold";
+import { countGrew, HOLD_MS, type RemovalHoldStore } from "./removal-hold";
 import {
   REMOVAL_HOLD_ROUTE_PATH,
   type RemovalHoldResult,
@@ -36,6 +36,7 @@ const HOLD_BODY = z.object({
   properties: z.array(ID).max(500),
   slots: z.array(ID).max(500),
   confirmed: z.number().int().min(0),
+  confirmedComplete: z.boolean(),
 });
 
 /** What the routes are wired with. */
@@ -75,9 +76,21 @@ export function removalHoldRoutes(
       handler: async (req, ctx) => {
         const body = parsed(await req.json().catch(() => undefined));
         await requireReadable(ctx, args.store, body.id);
+        const hold = {
+          properties: body.properties,
+          slots: body.slots,
+          confirmed: body.confirmed,
+          confirmedComplete: body.confirmedComplete,
+          until: now() + HOLD_MS,
+        };
+        // Held BEFORE the count, so no write judged after the count can set a
+        // removed field unseen. A write already past its check when the hold
+        // landed is caught by the count taken again as the publish is written
+        // (`registerPublishRecount`).
+        await args.holds().hold(body.id, hold);
         const count = await args.countPlacements(ctx)(body.id);
         const reach = { count: count.documents, complete: count.complete };
-        if (count.documents > body.confirmed) {
+        if (countGrew(count, hold)) {
           // The designer is asked again, so nothing stays held meanwhile.
           await args.holds().release(body.id);
           return respondMutation<RemovalHoldResult>(
@@ -85,12 +98,6 @@ export function removalHoldRoutes(
             { kind: "recount", reach }
           );
         }
-        await args.holds().hold(body.id, {
-          properties: body.properties,
-          slots: body.slots,
-          confirmed: body.confirmed,
-          until: now() + HOLD_MS,
-        });
         return respondMutation<RemovalHoldResult>(
           "The removal is held until it is published.",
           { kind: "held", reach }

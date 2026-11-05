@@ -34,12 +34,16 @@ function route(count: UsageCount) {
   const held: { id: string; hold: RemovalHold }[] = [];
   const released: string[] = [];
   const counted: string[] = [];
+  /** Every step the route took, in order. */
+  const steps: string[] = [];
   const holds: RemovalHoldStore = {
     hold: async (id, hold) => {
+      steps.push("hold");
       held.push({ id, hold });
     },
     of: async () => new Map(),
     release: async id => {
+      steps.push("release");
       released.push(id);
     },
   };
@@ -47,6 +51,7 @@ function route(count: UsageCount) {
     store: { field: "content" },
     holds: () => holds,
     countPlacements: () => async id => {
+      steps.push("count");
       counted.push(id);
       return count;
     },
@@ -60,10 +65,16 @@ function route(count: UsageCount) {
       }),
       ctx
     );
-  return { declared: declared!, ask, held, released, counted };
+  return { declared: declared!, ask, held, released, counted, steps };
 }
 
-const BODY = { id: "hero", properties: ["title"], slots: [], confirmed: 2 };
+const BODY = {
+  id: "hero",
+  properties: ["title"],
+  slots: [],
+  confirmed: 2,
+  confirmedComplete: true,
+};
 
 describe("asking for a removal's hold", () => {
   beforeEach(() => {
@@ -87,23 +98,33 @@ describe("asking for a removal's hold", () => {
           properties: ["title"],
           slots: [],
           confirmed: 2,
+          confirmedComplete: true,
           until: 121_000,
         },
       },
     ]);
   });
 
-  it("answers the new count, and holds nothing, when it has grown", async () => {
-    const { ask, held, released } = route({ documents: 3, complete: false });
+  it("answers the new count, and leaves nothing held, when it has grown", async () => {
+    const { ask, steps } = route({ documents: 3, complete: true });
 
     const answer = await (await ask(BODY)).json();
 
     expect(answer.item).toEqual({
       kind: "recount",
-      reach: { count: 3, complete: false },
+      reach: { count: 3, complete: true },
     });
-    expect(held).toEqual([]);
-    expect(released).toEqual(["hero"]);
+    // Held before the count, so no write judged after it slips through, and
+    // ended once the count has grown.
+    expect(steps).toEqual(["hold", "count", "release"]);
+  });
+
+  it("answers a recount when a whole count confirmed is now only a floor", async () => {
+    const { ask } = route({ documents: 2, complete: false });
+
+    const answer = await (await ask(BODY)).json();
+
+    expect(answer.item.kind).toBe("recount");
   });
 
   it("refuses a component the caller cannot read before counting it", async () => {

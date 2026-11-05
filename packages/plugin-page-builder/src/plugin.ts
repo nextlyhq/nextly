@@ -153,8 +153,8 @@ import {
   type PublishReadinessSetup,
 } from "./publish-readiness";
 import {
-  registerHoldRelease,
-  registerRemovalFence,
+  installRemovalHolds,
+  NO_HOLDS,
   removalHoldStore,
   type RemovalHoldStore,
 } from "./removal-hold";
@@ -1288,6 +1288,9 @@ export const pageBuilder = (
   // `init`, which holds the bookkeeping table's slug; read by the hold route.
   let removalHolds: RemovalHoldStore | null = null;
   const requireRemovalHolds = (): RemovalHoldStore => {
+    // Nothing is retired without the readiness hooks, so a removal loses no
+    // value and nothing need be held: a hold asked for holds nothing.
+    if (opts.componentReadiness === false) return NO_HOLDS;
     if (removalHolds === null) {
       throw new Error(
         "[page-builder] a component removal was held before the plugin was installed"
@@ -1299,19 +1302,20 @@ export const pageBuilder = (
    * How many documents place a component directly, from the usage index: the
    * number the removal dialog says, and the one a hold counts again.
    */
-  const countPlacements = (ctx: PluginRouteContext) => async (id: string) => {
-    const index =
-      ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-      COMPONENT_USAGE_INDEX_SLUG;
-    return componentUsageCount({
-      read: usageCountReader(await requireInstalled().nextly(), index),
-      componentId: id,
-      health: await usageHealthService(requireInstalled).read(
-        componentUsageIndex,
-        index
-      ),
-    });
-  };
+  const countPlacements =
+    (ctx: Pick<PluginRouteContext, "self">) => async (id: string) => {
+      const index =
+        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+        COMPONENT_USAGE_INDEX_SLUG;
+      return componentUsageCount({
+        read: usageCountReader(await requireInstalled().nextly(), index),
+        componentId: id,
+        health: await usageHealthService(requireInstalled).read(
+          componentUsageIndex,
+          index
+        ),
+      });
+    };
   // The ids a published removal retired: those the write hooks recorded, and
   // those the component's published history implies, recorded here when the
   // table lacks them. Where the hooks are not registered (the host renders
@@ -1667,23 +1671,19 @@ export const pageBuilder = (
         });
         // While a removal is published, no write may newly set one of its
         // fields: the count the designer confirmed is final until it lands.
-        const holds = removalHoldStore({
-          nextly: () => requireInstalled().nextly(),
-          collection:
-            ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-            COMPONENT_RETIRED_SLUG,
-        });
-        removalHolds = holds;
-        registerRemovalFence({
+        removalHolds = installRemovalHolds({
           ctx,
-          holds: () => holds,
-          storedDraft: at => storedDraftOf(at),
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
-        });
-        registerHoldRelease({
-          ctx,
+          store: removalHoldStore({
+            nextly: () => requireInstalled().nextly(),
+            collection:
+              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+              COMPONENT_RETIRED_SLUG,
+          }),
           componentCollection: composition.store.collection,
-          holds: () => holds,
+          componentField: composition.store.field,
+          storedDraft: storedDraftOf,
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          count: countPlacements(ctx),
         });
       }
       // A write that keeps a reference to a component being deleted, committed

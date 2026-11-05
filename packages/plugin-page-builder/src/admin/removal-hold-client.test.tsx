@@ -121,6 +121,7 @@ describe("a publish removing a component's fields", () => {
       properties: ["title"],
       slots: [],
       confirmed: 2,
+      confirmedComplete: true,
     });
   });
 

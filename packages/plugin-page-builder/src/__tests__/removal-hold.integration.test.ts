@@ -29,7 +29,11 @@ import {
 import { COMPONENTS_SLUG } from "../collections/components";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
-import { FIELD_BEING_REMOVED, REMOVAL_HOLD } from "../removal-hold";
+import {
+  FIELD_BEING_REMOVED,
+  REMOVAL_HOLD,
+  REMOVAL_RECOUNT,
+} from "../removal-hold";
 
 type Row = Record<string, unknown>;
 
@@ -144,7 +148,8 @@ describe.each(getConfiguredTestDialects())(
     async function holdTitle(
       t: TestNextly,
       componentId: string,
-      until = Date.now() + 60_000
+      until = Date.now() + 60_000,
+      confirmed = 1
     ): Promise<void> {
       await t.nextly.create({
         collection: COMPONENT_RETIRED_SLUG,
@@ -155,7 +160,10 @@ describe.each(getConfiguredTestDialects())(
           exposureId: JSON.stringify({
             properties: ["title"],
             slots: [],
-            confirmed: 1,
+            confirmed,
+            // A floor, as the dialog says while the usage index is not known
+            // whole: the count's completeness then plays no part here.
+            confirmedComplete: false,
             until,
           }),
         },
@@ -255,27 +263,88 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedNote(t, id)).toEqual({ title: "New", body: "Kept" });
     });
 
-    it("ends the hold when the component is published", async () => {
+    /** The holds the bookkeeping table keeps. */
+    async function holdRows(t: TestNextly): Promise<Row[]> {
+      const found = await t.nextly.find({
+        collection: COMPONENT_RETIRED_SLUG,
+        where: { kind: { equals: REMOVAL_HOLD } },
+        limit: 10,
+        depth: 0,
+        overrideAccess: true,
+      });
+      return found.items as Row[];
+    }
+
+    it("ends the hold when the publish drops the held field", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      await note(t, { body: "Kept" }, heroId);
+      await holdTitle(t, heroId);
+
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id: heroId,
+        data: { content: hero(["body"]), status: "published" },
+        overrideAccess: true,
+      });
+
+      expect(await holdRows(t)).toEqual([]);
+    });
+
+    it("keeps the hold through a publish that still exposes the held field", async () => {
       const t = await boot();
       const heroId = await publishedHero(t);
       const id = await note(t, { body: "Kept" }, heroId);
       await holdTitle(t, heroId);
 
-      // The publish the hold was taken for: it drops `body`, not `title`.
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["title"]), status: "published" },
+        data: { title: "Hero, renamed", status: "published" },
         overrideAccess: true,
       });
-      await t.nextly.update({
-        collection: NOTES,
-        id,
-        data: { content: page(heroId, { title: "New" }) },
-        overrideAccess: true,
-      });
+      const refused = await refusal(
+        t.nextly.update({
+          collection: NOTES,
+          id,
+          data: { content: page(heroId, { title: "New", body: "Kept" }) },
+          overrideAccess: true,
+        })
+      );
 
-      expect(await storedNote(t, id)).toEqual({ title: "New" });
+      expect(await holdRows(t)).toHaveLength(1);
+      expect(codesOf(refused)).toEqual([FIELD_BEING_REMOVED]);
+    });
+
+    it("refuses publishing a held removal once more documents place the component", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      await note(t, { body: "Kept" }, heroId);
+      // Confirmed at none: the note above is one more than the designer saw.
+      await holdTitle(t, heroId, Date.now() + 60_000, 0);
+
+      const refused = await refusal(
+        t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id: heroId,
+          data: { content: hero(["body"]), status: "published" },
+          overrideAccess: true,
+        })
+      );
+
+      expect(codesOf(refused)).toEqual([REMOVAL_RECOUNT]);
+      const live = (await t.nextly.findByID({
+        collection: COMPONENTS_SLUG,
+        id: heroId,
+        depth: 0,
+        overrideAccess: true,
+      })) as Row;
+      const content = (
+        typeof live.content === "string"
+          ? JSON.parse(live.content)
+          : live.content
+      ) as { exposed: { id: string }[] };
+      expect(content.exposed.map(field => field.id)).toEqual(["title", "body"]);
     });
   }
 );

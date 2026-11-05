@@ -11,7 +11,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { block } from "./canvas/editor-driver";
+import { block, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -119,21 +119,22 @@ async function removeHeadline(page: Page, id: string): Promise<string> {
 }
 
 /**
- * Publish from the top bar: the leading action where it is Publish, else the
- * menu on the leading action's arrow, where a component with unsaved edits
- * keeps it.
+ * Save the removal, then publish it: a live component publishes only the
+ * changes a save has held for it, as "Publish changes".
  */
-async function pressPublish(page: Page): Promise<void> {
-  const bar = page.locator('[data-topbar="end"]');
-  const leading = bar.getByRole("button", { name: /^Publish( changes)?$/ });
-  if ((await leading.count()) > 0) {
-    await leading.click();
-    return;
-  }
-  await bar
-    .getByRole("button", { name: /^More (ways to publish|document actions)$/ })
+async function saveThenPublish(page: Page, id: string): Promise<void> {
+  const saved = page.waitForResponse(
+    response =>
+      new URL(response.url()).pathname.endsWith(`/entries/${id}`) &&
+      ["PATCH", "PUT"].includes(response.request().method()) &&
+      response.ok()
+  );
+  await pressSave(page);
+  await saved;
+  await page
+    .locator('[data-topbar="end"]')
+    .getByRole("button", { name: "Publish changes", exact: true })
     .click();
-  await page.getByRole("menuitem", { name: /^Publish( changes)?$/ }).click();
 }
 
 test.describe("publishing a component's removed field", () => {
@@ -148,7 +149,7 @@ test.describe("publishing a component's removed field", () => {
     // Placed once more after the designer was told.
     await pagePlacing(page.request, id);
 
-    await pressPublish(page);
+    await saveThenPublish(page, id);
 
     const asked = page.getByRole("alertdialog", {
       name: "More documents use this component now",
@@ -173,7 +174,7 @@ test.describe("publishing a component's removed field", () => {
     await removeHeadline(page, id);
     await pagePlacing(page.request, id);
 
-    await pressPublish(page);
+    await saveThenPublish(page, id);
     const asked = page.getByRole("alertdialog", {
       name: "More documents use this component now",
     });
