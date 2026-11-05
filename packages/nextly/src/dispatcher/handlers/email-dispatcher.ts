@@ -35,6 +35,7 @@ import {
   overrideTemplateSchema,
   undoOwnerUpdateSchema,
 } from "../../domains/email/template-ownership-requests";
+import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
@@ -76,22 +77,14 @@ function fromContainer<T>(name: string): T | undefined {
 /**
  * The signed-in staff user's own address, which a test send always goes to.
  * An API key or any other caller has no address of its own, and is refused.
+ * The standalone `nextly/api/email-providers-test` export resolves its
+ * destination through the same helper, so both surfaces answer alike.
  */
 async function ownAddressOfCaller(): Promise<string> {
-  const actor = readAuthenticatedActor();
-  const users = fromContainer<UserService>("userService");
-  if (actor?.type !== "user" || !actor.id || !users) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "test-send-needs-a-signed-in-user" },
-    });
-  }
-  const user = await users.findById(actor.id, {});
-  if (!user.email) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "test-send-user-has-no-address" },
-    });
-  }
-  return user.email;
+  return testSendRecipientOf(
+    readAuthenticatedActor(),
+    fromContainer<UserService>("userService")
+  );
 }
 
 /**

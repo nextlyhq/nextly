@@ -60,7 +60,8 @@ async function admits(
     route.routeParams,
     httpMethod
   );
-  return !("statusCode" in result);
+  // A null gate answer is a visitor the gate admitted, as a non-error one is.
+  return result == null || !("statusCode" in result);
 }
 
 const CHECK = ["email-providers", "check"];
