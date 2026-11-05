@@ -740,9 +740,14 @@ export function EntryForm({
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
     // Every claim and beat names the copy's version, so the holder is told
-    // when someone else changes the entry.
-    version: versionStartedFrom,
+    // when someone else changes the entry. Only where the editor can load the
+    // latest copy: one that cannot would say it shows what it does not.
+    version: latest ? versionStartedFrom : undefined,
   });
+  // Whether anything unsaved is on screen, the page builder's own store
+  // included, which the form's values do not hold. Set below, where it is
+  // known, and read when someone else's change is told.
+  const hasUnsavedWorkNow = useRef(false);
   // Load the current version with the edits kept as a recovery point, then
   // offer it: one way, for a refused save's dialog and for someone else's
   // change alike. The offer is made below, so this is filled in there.
@@ -757,7 +762,7 @@ export function EntryForm({
     ),
     {
       surface: lockSurface,
-      dirty: () => form.formState.isDirty,
+      dirty: () => hasUnsavedWorkNow.current,
       hold: holdForVersionChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
@@ -911,6 +916,7 @@ export function EntryForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+  hasUnsavedWorkNow.current = hasUnsavedWork;
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,

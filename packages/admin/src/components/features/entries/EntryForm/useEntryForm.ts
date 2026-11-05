@@ -886,6 +886,9 @@ export function useEntryForm({
                 ? result.item.updatedAt
                 : undefined;
             version.adoptAnswered(result.item);
+            // Saved, so the copy is the current version: nothing a change
+            // told before still holds it.
+            version.release();
             savedRow = result.item;
             return {
               item: result.item,
@@ -946,6 +949,7 @@ export function useEntryForm({
           version.withVersion({ status })
         );
         version.adoptAnswered(result.item);
+        version.release();
         onSuccess?.(result.item);
         return { ok: true, item: result.item };
       } catch (error) {

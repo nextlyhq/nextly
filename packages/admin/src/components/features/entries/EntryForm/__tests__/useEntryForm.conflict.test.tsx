@@ -183,6 +183,29 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("lets go of a change it was told of once a save of its own succeeds", async () => {
+    // Told of a change while editing, and then its own save goes through:
+    // the copy is now the current version, so a newer read must reach it.
+    // Still held, every read after would be skipped and the next save sent
+    // from a version long gone.
+    const rendered = render();
+    act(() => {
+      rendered.result.current.holdForVersionChange(ANA_CHANGED as never);
+    });
+    update.mockResolvedValueOnce(
+      answered({ ...stored, title: "Mine", _rev: "5" })
+    );
+    await typeAndSave(rendered, "Mine");
+
+    act(() => rendered.rerender({ entry: { ...anas, _rev: "6" } }));
+    update.mockResolvedValueOnce(answered({ ...anas, _rev: "7" }));
+    await typeAndSave(rendered, "Mine again");
+
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _rev: "6" })
+    );
+  });
+
   it("moves to a newer version a read brings while nothing is pinned", async () => {
     const rendered = render();
     act(() => rendered.rerender({ entry: anas }));

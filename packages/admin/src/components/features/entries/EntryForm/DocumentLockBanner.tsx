@@ -113,7 +113,9 @@ export function DocumentLockBanner({
       )}
     >
       <Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-      <p className="flex-1 text-foreground">{notice.message}</p>
+      {/* Room for the sentence before any button: on a narrow screen the
+          buttons wrap under it rather than squeeze it into a column. */}
+      <p className="flex-[1_1_16rem] text-foreground">{notice.message}</p>
       {/*
         The confirmation is TEXT and not a disabled button. A control that stays
         on screen having stopped doing anything is the thing a reader cannot

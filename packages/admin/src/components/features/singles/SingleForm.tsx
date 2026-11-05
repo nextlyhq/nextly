@@ -896,7 +896,8 @@ export function SingleForm({
     ),
     {
       surface: lockSurface,
-      dirty: () => form.formState.isDirty,
+      // The page builder's own store included, which the form does not hold.
+      dirty: () => hasUnsavedWorkNow.current,
       hold: version.holdForChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
@@ -1027,6 +1028,9 @@ export function SingleForm({
           ownSave.current.storedKey = singleResetKey(stored, locale);
           version.adoptAnswered(stored);
         }
+        // Saved, so the copy is the current version: nothing a change told
+        // before still holds it.
+        version.release();
         return { ok: true, item: { id: document.id } };
       } catch (error) {
         return submitFailed(error);
@@ -1118,6 +1122,9 @@ export function SingleForm({
                 ownSave.current.inFlight = false;
               });
             if (stored) version.adoptAnswered(stored);
+            // Saved, so the copy is the current version: nothing a change
+            // told before still holds it.
+            version.release();
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
