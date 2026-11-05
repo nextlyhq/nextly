@@ -97,6 +97,12 @@ export interface ProviderTestResult {
   error?: string;
   setup?: EmailSetupCategory;
   retryable?: boolean;
+  /**
+   * Where the test actually went: the mailbox the server resolved and used.
+   * A caller shows its own address from a cached read, which can name an
+   * inbox the person no longer has; this is the one that received it.
+   */
+  to?: string;
 }
 
 /**
@@ -1776,14 +1782,20 @@ export class EmailProviderService extends BaseService {
             : TEST_RECIPIENT_REFUSED,
       });
 
-      if (delivered) return { success: true };
+      if (delivered) return { success: true, to: testMailbox };
       return accepted
-        ? { success: false, error: SEND_RETURNED_UNSUCCESSFUL, setup: "other" }
+        ? {
+            success: false,
+            error: SEND_RETURNED_UNSUCCESSFUL,
+            setup: "other",
+            to: testMailbox,
+          }
         : {
             success: false,
             error: TEST_RECIPIENT_REFUSED,
             setup: "recipient",
             retryable: false,
+            to: testMailbox,
           };
     } catch (error) {
       // Only a send that actually reached the provider. `mode === "send"` is
@@ -1836,6 +1848,9 @@ export class EmailProviderService extends BaseService {
           : "The test failed. The reason is in the server log.",
         setup: setupCategoryOf(error),
         ...(failure ? { retryable: failure.retryable } : {}),
+        // Only a message that was dispatched went anywhere; a probe that
+        // threw sent nothing, so it names no destination.
+        ...(dispatched ? { to: testMailbox } : {}),
       };
     }
   }

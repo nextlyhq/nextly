@@ -174,6 +174,27 @@ describe("testProvider disclosure", () => {
       )
     ).rejects.toThrow(/Unknown email provider test mode/);
   });
+
+  it("says where the test went, as the mailbox the server used", async () => {
+    // The admin shows the address from its cached /me, while the server
+    // resolves the recipient from the user record at send time. The result
+    // carries the mailbox the message actually went to, so a caller tells the
+    // operator to check the inbox that received it, not the one a stale
+    // cache still names.
+    (service as unknown as { createAdapterFromProvider: unknown })[
+      "createAdapterFromProvider"
+    ] = () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    });
+
+    const result = await service.testProvider(
+      providerId,
+      "Jane <jane@example.com>"
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.to).toBe("jane@example.com");
+  });
 });
 
 describe("a provider's deliberate error, with the raw failure as its cause", () => {

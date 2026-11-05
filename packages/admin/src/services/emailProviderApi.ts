@@ -211,6 +211,12 @@ export interface TestProviderResult {
   setup?: EmailSetupCategory;
   /** Whether sending again later can succeed, when the provider said. */
   retryable?: boolean;
+  /**
+   * Where the test actually went: the mailbox the server resolved, which a
+   * cached read of the caller's own address may not name anymore. Present
+   * only when a message was dispatched.
+   */
+  to?: string;
 }
 
 /**

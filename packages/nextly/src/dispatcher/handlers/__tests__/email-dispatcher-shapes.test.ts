@@ -182,9 +182,13 @@ describe("dispatchEmailProviders, mutations (respondMutation)", () => {
     const result = await dispatchEmailProviders(
       "createProvider",
       {},
-      { name: "Resend" }
+      {
+        name: "Resend",
+        type: "resend",
+        fromEmail: "no-reply@example.com",
+        configuration: {},
+      }
     );
-
     const response = result as Response;
     expect(response.status).toBe(201);
     const body = await response.json();
@@ -192,6 +196,33 @@ describe("dispatchEmailProviders, mutations (respondMutation)", () => {
       message: "Email provider created.",
       item: fakeProvider,
     });
+  });
+
+  it("refuses a create whose booleans are not booleans, before any default is touched", async () => {
+    // `{"isDefault":true,"isActive":0}` once reached the service as-is: the
+    // strict `isActive === false` guard does not match `0`, SQLite stores the
+    // 0 as an off provider, and the transaction demoted the working default
+    // to promote it. The body is parsed before the service sees it, so a
+    // number where a boolean belongs is a validation refusal and the service
+    // is never called.
+    const createProvider = vi.fn().mockResolvedValue({ id: "p1" });
+    wireProviders(makeProviderService({ createProvider }));
+
+    await expect(
+      dispatchEmailProviders(
+        "createProvider",
+        {},
+        {
+          name: "Resend",
+          type: "resend",
+          fromEmail: "no-reply@example.com",
+          configuration: {},
+          isDefault: true,
+          isActive: 0,
+        }
+      )
+    ).rejects.toThrow();
+    expect(createProvider).not.toHaveBeenCalled();
   });
 
   it("updateProvider returns { message, item } body and 200 status", async () => {

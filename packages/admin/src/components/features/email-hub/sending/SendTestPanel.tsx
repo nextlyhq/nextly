@@ -148,7 +148,10 @@ function useTestSend(
   const { mutate: send, isPending } = useTestProvider();
 
   const record = (result: TestProviderResult) => {
-    setSent({ to, result });
+    // The server's answer over the cached read: a changed address reaches
+    // the result before the /me cache does, so the outcome names the inbox
+    // that actually received the test.
+    setSent({ to: result.to ?? to, result });
     onResult?.(result);
   };
 

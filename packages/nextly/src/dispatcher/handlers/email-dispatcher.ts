@@ -115,6 +115,23 @@ const checkSavedProviderSchema = z
   .strict();
 const providerIdSchema = z.string().uuid();
 
+/**
+ * The body of a create, parsed here rather than trusted: booleans must be
+ * booleans before they reach the service's guards. `{"isDefault":true,
+ * "isActive":0}` once slipped `isActive === false` as a cast body, stored an
+ * off default, and demoted the working one to promote it. The standalone
+ * create route parses the same fields, so both surfaces refuse alike.
+ */
+const createProviderSchema = z.object({
+  name: z.string().min(1).max(255),
+  type: z.string().min(1),
+  fromEmail: z.string().email(),
+  fromName: z.string().max(255).optional().nullable(),
+  configuration: z.record(z.string(), z.unknown()),
+  isDefault: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+});
+
 // ============================================================
 // Email provider methods
 // ============================================================
@@ -154,10 +171,14 @@ const EMAIL_PROVIDER_METHODS: Record<
   createProvider: {
     // The acting identity is already on the params -- the route handler stamps
     // it for every dispatched request -- and this domain simply never read it,
-    // which is why credential changes left no trail.
+    // which is why credential changes left no trail. The body is parsed
+    // before the service sees it, so a boolean that is not one is refused
+    // here rather than stored.
     execute: async (svc, p, body) => {
+      const parsed = createProviderSchema.safeParse(body);
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
       const provider = await svc.providerService.createProvider(
-        body as Parameters<typeof svc.providerService.createProvider>[0],
+        parsed.data,
         readAuthenticatedActor()
       );
       return respondMutation("Email provider created.", provider, {
