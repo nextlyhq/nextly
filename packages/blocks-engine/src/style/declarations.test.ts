@@ -7,7 +7,11 @@ import {
 } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
 import type { UnionShape, UrlLeaf } from "./catalog-types";
-import { compileStyleValues, urlText } from "./declarations";
+import {
+  compileStyleValues,
+  paintsBackgroundImage,
+  urlText,
+} from "./declarations";
 import { overlaid } from "./overlay";
 import { styleUnionVariant } from "./validate-style-value";
 
@@ -232,18 +236,18 @@ describe("a background's overlay", () => {
     const image = written({ background: { url: "/hills.jpg" } })[
       "background-image"
     ];
-    expect(image).toMatch(
-      /^linear-gradient\(color-mix\(in srgb, var\(--nx-pb-overlay, transparent\) /
-    );
-    expect(image).toMatch(/, url\("\/hills\.jpg"\)$/);
+    expect(image?.startsWith("var(--nx-pb-overlay-layer,) ")).toBe(true);
+    expect(image).toBe('var(--nx-pb-overlay-layer,) url("/hills.jpg")');
   });
 
   it("is laid over a gradient too", () => {
     const gradient = written({
       backgroundGradient: "linear-gradient(red, blue)",
     })["background-image"];
-    expect(gradient).toMatch(/^linear-gradient\(color-mix\(/);
-    expect(gradient).toMatch(/, linear-gradient\(red, blue\)$/);
+    expect(gradient?.startsWith("var(--nx-pb-overlay-layer,) ")).toBe(true);
+    expect(gradient).toBe(
+      "var(--nx-pb-overlay-layer,) linear-gradient(red, blue)"
+    );
   });
 
   it("leaves a keyword alone: none clears the image, overlay and all", () => {
@@ -273,5 +277,47 @@ describe("a scaled token reference, written", () => {
       "--brand-"
     );
     expect(declarations[0]?.value).toBe("var(--brand-space-4)");
+  });
+});
+
+describe("a background without an overlay keeps its layers", () => {
+  const values = (background: Record<string, unknown>) =>
+    Object.fromEntries(
+      compileStyleValues({ background }, "/s").declarations.map(each => [
+        each.property,
+        each.value,
+      ])
+    );
+
+  it("paints its image alone, so a list of sizes still lines up with it", () => {
+    // `cover, contain` was the image's `cover`; a layer in front of it would
+    // have taken `cover` and left the image `contain`.
+    const written = values({ url: "/a.png", size: "cover, contain" });
+    expect(written["background-image"]).toBe(
+      'var(--nx-pb-overlay-layer,) url("/a.png")'
+    );
+    expect(written["background-size"]).toBe("cover, contain");
+  });
+
+  it("has its overlay's layer written by the overlay alone, with its comma", () => {
+    const layer = values({ overlay: "#000" })["--nx-pb-overlay-layer"];
+    expect(layer).toMatch(
+      /^linear-gradient\(color-mix\(in srgb, var\(--nx-pb-overlay, transparent\) /
+    );
+    expect(layer?.endsWith("),")).toBe(true);
+  });
+});
+
+describe("whether a stored background paints an image", () => {
+  it("answers as the compiler lays the overlay: a value or a token, never a clearing keyword", () => {
+    expect(paintsBackgroundImage("url", "/a.png")).toBe(true);
+    expect(paintsBackgroundImage("url", { $token: "image.hero" })).toBe(true);
+    expect(paintsBackgroundImage("url", "none")).toBe(false);
+    expect(paintsBackgroundImage("url", "inherit")).toBe(false);
+    expect(
+      paintsBackgroundImage("gradient", "linear-gradient(red, blue)")
+    ).toBe(true);
+    expect(paintsBackgroundImage("gradient", "none")).toBe(false);
+    expect(paintsBackgroundImage("gradient", undefined)).toBe(false);
   });
 });

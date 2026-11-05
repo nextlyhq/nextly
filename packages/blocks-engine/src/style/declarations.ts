@@ -29,7 +29,12 @@ import {
   isCssWideKeyword,
   trimCssWhitespace,
 } from "./css-value";
-import { overlaid } from "./overlay";
+import {
+  OVERLAY_COLOR,
+  OVERLAY_LAYER_PROPERTY,
+  OVERLAY_LAYER_VALUE,
+  overlaid,
+} from "./overlay";
 import {
   newStyleIssueBudget,
   normalizeStyleIssueBudget,
@@ -326,6 +331,42 @@ function scalarText(
   return isOverlaid(leaf, value) ? overlaid(text) : text;
 }
 
+/**
+ * Whether a stored background image or gradient paints one, as the compiler
+ * judges it when it lays the overlay's layer in front: a value, or a token,
+ * rather than a keyword that clears or defers it (`none`, `inherit`). For an
+ * editor deciding whether an overlay has anything to cover.
+ *
+ * @experimental
+ */
+export function paintsBackgroundImage(
+  field: "url" | "gradient",
+  value: unknown
+): boolean {
+  const leaf = field === "url" ? BACKGROUND_URL_LEAF : BACKGROUND_GRADIENT_LEAF;
+  if (leaf === undefined) return false;
+  if (isTokenRef(value)) return true;
+  return typeof value === "string" && isOverlaid(leaf, value);
+}
+
+/** The catalog's background image and gradient leaves, which an overlay covers. */
+const BACKGROUND_URL_LEAF: StyleLeaf | undefined = (() => {
+  const shape = CATALOG_IN_EMISSION_ORDER.find(
+    entry => entry.property === "background"
+  )?.shape;
+  const url =
+    shape !== undefined && !isStyleLeaf(shape) && shape.kind === "object"
+      ? shape.fields.url
+      : undefined;
+  return url !== undefined && isStyleLeaf(url) ? url : undefined;
+})();
+const BACKGROUND_GRADIENT_LEAF: StyleLeaf | undefined = (() => {
+  const shape = CATALOG_IN_EMISSION_ORDER.find(
+    entry => entry.property === "backgroundGradient"
+  )?.shape;
+  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
+})();
+
 /** Whether a leaf paints an image a background's overlay covers. */
 function paintsOverlaid(leaf: StyleLeaf): boolean {
   return (
@@ -407,6 +448,16 @@ function shapeDeclarations(
         ? {}
         : { descendant: shape.descendant }),
     });
+    // The overlay's colour also writes the layer an image reads in front of
+    // itself: present only where an overlay is, so no other background
+    // changes its layers.
+    if (shape.cssProperty === OVERLAY_COLOR) {
+      walk.placed.push({
+        path,
+        property: OVERLAY_LAYER_PROPERTY,
+        value: OVERLAY_LAYER_VALUE,
+      });
+    }
     return;
   }
   switch (shape.kind) {

@@ -35,10 +35,21 @@ const LAYER_COLOUR = `color-mix(in srgb, var(${OVERLAY_COLOR}, transparent) calc
 /** The layer laid in front of an image: a flat fill of the overlay's colour. */
 const OVERLAY_LAYER = `linear-gradient(${LAYER_COLOUR}, ${LAYER_COLOUR})`;
 
-/** The image's declared value with the overlay's layer in front of it. */
+/**
+ * The overlay's layer, as a custom property the overlay's colour writes
+ * beside itself, its comma included: an image reads it in front of itself,
+ * so a background with no overlay keeps exactly the layers it had, and a
+ * list of sizes or positions still lines up with its image.
+ */
+export const OVERLAY_LAYER_PROPERTY = "--nx-pb-overlay-layer";
+
+/** What the overlay's colour writes into {@link OVERLAY_LAYER_PROPERTY}. */
+export const OVERLAY_LAYER_VALUE: string = `${OVERLAY_LAYER},`;
+
+/** The image's declared value, reading the overlay's layer in front of it. */
 export function overlaid(image: string): string {
-  return `${OVERLAY_LAYER}, ${image}`;
+  return `var(${OVERLAY_LAYER_PROPERTY},) ${image}`;
 }
 
 /** The reset a sheet using the overlay carries, once: what stops it inheriting. */
-export const OVERLAY_RESET: string = `:where(.${PAGE_ROOT_CLASS} *) { ${OVERLAY_COLOR}: initial; ${OVERLAY_STRENGTH}: initial; }`;
+export const OVERLAY_RESET: string = `:where(.${PAGE_ROOT_CLASS} *) { ${OVERLAY_COLOR}: initial; ${OVERLAY_STRENGTH}: initial; ${OVERLAY_LAYER_PROPERTY}: initial; }`;

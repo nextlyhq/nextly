@@ -563,9 +563,9 @@ function leafIssues(
         ),
       ];
     }
-    const scaling = Object.hasOwn(value, "times")
-      ? scaleProblem(leaf, value.times)
-      : undefined;
+    // Left undefined, a scale is absent, as any optional field is.
+    const scaling =
+      value.times === undefined ? undefined : scaleProblem(leaf, value.times);
     if (scaling !== undefined) {
       return [
         invalid(path, scaling, "Store the token alone, or a factor in range."),

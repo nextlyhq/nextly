@@ -950,6 +950,7 @@ export {
   // Exported so a reader keyed on the emitted custom-property names asks this
   // rather than the setting, which changes without the output changing.
   safeTokenPrefix,
+  paintsBackgroundImage,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
 /**

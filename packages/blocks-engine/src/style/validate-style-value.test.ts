@@ -3554,3 +3554,15 @@ describe("a scaled token reference", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("a scale left undefined", () => {
+  it("is a token reference with no scale, as an omitted field is", () => {
+    expect(
+      validateStyleValues(
+        { rowGap: { $token: "space.4", times: undefined } as never },
+        "/s",
+        "strict"
+      ).filter(issue => issue.severity === "error")
+    ).toEqual([]);
+  });
+});

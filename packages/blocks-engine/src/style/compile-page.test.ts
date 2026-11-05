@@ -2289,7 +2289,7 @@ describe("the overlay's two properties", () => {
     );
     expect(
       used.startsWith(
-        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; }\n"
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; }\n"
       )
     ).toBe(true);
   });
