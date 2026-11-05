@@ -59,6 +59,9 @@ const EVERY_SHAPE = [
   { name: "a_checkbox", type: "checkbox" },
   { name: "a_date", type: "date" },
   { name: "a_json", type: "json" },
+  // A short id string whose column the creator takes from the column descriptor rather than its
+  // own type map: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+  { name: "a_icon", type: "icon" },
 ];
 
 for (const dialect of getConfiguredTestDialects()) {
