@@ -51,6 +51,7 @@ import {
 import { readLayoutCopy } from "../layout-removal/layout-copy";
 import { settleLayoutRemovals } from "../layout-removal/settle";
 import { LAYOUT_REMOVAL_CONTEXT_KEY } from "../layout-removal/layout-removal-guard";
+import { LAYOUT_CLEAR_CONTEXT_KEY } from "../layout-removal/page-reference-guard";
 import { PAGES_PER_TICK } from "../layout-removal/move-pages";
 import {
   layoutRemovalStore,
@@ -2364,6 +2365,71 @@ describe.each(getConfiguredTestDialects())(
         expect(await layoutRow(t, other)).toBeDefined();
         expect(await pageLayout(t, String(draft))).toBe(other);
         expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("refuses a person who may edit pages but not remove the Layout, before any page moves", async () => {
+        const t = await boot();
+        await owner(t);
+        const editor = await person(t, "editor");
+        const other = await layout(t, "Other", "other");
+        const [draft] = await unpublishedPages(t, other, 1);
+        // May edit every page, but may neither delete nor unpublish Layouts.
+        await grant(t, editor, [
+          "read-layouts",
+          "update-layouts",
+          "read-pages",
+          "update-pages",
+        ]);
+        const session = await sessionOf(t, editor);
+
+        const deleting = await tick(session, other, {});
+        const unpublishing = await tick(session, other, {
+          action: "unpublish",
+        });
+
+        expect(deleting.status).toBe(403);
+        expect(unpublishing.status).toBe(403);
+        expect(await pageLayout(t, String(draft))).toBe(other);
+        expect(await layoutRow(t, other)).toBeDefined();
+        expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("keeps another author's newer Layout choice over a clear that read the page before it", async () => {
+        const t = await boot();
+        await owner(t);
+        const other = await layout(t, "Other", "other");
+        const chosen = await layout(t, "Chosen", "chosen");
+        const [page] = await unpublishedPages(t, other, 1);
+        // Another author picks a Layout after the clear read "Other".
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: String(page),
+          data: { layout: chosen },
+          overrideAccess: true,
+        });
+
+        // The clear's own write, carrying the Layout it read.
+        const stale = await refusalOf(
+          t.nextly.update({
+            collection: PAGES_SLUG,
+            id: String(page),
+            data: { layout: null },
+            context: { [LAYOUT_CLEAR_CONTEXT_KEY]: other },
+            overrideAccess: true,
+          })
+        );
+
+        expect(stale).toBeDefined();
+        expect(await pageLayout(t, String(page))).toBe(chosen);
+        // The positive control: a clear that read what the page names now.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: String(page),
+          data: { layout: null },
+          context: { [LAYOUT_CLEAR_CONTEXT_KEY]: chosen },
+          overrideAccess: true,
+        });
+        expect(await pageLayout(t, String(page))).toBeNull();
       });
 
       it("leaves plain Remove Layout as strict as before: a live row alone still refuses it", async () => {

@@ -53,6 +53,7 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
+import { defaultIsUsable } from "../default-layout/store";
 import {
   namesItOffTheLiveRow,
   readableTitles,
@@ -77,6 +78,7 @@ import {
   ALREADY_BEING_REMOVED,
   CANT_EDIT_PAGE,
   MOVE_STOPPED,
+  NO_USABLE_DEFAULT,
   PAGE_NOT_SAVED,
 } from "./words";
 
@@ -251,6 +253,32 @@ async function unmoved(
   };
 }
 
+/**
+ * What a move needs beyond a removal: whether the person holds the grants the
+ * removal's final write is judged by, asked before any page moves.
+ */
+export interface MoveDeps extends RemoveLayoutDeps {
+  readonly mayRemove: (action: RemovalAction) => Promise<boolean>;
+}
+
+/**
+ * Refuse while the site has no published default: a page cleared now would
+ * draw no header or footer at all, not the site default the dialog promises.
+ * The one test of a usable default, as the repair and make-default ask it.
+ */
+async function requireUsableDefault(
+  deps: RemoveLayoutDeps,
+  layoutId: string
+): Promise<void> {
+  if (!(await defaultIsUsable(deps.nextly, deps.slugs))) {
+    throw conflict(
+      NO_USABLE_DEFAULT,
+      "layout-move-no-usable-default",
+      layoutId
+    );
+  }
+}
+
 /** By id, the order the cursor walks in. */
 function byId(a: PageReference, b: PageReference): number {
   if (a.id === b.id) return 0;
@@ -288,6 +316,7 @@ async function start(
   await mark(deps, request, token, true);
   await stopOnRefusal(deps, request.layoutId, token, async () => {
     await refuseIfDefault(deps, request.layoutId);
+    await requireUsableDefault(deps, request.layoutId);
     await advanceOrRefuse(deps, {
       layoutId: request.layoutId,
       token,
@@ -335,6 +364,11 @@ async function tick(
 ): Promise<RemoveAnswer> {
   const { layoutId } = request;
   const startedAt = deps.now().getTime();
+  // Asked again on every tick, before any page moves: the default can be
+  // unpublished while a move runs. The fence comes down with the refusal.
+  await stopOnRefusal(deps, layoutId, token, () =>
+    requireUsableDefault(deps, layoutId)
+  );
   const scan = await scanLayoutReferences({
     nextly: deps.nextly,
     pages: deps.slugs.pages,
@@ -441,11 +475,24 @@ async function stop(
 
 /** One tick of a move: start it, carry it on, or stop it. */
 export async function movePages(
-  deps: RemoveLayoutDeps,
+  deps: MoveDeps,
   request: MoveRequest
 ): Promise<RemoveAnswer> {
   await requireRemovable(deps, request);
   if (request.stop === true) return stop(deps, request);
+  // A precondition, so it runs before the fence and every page write, on
+  // every tick: a person who may not delete or unpublish this Layout would
+  // otherwise have each page moved and then be refused at the final write.
+  // Stop needs no grant, since it only takes the person's own fence down.
+  if (!(await deps.mayRemove(request.action))) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "layout-move-needs-removal-grant",
+        layoutId: request.layoutId,
+        action: request.action,
+      },
+    });
+  }
   if (request.token === undefined) {
     return tick(deps, request, await start(deps, request));
   }

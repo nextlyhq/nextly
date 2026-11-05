@@ -534,8 +534,11 @@ export function MovePagesDialog({
   ): Promise<TickBody | null> => {
     if (move === undefined) throw new Error("The move did not answer.");
     if (!open.current) {
-      // Closed while this tick ran: the move stops with it.
+      // Closed while this tick ran: the move stops with it. A last tick that
+      // removed the Layout all the same still leaves this screen, since what
+      // it shows is gone (deleted) or out of date (unpublished).
       if (move.state === "moving") sendStop(entryId, { ...move, action });
+      else if (move.state === "done") onFinished(action);
       return null;
     }
     setMoved(count => count + move.moved);

@@ -15,6 +15,13 @@
 export const DEFAULT_LAYOUT_REFUSAL =
   "This Layout is the site's default. Choose another default first.";
 
+/**
+ * What a move is told while the site has no published default to move its
+ * pages to: they would be left with no header or footer.
+ */
+export const NO_USABLE_DEFAULT =
+  "The site has no published default Layout to move these pages to. Publish one or choose another default first.";
+
 /** The dialog's sentence over the pages that stop a removal. */
 export const PAGES_USE_IT =
   "These pages use this Layout. Choose another Layout for them first.";

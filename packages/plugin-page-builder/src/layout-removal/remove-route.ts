@@ -38,7 +38,7 @@ import { readingAsUser } from "../library-route";
 
 import { movePages } from "./move-pages";
 import { removeLayout, type RemoveResult } from "./remove-layout";
-import { layoutRemovalStore } from "./store";
+import { layoutRemovalStore, type RemovalAction } from "./store";
 
 /** Where the route answers, under the plugin's namespace. */
 const REMOVE_ROUTE_PATH = "/layouts/:id/remove";
@@ -121,6 +121,15 @@ async function handle(
       ctx.logger.warn(message, meta),
     now: () => new Date(),
     newToken: () => globalThis.crypto.randomUUID(),
+    // The grants core judges the final write by: a delete, or an update that
+    // unpublishes. Asked of the caller before a move writes any page.
+    mayRemove: async (action: RemovalAction) => {
+      const asked = action === "delete" ? ["delete"] : ["update", "unpublish"];
+      for (const grant of asked) {
+        if (!(await ctx.caller?.can(grant, slugs.layouts))) return false;
+      }
+      return true;
+    },
   };
   const layoutId = ctx.params.id ?? "";
   const answer =

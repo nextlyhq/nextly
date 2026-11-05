@@ -22,10 +22,11 @@ import { LAYOUT_REMOVAL_CONTEXT_KEY } from "./layout-removal-guard";
 import {
   movePages,
   PAGES_PER_TICK,
+  type MoveDeps,
   type MoveProgress,
   type MoveRequest,
 } from "./move-pages";
-import { removeLayout, type RemoveLayoutDeps } from "./remove-layout";
+import { removeLayout } from "./remove-layout";
 import { settleLayoutRemovals } from "./settle";
 import {
   mayTakeOver,
@@ -39,6 +40,7 @@ import {
   CHANGED_WHILE_REMOVING,
   KEPT_AS_DEFAULT,
   NOT_PUBLISHED,
+  NO_USABLE_DEFAULT,
 } from "./words";
 
 type Row = Record<string, unknown> & { id: string };
@@ -328,7 +330,7 @@ const PERSON = {
 function deps(
   s: Site,
   store = memoryStore()
-): RemoveLayoutDeps & {
+): MoveDeps & {
   store: ReturnType<typeof memoryStore>;
   warned: string[];
   pagesSlug: string;
@@ -341,6 +343,8 @@ function deps(
     slugs: { layouts: "layouts", settings: "settings", pages: "pages" },
     pagesSlug: "pages",
     person: { userId: "author", as: PERSON as never },
+    // The author holds the removal's grants unless a test says otherwise.
+    mayRemove: async () => true,
     warn: message => warned.push(message),
     warned,
     now: () => new Date(),
@@ -361,7 +365,7 @@ async function refusal(work: Promise<unknown>): Promise<unknown> {
 }
 
 const remove = (
-  d: RemoveLayoutDeps,
+  d: MoveDeps,
   action: "delete" | "unpublish" = "delete",
   dryRun = false
 ) => removeLayout(d, { layoutId: "landing", action, dryRun });
@@ -1411,7 +1415,7 @@ describe("Move pages, then remove", () => {
   }
 
   /** One tick, as the dialog calls it. */
-  const tick = (d: RemoveLayoutDeps, request: Partial<MoveRequest> = {}) =>
+  const tick = (d: MoveDeps, request: Partial<MoveRequest> = {}) =>
     movePages(d, { layoutId: "landing", action: "delete", ...request });
 
   /**
@@ -1419,7 +1423,7 @@ describe("Move pages, then remove", () => {
    * and the cursor each answer gives. Answers every tick's progress.
    */
   async function run(
-    d: RemoveLayoutDeps,
+    d: MoveDeps,
     action: "delete" | "unpublish" = "delete"
   ): Promise<MoveProgress[]> {
     const ticks: MoveProgress[] = [];
@@ -1482,26 +1486,29 @@ describe("Move pages, then remove", () => {
     // Each tick answers what it moved; the dialog adds them up.
     expect(ticks.reduce((sum, progress) => sum + progress.moved, 0)).toBe(61);
     // No tick moved more than its bound, so the 61 took three of them.
-    for (const progress of ticks) {
-      if (progress.state === "moving") {
-        expect(progress.moved).toBeLessThanOrEqual(PAGES_PER_TICK);
-      }
-    }
+    expect(Math.max(...ticks.map(progress => progress.moved))).toBe(
+      PAGES_PER_TICK
+    );
     expect(ticks).toHaveLength(3);
     expect(s.layouts.has("landing")).toBe(false);
-    for (const page of s.pages) {
-      if (page.id.startsWith("u")) expect(page.layout).toBeNull();
-    }
+    const unpublished = s.pages.filter(page => page.id.startsWith("u"));
+    expect(unpublished.map(page => page.layout)).toEqual(
+      unpublished.map(() => null)
+    );
     // The working draft moved; both live rows still name the Layout, and
     // draw the site default now that it is gone.
-    expect(s.pageDrafts.get("edited")?.layout).toBeNull();
-    expect(s.pages.find(page => page.id === "edited")?.layout).toBe("landing");
-    expect(s.pages.find(page => page.id === "live")?.layout).toBe("landing");
+    expect(s.pageDrafts.get("edited")).toMatchObject({ layout: null });
+    const live = s.pages.filter(page => page.status === "published");
+    expect(live.map(page => [page.id, page.layout])).toEqual([
+      ["live", "landing"],
+      ["edited", "landing"],
+    ]);
     // Every page write was the person's own, their access enforced.
-    expect(s.pageWrites?.length).toBe(61);
-    for (const write of s.pageWrites ?? []) {
-      expect(write).toMatchObject({ overrideAccess: false, user: PERSON.user });
-    }
+    expect(s.pageWrites).toEqual(
+      Array.from({ length: 61 }, () =>
+        expect.objectContaining({ overrideAccess: false, user: PERSON.user })
+      )
+    );
     expect(d.store.rows.get("landing")).toMatchObject({
       step: "removed",
       pagesLeft: 0,
@@ -1558,6 +1565,61 @@ describe("Move pages, then remove", () => {
 
     const tried = (s.pageWrites ?? []).filter(write => write.id === "u000");
     expect(tried).toHaveLength(1);
+  });
+
+  it("refuses a person without the removal's grant before the fence or any page write", async () => {
+    const s = movingSite(3);
+    const asked: string[] = [];
+    const d = {
+      ...deps(s),
+      mayRemove: async (action: string) => {
+        asked.push(action);
+        return false;
+      },
+    };
+
+    const refused = await refusal(tick(d));
+
+    expect(NextlyError.isCode(refused, "FORBIDDEN")).toBe(true);
+    expect(asked).toEqual(["delete"]);
+    expect(d.store.rows.size).toBe(0);
+    expect(s.pageWrites).toEqual([]);
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+
+  it("refuses to start while the site has no published default, writing no page", async () => {
+    for (const lacking of ["none", "unpublished"] as const) {
+      const s = movingSite(3);
+      if (lacking === "none") s.defaultLayout = null;
+      else
+        s.layouts.set("main", { id: "main", title: "Main", status: "draft" });
+      const d = deps(s);
+
+      const refused = await refusal(tick(d));
+
+      expect(NextlyError.isCode(refused, "CONFLICT")).toBe(true);
+      expect((refused as NextlyError).publicMessage).toBe(NO_USABLE_DEFAULT);
+      expect(d.store.rows.size).toBe(0);
+      expect(s.pageWrites).toEqual([]);
+    }
+  });
+
+  it("refuses the next tick once the default is unpublished mid-move, keeping the pages moved", async () => {
+    const s = movingSite(PAGES_PER_TICK + 5);
+    const d = deps(s);
+    const first = (await tick(d)).item.move;
+    if (first?.state !== "moving") throw new Error("the move did not start");
+    s.layouts.set("main", { id: "main", title: "Main", status: "draft" });
+    const writes = s.pageWrites?.length;
+
+    const refused = await refusal(
+      tick(d, { token: first.token, after: first.after })
+    );
+
+    expect(NextlyError.isCode(refused, "CONFLICT")).toBe(true);
+    expect(s.pageWrites?.length).toBe(writes);
+    expect(d.store.rows.size).toBe(0);
+    expect(s.layouts.has("landing")).toBe(true);
   });
 
   it("stops between ticks, keeping the pages moved and the Layout", async () => {

@@ -84,6 +84,7 @@ interface PageHookContext {
   operation?: unknown;
   data?: unknown;
   originalData?: unknown;
+  context?: Record<string, unknown>;
   executor?: unknown;
   req?: { nextly?: unknown };
 }
@@ -218,6 +219,33 @@ async function judgeInTransaction(
   return undefined;
 }
 
+/**
+ * The hook-context key a clear carries the Layout it read under, so the write
+ * is refused if the page names another one by the time core judges it.
+ * Namespaced by plugin so no other caller's key collides with it.
+ */
+export const LAYOUT_CLEAR_CONTEXT_KEY = "pageBuilder.layoutClear";
+
+/**
+ * The before-update check for a clear: the page must still name the Layout the
+ * clear read. Another author's choice made since that read is newer than the
+ * clear, so it is kept and the clear refused, rather than overwritten.
+ */
+async function refuseStaleClear(
+  hook: PageHookContext,
+  args: PageReferenceGuardArgs
+): Promise<void> {
+  const expected = hook.context?.[LAYOUT_CLEAR_CONTEXT_KEY];
+  if (typeof expected !== "string") return;
+  if ((await storedLayoutOf(hook, args.pages)) === expected) return;
+  throw NextlyError.conflict({
+    logContext: { reason: PAGE_CHANGED_SINCE_READ, layoutId: expected },
+  });
+}
+
+/** The log reason a clear refused for a page that moved on carries. */
+const PAGE_CHANGED_SINCE_READ = "page-layout-changed-since-read";
+
 /** Whether a removal is past the point where it can still stop. */
 function pastItsFinalCheck(removal: LayoutRemoval): boolean {
   return (
@@ -252,17 +280,43 @@ export async function clearPageReference(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
-  // A page deleted since the read has nothing left to clear.
-  const cleared = await unlessGone(
-    nextly.update({
-      collection: pages,
-      id: pageId,
-      data: { layout: null },
-      ...(writeAs ?? { overrideAccess: true }),
-    }),
-    () => confirmedGone(nextly, pages, pageId)
-  );
-  return cleared !== null;
+  // A page deleted since the read has nothing left to clear, and one that
+  // names another Layout by the time its write is judged keeps that choice.
+  try {
+    const cleared = await unlessGone(
+      nextly.update({
+        collection: pages,
+        id: pageId,
+        data: { layout: null },
+        context: { [LAYOUT_CLEAR_CONTEXT_KEY]: layoutId },
+        ...(writeAs ?? { overrideAccess: true }),
+      }),
+      () => confirmedGone(nextly, pages, pageId)
+    );
+    return cleared !== null;
+  } catch (error) {
+    if (await movedOnSinceTheRead(nextly, pages, pageId, layoutId, error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether a refused clear was refused because the page no longer names the
+ * Layout. Decided by reading the page again, not by the refusal's details,
+ * which core replaces on the way out of a hook.
+ */
+async function movedOnSinceTheRead(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  error: unknown
+): Promise<boolean> {
+  if (!NextlyError.isCode(error, "CONFLICT")) return false;
+  const current = await currentPage(nextly, pages, pageId);
+  return current === null || relationId(current.layout) !== layoutId;
 }
 
 /** The page and the Layout a committed page write names, or null. */
@@ -322,9 +376,10 @@ export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
   ctx.hooks.on("beforeCreate", pages, context =>
     refuseAddedReference(context as PageHookContext, args, true)
   );
-  ctx.hooks.on("beforeUpdate", pages, context =>
-    refuseAddedReference(context as PageHookContext, args, false)
-  );
+  ctx.hooks.on("beforeUpdate", pages, async context => {
+    await refuseStaleClear(context as PageHookContext, args);
+    return refuseAddedReference(context as PageHookContext, args, false);
+  });
   ctx.hooks.on("afterCreate", pages, context =>
     clearInFlight(context as PageHookContext, args, "afterCreate")
   );

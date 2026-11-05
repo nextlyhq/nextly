@@ -560,6 +560,33 @@ describe("moving the pages to the site default first", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
+  it("still leaves for the list when the tick in flight as the dialog closed deleted the Layout", async () => {
+    let release: (value: unknown) => void = () => {};
+    moveAnswers(forty(), body =>
+      body.token === undefined
+        ? Promise.resolve(moving(25, "q20"))
+        : new Promise(resolve => {
+            release = resolve;
+          })
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+    await screen.findByText("Moved 25 of 40 pages…");
+
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(navigated).toEqual([]);
+    release({ state: "done", moved: 15 });
+
+    await waitFor(() =>
+      expect(navigated).toEqual(["/admin/collections/layouts"])
+    );
+  });
+
   it("stops the move when the dialog is closed while pages move", async () => {
     let release: (value: unknown) => void = () => {};
     moveAnswers(forty(), body =>
