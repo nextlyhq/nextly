@@ -12,6 +12,10 @@ import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schem
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import {
+  collectAdminPlaces,
+  publishAdminPlaces,
+} from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -98,6 +102,11 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // consult what was declared. Discarding it left every declared payload
   // schema checking nothing.
   publishHookPoints(collectHookPoints(plugins));
+  // Admin places, for the same reasons: a place two plugins both name, or one
+  // in another plugin's namespace or core's, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Published only once
+  // every declaration passes.
+  publishAdminPlaces(collectAdminPlaces(plugins));
   // Kinds of signed-in person, checked and published for the same reasons:
   // a kind with no usable resolver, or one two plugins both name, would
   // otherwise surface as a route that refuses everyone, and recognition runs

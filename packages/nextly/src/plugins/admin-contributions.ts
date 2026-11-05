@@ -73,6 +73,17 @@ export interface PluginHeaderContributions {
  * intentionally NOT supported because menus are serialized to the client.
  */
 /**
+ * @experimental One place a plugin declares on its own admin pages, under its
+ * namespace: see `PluginAdminContributions.places`.
+ */
+export interface PluginAdminPlaceDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-billing.invoice"`. */
+  name: string;
+  /** What the place is for, for the authors of plugins that add to it. */
+  description?: string;
+}
+
+/**
  * @experimental Where a plugin's admin surfaces appear in the sidebar.
  *
  * A closed vocabulary rather than a free string, so a typo is a compile error
@@ -246,6 +257,14 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
   menu?: PluginMenuItem[];
+  /**
+   * @experimental Places of this plugin's own, on its pages, that plugins may
+   * add to. Each name starts with this plugin's slug and a dot,
+   * `"acme-billing.invoice"` for `@acme/billing`; the app refuses to start on
+   * one outside it, under a segment core reserves, or declared by two
+   * plugins. Type each by augmenting `AdminPlaces`.
+   */
+  places?: PluginAdminPlaceDeclaration[];
   /** Custom admin pages, namespaced + RBAC-gated. */
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
