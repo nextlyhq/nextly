@@ -6,6 +6,7 @@ import {
   collectPluginWebhookEventTypes,
   isSubscribableEventType,
   publishWebhookEventTypes,
+  stageWebhookEventTypes,
   webhookEventTypes,
 } from "../event-type-registry";
 
@@ -142,6 +143,44 @@ describe("the list of event types", () => {
   });
 
   it("subscribes to no type nobody declared", () => {
+    expect(isSubscribableEventType("acme-shop.order.paid")).toBe(false);
+  });
+});
+
+describe("the list while a reload holds it", () => {
+  afterEach(() => {
+    publishWebhookEventTypes([]);
+  });
+
+  const shop = [{ type: "acme-shop.order.paid", owner: "@acme/shop" }];
+
+  it("keeps the types in force until the reload commits, then installs its own", () => {
+    const held = stageWebhookEventTypes();
+    publishWebhookEventTypes(shop);
+
+    expect(isSubscribableEventType("acme-shop.order.paid")).toBe(false);
+    held.commit();
+    expect(isSubscribableEventType("acme-shop.order.paid")).toBe(true);
+  });
+
+  it("drops what an abandoned reload published, and keeps the types in force", () => {
+    publishWebhookEventTypes(shop);
+    const held = stageWebhookEventTypes();
+    publishWebhookEventTypes([]);
+    held.abandon();
+
+    expect(isSubscribableEventType("acme-shop.order.paid")).toBe(true);
+    // And publication goes straight through again once nothing holds it.
+    publishWebhookEventTypes([]);
+    expect(isSubscribableEventType("acme-shop.order.paid")).toBe(false);
+  });
+
+  it("settles once: a commit after an abandon installs nothing", () => {
+    const held = stageWebhookEventTypes();
+    publishWebhookEventTypes(shop);
+    held.abandon();
+    held.commit();
+
     expect(isSubscribableEventType("acme-shop.order.paid")).toBe(false);
   });
 });

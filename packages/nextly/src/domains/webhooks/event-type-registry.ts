@@ -117,11 +117,48 @@ export function collectPluginWebhookEventTypes(
 /** The plugin types published at resolution; none before it runs. */
 let published: readonly WebhookEventTypeEntry[] = [];
 
+/**
+ * Where publication goes while a dev reload holds it: the reload's own stage,
+ * or nowhere when no reload is running.
+ */
+let stage: { entries?: readonly WebhookEventTypeEntry[] } | null = null;
+
 /** Publish the checked plugin types, for every reader of the list. */
 export function publishWebhookEventTypes(
   entries: readonly WebhookEventTypeEntry[]
 ): void {
+  if (stage !== null) {
+    stage.entries = entries;
+    return;
+  }
   published = entries;
+}
+
+/**
+ * Hold publication for the length of a dev reload, as the kinds of signed-in
+ * person are held.
+ *
+ * Reading the reloaded config publishes its types long before the reload
+ * knows whether it will land, and requests keep being served meanwhile. Held,
+ * they wait on the stage: subscriptions go on being judged against the types
+ * in force until `commit` installs the new ones, and `abandon` drops them, so
+ * an endpoint is never let subscribe to a type from a config the process has
+ * not accepted. Each settles once; whichever comes second does nothing.
+ */
+export function stageWebhookEventTypes(): {
+  commit: () => void;
+  abandon: () => void;
+} {
+  const held: { entries?: readonly WebhookEventTypeEntry[] } = {};
+  stage = held;
+  let settled = false;
+  const settle = (install: boolean): void => {
+    if (settled) return;
+    settled = true;
+    if (stage === held) stage = null;
+    if (install && held.entries !== undefined) published = held.entries;
+  };
+  return { commit: () => settle(true), abandon: () => settle(false) };
 }
 
 /** Every type an endpoint may subscribe to: core's first, then plugins'. */
