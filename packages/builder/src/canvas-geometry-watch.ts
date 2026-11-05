@@ -233,13 +233,23 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   /*
    * A form field's value changes with no DOM mutation, and can change what
-   * `:valid`, `:invalid` or `:placeholder-shown` styles. Only a field's own
-   * events: typing into editable text mutates the DOM as well, which the
-   * mutation watch already measures, and hearing its `input` too would
-   * measure every character twice.
+   * `:valid`, `:invalid` or `:placeholder-shown` styles. Typing into editable
+   * text mutates the DOM as well, which the mutation watch already measures,
+   * and hearing its `input` too would measure every character twice — but
+   * only text in the canvas's own tree: an edit inside a custom element's
+   * shadow root is a mutation no observer on the root sees, so its `input` is
+   * the one signal there is.
+   *
+   * Read from the composed path, whose first entry is the element the edit
+   * reached: `target` is retargeted to the shadow host by the time the event
+   * reaches the root, which would hide a field inside one.
    */
   const valueChanged = (event: Event): void => {
-    if (isFormField(event.target)) restated();
+    const origin = event.composedPath()[0] ?? event.target;
+    if (!isElement(origin)) return;
+    if (isFormField(origin) || origin.getRootNode() !== root.getRootNode()) {
+      restated();
+    }
   };
   root.addEventListener("input", valueChanged);
   root.addEventListener("change", valueChanged);

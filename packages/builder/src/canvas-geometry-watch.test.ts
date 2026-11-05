@@ -156,8 +156,9 @@ describe("a block an authored state rule moves", () => {
   });
 
   it("measures a typed character once, for the text it changed", async () => {
-    // Typing changes a text node, which can wrap a line and grow the block:
-    // that change is measured. The key that typed it adds nothing of its own.
+    // Typing changes a text node: that change is measured. The key that
+    // typed it, and the input event that follows, add nothing of their own.
+    // A character that also resizes the block is the test after this one.
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
       frames.push(run);
@@ -193,6 +194,96 @@ describe("a block an authored state rule moves", () => {
     await delivered();
     for (const run of frames.splice(0)) run(0);
     expect(moved).toHaveBeenCalledTimes(1);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("hears an edit inside a custom element's shadow root, which no mutation reports", () => {
+    // The event reaches the root retargeted to the host, and the root's
+    // mutation watch cannot see into the shadow tree: the composed path is
+    // what shows a field, or editable text, inside it.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const host = block.ownerDocument.createElement("x-widget");
+    block.append(host);
+    const shadow = host.attachShadow({ mode: "open" });
+    const field = block.ownerDocument.createElement("input");
+    const words = block.ownerDocument.createElement("p");
+    words.setAttribute("contenteditable", "true");
+    shadow.append(field, words);
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    for (const inside of [field, words]) {
+      inside.dispatchEvent(
+        new Event("input", { bubbles: true, composed: true })
+      );
+      for (const run of frames.splice(0)) run(0);
+    }
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("measures a keystroke that resizes its block by the text and the resize, and no more", async () => {
+    /*
+     * The mutation is measured as it is delivered, and a resize it causes is
+     * delivered after layout as an observer's report of its own. The report
+     * is not folded into the mutation's measurement: the same delivery can
+     * carry a later change of layout (an image arriving at its size), which
+     * a skipped report would leave unmeasured. The keystroke and the editing
+     * host's input event add nothing to the two.
+     */
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    let report: (() => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          report = callback;
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      }
+    );
+    const { layer, block } = canvas();
+    const words = block.ownerDocument.createElement("p");
+    words.setAttribute("contenteditable", "true");
+    words.textContent = "Some words";
+    block.append(words);
+    await delivered();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    words.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", bubbles: true })
+    );
+    for (const run of frames.splice(0)) run(0);
+    moved.mockClear();
+
+    words.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "s", bubbles: true })
+    );
+    const typed = words.firstChild;
+    if (!(typed instanceof Text)) throw new Error("no text node");
+    typed.appendData("s");
+    words.dispatchEvent(new Event("input", { bubbles: true }));
+    words.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "s", bubbles: true })
+    );
+    await delivered();
+    // The line wrapped: the observer reports the block's new size.
+    report?.();
+    for (const run of frames.splice(0)) run(0);
+    expect(report, "the watch observes sizes").toBeDefined();
+    expect(moved).toHaveBeenCalledTimes(2);
     stop?.();
     vi.unstubAllGlobals();
   });
