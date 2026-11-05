@@ -12519,48 +12519,23 @@ export class CollectionMutationService extends BaseService {
     const requested = this.localization
       ? resolveRequestedLocale(this.localization, params.locale)
       : undefined;
-    // Before the translation table is ready, a save in another language than
-    // the default has nowhere to go, and a read then gave a version naming
-    // no language: judged on that language all the same, it is refused here
-    // as the validation error it is, before any hook runs.
-    if (
-      !companion &&
-      !sweep &&
-      requested !== undefined &&
-      requested !== this.localization?.defaultLocale &&
-      (await this.fileManager.loadCompanionSchema(params.collectionName))
-    ) {
-      try {
-        judgedLanguage(check.given, requested);
-      } catch (error) {
-        return errorToServiceResult(
-          error,
-          { defaultMessage: "Failed to update entry" },
-          this.dialect
-        );
-      }
-    }
     const locales =
       companion && this.localization && requested !== undefined
         ? sweep
           ? this.localization.locales.map(l => l.code)
           : [requested]
         : [];
-    // A version from a read of another language, or for a sweep one that
-    // does not name every language, can't be judged: refused here, before
-    // any hook runs, as the validation error it is.
-    if (locales.length > 0) {
-      try {
-        if (sweep) assertVersionNamesEvery(check.given, locales);
-        else judgedLanguage(check.given, locales[0]);
-      } catch (error) {
-        return errorToServiceResult(
-          error,
-          { defaultMessage: "Failed to update entry" },
-          this.dialect
-        );
+    const unjudgeable = await this.unjudgeableVersionAnswer(
+      params,
+      check.given,
+      {
+        ready: companion !== null,
+        requested,
+        locales,
+        sweep,
       }
-    }
+    );
+    if (unjudgeable) return unjudgeable;
     const at: StaleWrite =
       companion && locales.length > 0
         ? { table, languages: { table: companion.companionTableName, locales } }
@@ -12573,6 +12548,48 @@ export class CollectionMutationService extends BaseService {
       languages: at.languages,
     });
     return stale ? this.staleVersionAnswer(params, check.given, at) : null;
+  }
+
+  /**
+   * The refusal of a version that can't be judged, before any hook runs, as
+   * the validation error it is: one from a read of another language, one for
+   * a sweep that does not name every language, or, before the translation
+   * table is ready, one for a save in another language than the default,
+   * which has nowhere to go and whose read named no language. Null for a
+   * version that can be judged.
+   */
+  private async unjudgeableVersionAnswer(
+    params: { collectionName: string },
+    given: DecodedVersion,
+    args: {
+      /** Whether the translation table is ready. */
+      ready: boolean;
+      /** The save's language, as the request names it. */
+      requested: string | undefined;
+      /** The languages it is judged on, where the table is ready. */
+      locales: readonly string[];
+      sweep: boolean;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const notReadyLanguage =
+      !args.ready &&
+      !args.sweep &&
+      args.requested !== undefined &&
+      args.requested !== this.localization?.defaultLocale &&
+      (await this.fileManager.loadCompanionSchema(params.collectionName)) !==
+        null;
+    try {
+      if (notReadyLanguage) judgedLanguage(given, args.requested);
+      else if (args.sweep) assertVersionNamesEvery(given, args.locales);
+      else if (args.locales.length > 0) judgedLanguage(given, args.locales[0]);
+      return null;
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
   }
 
   /**
