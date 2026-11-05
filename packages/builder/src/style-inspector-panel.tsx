@@ -283,6 +283,11 @@ const StyleTargetContext = React.createContext<StyleTarget>(BLOCK_TARGET);
 
 export interface StyleInspectorPanelProps {
   /**
+   * The mode the selected block is drawn in, when the caller already reads
+   * it for a sibling surface: one canvas subscription, not two.
+   */
+  tokenMode?: TokenMode;
+  /**
    * The editor whose selected block this styles.
    *
    * The whole state rather than a document and an `apply` separately, for the
@@ -545,9 +550,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      <StyleInspectorBody {...props} />
+      {props.tokenMode === undefined ? (
+        <StyleInspectorOwnMode {...props} />
+      ) : (
+        <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+      )}
     </FontChoicesContext.Provider>
   );
+}
+
+/** The panel reading its block's mode itself, where no caller hands it one. */
+function StyleInspectorOwnMode(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  const tokenMode = useCanvasTokenModeAt(props.editor.selectedId);
+  return <StyleInspectorBody {...props} tokenMode={tokenMode} />;
 }
 
 function StyleInspectorBody({
@@ -565,7 +582,8 @@ function StyleInspectorBody({
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
   showReadOnlyReason = true,
-}: StyleInspectorPanelProps): React.JSX.Element {
+  tokenMode,
+}: StyleInspectorPanelProps & { tokenMode: TokenMode }): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
   // two collapsed onto one value made the first section impossible to close,
@@ -579,8 +597,7 @@ function StyleInspectorBody({
     {}
   );
   // The mode the selected block is drawn in, its nearest theme marker first
-  // and the device after, read once here and handed to every control below.
-  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  // and the device after, read once above and handed to every control below.
   const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.

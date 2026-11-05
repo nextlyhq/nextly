@@ -161,17 +161,21 @@ describe("loading the latest document before a gain unlocks the form", () => {
   // the older copy back over theirs.
 
   type Lock = ReturnType<typeof lockHook>;
+  // No one else's change told: these cases are about the gain alone.
+  const quiet = { change: null, settleChange: () => {} };
   const keptOut: Lock = {
     state: { status: "held-by-other", holder: bob, requestSent: false },
     gains: 0,
     takeOver,
     requestAccess,
+    ...quiet,
   };
   const gained = (gains = 1, someoneWaiting = false): Lock => ({
     state: { status: "held-by-me", someoneWaiting },
     gains,
     takeOver,
     requestAccess,
+    ...quiet,
   });
 
   /** The reads of the document on screen: when, and whether the last failed. */
@@ -221,7 +225,13 @@ describe("loading the latest document before a gain unlocks the form", () => {
     [
       "the colleague's lease lapses, through a failed poll",
       [
-        { state: { status: "unavailable" }, gains: 0, takeOver, requestAccess },
+        {
+          state: { status: "unavailable" },
+          gains: 0,
+          takeOver,
+          requestAccess,
+          ...quiet,
+        },
         gained(),
       ],
     ],
@@ -274,6 +284,7 @@ describe("loading the latest document before a gain unlocks the form", () => {
       gains: 0,
       takeOver,
       requestAccess,
+      ...quiet,
     });
     expect(result.current.readOnly).toBe(false);
 

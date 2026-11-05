@@ -72,6 +72,11 @@ import {
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { OVERLAY_LAYER_PROPERTY, OVERLAY_RESET } from "./overlay";
+import {
+  partRouting,
+  routeDeclarations,
+  type PartRouting,
+} from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { SpacingMode } from "./spacing-mode";
@@ -1263,6 +1268,12 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
+  /**
+   * The properties block parts take from a wrapping root, for the tiers that
+   * style a node's root (its own values, shared styles, looks). Absent for
+   * the defaults tiers, whose type class sits on the part itself.
+   */
+  routing?: PartRouting;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1329,7 +1340,14 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  const {
+    origin,
+    trace,
+    mayFetchUrl,
+    weightlessAnchor,
+    previewStates,
+    routing,
+  } = about;
   // Chosen ONCE per envelope rather than per rule: it is a property of the
   // compile, and re-deciding it inside the loop invites the two forms to
   // disagree between a node's base rule and its hover one.
@@ -1416,7 +1434,12 @@ function envelopeRules(
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
-      for (const rule of groupByDescendant(compiled.declarations)) {
+      for (const rule of anchoredGroups(
+        compiled.declarations,
+        selector,
+        stateSelectors[state],
+        weightlessAnchor === undefined ? routing : undefined
+      )) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
           // Everything after the anchor is wrapped, state and descendant
@@ -1425,15 +1448,18 @@ function envelopeRules(
           // itself would outrank a host rule of the same shape. The anchor is
           // the only part that weighs.
           selector:
-            weightlessAnchor === undefined
+            rule.selector ??
+            (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
-        if (trace === undefined) continue;
+        // A routed declaration is written twice (off the wrapper, onto the
+        // part) and traced once: it is one value the node was given.
+        if (trace === undefined || rule.traced === false) continue;
         for (const declaration of rule.declarations) {
           trace.push({
             origin,
@@ -1449,6 +1475,46 @@ function envelopeRules(
     }
   }
   return rules;
+}
+
+/**
+ * The rules one compiled style map writes: grouped by the descendant each
+ * declaration attaches to, root first, with the root's declarations a block
+ * part takes from a wrapping root split off to their own selectors. A routed
+ * group's second rule carries `traced: false`, so the trace records each
+ * value once.
+ */
+function anchoredGroups(
+  declarations: readonly Declaration[],
+  selector: string,
+  state: string,
+  routing: PartRouting | undefined
+): {
+  descendant: string;
+  declarations: Declaration[];
+  selector?: string;
+  traced?: false;
+}[] {
+  const groups = groupByDescendant(declarations);
+  if (routing === undefined || routing.size === 0) return groups;
+  return groups.flatMap(group => {
+    if (group.descendant !== "") return [group];
+    const { kept, routed } = routeDeclarations(
+      selector,
+      state,
+      group.declarations,
+      routing
+    );
+    return [
+      ...(kept.length === 0 ? [] : [{ descendant: "", declarations: kept }]),
+      ...routed.map((rule, index) => ({
+        descendant: "",
+        declarations: rule.declarations,
+        selector: rule.selector,
+        ...(index % 2 === 1 ? { traced: false as const } : {}),
+      })),
+    ];
+  });
 }
 
 /** Split declarations by the descendant they attach to, root first. */
@@ -1912,6 +1978,9 @@ export function compilePageCss(
     scope === ""
       ? `.${PAGE_ROOT_CLASS}`
       : `.${PAGE_ROOT_CLASS}:where(${scope})`;
+  // Which root properties block parts take from a wrapping root, read once
+  // for the node and class tiers below.
+  const routing = partRouting(ctx.blockParts);
 
   const nodes = documentNodes(
     doc,
@@ -2365,6 +2434,7 @@ export function compilePageCss(
           previewStates,
           trace,
           mayFetchUrl,
+          routing,
         }
       )
     );
@@ -2427,6 +2497,7 @@ export function compilePageCss(
           trace,
           mayFetchUrl,
           previewStates,
+          routing,
         }
       ),
       ...visibilityRules(

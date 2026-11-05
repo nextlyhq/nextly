@@ -109,12 +109,20 @@ That leaves a third thing to say â€” "move the whole document, every language" â
 and it is spelled with the wildcard locale:
 
 ```typescript
+// Read it in every language first: that read's `_rev` covers each
+// translation, so the takedown is refused if any of them changed since.
+const current = await nextly.findByID({
+  collection: "pages",
+  id: page.id,
+  locale: "*",
+});
+
 // Take the document down in every language it has.
 await nextly.update({
   collection: "pages",
   id: page.id,
   locale: "*",
-  data: { status: "draft" },
+  data: { status: "draft", _rev: current._rev },
 });
 ```
 

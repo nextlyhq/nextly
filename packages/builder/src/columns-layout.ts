@@ -19,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { offeredTiers } from "./canvas-width";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   readStyleValue,
   styleClearOp,

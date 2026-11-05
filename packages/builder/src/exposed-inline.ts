@@ -36,7 +36,7 @@ import { composedHolds } from "./component-holds";
 import { inlinePropKind } from "./inline-prop-kind";
 import { setOverrideOp } from "./instance-inspector";
 import { lockBlockingEdit } from "./locking";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /** An exposed value the canvas may edit in place, addressed through its placement. */
 export interface ExposedTextTarget {

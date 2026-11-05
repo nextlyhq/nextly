@@ -1,0 +1,46 @@
+/**
+ * The background job that carries a breakpoint removal on when nobody else
+ * will.
+ *
+ * A removal is walked by the save that started it and by its route, both
+ * asked by a person. A write committed after a removal was done can open it
+ * again (`after-commit`), and nobody is then waiting on it: the person who
+ * removed the breakpoint was told it was finished, and the write that brought
+ * the values back was somebody else's save. Without this the reopened run
+ * would hold the one open slot, and keep the breakpoint from being added
+ * again, until someone happened to call the route.
+ *
+ * A sweep, for the reason the usage backfill is one: what is owed is in the
+ * runs table, whichever path put it there, and no single request is the
+ * moment it becomes due. Each pass walks the owed run until the runner's
+ * deadline and resumes on the next pass where it stopped. A walk that meets a
+ * request walking the same run is safe: every write carries the hash of the
+ * value it was computed from, and every move of the run is a compare-and-set.
+ *
+ * @module breakpoint-removal/job
+ */
+import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
+
+import type { BreakpointRemovalService } from "./service";
+
+/** The job type this plugin registers, namespaced by the plugin. */
+export const BREAKPOINT_REMOVAL_JOB = "page-builder:breakpoint-removal";
+
+/**
+ * Build the sweep. The service is resolved on every pass, so a pass that ran
+ * before the plugin was installed refuses with a named reason rather than
+ * walking a half-built configuration.
+ */
+export function breakpointRemovalJob(
+  service: () => Pick<BreakpointRemovalService, "carryOn">
+): JobDefinition {
+  return defineJob({
+    slug: BREAKPOINT_REMOVAL_JOB,
+    sweep: true,
+    handler: async (_input, context) => {
+      // The runner's own deadline: the walk checks the live clock against it
+      // between documents.
+      await service().carryOn({ deadline: context.deadline });
+    },
+  });
+}

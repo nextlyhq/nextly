@@ -31,6 +31,9 @@ export function registerPluginsCommand(program: Command): void {
       "Install every configured plugin, dependencies first",
       false
     )
+    // A pending module that deletes data takes the data-loss consent, as
+    // `nextly migrate` asks for the same module.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       lazyAction(async () => (await import("./plugins")).pluginsInstallAction)
     );

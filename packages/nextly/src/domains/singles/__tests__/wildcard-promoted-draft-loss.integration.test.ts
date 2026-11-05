@@ -21,6 +21,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { SingleEntryService } from "../services/single-entry-service";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -30,9 +34,13 @@ afterEach(async () => {
 
 const SLUG = "prefs";
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     singles: [
       defineSingle({
         slug: SLUG,
@@ -128,11 +136,20 @@ async function germanOnlyAndPublished(t: TestNextly): Promise<void> {
   );
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a wildcard publish and the draft it promotes (%s)",
-  dialect => {
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
+  "a wildcard publish and the draft it promotes ($dialect, $mode)",
+  ({ dialect, storage }) => {
     it("does not lose a promoted edit it never writes", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       await germanOnlyAndPublished(t);
 
       // The precondition the guard produces: no English translation row, so a
@@ -171,7 +188,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("CONTROL: the same edit survives a publish that names the language", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       await germanOnlyAndPublished(t);
 
       await singlesOf(t).update(
@@ -195,7 +212,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("CONTROL: the language that does have a translation is unaffected", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       await germanOnlyAndPublished(t);
 
       await singlesOf(t).update(

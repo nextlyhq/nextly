@@ -40,6 +40,7 @@ import {
   type DefaultLayoutDirectApi,
   type DefaultLayoutSlugs,
 } from "../default-layout/store";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 
 import { readLayoutCopy } from "./layout-copy";
 import {
@@ -407,11 +408,16 @@ async function finalScan(
   );
 }
 
-/** Step 6's write, as the person, carrying the row's token. */
+/**
+ * Step 6's write, as the person, carrying the row's token. An unpublish sends
+ * `rev`, the version the copy was read at, so a save of the Layout since the
+ * copy refuses it; a delete removes the row whatever it holds.
+ */
 async function write(
   deps: RemoveLayoutDeps,
   request: RemoveRequest,
-  token: string
+  token: string,
+  rev: string | undefined
 ): Promise<void> {
   const common = {
     collection: deps.slugs.layouts,
@@ -422,7 +428,10 @@ async function write(
   if (request.action === "delete") {
     await deps.nextly.delete(common);
   } else {
-    await deps.nextly.update({ ...common, data: { status: "draft" } });
+    await deps.nextly.update({
+      ...common,
+      data: withVersionFrom({ status: "draft" }, rev),
+    });
   }
 }
 
@@ -488,10 +497,16 @@ async function copyThenRemove(
       set: { copy: taken.copy, copyVersion: taken.version },
     });
     try {
-      await write(deps, request, token);
+      await write(deps, request, token, documentVersionOf(taken.copy.live));
       return;
     } catch (error) {
-      if (!(await movedSinceTheCopy(deps, layoutId, taken.version, error))) {
+      // A write refused as made from an out-of-date version was refused
+      // because the Layout was saved since the copy, even when the save left
+      // its content as it was: the copy is taken again, as for any move.
+      if (
+        !NextlyError.isCode(error, "STALE_VERSION") &&
+        !(await movedSinceTheCopy(deps, layoutId, taken.version, error))
+      ) {
         await passOnUnlessItLanded(deps, request, error);
         return;
       }

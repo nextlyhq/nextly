@@ -59,6 +59,8 @@ import {
   compileStyleValues,
   isPlainRecord,
   classNameOf,
+  isLook,
+  namedClassesRead,
   usableNamedClasses,
   type Declaration,
   type NamedClass,
@@ -138,20 +140,17 @@ export interface ClassRow extends ClassChoice {
 /**
  * The classes the compiler will actually emit rules for, in precedence order.
  *
- * The bound is the compiler's, applied the compiler's way: the cap slices the
- * STORED order, before any sorting, so it is not the same set as the first
- * `MAX_NAMED_CLASSES` by precedence. Reproducing it here rather than ordering
- * the whole library keeps a tail entry from being offered as though applying it
- * would do something.
+ * The bound is the compiler's, read through the compiler's own function: the
+ * cap slices the STORED order, before any sorting, and counts shared styles and
+ * looks each under a cap of its own, so a tail entry is never offered as though
+ * applying it would do something, and a look past the shared styles' cap still
+ * is.
  */
 export function usableSiteClasses(
   library: readonly NamedClass[]
 ): NamedClass[] {
-  const bounded =
-    library.length > MAX_NAMED_CLASSES
-      ? library.slice(0, MAX_NAMED_CLASSES)
-      : library;
-  return usableNamedClasses(bounded);
+  // The engine's own read: shared styles and looks each under their cap.
+  return usableNamedClasses(namedClassesRead(library));
 }
 
 export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
@@ -531,10 +530,12 @@ export type ClassNameOutcome =
  * library of malformed entries draws nothing while every slot is taken.
  *
  * Counts the STORED entries, which is what capacity is about. The drawn list
- * is a different question and answering one with the other is the bug.
+ * is a different question and answering one with the other is the bug. Only
+ * shared styles count: looks come from code under a cap of their own, and a
+ * new class here is always a shared style.
  */
 function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
-  return library.length < MAX_NAMED_CLASSES;
+  return library.filter(entry => !isLook(entry)).length < MAX_NAMED_CLASSES;
 }
 
 /**
