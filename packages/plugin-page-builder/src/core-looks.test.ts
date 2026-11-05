@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { withBlockLooks, withCoreLooks } from "./core-looks";
-import { classOverrideOf } from "./site-style";
+import { checkStoredClasses } from "./site-style-record";
+import { classOverrideOf, resolveSiteStyle } from "./site-style";
 
 describe("the core blocks' looks in the site's code tier", () => {
   it("adds every core look as a class the code supplies", () => {
@@ -60,5 +61,39 @@ describe("looks of blocks another plugin declares", () => {
       each => each.id
     );
     expect(ids).toEqual(["look:acme/hero:dark"]);
+  });
+});
+
+describe("a site's own style holding a look's name", () => {
+  // A site saved a shared style named like a seeded look before looks existed.
+  const mine = {
+    id: "c-outline",
+    slug: "button-outline",
+    orderIndex: 0,
+    styles: { base: { base: { color: "black" } } },
+  };
+  const card = { id: "c-card", slug: "card", orderIndex: 1, styles: {} };
+  const policy = { defaults: resolveSiteStyle(withCoreLooks(undefined)) };
+
+  it("keeps the style and lets every later save through", () => {
+    // The look it shadows is the one the compiler leaves out, so neither the
+    // save that keeps the style nor one that adds another style is refused.
+    expect(checkStoredClasses([mine], policy).issues).toEqual([]);
+    expect(checkStoredClasses([mine, card], policy).issues).toEqual([]);
+  });
+
+  it("still refuses a save whose own look takes another look's name", () => {
+    // Only a shared style keeps a name over a look. A look ordered first that
+    // claims another look's name stops that look rendering, so it is refused.
+    const rival = {
+      id: "look:core/button:rival",
+      slug: "image-circle",
+      orderIndex: -1,
+      blockType: "core/button",
+      styles: {},
+    };
+    expect(checkStoredClasses([rival], policy).issues).toEqual([
+      expect.stringContaining('"look:core/image:circle"'),
+    ]);
   });
 });

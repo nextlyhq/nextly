@@ -54,31 +54,25 @@ describe("core/image, whichever branch it renders", () => {
     expect(container.querySelector("img")?.className).toContain(TYPE_CLASS);
   });
 
-  it("puts the image's look on the IMG when there IS a caption, a shared style on the figure", async () => {
-    // Rounded and Circle style the picture itself: on the figure, the corners
-    // and the fit would miss the image and catch the caption instead.
-    // A shared style named like a look keeps its `nx-c-` name, and the figure.
+  it("keeps the image's look on the figure with its shared style and its own class", async () => {
+    // A look is outranked by a shared style and by the block's own values, and
+    // only declarations on one element are ranked against each other: a look
+    // on the picture would beat a corner or a fit the block sets on the
+    // figure. The picture inherits both from the figure instead.
     const container = await draw(
       "a caption",
-      " nx-l-image-rounded nx-c-image-circle nx-c-card"
-    );
-    expect(container.querySelector("img")?.className).toContain(
-      "nx-l-image-rounded"
+      " nx-l-image-circle nx-c-card nx-l-image-rounded-2"
     );
     const figure = container.querySelector("figure")?.className ?? "";
-    expect(figure).not.toContain("nx-l-image-rounded");
-    expect(figure).toContain("nx-c-card");
-    expect(figure).toContain("nx-c-image-circle");
-  });
-
-  it("puts any look the image wears on the IMG, a renamed one included", async () => {
-    // An imported look can arrive renamed; the compiler applies a look only to
-    // its own block type, so every look class here is the image's.
-    const container = await draw("a caption", " nx-l-image-rounded-2");
-    expect(container.querySelector("img")?.className).toContain(
-      "nx-l-image-rounded-2"
-    );
-    expect(container.querySelector("figure")?.className ?? "").not.toContain(
+    for (const name of [
+      "nx-pb-node1",
+      "nx-c-card",
+      "nx-l-image-circle",
+      "nx-l-image-rounded-2",
+    ]) {
+      expect(figure).toContain(name);
+    }
+    expect(container.querySelector("img")?.className ?? "").not.toContain(
       "nx-l-"
     );
   });
@@ -102,7 +96,8 @@ async function drawWith(
   resolveEntryPath: (
     collection: string,
     id: string
-  ) => Promise<string | null> = async () => null
+  ) => Promise<string | null> = async () => null,
+  extra = ""
 ) {
   const { container } = render(
     await renderImage({
@@ -111,7 +106,7 @@ async function drawWith(
         alt: "The team",
         ...props,
       },
-      className: `nx-pb-node1 ${TYPE_CLASS}`,
+      className: `nx-pb-node1 ${TYPE_CLASS}${extra}`,
       partClass: (part: string) => `part-${part}`,
       ctx: { resolveMedia: async () => null, resolveEntryPath },
     } as never)
@@ -133,6 +128,20 @@ describe("core/image with a link", () => {
     expect(img?.className).not.toContain("nx-pb-node1");
     // The alt text is what names the link.
     expect(img?.getAttribute("alt")).toBe("The team");
+  });
+
+  it("keeps its look on the link with its own class, where the link is the root", async () => {
+    // As under a caption: the look is ranked below the node's own values only
+    // on one element, and the picture inherits the corners and fit from it.
+    const container = await drawWith(
+      { href: "/about" },
+      undefined,
+      " nx-l-image-circle"
+    );
+    const link = container.firstElementChild;
+    expect(link?.className).toContain("nx-l-image-circle");
+    expect(link?.className).toContain("nx-pb-node1");
+    expect(link?.querySelector("img")?.className).not.toContain("nx-l-");
   });
 
   it("links only the picture, leaving the caption outside the link", async () => {

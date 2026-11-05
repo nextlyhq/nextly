@@ -16,7 +16,6 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   defineBlock,
-  LOOK_CLASS_PREFIX,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -161,25 +160,6 @@ export async function renderImage({
 }
 
 /**
- * The look classes among a class string. The compiler puts a look on a node
- * only when the look is bound to the node's own type, so every look class on
- * an image is one of the image's looks, whatever its name.
- */
-function looksIn(className: string | undefined): string[] {
-  return (className ?? "")
-    .split(/\s+/)
-    .filter(name => name.startsWith(LOOK_CLASS_PREFIX));
-}
-
-/** A class string without its look classes. */
-function withoutLooks(className: string | undefined): string {
-  return (className ?? "")
-    .split(/\s+/)
-    .filter(name => name !== "" && !name.startsWith(LOOK_CLASS_PREFIX))
-    .join(" ");
-}
-
-/**
  * The picture's classes: the node's own where it is the root, else the type
  * class and the part that takes the fit and focal point from the root (where
  * the node's Style values land, and `object-fit` does nothing), plus the part
@@ -196,9 +176,6 @@ function pictureClass(
     blockTypeClassName(IMAGE_BLOCK),
     partClass("picture"),
     ...(link === undefined ? [] : [partClass("linked")]),
-    // The image's looks style the picture itself (its corners, its fit), so
-    // they ride the `<img>` wherever it isn't the root.
-    ...looksIn(className),
   ]
     .filter(Boolean)
     .join(" ");
@@ -228,7 +205,7 @@ function wrapPicture(
     linkName: string | undefined;
   }
 ): ReactElement {
-  const rootClass = caption === "" ? withoutLooks(className) : "";
+  const rootClass = caption === "" ? className : "";
   const linked =
     link === undefined ? (
       image
@@ -244,9 +221,7 @@ function wrapPicture(
   if (caption === "") return linked;
   return (
     <figure
-      className={[withoutLooks(className), partClass("frame")]
-        .filter(Boolean)
-        .join(" ")}
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
     >
       {linked}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
@@ -318,15 +293,17 @@ const IMAGE_PARTS = {
       },
     },
   },
-  // The picture inside a wrapper (a figure, a link) takes the fit and focal
-  // point the node's Style values set on the root, and may shrink to the room
-  // the wrapper leaves it, where the fit then crops or fits it.
+  // The picture inside a wrapper (a figure, a link) takes the fit, focal
+  // point and corners the root is given (by a look, a shared style or the
+  // node's own values, ranked there), and may shrink to the room the wrapper
+  // leaves it, where the fit then crops or fits it.
   picture: {
     baseStyles: {
       base: {
         base: {
           objectFit: "inherit",
           objectPosition: "inherit",
+          borderRadius: "inherit",
           // The wrapper's width, which the block's width sets: the box the fit
           // crops or fits the picture to.
           width: "100%",
@@ -351,7 +328,9 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Clipped, so a radius set on the block rounds the picture inside.
+          // Clipped, so a radius set on the block rounds the picture inside;
+          // inside a figure, the figure's corners, which the block's are.
+          borderRadius: "inherit",
           overflow: "hidden",
         },
       },
