@@ -704,6 +704,25 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   /**
+   * A save that leaves the section as it stands: no step to take back, but
+   * still a write in turn, tracked by the form's storing gate like any other.
+   * The gate may hold the refusal of the save before it, and this is what
+   * corrects it; written directly, the gate kept the refusal and Save stayed
+   * refused.
+   */
+  const writeWithoutStep = useCallback(
+    async (
+      chain: SectionChain,
+      section: SiteStyleSection,
+      value: unknown
+    ): Promise<SiteStyleSaveResult> => {
+      const { done } = inTurn(chain, section, () => value);
+      return (await done).result;
+    },
+    [inTurn]
+  );
+
+  /**
    * The section's chain, begun again from the stored read when nothing of
    * this editor's is in flight and the read has moved on since it settled.
    */
@@ -796,7 +815,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           // back.
           if (chain.pending === 0 && sameSection(chain.held, value)) {
             drop();
-            return write(section, value);
+            return writeWithoutStep(chain, section, value);
           }
           const { before, done } = inTurn(chain, section, () => value);
           fill({ before, value, inverse });
@@ -807,7 +826,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         },
       };
     },
-    [write, history, inTurn, chainOf]
+    [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
   /*
@@ -838,7 +857,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // A save that leaves the section as it stands is no step to take back,
       // and must not end the redo branch.
       if (chain.pending === 0 && sameSection(chain.held, value)) {
-        return write(section, value);
+        return writeWithoutStep(chain, section, value);
       }
       const held = options?.hold === true ? holdFor(chain, value) : undefined;
       const { before, done, turn } = inTurn(chain, section, prior =>
@@ -917,7 +936,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       }
       return result;
     },
-    [write, history, inTurn, chainOf]
+    [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
   return { save, reserve, saving: mutation.isPending };

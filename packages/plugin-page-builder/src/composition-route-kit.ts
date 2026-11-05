@@ -13,7 +13,12 @@ import {
   type PlanProblem,
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  resolvedCollectionDraftSplit,
+  resolvedCollectionView,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import { slugify } from "nextly";
 import { requireNextly } from "nextly/runtime";
 import type { z } from "nextly/zod";
@@ -112,19 +117,42 @@ export function storeOf(
  */
 export async function actingCaller(
   ctx: CompositionRouteContext,
-  asks: readonly (readonly [action: string, resource: string])[] = []
+  asks: readonly (readonly [action: string, resource: string])[] = [],
+  /**
+   * `{ anyEntry: true }` asks whether the caller may act on any entry at all,
+   * for a route whose write, made as the caller, then decides the entry it
+   * names: a rule limiting the action to some entries answers no to a
+   * question that names none.
+   */
+  options?: { readonly anyEntry?: boolean }
 ): Promise<ActionBy> {
   const { user, caller } = ctx;
   let allowed = user !== null && caller !== null;
   for (const [action, resource] of asks) {
     if (!allowed) break;
-    allowed = (await caller?.can(action, resource)) === true;
+    allowed = (await caller?.can(action, resource, options)) === true;
   }
   if (!allowed || user === null || caller === null) {
     throw NextlyError.forbidden({
       logContext: { reason: "composition-action-not-granted", asks },
     });
   }
+  return actionByOf(user, caller);
+}
+
+/**
+ * Who a request runs as, as an answer reports it: the signed-in person, or the
+ * API key and the person who owns it. Every route that says `by` derives it
+ * here, so a key is never reported as its owner by one route and as the key by
+ * another.
+ */
+export function actionByOf(
+  user: { readonly id: string },
+  caller: {
+    readonly authMethod?: "session" | "api-key";
+    readonly apiKeyId?: string;
+  }
+): ActionBy {
   return caller.authMethod === "api-key"
     ? {
         kind: "api-key",
@@ -177,15 +205,42 @@ export async function readOrNull(
   }
 }
 
-/** A row's blocks field, or `null` when it holds none. */
+/**
+ * A row's blocks field, or `null` when it holds none: absent, empty, or a
+ * value of another kind (a caller naming a text field, say), which is not a
+ * document to plan against.
+ */
 export function blocksDocumentOf(
   row: unknown,
   field: string
 ): BlockDocument | null {
   const value = (row as Record<string, unknown> | null)?.[field];
-  return value === undefined || value === null
-    ? null
-    : (value as BlockDocument);
+  if (typeof value !== "object" || value === null) return null;
+  return Array.isArray((value as { nodes?: unknown }).nodes)
+    ? (value as BlockDocument)
+    : null;
+}
+
+/**
+ * Whether a write naming no status changes what the site serves: the
+ * collection has a Draft/Published lifecycle but cannot hold a working draft,
+ * so an edit of a published entry lands on it in place. Such a write is a
+ * publish, and is asked for as one.
+ */
+export async function savesLive(
+  collections: {
+    getCollection(
+      name: string,
+      context: Record<string, never>
+    ): Promise<unknown>;
+  },
+  collection: string
+): Promise<boolean> {
+  const view = resolvedCollectionView(
+    await collections.getCollection(collection, {})
+  );
+  if (view.status !== true) return false;
+  return !(await resolvedCollectionDraftSplit(view)).eligible;
 }
 
 /**

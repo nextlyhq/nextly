@@ -208,6 +208,17 @@ function useStoredLayout<T extends FieldValues>(
   );
 }
 
+/**
+ * The Layout a page's form names, or null: none named, "No header or footer",
+ * or a form that is not a page's. What a publish of the page puts it inside.
+ */
+export function usePageLayoutId<T extends FieldValues>(
+  control: Control<T>
+): string | null {
+  const stored = useStoredLayout(control);
+  return stored?.noHeaderFooter === true ? null : selectedOf(stored);
+}
+
 /** The id the stored values select, which the choices are asked about. */
 function selectedOf(
   stored: { layout: unknown; noHeaderFooter: boolean } | undefined

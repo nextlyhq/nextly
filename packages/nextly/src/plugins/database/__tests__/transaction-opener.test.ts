@@ -62,7 +62,7 @@ describe("the opener the escape check names for ctx.db.transaction", () => {
         const openedAt = new Error().stack ?? "";
         Error.stackTraceLimit = limit;
         reportEscape(openedAt);
-        return fn({ db, relationalDb: db });
+        return fn({ db, relationalDb: db, afterCommit: () => undefined });
       },
     });
 

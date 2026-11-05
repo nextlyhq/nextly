@@ -1,19 +1,20 @@
 "use client";
 
 /**
- * "Schedule publish…" on the editor's Publish split: this document, live at
- * a time someone chooses, in a release holding only it.
+ * "Schedule…" on the editor's Publish split: this document, put into a
+ * release, on its own at a time, with an existing release or in a new one,
+ * to go live or come down at that release's moment. The one way to schedule a
+ * document from its editor.
  *
- * Contributed by the page, as Add to release is, because releases are a
- * feature of the page and not of the editor: the editor's action model places
- * it on the primary action's arrow and draws its reason when it is held.
+ * Contributed by the page, because releases are a feature of the page and not
+ * of the editor: the editor's action model places it on the primary action's
+ * arrow and draws its reason when it is held.
  *
- * Offered to everyone editing a document with a publish lifecycle, and held,
- * with the reason, from a person who may not schedule releases or publish
- * this document. A person who reaches for scheduling and finds nothing cannot
- * tell a missing permission from a missing feature.
+ * Offered to a person who may create releases, editing a saved document with
+ * a publish lifecycle, and held, with the reason, where this document refuses:
+ * the reader may neither publish nor unpublish it, or is on a translation.
  *
- * @module components/features/releases/SchedulePublishAction
+ * @module components/features/releases/ScheduleDocumentAction
  */
 
 import type { ReactNode } from "react";
@@ -31,17 +32,17 @@ import {
   SCHEDULE_PUBLISH_LABEL,
   schedulePublishRefusal,
 } from "./schedule-publish";
-import type { SchedulePublishDialogProps } from "./SchedulePublishDialog";
+import type { ScheduleDocumentDialogProps } from "./ScheduleDocumentDialog";
 import { useOpenForDocument } from "./useOpenForDocument";
 import { useSchedulingInFlight } from "./useSchedulingInFlight";
 
-const SchedulePublishDialog = lazy(() =>
-  import("./SchedulePublishDialog").then(module => ({
-    default: module.SchedulePublishDialog,
+const ScheduleDocumentDialog = lazy(() =>
+  import("./ScheduleDocumentDialog").then(module => ({
+    default: module.ScheduleDocumentDialog,
   }))
 );
 
-export interface SchedulePublishProps {
+export interface ScheduleDocumentProps {
   scopeKind: "collection" | "single";
   /** Absent while the page is loading, as the document may be. */
   scopeSlug: string | undefined;
@@ -54,9 +55,10 @@ export interface SchedulePublishProps {
   /** Whether the editor is on the document's default locale. */
   onDefaultLocale: boolean;
   /**
-   * The document's title, which names the release it goes into: read from
-   * the document as the editor holds it when the action is chosen, so a
-   * title typed and not yet saved is the one the release takes.
+   * The document's title, which names the release it goes into, asked when
+   * the action is chosen. A page answers with the title as SAVED, the version
+   * the release ships; the document as the editor holds it is passed for a
+   * surface whose saved title is not otherwise in hand.
    */
   documentTitle: (document: DocumentAsEdited) => string | undefined;
   /**
@@ -65,16 +67,22 @@ export interface SchedulePublishProps {
    * rather than promising later saves wait for the release.
    */
   savesGoLive: boolean;
+  /**
+   * The site's content languages where the document is translated (the site
+   * has localization on and the collection or Single is localized), which a
+   * release moves together; absent or one otherwise.
+   */
+  languages?: readonly string[];
 }
 
-export interface SchedulePublishAction {
+export interface ScheduleDocumentAction {
   /** The action to contribute, or null when it does not apply at all. */
   contributed: ContributedAction | null;
   /** The dialog to mount, or null when there is no action. */
   dialog: ReactNode;
 }
 
-export function useSchedulePublishAction({
+export function useScheduleDocumentAction({
   scopeKind,
   scopeSlug,
   entryId,
@@ -82,12 +90,14 @@ export function useSchedulePublishAction({
   onDefaultLocale,
   documentTitle,
   savesGoLive,
-}: SchedulePublishProps): SchedulePublishAction {
-  // Both, because the server asks both: creating the release, and
-  // scheduling it, which is what puts content live later.
+  languages,
+}: ScheduleDocumentProps): ScheduleDocumentAction {
+  // Every way makes or joins a release, which the server asks permission to
+  // create releases for. Scheduling one on its own also asks permission to
+  // schedule, which the dialog holds that way for.
   const canCreateReleases = useCan("create-content-releases");
-  const canScheduleReleases = useCan("publish-content-releases");
   const canPublishDocument = useCan(`publish-${scopeSlug}`);
+  const canUnpublishDocument = useCan(`unpublish-${scopeSlug}`);
   // Open only for the document it was opened for, and closed by leaving it.
   const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
   const { open, setOpen } = useOpenForDocument(documentKey);
@@ -100,17 +110,23 @@ export function useSchedulePublishAction({
   const [opening, setOpening] = useState(0);
   // Where focus goes back to when the dialog closes.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
-  // The title as it stood when the action was chosen.
+  // The title, and whether edits were unsaved, as they stood when the action
+  // was chosen.
   const [title, setTitle] = useState<string | undefined>(undefined);
+  const [unsaved, setUnsaved] = useState(false);
 
-  if (lifecycleEnabled !== true || !scopeSlug || !entryId) {
+  if (
+    lifecycleEnabled !== true ||
+    !scopeSlug ||
+    !entryId ||
+    !canCreateReleases
+  ) {
     return { contributed: null, dialog: null };
   }
 
   const disabledReason = schedulePublishRefusal({
     scheduling,
-    canSchedule: canCreateReleases && canScheduleReleases,
-    canPublish: canPublishDocument,
+    canChangeDocument: canPublishDocument || canUnpublishDocument,
     onDefaultLocale,
   });
 
@@ -129,6 +145,7 @@ export function useSchedulePublishAction({
         if (open || inFlightNow()) return;
         setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
         setTitle(documentTitle(edited));
+        setUnsaved(edited.dirty === true);
         setOpening(count => count + 1);
         setOpen(true);
       },
@@ -142,6 +159,8 @@ export function useSchedulePublishAction({
     documentTitle: title,
     savesGoLive,
     opener,
+    languages,
+    hasUnsavedEdits: unsaved,
   });
 
   return { contributed, dialog };
@@ -154,12 +173,12 @@ export function useSchedulePublishAction({
  */
 function dialogFor(
   opening: number,
-  props: SchedulePublishDialogProps
+  props: ScheduleDocumentDialogProps
 ): ReactNode {
   if (opening === 0) return null;
   return (
     <Suspense fallback={null}>
-      <SchedulePublishDialog key={opening} {...props} />
+      <ScheduleDocumentDialog key={opening} {...props} />
     </Suspense>
   );
 }

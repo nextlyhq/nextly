@@ -38,7 +38,11 @@
  */
 
 import { isElement } from "./dom-kind";
-import { overlaySpaceOf } from "./geometry-dom";
+import {
+  overlaySpaceOf,
+  screenScrollers,
+  scrollEventTarget,
+} from "./geometry-dom";
 import { nodeElements, nodeElementsIn } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -358,4 +362,54 @@ function watchCanvasStyleMutations(
     characterData: true,
   });
   return () => styles.disconnect();
+}
+
+/**
+ * Call `moved` whenever what of the canvas is on screen may have changed:
+ * a scroll of the canvas's own scroller or of the host's around its frame,
+ * either one resizing, or a window resizing. Chrome kept to the screen band
+ * (the block toolbar, the marks' tags) re-measures for all of them.
+ *
+ * One subscription rather than each consumer listening for its own share, for
+ * the reason this module exists: an overlay that heard the scrolls and not
+ * the resizes looked complete and stayed where a resized panel had left the
+ * band. A scroller's scroll is heard where it is dispatched
+ * (`scrollEventTarget`): a document's scrolling element scrolls at its
+ * document, never at itself.
+ *
+ * @param root - the canvas root the band is read for
+ * @param frame - the frame the canvas is drawn in, or `null`
+ * @param moved - re-measure; called once per change
+ * @returns unsubscribes everything this installed
+ */
+export function watchScreenBand(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null,
+  moved: () => void
+): () => void {
+  const changed = (): void => moved();
+  const stops: (() => void)[] = [];
+  const views = new Set<Window>();
+  for (const scroller of screenScrollers(root, frame)) {
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", changed, { passive: true });
+    stops.push(() => source.removeEventListener("scroll", changed));
+    const view = scroller.ownerDocument.defaultView;
+    if (view === null) continue;
+    views.add(view);
+    // Absent in jsdom unless a test supplies one, and in older browsers: a
+    // missing observer costs a re-measure, not correctness.
+    const Sizes = view.ResizeObserver;
+    if (typeof Sizes !== "function") continue;
+    const sizes = new Sizes(changed);
+    sizes.observe(scroller);
+    stops.push(() => sizes.disconnect());
+  }
+  for (const view of views) {
+    view.addEventListener("resize", changed);
+    stops.push(() => view.removeEventListener("resize", changed));
+  }
+  return () => {
+    for (const stop of stops) stop();
+  };
 }
