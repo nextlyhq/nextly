@@ -5873,12 +5873,6 @@ export class CollectionMutationService extends BaseService {
       params.locale ?? undefined
     );
     if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
-    // Judged under the lock, before the change is written.
-    const before = await this.refuseIfPendingChangeMoved(
-      tx,
-      version.judging,
-      version.holder
-    );
     const pending = await new VersionsRepository(tx).findWorkingDraft(
       ref,
       draftLocale
@@ -5890,6 +5884,13 @@ export class CollectionMutationService extends BaseService {
       .where(eq(schema.id, params.entryId))
       .limit(1);
     if (!pending || !row) return null;
+    // Judged under the lock, once there is a pending change to rewrite and
+    // before it is written: with none, the answer is the one it always was.
+    const before = await this.refuseIfPendingChangeMoved(
+      tx,
+      version.judging,
+      version.holder
+    );
     const { live, shared, views, byHand } = await this.liveSharedDocument(tx, {
       collectionName: params.collectionName,
       entryId: params.entryId,

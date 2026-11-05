@@ -235,12 +235,18 @@ function rebuildRolledBackErrors(
   }
   state.errors = [];
   for (let i = 0; i < ids.length; i += 1) {
-    // An item that recorded its own failure keeps its message and code; one
-    // the rollback undid reports the abort, with the abort's code.
+    // An item that recorded its own failure keeps its message, code and data
+    // (a conflict's current version); one the rollback undid reports the
+    // abort, with the abort's code.
     const own = byIndex.get(i);
     state.errors.push(
       own
-        ? { index: i, error: own.error, code: own.code }
+        ? {
+            index: i,
+            error: own.error,
+            code: own.code,
+            ...(own.data ? { data: own.data } : {}),
+          }
         : { index: i, ...rollbackNote }
     );
   }
