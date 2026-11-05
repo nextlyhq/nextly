@@ -293,6 +293,38 @@ describe("the version the editor's copy started from", () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
+  it("does not pin a refusal of a save made before a recovery point without a version was restored", async () => {
+    // A point saved before versions existed keeps the version on screen, but
+    // its edits are a new copy: pinned on them, Save anyway would send the
+    // values from before the restore.
+    let refuseEarlier: (reason: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuseEarlier = reject;
+        })
+    );
+    const rendered = render();
+    act(() => {
+      rendered.result.current.form.setValue("title", "Before the restore", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    act(() => rendered.result.current.adoptRecoveredVersion(undefined));
+    await act(async () => {
+      refuseEarlier(staleVersion());
+      await saving.catch(() => {});
+    });
+
+    expect(rendered.result.current.versionConflict).toBeNull();
+  });
+
   it("moves to a newer version a read brings while nothing is pinned", async () => {
     const rendered = render();
     act(() => rendered.rerender({ entry: anas }));

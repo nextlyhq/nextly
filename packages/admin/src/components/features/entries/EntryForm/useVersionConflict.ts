@@ -152,9 +152,10 @@ function adoptAnswered(tracked: Tracked, item: unknown): void {
 }
 
 function adoptRecovered(tracked: Tracked, recovered: string | undefined): void {
-  if (recovered === undefined) return;
-  tracked.startedFrom = recovered;
+  // A new copy either way, so a write made from the one it replaced is not
+  // taken for it. A point saved before versions keeps the version on screen.
   tracked.copy += 1;
+  if (recovered !== undefined) tracked.startedFrom = recovered;
 }
 
 function adoptRead(tracked: Tracked, doc: unknown): void {

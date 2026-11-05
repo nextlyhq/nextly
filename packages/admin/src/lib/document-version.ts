@@ -70,12 +70,6 @@ export function versionOf(doc: unknown): string | undefined {
 }
 
 /**
- * What a refusal of a save made from an older version says, from the error a
- * write threw; undefined for any other failure. Each optional part is kept
- * only when it has the shape the server gives it, so a malformed one is left
- * out rather than shown.
- */
-/**
  * The editor's copy of a document, as a publish of every language compares
  * it: the version it started from, and the read it was loaded with.
  */
@@ -146,6 +140,12 @@ export function refusedAsChangedSince(error: unknown): boolean {
 export const DISCARD_CHANGED_SINCE =
   "This document changed since you opened it. It now shows the current version; discard again if you still want to.";
 
+/**
+ * What a refusal of a save made from an older version says, from the error a
+ * write threw; undefined for any other failure. Each optional part is kept
+ * only when it has the shape the server gives it, so a malformed one is left
+ * out rather than shown.
+ */
 export function staleVersionOf(error: unknown): StaleVersion | undefined {
   if (!isApiError(error)) return undefined;
   if (
