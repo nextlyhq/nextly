@@ -39,7 +39,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
-import type { RewriteReport } from "./host-rewrite/contract";
+import { documentKeyOf, type RewriteReport } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import {
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
@@ -409,20 +409,22 @@ async function auditRemoval(
  * The answer to a save or a call carrying a removal on: 202 while the walk is
  * not finished, so the caller knows to call the removal route again.
  */
-function removalAnswer<T extends object>(
+function removalAnswer<T>(
   message: { readonly finished: string; readonly going: string },
-  item: T,
+  itemOf: (removal: SiteBreakpointRemoval) => T,
   runId: string,
   report: RewriteReport
 ): Response {
   const removal: SiteBreakpointRemoval = {
     runId,
     finished: report.finished,
-    left: report.left.length,
+    // Documents, each once: a call walking both walks meets a document it
+    // must leave in each, and a document leaves each of its hosts.
+    left: new Set(report.left.map(left => documentKeyOf(left.host))).size,
   };
   return respondMutation(
     report.finished ? message.finished : message.going,
-    { ...item, removal },
+    itemOf(removal),
     report.finished ? undefined : { status: 202 }
   );
 }
@@ -517,7 +519,12 @@ async function saveBreakpoints(
   const report = await service.walk(run.id, {
     deadline: new Date(Date.now() + removal.cascade.walkMs),
   });
-  return removalAnswer(SAVED, { breakpoints }, run.id, report);
+  return removalAnswer(
+    SAVED,
+    (removal): SiteBreakpointsSaved => ({ breakpoints, removal }),
+    run.id,
+    report
+  );
 }
 
 /**
@@ -638,7 +645,7 @@ async function carryOnRemoval(
   const report = await service.walk(runId, {
     deadline: new Date(Date.now() + removal.cascade.walkMs),
   });
-  return removalAnswer(CARRIED, {}, runId, report);
+  return removalAnswer(CARRIED, removal => removal, runId, report);
 }
 
 /**
