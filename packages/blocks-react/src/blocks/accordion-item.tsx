@@ -39,23 +39,34 @@
  * Should it be wanted, the honest route is a group id on the context, decided
  * for the renderer as a whole rather than smuggled in with this block.
  *
- * **`<summary>` takes the title as text, and cannot yet be styled separately.**
- * Styles compile onto a block's own root element, so a rule for a descendant
- * has nowhere to live in the catalog. The summary therefore keeps the browser's
- * own disclosure affordance — a real marker, a real focus ring, both already
- * accessible — and the block does not fake one with an inline style the engine
- * would not compile. Everything a site can express today is available on the
- * `<details>` root through {@link ACCORDION_ITEM_SUPPORTS}.
+ * **The `<summary>` holds an icon and the title, and the group styles both.**
+ * The title is text, or the heading level the accordion names through the
+ * render context (`accordionTitles`): a heading inside `<summary>` is valid
+ * HTML, and the summary stays the native toggle. Before it sits an empty,
+ * hidden icon, which the accordion's icon choice paints with a mask, turns
+ * while open, or hides; the browser's own marker is what "Browser default"
+ * keeps. Both are marked with the engine's classes rather than parts, since it
+ * is the accordion's values that reach them, through child selectors, and a
+ * section is never styled from inside itself.
  *
  * @module blocks/library/accordion-item
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  defineBlock,
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 // This package's own render args, not the engine's. The engine leaves
 // `renderSlot`'s return renderer-agnostic; `context.ts` narrows it to
 // `ReactNode` so a slot's output can be placed straight into JSX.
-import type { BlockRenderArgs, PageContext } from "../context";
+import type {
+  AccordionTitleLevel,
+  BlockRenderArgs,
+  PageContext,
+} from "../context";
 
 import { INTERACTIVE } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
@@ -107,9 +118,31 @@ export const ACCORDION_ITEM_SUPPORTS = {
   effects: true,
 } as const;
 
+/** The heading levels a title may be drawn as, by what an accordion stores. */
+const TITLE_HEADINGS: ReadonlySet<string> = new Set<AccordionTitleLevel>([
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+]);
+
+/**
+ * The element a title is drawn as: the heading its accordion names, or text
+ * for anything else, read defensively as the stored props are.
+ */
+function titleTag(
+  level: AccordionTitleLevel | undefined
+): "span" | "h2" | "h3" | "h4" | "h5" | "h6" {
+  return level !== undefined && level !== "text" && TITLE_HEADINGS.has(level)
+    ? level
+    : "span";
+}
+
 /** A section: its title always visible, its children revealed when open. */
 function renderAccordionItem({
   props,
+  ctx,
   className,
   renderSlot,
 }: BlockRenderArgs<AccordionItemProps>): ReactElement {
@@ -118,9 +151,13 @@ function renderAccordionItem({
   // props be an object. A stored non-string title would otherwise reach React
   // as a child object and throw, taking the page down with it.
   const title = typeof props.title === "string" ? props.title : "";
+  const Title = titleTag(ctx.accordionTitles);
   return (
     <details className={className} open={props.open === true}>
-      <summary>{title}</summary>
+      <summary>
+        <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
+        <Title className={DISCLOSURE_TITLE_CLASS}>{title}</Title>
+      </summary>
       {renderSlot("children")}
     </details>
   );

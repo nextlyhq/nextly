@@ -32,6 +32,7 @@ import type { StyleGroup, StyleState } from "@nextlyhq/blocks-engine";
 
 /** The Style tab's sections, by key. */
 export type InspectorSectionKey =
+  | "icon"
   | "layout"
   | "spacing"
   | "size"
@@ -82,6 +83,16 @@ export interface InspectorSectionDef {
  * weight, then size.
  */
 export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
+  // First, where a block has it: an Accordion's icon is the look an author
+  // sets on one before any other. Only a block offering it shows the section.
+  {
+    key: "icon",
+    label: "Icon",
+    properties: [
+      ["disclosureIcon", "common"],
+      ["disclosurePosition", "common"],
+    ],
+  },
   {
     key: "layout",
     label: "Layout",
@@ -204,6 +215,7 @@ const SECTION_OF_GROUP: Readonly<Record<StyleGroup, InspectorSectionKey>> = {
   position: "position",
   container: "layout",
   list: "typography",
+  disclosure: "icon",
 };
 
 /** Where one property is placed. */

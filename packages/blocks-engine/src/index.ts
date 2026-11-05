@@ -705,6 +705,7 @@ export type {
   ColorLeaf,
   CssValueLeaf,
   DimensionLeaf,
+  KeywordExpansion,
   KeywordLeaf,
   LogicalCornersShape,
   LogicalSidesShape,
@@ -937,6 +938,10 @@ export {
   // gap's rules on it, a block repeating its slot puts it on each wrapper, and
   // an editor takes it off to ask whether a margin is the gap.
   CHILD_GAP_CLASS,
+  // What an Accordion section marks as its icon and its title, for the
+  // Accordion's icon choices to reach.
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -961,6 +966,7 @@ export type { CompiledDeclarations, Declaration } from "./style/declarations";
  * @experimental
  */
 export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
+export { DISCLOSURE_ICONS, DISCLOSURE_POSITIONS } from "./style/disclosure";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {

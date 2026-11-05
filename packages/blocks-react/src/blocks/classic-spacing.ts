@@ -77,7 +77,15 @@ const HAIRLINE_ABOVE = {
 const CLASSIC_BLOCK_BASES: Readonly<Record<string, NodeStyles | null>> =
   Object.freeze({
     "core/accordion": {
-      base: { base: { display: "grid", gap: { $token: "space.4" } } },
+      base: {
+        base: {
+          display: "grid",
+          gap: { $token: "space.4" },
+          // The browser's own marker, as these sections drew before an
+          // accordion offered an icon of its own.
+          disclosureIcon: "browser",
+        },
+      },
     },
     "core/button": {
       base: {

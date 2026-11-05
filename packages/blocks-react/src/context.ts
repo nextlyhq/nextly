@@ -420,7 +420,30 @@ export interface PageContext {
    * hanging.
    */
   queries?: QueryBudget;
+  /**
+   * How the sections of the accordion being rendered draw their titles: as
+   * text, or as the heading level the accordion names.
+   *
+   * Widened deliberately, as the one setting a section takes from its group
+   * rather than from its own props: a heading level is a fact about the set
+   * (every question in an FAQ sits at one level under the page's headings),
+   * so the accordion sets it once and its sections read it. An accordion
+   * sets it for its own subtree, so one nested inside a section sets its own.
+   *
+   * Absent outside an accordion, where a section draws its title as text.
+   *
+   * @experimental
+   */
+  accordionTitles?: AccordionTitleLevel;
 }
+
+/**
+ * What an accordion's section titles are drawn as: text, or a heading from
+ * level 2 to 6. Not level 1, which names the page itself.
+ *
+ * @experimental
+ */
+export type AccordionTitleLevel = "text" | "h2" | "h3" | "h4" | "h5" | "h6";
 
 /**
  * What one of this package's blocks receives.

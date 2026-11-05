@@ -8,7 +8,17 @@
  * section's body is a SLOT rather than a string — that last one being the whole
  * reason this is a port rather than a copy of the older repeater block.
  */
+import {
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+
+import { PageRenderer } from "../page-renderer";
+import { createBlockResolver } from "../resolver";
+import { resolvePageStyles } from "../styles";
 
 import { accordion, ACCORDION_BASE_STYLES } from "./accordion";
 import {
@@ -25,6 +35,8 @@ function args(props: Record<string, unknown>, slot = "BODY") {
     props,
     node: { id: "n1", type: ACCORDION_ITEM_BLOCK, version: 1, props },
     className: "cls",
+    // Outside any accordion's render, as a section drawn alone is.
+    ctx: {},
     // Required by the render contract; these fixtures declare no parts.
     partClass: () => "",
     renderSlot: (name: string) => (name === "children" ? slot : null),
@@ -140,5 +152,117 @@ describe("the accordion pair", () => {
     // Every key must be a STYLE CATALOG group — the registry refuses unknown
     // ones, which is what caught `visibility` copied from the older block.
     expect(ACCORDION_ITEM_SUPPORTS).not.toHaveProperty("visibility");
+  });
+});
+
+describe("an accordion's titles and icon, on a rendered page", () => {
+  /** An accordion of one section, with what the accordion is given. */
+  const page = (
+    accordionProps: Record<string, unknown>,
+    body: unknown[] = []
+  ): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "acc",
+          type: ACCORDION_BLOCK,
+          version: 1,
+          props: { as: "div", contained: false, ...accordionProps },
+          slots: {
+            children: [
+              {
+                id: "s1",
+                type: ACCORDION_ITEM_BLOCK,
+                version: 1,
+                props: { title: "What is included?", open: false },
+                slots: { children: body },
+              },
+            ],
+          },
+        },
+      ],
+    }) as unknown as BlockDocument;
+  const resolver = createBlockResolver([...coreBlocks]);
+  const CONTEXT = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+  const markup = (
+    document: BlockDocument,
+    spacingMode?: "classic" | "gaps"
+  ): string =>
+    renderToStaticMarkup(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        styles={resolvePageStyles(
+          document,
+          undefined,
+          { ...CONTEXT, ...(spacingMode === undefined ? {} : { spacingMode }) },
+          resolver
+        )}
+      />
+    );
+  const summaryOf = (html: string): string =>
+    /<summary>(.*?)<\/summary>/.exec(html)?.[1] ?? "";
+
+  it("draws each title as the heading Titles as names, inside its summary", () => {
+    expect(summaryOf(markup(page({ titlesAs: "h3" })))).toBe(
+      `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><h3 class="${DISCLOSURE_TITLE_CLASS}">What is included?</h3>`
+    );
+  });
+
+  it("draws a title as text by default, and for a level it does not offer", () => {
+    for (const props of [{}, { titlesAs: "h1" }, { titlesAs: "div" }]) {
+      expect(summaryOf(markup(page(props)))).toBe(
+        `<span class="${DISCLOSURE_ICON_CLASS}" aria-hidden="true"></span><span class="${DISCLOSURE_TITLE_CLASS}">What is included?</span>`
+      );
+    }
+  });
+
+  it("gives a nested accordion its own titles, not its parent's", () => {
+    const nested = {
+      id: "inner",
+      type: ACCORDION_BLOCK,
+      version: 1,
+      props: { as: "div", contained: false },
+      slots: {
+        children: [
+          {
+            id: "s2",
+            type: ACCORDION_ITEM_BLOCK,
+            version: 1,
+            props: { title: "Inner", open: false },
+            slots: { children: [] },
+          },
+        ],
+      },
+    };
+    const html = markup(page({ titlesAs: "h2" }, [nested]));
+    expect(html).toContain(
+      `<h2 class="${DISCLOSURE_TITLE_CLASS}">What is included?</h2>`
+    );
+    expect(html).toContain(
+      `<span class="${DISCLOSURE_TITLE_CLASS}">Inner</span>`
+    );
+  });
+
+  it("draws a chevron after the title on a new site", () => {
+    const html = markup(page({}));
+    expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
+    expect(html).toContain("list-style: none");
+    expect(html).toContain("rotate(180deg)");
+    expect(html).toContain("margin-inline-start: auto");
+  });
+
+  it("keeps the browser's marker on a site built before icons were offered", () => {
+    const html = markup(page({}), "classic");
+    expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
+    expect(html).not.toContain("list-style: none");
+    expect(html).not.toContain("rotate(180deg)");
   });
 });

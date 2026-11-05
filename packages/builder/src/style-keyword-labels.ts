@@ -139,6 +139,17 @@ const KEYWORD_LABELS: Readonly<
     lowercase: "Lowercase",
     capitalize: "Capitalize words",
   },
+  // An Accordion's icon choices, traced on their own custom properties.
+  "--nx-pb-disclosure-icon": {
+    chevron: "Chevron",
+    plus: "Plus",
+    none: "None",
+    browser: "Browser default",
+  },
+  "--nx-pb-disclosure-position": {
+    before: "Before",
+    after: "After",
+  },
   "list-style-type": {
     none: "None",
     revert: "Default",

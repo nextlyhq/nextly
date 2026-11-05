@@ -32,9 +32,30 @@ import {
 } from "./classic-spacing.fixture";
 import { coreBlocks } from "./index";
 
-const OLD_CSS = readFileSync(
+const CAPTURED_CSS = readFileSync(
   new URL("./__fixtures__/classic-spacing.css", import.meta.url),
   "utf8"
+);
+
+/** The accordion's rule as the earlier compiler wrote it. */
+const CAPTURED_ACCORDION =
+  ".nx-pb-page :where(.nx-bt-core--accordion) { display: grid; gap: var(--site-space-4) }";
+
+/**
+ * The captured sheet with the one addition made since, stated here rather
+ * than edited into the capture, which stays what the earlier compiler wrote.
+ * An accordion's sections now draw an empty icon beside their titles, and a
+ * classic site's accordion keeps the browser's marker: its icon choice is
+ * Browser default, which hides that icon and keeps a title on the marker's
+ * line. The page looks as it did.
+ */
+const OLD_CSS = CAPTURED_CSS.replace(
+  CAPTURED_ACCORDION,
+  [
+    ".nx-pb-page :where(.nx-bt-core--accordion) { --nx-pb-disclosure-icon: browser; display: grid; gap: var(--site-space-4) }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-icon) { display: none }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-title) { display: inline }",
+  ].join("\n")
 );
 
 const resolver: BlockResolver = {
@@ -53,6 +74,12 @@ function compiled(document: BlockDocument, ctx: StyleCompileContext) {
 }
 
 describe("the classic spacing model", () => {
+  it("states its addition over the capture, which still holds the rule it replaces", () => {
+    // A replace that matched nothing would leave the capture as the pin.
+    expect(CAPTURED_CSS).toContain(CAPTURED_ACCORDION);
+    expect(OLD_CSS).not.toBe(CAPTURED_CSS);
+  });
+
   it("compiles the stylesheet the compiler before container gaps wrote", () => {
     expect(compiled(CLASSIC_SPACING_PAGE, context("classic")).css).toBe(
       OLD_CSS
