@@ -1475,10 +1475,12 @@ describe("a component save judged inside the documents that use it", () => {
         listIncomplete: true,
         reasons: expect.arrayContaining([
           expect.stringContaining("cannot list every document"),
-          expect.stringContaining("through a placement's override"),
         ]),
       },
     ]);
+    // Not said of every lookup any more: the index records a document that
+    // reaches a component through a placement's override as using it.
+    expect(unjudged[0]!.reasons.join(" ")).not.toContain("override");
   });
 
   it("reports a host it cannot read as unjudged rather than passing over it", async () => {

@@ -11,17 +11,22 @@
  */
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
-import { blocksFieldSurvey } from "./class-usage-blocks-fields";
+import {
+  blocksFieldSurvey,
+  singleUsageDeclaration,
+} from "./class-usage-blocks-fields";
 import {
   walkPageBuilderUsageIndexes,
   type ClassUsageRebuildReport,
 } from "./class-usage-index-rebuild";
+import { classUsageIndex } from "./class-usage-reconcile";
 import {
-  classUsageIndexStore,
-  fencedIndexStore,
+  singleRebuildDocumentStore,
   usageRebuildDocumentStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
+import { componentUsageIndex } from "./component-usage";
+import type { SingleToWalk } from "./host-rewrite/site";
 import type { BackfillStateStore } from "./usage-backfill";
 import type { UsageBackfillDeps } from "./usage-backfill-job";
 import {
@@ -30,7 +35,11 @@ import {
   type BackfillScope,
 } from "./usage-backfill-scope";
 import type { UsageBookkeeping, UsageRun } from "./usage-bookkeeping";
-import type { GroupedUsageReader } from "./usage-index";
+import {
+  fencedUsageTableStore,
+  usageTableOf,
+  type UsageDb,
+} from "./usage-index-tables";
 
 /** What the wiring must be able to ask of the host, named structurally. */
 export interface BackfillHost {
@@ -68,40 +77,27 @@ export interface BackfillHost {
   /** Whether a resolved collection stores a draft beside its published row. */
   hasDrafts: (collection: unknown) => Promise<boolean> | boolean;
   /**
-   * Whether any Single declares a blocks field.
-   *
-   * A Single's content cannot be indexed at all — a plugin has no supported way
-   * to READ one, since the available path creates the row when it is absent, so
-   * `writeTargetOf` declines every `single:` hook and no scope is enumerated.
-   * The backfill therefore cannot make the index cover such a site however many
-   * collection scopes it finishes, and completeness must not claim otherwise.
+   * Every live Single whose declaration holds a blocks field, or `undefined`
+   * when the Singles registry could not be read whole, which is a refusal for
+   * the reason an unreadable collection registry is one.
    */
-  singlesHoldBlocks: () => Promise<boolean>;
+  singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured locales, read per pass. */
   locales: () => readonly string[];
   /** The bounds the renderer draws under. */
   limits: () => DocumentLimits;
-  /** The RESOLVED slugs of the two index collections a pass writes to. */
-  slugs: () => {
-    classIndex: string;
-    componentIndex: string;
-  };
+  /** The plugin's own database, which the index rows live in. */
+  db: UsageDb;
   /** The run, its progress and the dirty mark, in the plugin's own tables. */
   bookkeeping: () => UsageBookkeeping;
-  /**
-   * A grouped read of one of the plugin's own index collections that no site
-   * hook shapes, for the health marker probe.
-   */
-  ownIndexReader: (indexCollection: string) => GroupedUsageReader;
 }
 
 /** The derivation the host's index is built under, read now. */
 export function hostGeneration(host: BackfillHost): string {
-  const slugs = host.slugs();
   return backfillGeneration({
     limits: host.limits(),
-    classIndex: slugs.classIndex,
-    componentIndex: slugs.componentIndex,
+    classIndex: usageTableOf(classUsageIndex).name,
+    componentIndex: usageTableOf(componentUsageIndex).name,
   });
 }
 
@@ -163,14 +159,14 @@ export async function backfillScopes(
 export interface BackfillSurvey {
   scopes: readonly BackfillScope[];
   /**
-   * Whether any tracked collection declares a blocks field no scope can cover.
+   * Whether any tracked collection or Single declares a blocks field no scope
+   * can cover.
    *
    * A blocks field nested under a named group has no addressable subject, so no
    * scope is enumerated for it and no hook reconciles it — see
-   * {@link blocksFieldSurvey}. Unlike a Single, nothing else reports it, so
-   * "every scope walked" would be vacuously true for a collection whose only
-   * blocks field is nested, and health would call an index that never saw those
-   * references exact.
+   * {@link blocksFieldSurvey}. Nothing else reports it, so "every scope walked"
+   * would be vacuously true for a document whose only blocks field is nested,
+   * and health would call an index that never saw those references exact.
    *
    * Answered from the SAME walk that builds the scopes, because a second walk
    * over the registry is a second answer to one question and would also double
@@ -226,6 +222,29 @@ export async function backfillSurvey(
     );
   }
 
+  const singles = await host.singles();
+  if (singles === undefined) {
+    throw new Error(
+      "[page-builder] the usage backfill could not read the Singles registry, so it cannot tell an unindexed Single from a site that has none"
+    );
+  }
+  for (const single of singles) {
+    const survey = blocksFieldSurvey(singleUsageDeclaration(single));
+    if (survey.unaddressable) unaddressable = true;
+    // Both forms, whatever the Single's versioning: the registry listing does
+    // not say whether a Single keeps a working draft, and the draft read
+    // answers absent for one that does not, which records nothing.
+    scopes.push(
+      ...backfillScopesFor({
+        scope: "single",
+        collection: single.slug,
+        fields: survey.addressable,
+        locales,
+        hasDrafts: true,
+      })
+    );
+  }
+
   return { scopes, unaddressable };
 }
 
@@ -252,19 +271,24 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
     },
     rebuild: async (scope, walk) => {
       const nextly = await host.nextly();
-      const slugs = host.slugs();
       const { report, finished } = await walkPageBuilderUsageIndexes(
         {
-          documents: usageRebuildDocumentStore(nextly),
+          documents:
+            scope.scope === "single"
+              ? singleRebuildDocumentStore(nextly)
+              : usageRebuildDocumentStore(nextly),
           // Fenced by the run: a pass a newer run replaced writes nothing.
-          classIndex: fencedIndexStore(
-            classUsageIndexStore(nextly, slugs.classIndex),
+          classIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(classUsageIndex),
             write => walk.fenced(write)
           ),
-          componentIndex: fencedIndexStore(
-            classUsageIndexStore(nextly, slugs.componentIndex),
+          componentIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(componentUsageIndex),
             write => walk.fenced(write)
           ),
+          scope: scope.scope,
           collection: scope.entity,
           field: scope.field,
           locale: scope.locale,
@@ -324,7 +348,7 @@ export function refuseIncompleteWalk(
 ): void {
   if (report.failure === undefined && report.unrepaired === 0) return;
 
-  const where = `${scope.entity}.${scope.field} (${scope.locale || "shared"}, ${scope.variant})`;
+  const where = `${scope.scope === "single" ? "Single " : ""}${scope.entity}.${scope.field} (${scope.locale || "shared"}, ${scope.variant})`;
   throw new Error(
     `[page-builder] the usage backfill could not walk ${where} whole — ` +
       `${report.unrepaired} unrepaired — ` +

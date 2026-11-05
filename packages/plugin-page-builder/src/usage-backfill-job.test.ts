@@ -20,7 +20,13 @@ import { usageBookkeeping } from "./usage-bookkeeping";
 const WHOLE = { finished: true };
 
 function scope(field: string): BackfillScope {
-  return { entity: "pages", field, locale: "", variant: "published" };
+  return {
+    scope: "collection",
+    entity: "pages",
+    field,
+    locale: "",
+    variant: "published",
+  };
 }
 
 function store(initial: string[] = []) {

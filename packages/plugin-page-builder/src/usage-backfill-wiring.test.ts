@@ -29,11 +29,11 @@ function host(over: Partial<BackfillHost>): BackfillHost {
       fields: [{ name: "content", type: "blocks" }],
     }),
     hasDrafts: () => false,
+    singles: async () => [],
     locales: () => [],
     limits: NOT_USED as never,
-    slugs: NOT_USED as never,
+    db: NOT_USED as never,
     bookkeeping: NOT_USED as never,
-    ownIndexReader: NOT_USED as never,
     ...over,
   };
 }
@@ -119,6 +119,53 @@ describe("enumerating the scopes a site currently has", () => {
 
     expect(scopes).toHaveLength(4);
   });
+
+  it("walks each Single holding blocks, in both forms, under its own scope", async () => {
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          { slug: "home", fields: [{ name: "content", type: "blocks" }] },
+        ],
+      })
+    );
+
+    expect(scopes.map(s => `${s.scope}:${s.entity}:${s.variant}`)).toEqual([
+      "single:home:published",
+      "single:home:draft",
+    ]);
+  });
+
+  it("reads a Single whose fields' languages are unknown in every language", async () => {
+    // Its field flags are not on the surface a plugin reads, so a field is
+    // read per language rather than a translation being missed.
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [{ name: "content", type: "blocks" }],
+            localized: true,
+            languagesUnknown: true,
+          },
+        ],
+        locales: () => ["en", "fr"],
+      })
+    );
+
+    expect(
+      scopes.filter(s => s.variant === "published").map(s => s.locale)
+    ).toEqual(["en", "fr"]);
+  });
+
+  it("REFUSES when the Singles registry cannot be read", async () => {
+    // As for collections: answering no Singles would call a site whose
+    // homepage is a Single whole without having walked it.
+    await expect(
+      backfillScopes(host({ singles: async () => undefined }))
+    ).rejects.toThrow(/could not read the Singles registry/);
+  });
 });
 
 /**
@@ -171,6 +218,28 @@ describe("reporting content no scope can cover", () => {
     );
 
     expect(survey.scopes.length).toBe(1);
+    expect(survey.unaddressable).toBe(true);
+  });
+
+  it("reports a Single whose blocks field is nested", async () => {
+    const survey = await backfillSurvey(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [
+              {
+                type: "group",
+                name: "hero",
+                fields: [{ type: "blocks", name: "content" }],
+              },
+            ],
+          },
+        ],
+      })
+    );
+
     expect(survey.unaddressable).toBe(true);
   });
 
