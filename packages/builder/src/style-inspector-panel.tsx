@@ -35,6 +35,7 @@ import {
   isStyleLeaf,
   isTokenRef,
   OVERLAY_STRENGTH,
+  paintsBackgroundImage,
   STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
@@ -1312,12 +1313,7 @@ function BlockShortcutsFields({
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
   if (target.kind !== "block") return null;
-  const where = {
-    editor: surroundings.editor,
-    nodeId: surroundings.nodeId,
-    state: surroundings.state,
-    breakpoint: surroundings.breakpoint,
-  };
+  const where = shortcutWhere(surroundings);
   return (
     <>
       <BlockShortcutsControl {...where} />
@@ -1334,15 +1330,30 @@ function BlockPresetsOver({
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
   if (target.kind !== "block") return null;
-  return (
-    <MinHeightPresets
-      editor={surroundings.editor}
-      nodeId={surroundings.nodeId}
-      state={surroundings.state}
-      breakpoint={surroundings.breakpoint}
-      over
-    />
-  );
+  return <MinHeightPresets {...shortcutWhere(surroundings)} over />;
+}
+
+/**
+ * Where a shortcut writes, and what reaches it from elsewhere: the value the
+ * panel's own provenance reports as inherited, the one ranking of the trace.
+ */
+function shortcutWhere(surroundings: StyleFieldSurroundings) {
+  return {
+    editor: surroundings.editor,
+    nodeId: surroundings.nodeId,
+    state: surroundings.state,
+    breakpoint: surroundings.breakpoint,
+    reaching: (cssProperty: string) => {
+      const answer = surroundings.provenanceOf({
+        kind: "cssValue",
+        cssProperty,
+        tokenKinds: [],
+      });
+      return answer?.provenance.kind === "inherited"
+        ? answer.provenance.entry.value
+        : undefined;
+    },
+  };
 }
 
 /** The background's overlay fields, offered only over an image. */
@@ -1396,15 +1407,18 @@ function overlayCovers(surroundings: StyleFieldSurroundings): boolean {
 function storesBackgroundImage(styles: NodeStyles | undefined): boolean {
   for (const byBreakpoint of Object.values(styles ?? {})) {
     for (const values of Object.values(byBreakpoint ?? {})) {
-      if (values?.backgroundGradient !== undefined) return true;
+      // Judged as the compiler judges it: `none` clears an image, and an
+      // overlay over it would cover nothing.
+      if (paintsBackgroundImage("gradient", values?.backgroundGradient)) {
+        return true;
+      }
       const background = values?.background;
       if (
         typeof background === "object" &&
         background !== null &&
         !Array.isArray(background) &&
-        ["url", ...OVERLAY_FIELDS].some(field =>
-          Object.hasOwn(background, field)
-        )
+        (paintsBackgroundImage("url", (background as { url?: unknown }).url) ||
+          [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field)))
       ) {
         return true;
       }
@@ -2991,6 +3005,18 @@ function ControlValue({
  * another, or, in a side of the spacing box, where there is no room for both,
  * the chip alone with its name as the way to choose.
  */
+/**
+ * The reference a chip commits when another variable replaces its own: the
+ * new variable at the held one's scale, which is the size it was set to (a
+ * Small button's padding), not a property of the variable.
+ */
+export function pickedReference(
+  picked: string,
+  times: number | undefined
+): { $token: string; times?: number } {
+  return { $token: picked, ...(times === undefined ? {} : { times }) };
+}
+
 function HeldVariable({
   id,
   labelledBy,
@@ -3015,7 +3041,10 @@ function HeldVariable({
   compact: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const pick = (picked: string): CommitOutcome => onCommit({ $token: picked });
+  // A scaled variable stays scaled when another replaces it: the factor is
+  // the size it was set to (a Small button's padding), not the variable's.
+  const pick = (picked: string): CommitOutcome =>
+    onCommit(pickedReference(picked, times));
   const clear = (): void => {
     // Removing the variable puts the typed field back in the chip's place, and
     // the ✕ that held focus is gone: focus goes to that field once it is

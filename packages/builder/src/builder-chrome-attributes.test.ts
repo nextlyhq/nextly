@@ -135,6 +135,12 @@ describe("an empty container's area yields to what the block sets", () => {
     expect(css).toContain(
       `:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }`
     );
+    // Selected, the empty block matches the selection's safeguard too, which
+    // yields the same way: choosing Full screen selects the Section.
+    expect(css).toMatch(
+      /:where\(\.nx-canvas \[data-nx-selected\]:empty\) \{ min-height: 2px; \}/
+    );
+    expect(css).not.toMatch(/\*\/ \.nx-canvas \[data-nx-selected\]:empty \{/);
   });
 });
 

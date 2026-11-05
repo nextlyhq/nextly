@@ -179,7 +179,7 @@ describe("a segmented choice's selected state", () => {
   const chosen = () =>
     ruleBody(
       CHROME,
-      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"],\n.nx-segment__option[aria-checked="true"]'
+      '.nx-style-inspector__toggle > button[aria-pressed="true"],\n.nx-style-inspector__toggle > button[aria-checked="true"],\n.nx-segment__option[aria-checked="true"],\n.nx-icon-choice__option[aria-checked="true"]'
     );
 
   it("is told by its words' weight and colour, not by its fill alone", () => {

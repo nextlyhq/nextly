@@ -29,6 +29,15 @@ export interface ShortcutAt {
   readonly breakpoint: BreakpointId;
 }
 
+/**
+ * What reaches the edited address from elsewhere (a wider device, a shared
+ * style, another state) for a CSS property, as the cascade writes it; none
+ * where nothing does. Read only while nothing is set here.
+ */
+export type Reaching = (cssProperty: string) => string | undefined;
+
+const NOTHING_REACHES: Reaching = () => undefined;
+
 /** A value stored at the edited address, for one top-level property. */
 function storedAt(
   node: BlockNode,
@@ -63,22 +72,29 @@ export type HeightChoice = "auto" | "screen";
 /** Auto while no min height is set here, Full screen for its own, else none. */
 export function heightOf(
   node: BlockNode,
-  at: ShortcutAt
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
 ): HeightChoice | undefined {
-  const stored = storedAt(node, at, "minHeight");
-  if (stored === undefined) return "auto";
-  return stored === FULL_SCREEN ? "screen" : undefined;
+  const shown = storedAt(node, at, "minHeight") ?? reaching("min-height");
+  if (shown === undefined) return "auto";
+  return shown === FULL_SCREEN ? "screen" : undefined;
 }
 
-/** Full screen writes its min height here; Auto clears it. */
+/**
+ * Full screen writes its min height here; Auto clears it, or, where one
+ * reaches from elsewhere, writes `auto` over it, since a clear would leave
+ * that one in force.
+ */
 export function planHeight(
   node: BlockNode,
   choice: HeightChoice,
-  at: ShortcutAt
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
 ): BuilderOp | null {
-  return written(node, at, [
-    ["minHeight", choice === "screen" ? FULL_SCREEN : null],
-  ]);
+  if (choice === "screen")
+    return written(node, at, [["minHeight", FULL_SCREEN]]);
+  const over = reaching("min-height") === undefined ? null : "auto";
+  return written(node, at, [["minHeight", over]]);
 }
 
 // --- a Button's size
@@ -120,7 +136,9 @@ function scaledPadding(
   const sides: Record<string, StyleValue> = {};
   for (const [side, value] of Object.entries(base)) {
     if (!isTokenRef(value)) return undefined;
-    sides[side] = { $token: value.$token, times };
+    // Unscaled, the token alone: what the button's own padding is.
+    sides[side] =
+      times === 1 ? { $token: value.$token } : { $token: value.$token, times };
   }
   return sides;
 }
@@ -136,9 +154,23 @@ function samePadding(
   const keys = Object.keys(expected);
   return (
     Object.keys(sides).length === keys.length &&
-    keys.every(
-      side => JSON.stringify(sides[side]) === JSON.stringify(expected[side])
-    )
+    keys.every(side => sameScaledToken(sides[side], expected[side]))
+  );
+}
+
+/**
+ * Whether two token references name the same token at the same scale, read
+ * field by field: a reference's keys may arrive in any order.
+ */
+function sameScaledToken(
+  stored: StyleValue | undefined,
+  expected: StyleValue | undefined
+): boolean {
+  return (
+    isTokenRef(stored) &&
+    isTokenRef(expected) &&
+    stored.$token === expected.$token &&
+    stored.times === expected.times
   );
 }
 
@@ -153,11 +185,14 @@ export function sizesOffered(node: BlockNode): boolean {
  */
 export function sizeOf(
   node: BlockNode,
-  at: ShortcutAt
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
 ): SizeChoice | undefined {
   const padding = storedAt(node, at, "padding");
   const text = storedAt(node, at, "fontSize");
-  if (padding === undefined && text === undefined) return "medium";
+  if (padding === undefined && text === undefined) {
+    return reachingSize(reaching);
+  }
   for (const size of ["small", "large"] as const) {
     const scaled = scaledPadding(node, SIZES[size].times);
     if (
@@ -171,16 +206,44 @@ export function sizeOf(
   return undefined;
 }
 
-/** Small or Large writes its padding and text size here; Medium clears both. */
+/**
+ * The size a value reaching from elsewhere draws, as the cascade writes it:
+ * a scaled padding token compiles to `calc(<token> * <times>)` beside its
+ * text size, Medium is neither reaching, and anything else is none.
+ */
+function reachingSize(reaching: Reaching): SizeChoice | undefined {
+  const text = reaching("font-size");
+  const padding = reaching("padding-block-start");
+  if (text === undefined && padding === undefined) return "medium";
+  for (const size of ["small", "large"] as const) {
+    if (
+      text === SIZES[size].text &&
+      padding?.endsWith(`* ${String(SIZES[size].times)})`) === true
+    ) {
+      return size;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Small or Large writes its padding and text size here. Medium clears both,
+ * or, where a size reaches from elsewhere, writes the button's own padding
+ * and text size over it, since a clear would leave that one in force.
+ */
 export function planSize(
   node: BlockNode,
   size: SizeChoice,
-  at: ShortcutAt
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
 ): BuilderOp | null {
   if (size === "medium") {
+    const over =
+      reaching("font-size") !== undefined ||
+      reaching("padding-block-start") !== undefined;
     return written(node, at, [
-      ["padding", null],
-      ["fontSize", null],
+      ["padding", over ? (scaledPadding(node, 1) ?? null) : null],
+      ["fontSize", over ? "inherit" : null],
     ]);
   }
   const padding = scaledPadding(node, SIZES[size].times);
@@ -193,16 +256,26 @@ export function planSize(
 
 // --- a Button's full width
 
-/** Whether the button is as wide as its container here. */
-export function fullWidthOf(node: BlockNode, at: ShortcutAt): boolean {
-  return storedAt(node, at, "width") === "100%";
+/** Whether the button is as wide as its container here, set or reaching. */
+export function fullWidthOf(
+  node: BlockNode,
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
+): boolean {
+  return (storedAt(node, at, "width") ?? reaching("width")) === "100%";
 }
 
-/** On writes a width of 100% here; off clears it. */
+/**
+ * On writes a width of 100% here. Off clears it, or, where a width reaches
+ * from elsewhere, writes `auto` over it.
+ */
 export function planFullWidth(
   node: BlockNode,
   on: boolean,
-  at: ShortcutAt
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
 ): BuilderOp | null {
-  return written(node, at, [["width", on ? "100%" : null]]);
+  if (on) return written(node, at, [["width", "100%"]]);
+  const over = reaching("width") === undefined ? null : "auto";
+  return written(node, at, [["width", over]]);
 }

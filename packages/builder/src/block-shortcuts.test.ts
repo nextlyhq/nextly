@@ -126,6 +126,29 @@ describe("a Button's size", () => {
     );
   });
 
+  it("reads a scaled token whatever order its fields were stored in", () => {
+    // Keys in JSON carry no meaning: an import may write `times` first.
+    const imported = node("core/button", {
+      base: {
+        base: {
+          padding: Object.fromEntries(
+            ["blockStart", "blockEnd", "inlineStart", "inlineEnd"].map(side => [
+              side,
+              {
+                times: 0.75,
+                $token: side.startsWith("block")
+                  ? "button.padding-y"
+                  : "button.padding-x",
+              },
+            ])
+          ),
+          fontSize: "0.875em",
+        },
+      },
+    } as never);
+    expect(sizeOf(imported, at)).toBe("small");
+  });
+
   it("reads as none of the three for padding or text set any other way", () => {
     expect(
       sizeOf(node("core/button", { base: { base: { fontSize: "2rem" } } }), at)
@@ -143,5 +166,45 @@ describe("a Button's full width", () => {
     expect(
       applied(wide, planFullWidth(wide, false, mobile)).styles ?? {}
     ).toEqual({});
+  });
+});
+
+describe("a shortcut over a value reaching from a wider device", () => {
+  /** What the cascade says reaches the edited address. */
+  const reaching =
+    (values: Record<string, string>) =>
+    (cssProperty: string): string | undefined =>
+      values[cssProperty];
+
+  it("shows the preset that reaches, and overrides it with an explicit reset", () => {
+    const section = node("core/section");
+    const tall = reaching({ "min-height": "100svh" });
+    expect(heightOf(section, mobile, tall)).toBe("screen");
+    // A clear would leave the wider device's 100svh in force.
+    expect(
+      applied(section, planHeight(section, "auto", mobile, tall)).styles
+    ).toEqual({ base: { sm: { minHeight: "auto" } } });
+    // With nothing reaching, Auto still just clears.
+    expect(planHeight(section, "auto", mobile)).toBeNull();
+  });
+
+  it("reads a Small reaching from above, and Medium writes the button's own over it", () => {
+    const button = node("core/button");
+    const small = reaching({
+      "font-size": "0.875em",
+      "padding-block-start": "calc(var(--site-button-padding-y) * 0.75)",
+    });
+    expect(sizeOf(button, mobile, small)).toBe("small");
+    const medium = applied(button, planSize(button, "medium", mobile, small));
+    expect(medium.styles?.base?.sm).toEqual({ padding, fontSize: "inherit" });
+  });
+
+  it("reads Full width reaching from above, and off writes auto over it", () => {
+    const button = node("core/button");
+    const wide = reaching({ width: "100%" });
+    expect(fullWidthOf(button, mobile, wide)).toBe(true);
+    expect(
+      applied(button, planFullWidth(button, false, mobile, wide)).styles
+    ).toEqual({ base: { sm: { width: "auto" } } });
   });
 });

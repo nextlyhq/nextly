@@ -18,7 +18,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import { pickedReference, StyleInspectorPanel } from "./style-inspector-panel";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -214,6 +214,15 @@ describe("a background's overlay", () => {
     expect(overlayLabels()).toEqual([]);
   });
 
+  it("is not offered over an image cleared with none", () => {
+    // `none` clears an image; the compiler lays no layer over it.
+    mount("core/section", {
+      base: { [BASE_BREAKPOINT]: { background: { url: "none" } } },
+    });
+    open("Background");
+    expect(overlayLabels()).toEqual([]);
+  });
+
   it("is offered over an image, its strength in percent", () => {
     mount("core/section", {
       base: { [BASE_BREAKPOINT]: { background: { url: "/hills.jpg" } } },
@@ -225,5 +234,17 @@ describe("a background's overlay", () => {
         .getByRole("slider", { name: /overlay strength/i })
         .getAttribute("aria-valuenow")
     ).toBe("50");
+  });
+});
+
+describe("replacing a scaled variable", () => {
+  it("keeps its scale, the size it was set to", () => {
+    expect(pickedReference("space.3", 0.75)).toEqual({
+      $token: "space.3",
+      times: 0.75,
+    });
+    expect(pickedReference("space.3", undefined)).toEqual({
+      $token: "space.3",
+    });
   });
 });

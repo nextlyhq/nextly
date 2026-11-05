@@ -24,6 +24,7 @@ import {
   sizeOf,
   sizesOffered,
   type HeightChoice,
+  type Reaching,
   type ShortcutAt,
   type SizeChoice,
 } from "./block-shortcuts";
@@ -91,6 +92,8 @@ interface ShortcutProps {
   nodeId: string;
   state: StyleState;
   breakpoint: BreakpointId;
+  /** What reaches the edited address from elsewhere, as the cascade says. */
+  reaching?: Reaching | undefined;
 }
 
 /**
@@ -103,6 +106,7 @@ export function MinHeightPresets({
   nodeId,
   state,
   breakpoint,
+  reaching,
   over,
 }: ShortcutProps & { over: boolean }): React.JSX.Element | null {
   const node = findNode(editor.document.nodes, nodeId);
@@ -114,7 +118,7 @@ export function MinHeightPresets({
         label={over ? "Min height presets" : "Min height"}
         shownLabel={!over}
         options={["auto", "screen"] as const}
-        on={heightOf(node, at)}
+        on={heightOf(node, at, reaching)}
         labels={HEIGHT_LABELS}
         // Over the field, the value beneath says what Full screen wrote, and a
         // line between them would part the presets from the field they set.
@@ -124,7 +128,7 @@ export function MinHeightPresets({
             : "Full screen: at least the screen's height, growing with its content."
         }
         onChoose={choice => {
-          const op = planHeight(node, choice, at);
+          const op = planHeight(node, choice, at, reaching);
           if (op !== null) editor.apply(op);
         }}
       />
@@ -138,6 +142,7 @@ export function BlockShortcutsControl({
   nodeId,
   state,
   breakpoint,
+  reaching,
 }: ShortcutProps): React.JSX.Element | null {
   const node = findNode(editor.document.nodes, nodeId);
   if (node === undefined) return null;
@@ -146,7 +151,7 @@ export function BlockShortcutsControl({
     if (op !== null) editor.apply(op);
   };
   if (node.type !== BUTTON_BLOCK) return null;
-  const size = sizeOf(node, at);
+  const size = sizeOf(node, at, reaching);
   return (
     <div className="nx-block-shortcuts" data-control="button-size">
       {sizesOffered(node) ? (
@@ -160,15 +165,15 @@ export function BlockShortcutsControl({
               ? "Custom: the padding or text size below is set another way."
               : "Sets the padding and text size together."
           }
-          onChoose={choice => apply(planSize(node, choice, at))}
+          onChoose={choice => apply(planSize(node, choice, at, reaching))}
         />
       ) : null}
       <div className="nx-inspector__field">
         <span className="nx-inspector__field-name">Full width</span>
         <Switch
           aria-label="Full width"
-          checked={fullWidthOf(node, at)}
-          onCheckedChange={on => apply(planFullWidth(node, on, at))}
+          checked={fullWidthOf(node, at, reaching)}
+          onCheckedChange={on => apply(planFullWidth(node, on, at, reaching))}
         />
       </div>
       <p className="nx-inspector__note">

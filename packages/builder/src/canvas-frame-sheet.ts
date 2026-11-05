@@ -167,8 +167,10 @@ ${ROOT} [contenteditable="true"] * {
   -webkit-user-select: text;
 }
 
-/* A block that draws nothing still has height enough to be selected. */
-${ROOT} [data-nx-selected]:empty { min-height: 2px; }
+/* A block that draws nothing still has height enough to be selected: at no
+   specificity, so a min height the block sets (a Section at Full screen)
+   wins over it while it is selected, as it does on the page. */
+:where(${ROOT} [data-nx-selected]:empty) { min-height: 2px; }
 
 /* A text block emptied of its words keeps a line, so it can still be clicked:
    see EMPTY_TEXT_SELECTOR. */

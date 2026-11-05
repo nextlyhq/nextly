@@ -143,12 +143,13 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     const inner = ".nx-pb-page section section";
     await expect(page.locator(inner)).toHaveCount(1);
     expect(await firstLayerAlpha(page, outer)).toBeCloseTo(0.6, 2);
-    // The nested Section's own image, with nothing over it.
-    expect(await firstLayerAlpha(page, inner)).toBe(0);
+    // The nested Section's own image alone: no layer in front of it, the
+    // parent's overlay stopped at the parent.
     const innerImage = await page
       .locator(inner)
       .evaluate(element => getComputedStyle(element).backgroundImage);
     expect(innerImage).toContain("inner.png");
+    expect(innerImage).not.toContain("gradient");
   });
 
   test("Full screen stores 100svh and draws the Section at the frame.s height", async ({

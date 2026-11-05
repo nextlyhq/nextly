@@ -2787,7 +2787,8 @@
  */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
 .nx-style-inspector__toggle > button[aria-checked="true"],
-.nx-segment__option[aria-checked="true"] {
+.nx-segment__option[aria-checked="true"],
+.nx-icon-choice__option[aria-checked="true"] {
   background: var(--nx-foreground);
   color: var(--nx-background);
   font-weight: 600;
@@ -8947,11 +8948,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 .nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
-}
-
-.nx-icon-choice__option[aria-checked="true"] {
-  color: var(--nx-accent-foreground);
-  background: var(--nx-accent);
 }
 
 /*
