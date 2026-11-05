@@ -36,6 +36,11 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  hiddenPathsFor,
+  refuseHiddenQuery,
+  withoutHiddenFields,
+} from "./hidden-fields";
+import {
   accessOptions,
   buildMutationMessage,
   callerAccess,
@@ -60,6 +65,13 @@ export async function find<TSlug extends CollectionSlug>(
   args: FindArgs<TSlug>
 ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
+  // Judged before the read: a filter or a sort on a field this read leaves
+  // out is refused, since the rows it keeps would reveal the value.
+  const hidden = await hiddenPathsFor(config, {
+    kind: "collection",
+    slug: args.collection,
+  });
+  refuseHiddenQuery(args, hidden);
 
   const result = await ctx.collectionsHandler.listEntries({
     collectionName: args.collection,
@@ -100,7 +112,9 @@ export async function find<TSlug extends CollectionSlug>(
     legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
 
   return {
-    items: legacy.docs,
+    items: await Promise.all(
+      legacy.docs.map(doc => withoutHiddenFields(doc, hidden))
+    ),
     meta: {
       total,
       page,
@@ -120,6 +134,10 @@ export async function findByID<TSlug extends CollectionSlug>(
   args: FindByIDArgs<TSlug>
 ): Promise<RowFromCollectionSlug<TSlug> | null> {
   const config = mergeConfig(ctx.defaultConfig, args);
+  const hidden = await hiddenPathsFor(config, {
+    kind: "collection",
+    slug: args.collection,
+  });
 
   try {
     const result = await ctx.collectionsHandler.getEntry({
@@ -149,7 +167,10 @@ export async function findByID<TSlug extends CollectionSlug>(
       throw createErrorFromResult(result);
     }
 
-    return result.data as RowFromCollectionSlug<TSlug>;
+    return await withoutHiddenFields(
+      result.data as RowFromCollectionSlug<TSlug>,
+      hidden
+    );
   } catch (error) {
     if (config.disableErrors && isNotFoundError(error)) {
       return null;

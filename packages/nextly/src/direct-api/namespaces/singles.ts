@@ -24,6 +24,7 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
+import { hiddenPathsFor, withoutHiddenFields } from "./hidden-fields";
 import {
   accessOptions,
   buildMutationMessage,
@@ -98,8 +99,11 @@ export async function findSingle<
   }
 
   // A document is in hand, which every `FoundSingle` admits whatever
-  // `TCreate` is.
-  return data;
+  // `TCreate` is. Its hidden fields are left out where this read says so.
+  return withoutHiddenFields(
+    data,
+    await hiddenPathsFor(config, { kind: "single", slug: args.slug })
+  );
 }
 
 /**
