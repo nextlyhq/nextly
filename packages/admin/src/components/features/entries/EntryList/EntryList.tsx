@@ -34,6 +34,7 @@ import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistratio
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
 import { getSearchParam } from "@admin/lib/search-params";
@@ -71,6 +72,7 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import { useEntryBulkActions } from "./useEntryBulkActions";
+import type { EntryVersions } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -426,15 +428,25 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Bulk publish/unpublish: fire the bulk-update mutation directly (no
   // confirmation modal — the action is reversible by clicking the
   // opposite button). The hook's onSuccess clears row selection.
+  // Each judged by the version its row had when selected, so a document
+  // changed since is refused alone and named, and the rest go ahead.
   const handleBulkPublish = useCallback(
-    (entryIds: string[]) => {
-      void bulkUpdate.mutate({ ids: entryIds, data: { status: "published" } });
+    (entryIds: string[], versions: EntryVersions) => {
+      void bulkUpdate.mutate({
+        ids: entryIds,
+        data: { status: "published" },
+        revs: revsFor(entryIds, versions),
+      });
     },
     [bulkUpdate]
   );
   const handleBulkUnpublish = useCallback(
-    (entryIds: string[]) => {
-      void bulkUpdate.mutate({ ids: entryIds, data: { status: "draft" } });
+    (entryIds: string[], versions: EntryVersions) => {
+      void bulkUpdate.mutate({
+        ids: entryIds,
+        data: { status: "draft" },
+        revs: revsFor(entryIds, versions),
+      });
     },
     [bulkUpdate]
   );
