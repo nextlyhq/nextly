@@ -858,6 +858,13 @@ export type BreakpointId = string;
  */
 export interface TokenRef {
   $token: string;
+  /**
+   * A factor the token's value is scaled by, for a length or a number: a
+   * button's Small padding is its padding token times 0.75. Written as
+   * `calc(var(<token>) * times)`, so it follows the site's token and its
+   * prefix wherever either changes. From 0.25 to 4.
+   */
+  times?: number;
 }
 
 /**
@@ -892,6 +899,21 @@ export type NodeStyles = Partial<
 export interface BlockPart {
   /** Shared default styles for this part on every instance of the block type. */
   baseStyles?: NodeStyles;
+  /**
+   * Style properties this part takes from the block's root when the root is
+   * one of the named wrapper parts: an image's picture takes its corners,
+   * proportion and fit from a figure or a link around it. Every tier styling
+   * the node (a look, a shared style, its own values) then writes those
+   * properties on this part, never on the wrapper's box.
+   *
+   * @experimental
+   */
+  takesFromRoot?: {
+    /** Style keys, as the catalog names them (`borderRadius`). */
+    readonly properties: readonly string[];
+    /** The wrapper parts the root may be (`frame`, `link`). */
+    readonly whenRootIs: readonly string[];
+  };
 }
 
 /** True if a style value is a design-token reference. */

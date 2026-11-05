@@ -1,0 +1,243 @@
+/**
+ * The schedules plugins declare, collected for the jobs pass: each one read
+ * and checked as the installation starts, and refused there, naming the
+ * plugin, when it cannot run.
+ */
+import { describe, expect, it } from "vitest";
+
+import { defineJob } from "../../jobs/job-registry";
+import { NextlyError } from "../../../errors";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
+import type { CollectedJob } from "../../../plugins/jobs/collect-jobs";
+import { collectSchedules } from "../collect-schedules";
+
+const tick = defineJob({ slug: "acme:tick", handler: async () => {} });
+
+function plugin(
+  schedules: unknown[],
+  overrides: Partial<PluginDefinition> = {}
+): PluginDefinition {
+  return {
+    name: "@acme/plugin",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: {
+      jobs: [tick],
+      schedules: schedules as NonNullable<
+        PluginDefinition["contributes"]
+      >["schedules"],
+    },
+    ...overrides,
+  };
+}
+
+function jobsOf(...plugins: PluginDefinition[]): CollectedJob[] {
+  return plugins.flatMap(p =>
+    (p.contributes?.jobs ?? []).map(definition => ({
+      definition,
+      owner: p.name,
+      plugin: p.name,
+    }))
+  );
+}
+
+/** The refusal of collecting `plugins`, or a failure saying there was none. */
+function refusal(...plugins: PluginDefinition[]): NextlyError {
+  try {
+    collectSchedules(plugins, jobsOf(...plugins));
+  } catch (error) {
+    if (NextlyError.is(error)) return error;
+    throw error;
+  }
+  throw new Error("expected the schedules to be refused");
+}
+
+describe("collecting plugin schedules", () => {
+  it("collects a schedule, keyed by its plugin, read in its time zone", () => {
+    const p = plugin([
+      {
+        slug: "tick",
+        cron: "0 9 * * *",
+        job: "acme:tick",
+        tz: "Europe/Berlin",
+      },
+    ]);
+    const [collected] = collectSchedules([p], jobsOf(p));
+    // The plugin, the slug and a short tag of the definition.
+    expect(collected.key).toMatch(/^@acme\/plugin:tick@[\w-]{12}$/);
+    expect(collected).toMatchObject({
+      plugin: "@acme/plugin",
+      slug: "tick",
+      job: "acme:tick",
+      timeZone: "Europe/Berlin",
+      input: {},
+    });
+    expect(collected.cron.source).toBe("0 9 * * *");
+  });
+
+  it("reads UTC when a schedule names no time zone, and keeps its input", () => {
+    const p = plugin([
+      { slug: "tick", cron: "@hourly", job: "acme:tick", input: { a: 1 } },
+    ]);
+    expect(collectSchedules([p], jobsOf(p))[0]).toMatchObject({
+      timeZone: "UTC",
+      input: { a: 1 },
+    });
+  });
+
+  it("collects nothing from a disabled plugin", () => {
+    const p = plugin([{ slug: "tick", cron: "nonsense", job: "acme:tick" }], {
+      enabled: false,
+    });
+    expect(collectSchedules([p], jobsOf(p))).toEqual([]);
+  });
+
+  it.each([
+    ["an invalid cron", { slug: "tick", cron: "61 * * * *", job: "acme:tick" }],
+    [
+      "an unknown time zone",
+      { slug: "tick", cron: "@daily", job: "acme:tick", tz: "Mars/Olympus" },
+    ],
+    ["an unknown job", { slug: "tick", cron: "@daily", job: "acme:nothing" }],
+    ["an empty slug", { slug: "", cron: "@daily", job: "acme:tick" }],
+    [
+      "a slug with capitals",
+      { slug: "Tick", cron: "@daily", job: "acme:tick" },
+    ],
+    ["a slug with a colon", { slug: "a:b", cron: "@daily", job: "acme:tick" }],
+    ["a blank job slug", { slug: "tick", cron: "@daily", job: "   " }],
+    [
+      "input that is not an object",
+      { slug: "tick", cron: "@daily", job: "acme:tick", input: [1, 2] },
+    ],
+    [
+      "input holding a date",
+      {
+        slug: "tick",
+        cron: "@daily",
+        job: "acme:tick",
+        input: { at: new Date() },
+      },
+    ],
+    [
+      "input holding a bigint",
+      { slug: "tick", cron: "@daily", job: "acme:tick", input: { n: 1n } },
+    ],
+    [
+      "input holding a map",
+      {
+        slug: "tick",
+        cron: "@daily",
+        job: "acme:tick",
+        input: { m: new Map() },
+      },
+    ],
+  ])("refuses to start on %s, naming the plugin", (_case, schedule) => {
+    const error = refusal(plugin([schedule]));
+    expect(error.code).toBe("INVALID_INPUT");
+    expect(error.message).toContain("@acme/plugin");
+  });
+
+  it("refuses a key that fits in characters but not in the bytes stored, naming the plugin", () => {
+    // 100 two-byte characters: under 191 characters, over 191 bytes.
+    const name = "é".repeat(100);
+    const error = refusal(
+      plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }], {
+        name,
+        contributes: {
+          jobs: [tick],
+          schedules: [{ slug: "tick", cron: "@daily", job: "acme:tick" }],
+        },
+      })
+    );
+    expect(error.message).toContain(name);
+    expect(error.message).toContain("bytes");
+  });
+
+  it("refuses a key with a control character, which PostgreSQL cannot store, naming the plugin", () => {
+    const name = "@acme/plug\u0000in";
+    const error = refusal(
+      plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }], {
+        name,
+        contributes: {
+          jobs: [tick],
+          schedules: [{ slug: "tick", cron: "@daily", job: "acme:tick" }],
+        },
+      })
+    );
+    expect(error.message).toContain(name);
+    expect(error.message).toContain("control character");
+  });
+
+  it("refuses to start on a duplicate slug, naming the plugin", () => {
+    const error = refusal(
+      plugin([
+        { slug: "tick", cron: "@daily", job: "acme:tick" },
+        { slug: "tick", cron: "@hourly", job: "acme:tick" },
+      ])
+    );
+    expect(error.message).toContain("@acme/plugin");
+    expect(error.message).toContain('"tick"');
+  });
+
+  it("refuses a schedule running another plugin's job, naming the plugin", () => {
+    const other = plugin([], {
+      name: "@other/plugin",
+      contributes: {
+        jobs: [defineJob({ slug: "other:job", handler: async () => {} })],
+      },
+    });
+    const p = plugin([{ slug: "tick", cron: "@daily", job: "other:job" }]);
+    let thrown: unknown;
+    try {
+      collectSchedules([p, other], jobsOf(p, other));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).message).toContain("@acme/plugin");
+  });
+
+  it("refuses an entry in neither shape, such as a misspelled cron, naming the plugin", () => {
+    const error = refusal(
+      plugin([{ slug: "tick", crons: "@daily", job: "acme:tick" }])
+    );
+    expect(error.message).toContain("@acme/plugin");
+    expect(error.message).toContain("cron");
+  });
+
+  it("keys a schedule by its definition: the cron and the time zone change it, spacing and alias spelling do not", () => {
+    const keyOf = (cron: string, tz?: string) => {
+      const p = plugin([
+        { slug: "tick", cron, job: "acme:tick", ...(tz ? { tz } : {}) },
+      ]);
+      return collectSchedules([p], jobsOf(p))[0].key;
+    };
+    const daily = keyOf("@daily");
+    expect(keyOf("0 0 * * *")).toBe(daily);
+    expect(keyOf("  0   0 * *  * ")).toBe(daily);
+    expect(keyOf("@midnight")).toBe(daily);
+    expect(keyOf("0 0 * * *", "UTC")).toBe(daily);
+    expect(keyOf("0 1 * * *")).not.toBe(daily);
+    expect(keyOf("@daily", "Europe/Berlin")).not.toBe(daily);
+  });
+
+  it("refuses two plugins whose schedules have one key, naming the second", () => {
+    const first = plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }]);
+    const second = plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }]);
+    let thrown: unknown;
+    try {
+      collectSchedules([first, second], jobsOf(first, second));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).message).toContain("@acme/plugin");
+    expect((thrown as NextlyError).message).toContain("same key");
+  });
+
+  it("leaves a schedule in the earlier shape unexecuted, as before", () => {
+    const p = plugin([{ name: "acme.old", schedule: "0 * * * *" }]);
+    expect(collectSchedules([p], jobsOf(p))).toEqual([]);
+  });
+});

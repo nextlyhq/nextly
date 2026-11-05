@@ -523,7 +523,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
 }
 
 /** Where each of some Layouts stands with the fence, from one read of it. */
-function fenceStates(
+export function fenceStates(
   store: Pick<LayoutRemovalStore, "removalsOf">
 ): NonNullable<LayoutChoicesRequest["fence"]> {
   return {

@@ -79,9 +79,16 @@ const CSS_WIDE = new Set([
   "revert-layer",
 ]);
 
-/** The compat key a property is tracked under. */
+/**
+ * The compat key a property is tracked under. A custom property the engine
+ * writes (a background's overlay, which its image reads through `color-mix`,
+ * itself widely available) is tracked as every custom property is, under one
+ * key for them all.
+ */
 function propertyKey(cssProperty: string): string {
-  return `css.properties.${cssProperty}`;
+  return cssProperty.startsWith("--")
+    ? "css.properties.custom-property"
+    : `css.properties.${cssProperty}`;
 }
 
 /**

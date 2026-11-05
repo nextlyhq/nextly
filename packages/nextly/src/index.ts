@@ -572,7 +572,9 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
   type PermissionSlug,
   type PluginHookRegistry,
   type PluginFilterRegistry,
@@ -617,8 +619,13 @@ export {
   type PluginCollectionView,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginAdminPlaceDeclaration,
   type PluginMenuItem,
   type PluginNavSection,
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
 } from "./plugins";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.

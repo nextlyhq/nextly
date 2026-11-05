@@ -26,6 +26,7 @@ import type {
   TokenKind,
   UrlLeaf,
 } from "./catalog-types";
+import { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./overlay";
 
 // --- Leaf constructors ------------------------------------------------------
 // Terse to author, explicit once built: every leaf carries the literal CSS
@@ -762,7 +763,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
         // `none` is what clears an image set at an earlier state, and it has
         // to be a keyword rather than a path or it emits `url("none")`. A file
         // really named `none` is still reachable as `./none`.
-        url: url("background-image", ["none"]),
+        url: { ...url("background-image", ["none"]), overlaid: true },
         position: cssValue("background-position"),
         size: cssValue("background-size"),
         // `repeat-x` and `repeat-y` each name both axes already, so they are
@@ -778,6 +779,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
           "fixed",
           "local",
         ]),
+        // A colour laid over the image, and how strongly, in percent: each
+        // its own custom property, which the image's layer reads, so either
+        // may be set at a device the image is not.
+        overlay: color(OVERLAY_COLOR),
+        overlayStrength: numberValue(OVERLAY_STRENGTH, { min: 0, max: 100 }),
       },
     },
     summary: "Background image and how it is placed.",
@@ -786,7 +792,7 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "backgroundGradient",
     group: "background",
     flag: "gradient",
-    shape: cssValue("background-image"),
+    shape: { ...cssValue("background-image"), overlaid: true },
     summary: "Gradient fill, as a CSS gradient value.",
   },
 

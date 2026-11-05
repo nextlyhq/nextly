@@ -4,14 +4,18 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 export function registerUpgradeCommand(program: Command): void {
-  program
-    .command("upgrade")
-    .description(
-      "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("upgrade")
+      .description(
+        "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
+      )
+  )
     .option(
       "--confirm-backed-up",
       "Confirm a backup exists (required in CI/non-TTY)",

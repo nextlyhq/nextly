@@ -342,4 +342,30 @@ export class JobRegistry {
       .filter(definition => definition.sweep)
       .sort((a, b) => a.slug.localeCompare(b.slug));
   }
+
+  /**
+   * Hand over what enqueues the plugins' schedules, once per window, and
+   * prunes their old windows. Given by the registration that holds the
+   * database; a registry built without one has no schedules to run.
+   */
+  useSchedules(schedules: JobSchedules): void {
+    this.scheduled = schedules;
+  }
+
+  /** What enqueues the plugins' schedules, when the installation has any. */
+  schedules(): JobSchedules | undefined {
+    return this.scheduled;
+  }
+
+  private scheduled: JobSchedules | undefined;
+}
+
+/**
+ * The plugins' schedules, as a jobs pass asks them: enqueue each schedule's
+ * latest window that has opened, once, and prune windows past keeping.
+ */
+export interface JobSchedules {
+  /** Sweep at `now`, stopping once the wall clock reaches `deadline` (epoch ms). */
+  sweep(now: Date, deadline?: number): Promise<void>;
+  prune(before: Date, limit: number): Promise<number>;
 }

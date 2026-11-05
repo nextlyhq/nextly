@@ -947,6 +947,32 @@ export interface NextlyConfig {
   webhooks?: WebhookConfig;
   /** Audit and activity trail policy. */
   audit?: AuditConfig;
+
+  /**
+   * Settings that are not stable yet: each may change or be removed in a later release.
+   *
+   * @experimental
+   */
+  experimental?: ExperimentalConfig;
+}
+
+/**
+ * Settings that are not stable yet.
+ *
+ * @experimental
+ */
+export interface ExperimentalConfig {
+  /**
+   * Keep every translatable field in its per-language table from the start, for every collection,
+   * Single and component, whether or not it is marked translatable and whether or not the site
+   * declares languages; a site that declares none has one implicit language. Adding a language is
+   * then data only. Chosen when the site starts: a running site refuses a change until it is
+   * restarted, and a database that still keeps translatable values on its main tables is refused
+   * while it is on. Off by default.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
 }
 
 /**
@@ -1100,6 +1126,14 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization; defaults to false.
    */
   webhookAuditEnabled: boolean;
+
+  /**
+   * Whether every translatable field is kept per language from the start
+   * (`experimental.perLanguageStorage`). Always present after sanitization; defaults to false.
+   *
+   * @experimental
+   */
+  perLanguageStorage: boolean;
 }
 
 // ============================================================
@@ -1441,5 +1475,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,
+    // Only `true` turns it on, so a stray value never moves a site's storage. A config sanitized
+    // already, as the CLI sanitizes an export written with `defineConfig` again, carries the
+    // result instead of the `experimental` block, and keeps it.
+    perLanguageStorage:
+      config.experimental?.perLanguageStorage === true ||
+      (config as { perLanguageStorage?: unknown }).perLanguageStorage === true,
   };
 }

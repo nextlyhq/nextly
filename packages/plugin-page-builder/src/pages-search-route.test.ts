@@ -488,6 +488,27 @@ describe("the merged answer", () => {
     });
   });
 
+  it("gives each page the version it was read at, for a rename to send back", async () => {
+    const { reads } = readsOver(
+      [record("pages", { label: "Page" })],
+      async () =>
+        rows(
+          [
+            { id: "p1", title: "About", _rev: "6" },
+            { id: "p2", title: "Contact" },
+          ],
+          2
+        )
+    );
+
+    const answer = await readPagesSearch(request({ limit: 5 }), reads);
+    const revs = Object.fromEntries(
+      answer.items.map(item => [item.id, item.rev])
+    );
+    // A row a server without versions answers carries none.
+    expect(revs).toEqual({ p1: "6", p2: undefined });
+  });
+
   it("merges two collections by title, capped at the limit, with the total of both", async () => {
     const { reads } = readsOver(
       [

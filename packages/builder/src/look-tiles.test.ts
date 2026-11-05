@@ -247,6 +247,31 @@ describe("a token-built look's tile", () => {
   });
 });
 
+describe("a look built from scaled tokens", () => {
+  it("draws each token at its factor, as the page compiles it", () => {
+    // The page writes `calc(var(--…space-4) * 0.25)`; the tile, which has no
+    // variables, writes the token's value at the same factor.
+    const side = { $token: "space.4", times: 0.25 };
+    const tile = lookTileStyle(
+      undefined,
+      values({
+        border: {
+          width: {
+            blockStart: side,
+            blockEnd: side,
+            inlineStart: side,
+            inlineEnd: side,
+          },
+          style: "solid",
+        },
+      }),
+      undefined,
+      "light"
+    );
+    expect(tile.borderBlockStartWidth).toBe("calc(1rem * 0.25)");
+  });
+});
+
 describe("the bar's line about a worn look", () => {
   it("says an edit here is this block's, and offers the look for every block", () => {
     expect(lookLineWords("Outline", "Button")).toEqual({

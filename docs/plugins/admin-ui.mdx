@@ -57,6 +57,9 @@ load the config:
 npx nextly generate:types --check
 ```
 
+`--check` and `--dry-run` are refused together: `--check` exits non-zero when the map is out
+of date, while `--dry-run` lists the files a real run would write and exits 0.
+
 Production never reads, checks or writes the map. A dashboard widget whose component is missing
 from it draws its own card's error state, and every other card and page draws as usual. In
 development the error names the widget, its owner and the missing path; in production it says
