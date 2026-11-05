@@ -282,6 +282,15 @@ export function deletionKey(deletion: Deletion): string {
  * covered before, the consent without targets for everything, and a list for
  * the deletions in a table it names or of a column it names.
  */
+/**
+ * Whether only the consent without targets covers `deletion`: one its
+ * command cannot name, or one on a schema-qualified table, which a target
+ * list cannot tell from a `table.column`.
+ */
+function onlyBlanketCovers(deletion: Deletion): boolean {
+  return deletion.kind === "unnamed" || deletion.table.includes(".");
+}
+
 export function consentCovers(
   consent: DataLossConsent,
   deletion: Deletion
@@ -293,7 +302,7 @@ export function consentCovers(
   const given = consent.given;
   if (given === null) return false;
   if (given.targets === "all") return true;
-  if (deletion.kind === "unnamed") return false;
+  if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
   return (
     deletion.kind === "column" &&
@@ -341,7 +350,7 @@ function consentHint(
   consent: DataLossConsent,
   flag: boolean
 ): string {
-  const blanket = deletions.some(d => d.kind === "unnamed");
+  const blanket = deletions.some(onlyBlanketCovers);
   const forms = (value: string | null): string => {
     const env =
       value === null
@@ -460,8 +469,8 @@ export async function judgeDataLoss(args: {
   const flag = args.flag ?? true;
   const targets = consent.given?.targets;
   if (targets !== undefined && targets !== "all") {
-    const unnamedNote = uncovered.some(d => d.kind === "unnamed")
-      ? " A deletion its command cannot name is covered only by the consent without targets."
+    const unnamedNote = uncovered.some(onlyBlanketCovers)
+      ? " A deletion its command cannot name, or one on a schema-qualified table, is covered only by the consent without targets."
       : "";
     return {
       kind: "refused",

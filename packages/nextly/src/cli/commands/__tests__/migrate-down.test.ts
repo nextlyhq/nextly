@@ -191,7 +191,7 @@ const quietFacts = async () => ({
   cascadeFrom: () => [],
   truncateCascadeFrom: () => [],
   nulledBy: () => [],
-  deleteTriggered: () => false,
+  triggered: () => false,
   descendantsOf: () => [],
   liveColumns: new Map(),
 });
@@ -243,6 +243,38 @@ describe("a rollback's deletions, read as one run", () => {
               row("a.sql", "rolled_back", 3000),
             ],
       readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);
+    expect(asked).toHaveLength(1);
+    expect(executed).toEqual([]);
+  });
+
+  it("never lets one file's agreed deletion cover another file's same deletion once that file changed", async () => {
+    // Both DOWNs delete posts' rows. a.sql stays as agreed; b.sql's text
+    // changes while the lock is awaited, so its deletion is not the one agreed.
+    const reads = new Map<string, number>();
+    const asked: string[] = [];
+    const { deps, executed } = baseDeps({
+      interactive: true,
+      askToDelete: async (question: string) => {
+        asked.push(question);
+        return true;
+      },
+      options: { step: 2, allowDataLoss: false, yes: false, dryRun: false },
+      listFileApplies: async () => [
+        row("b.sql", "applied", 1000),
+        row("a.sql", "applied", 2000),
+      ],
+      readDownSql: async (filename: string) => {
+        const read = reads.get(filename) ?? 0;
+        reads.set(filename, read + 1);
+        return down(
+          filename === "b.sql" && read > 0
+            ? 'DELETE FROM "posts"; DELETE FROM "posts";'
+            : 'DELETE FROM "posts";'
+        );
+      },
       readDeletionFacts: quietFacts,
     });
     await expect(migrateDownCore(deps as never)).rejects.toThrow(/b\.sql/);

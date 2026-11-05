@@ -350,6 +350,22 @@ describe("judging a run's deletions", () => {
     expect(verdict).toEqual({ kind: "proceed" });
   });
 
+  it("covers a deletion on a schema-qualified table only by the consent without targets, and says so", async () => {
+    const qualified: Deletion = { kind: "rows", table: "archive.comments" };
+    const named = resolveDataLossConsent({ flag: "archive.comments", env: {} });
+    expect(consentCovers(named, qualified)).toBe(false);
+    expect(
+      consentCovers(resolveDataLossConsent({ flag: true, env: {} }), qualified)
+    ).toBe(true);
+    const { verdict } = await judge([qualified], named, false);
+    expect(verdict.kind).toBe("refused");
+    if (verdict.kind !== "refused") return;
+    expect(verdict.message).toContain("only by the consent without targets");
+    expect(verdict.message).toContain(
+      "--accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1)"
+    );
+  });
+
   it("stops when the terminal says no", async () => {
     const { verdict } = await judge([table("posts")], NO_CONSENT, true, false);
     expect(verdict).toEqual({ kind: "declined" });

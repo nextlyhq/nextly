@@ -242,6 +242,28 @@ describe("runChecks (F11 PR 4)", () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
+    it("reports a call to a function a migration file defines as DESTRUCTIVE, and leaves a built-in to the run", async () => {
+      await writeGenerated(
+        "20260101_120000_001_function",
+        "-- UP\nCREATE FUNCTION purge_old() RETURNS void AS $$ DELETE FROM t $$ LANGUAGE sql;\n\n-- DOWN\nDROP FUNCTION purge_old();\n"
+      );
+      await writeGenerated(
+        "20260101_120000_002_call",
+        "-- UP\nSELECT purge_old();\nSELECT count(*) FROM t;\n\n-- DOWN\n"
+      );
+      const logger = await run();
+      const warned = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([line]) => String(line)
+      );
+      const destructive = warned.filter(line => line.includes("DESTRUCTIVE"));
+      expect(destructive).toEqual([
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_002_call\.sql \(UP\) deletes data: SELECT PURGE_OLD \(calls a function, may delete data\)\./
+        ),
+      ]);
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
     it("reports a file that deletes data as DESTRUCTIVE, naming each deletion per section, without failing", async () => {
       await writeGenerated(
         "20260101_120000_001_drop",

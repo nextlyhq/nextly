@@ -281,6 +281,34 @@ export async function runPluginMigrations(
 }
 
 /**
+ * The modules a run over `appliedShas` applies, in the order it applies them
+ * and within `limit`: each one the history records no checksum for
+ * (`isPending`), walked as `runPluginMigrations` walks the sets
+ * (`orderedMigrations`, `moduleBudget`). What `nextly migrate` judges for
+ * the data its modules delete, before it runs them.
+ */
+export function pendingPluginModules(
+  sets: readonly PluginMigrationSet[],
+  appliedShas: ReadonlyMap<string, string | null>,
+  limit: number | undefined
+): { filename: string; migration: PluginMigration }[] {
+  const pending: { filename: string; migration: PluginMigration }[] = [];
+  let remaining = moduleBudget(limit);
+  for (const set of sets) {
+    for (const migration of orderedMigrations(set.migrations)) {
+      if (!isPending(set, migration, { appliedShas })) continue;
+      if (remaining <= 0) return pending;
+      pending.push({
+        filename: qualifiedFilename(set.pluginName, migration.name),
+        migration,
+      });
+      remaining -= 1;
+    }
+  }
+  return pending;
+}
+
+/**
  * How many modules a run may apply or adopt under `limit`
  * (`RunPluginMigrationsDeps.limit`): all of them unless it is positive.
  */

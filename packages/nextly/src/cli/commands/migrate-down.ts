@@ -148,7 +148,7 @@ function unreadFacts(liveColumns: LiveColumns | undefined): DeletionFacts {
     cascadeFrom: () => undefined,
     truncateCascadeFrom: () => undefined,
     nulledBy: () => undefined,
-    deleteTriggered: () => undefined,
+    triggered: () => undefined,
     descendantsOf: () => undefined,
     liveColumns: liveColumns ?? new Map(),
   };

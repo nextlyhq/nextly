@@ -185,15 +185,21 @@ export async function judgeRunDeletions(args: {
 }): Promise<Agreement> {
   const first = args.agreed === undefined;
   const sources = [...args.sources];
+  // Under the lock only what no agreement binds goes to the verdict, which
+  // compares deletions by kind and table alone: an agreement is kept here,
+  // by file, so one file's agreed deletion never covers another's.
+  const judged = first
+    ? sources
+    : sources.filter(
+        ([deletion, source]) =>
+          args.agreed?.has(agreed(source, deletion)) !== true
+      );
   const verdict = await judgeDataLoss({
-    deletions: [...args.sources.keys()],
+    deletions: judged.map(([deletion]) => deletion),
     consent: args.consent,
     interactive: first && args.interactive === true,
     ask: question => args.askToDelete?.(question) ?? Promise.resolve(false),
     print: first ? args.warn : () => {},
-    approved: sources.flatMap(([deletion, source]) =>
-      args.agreed?.has(agreed(source, deletion)) === true ? [deletion] : []
-    ),
     sourceOf: deletion => args.sources.get(deletion)?.label,
   });
   if (verdict.kind === "refused") {

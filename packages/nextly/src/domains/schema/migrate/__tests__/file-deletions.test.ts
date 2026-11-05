@@ -38,7 +38,10 @@ interface Facts {
   /** Judge a rebuild of an unseen table as `migrate:check` does. */
   deferred?: boolean;
   /** Per table, the removals a trigger on it fires on; none when left out. Undefined: unreadable. */
-  triggers?: Record<string, readonly ("delete" | "truncate")[] | undefined>;
+  triggers?: Record<
+    string,
+    readonly ("delete" | "truncate" | "insert" | "update")[] | undefined
+  >;
   /** Per table, its inheritance descendants and partitions; none when left out. Undefined: unreadable. */
   descendants?: Record<string, readonly string[] | undefined>;
 }
@@ -57,9 +60,9 @@ function fake(facts: Facts = {}): DeletionFacts {
     nulledBy: table =>
       nulled !== undefined && table in nulled ? nulled[table] : [],
     // A table left out has no trigger; one mapped to undefined is unreadable.
-    deleteTriggered: (table, removal) =>
+    triggered: (table, event) =>
       triggers !== undefined && table in triggers
-        ? triggers[table]?.includes(removal)
+        ? triggers[table]?.includes(event)
         : false,
     descendantsOf: answer(facts.descendants),
     ...(facts.functions === "unreadable"
@@ -357,6 +360,62 @@ describe("triggers a removal of rows fires", () => {
     ).toEqual([rows("posts"), fires("posts", "TRUNCATE")]);
   });
 
+  it("stands for an INSERT or UPDATE trigger a write fires, an upsert firing an UPDATE one too", () => {
+    const written = (table: string, event: string): Deletion =>
+      unnamed(
+        `rows written to ${table} fire an ${event} trigger, which may delete other data`
+      );
+    expect(
+      read("postgresql", ["INSERT INTO audit (id) VALUES (1)"], {
+        triggers: { audit: ["insert"] },
+      })
+    ).toEqual([written("audit", "INSERT")]);
+    expect(
+      read("postgresql", ["UPDATE posts SET title = 'x'"], {
+        triggers: { posts: ["update"] },
+      })
+    ).toEqual([written("posts", "UPDATE")]);
+    expect(
+      read(
+        "postgresql",
+        [
+          "INSERT INTO posts (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = 1",
+        ],
+        { triggers: { posts: ["update"] } }
+      )
+    ).toEqual([written("posts", "UPDATE")]);
+    // A table with no trigger, or one the list made, asks nothing.
+    expect(
+      read("mysql", [
+        "INSERT INTO plain (id) VALUES (1)",
+        "CREATE TABLE scratch (id integer)",
+        "INSERT INTO scratch (id) VALUES (1)",
+      ])
+    ).toEqual([]);
+  });
+
+  it("stands for a trigger the list itself creates, on a write after it, and fails closed when a write's triggers could not be read", () => {
+    expect(
+      read("postgresql", [
+        "CREATE TRIGGER audit_trg AFTER INSERT ON audit FOR EACH ROW EXECUTE FUNCTION keep()",
+        "INSERT INTO audit (id) VALUES (1)",
+      ])
+    ).toEqual([
+      unnamed(
+        "rows written to audit fire an INSERT trigger, which may delete other data"
+      ),
+    ]);
+    expect(
+      read("mysql", ["INSERT INTO audit (id) VALUES (1)"], {
+        triggers: { audit: undefined },
+      })
+    ).toEqual([
+      unnamed(
+        "rows written to audit may fire an INSERT trigger, which could not be read"
+      ),
+    ]);
+  });
+
   it("fails closed when the triggers could not be read", () => {
     expect(
       read("mysql", ["DELETE FROM posts"], { triggers: { posts: undefined } })
@@ -568,13 +627,33 @@ describe("foreign keys and columns the list itself adds", () => {
         "ALTER TABLE posts ADD COLUMN tmp text",
         "ALTER TABLE posts RENAME COLUMN tmp TO scratch",
         "ALTER TABLE posts DROP COLUMN scratch",
-        "ALTER TABLE posts ADD COLUMN IF NOT EXISTS other text",
+        "ALTER TABLE posts ADD COLUMN other text",
         "ALTER TABLE posts ALTER COLUMN other TYPE integer",
       ])
     ).toEqual([]);
     expect(read("postgresql", ["ALTER TABLE posts DROP COLUMN tmp"])).toEqual([
       column("posts", "tmp"),
     ]);
+  });
+
+  it("gives a name back to its live table once the temporary table shadowing it is renamed away, and holds the renamed one as the run's", () => {
+    expect(
+      read("postgresql", [
+        "CREATE TEMP TABLE posts AS SELECT * FROM posts WHERE draft",
+        "ALTER TABLE posts RENAME TO scratch",
+        "DELETE FROM scratch",
+        "DELETE FROM posts WHERE id = 1",
+      ])
+    ).toEqual([rows("posts")]);
+  });
+
+  it("names a column a conditional ADD COLUMN may have found already there, when it is dropped later", () => {
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD COLUMN IF NOT EXISTS summary text",
+        "ALTER TABLE posts DROP COLUMN summary",
+      ])
+    ).toEqual([column("posts", "summary")]);
   });
 
   it("gives a name back to its live table once the temporary table shadowing it is dropped", () => {

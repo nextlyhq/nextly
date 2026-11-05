@@ -219,8 +219,8 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
       `DELETE FROM ${triggered}`,
       `DELETE FROM ${plain}`,
     ]);
-    expect(facts.deleteTriggered(triggered, "delete")).toBe(true);
-    expect(facts.deleteTriggered(plain, "delete")).toBe(false);
+    expect(facts.triggered(triggered, "delete")).toBe(true);
+    expect(facts.triggered(plain, "delete")).toBe(false);
   }, 120_000);
 
   it.runIf(dialect === "postgresql")(

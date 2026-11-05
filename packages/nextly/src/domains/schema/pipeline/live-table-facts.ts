@@ -442,38 +442,50 @@ export async function readReferencingKeys(
 }
 
 /** PostgreSQL's `tgtype` bits for a trigger fired by a DELETE and by a TRUNCATE. */
-const PG_TRIGGER_BITS = { delete: 8, truncate: 32 } as const;
+/** The `pg_trigger.tgtype` bit of each event a trigger fires on. */
+const PG_TRIGGER_BITS = {
+  insert: 4,
+  delete: 8,
+  update: 16,
+  truncate: 32,
+} as const;
+
+/** The `pg_rewrite.ev_type` of the rule each event is rewritten by; TRUNCATE has none. */
+const PG_RULE_EVENTS = { update: "2", insert: "3", delete: "4" } as const;
+
+/** An event a statement fires triggers on. */
+export type TriggerEvent = keyof typeof PG_TRIGGER_BITS;
 
 /** Quoted names, strings and comments in a SQLite trigger's text, which name no event. */
 const SQLITE_NOT_CODE =
   /"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g;
 
 /**
- * Whether a SQLite trigger's `CREATE TRIGGER` text fires on DELETE: its first event word, read
- * past quoted names, strings and comments, is DELETE. One whose event cannot be found counts as
+ * Whether a SQLite trigger's `CREATE TRIGGER` text fires on `event`: its first event word, read
+ * past quoted names, strings and comments, is that event. One whose event cannot be found counts as
  * one that fires, since a trigger nobody could read cannot be ruled out.
  */
-function sqliteTriggerFiresOnDelete(text: string): boolean {
-  const event = /\b(DELETE|INSERT|UPDATE)\b/i.exec(
+function sqliteTriggerFiresOn(text: string, event: TriggerEvent): boolean {
+  const found = /\b(DELETE|INSERT|UPDATE)\b/i.exec(
     text.replace(SQLITE_NOT_CODE, " ")
   );
-  return event === null || event[1].toUpperCase() === "DELETE";
+  return found === null || found[1].toUpperCase() === event.toUpperCase();
 }
 
 /**
- * Whether removing rows from any of `tables` fires a trigger, which runs code the removal does not
- * show and so may delete or rewrite other data. `removal` is how the rows go: a `delete` (DELETE,
- * REPLACE, a cascade) fires DELETE triggers, a `truncate` fires PostgreSQL's TRUNCATE triggers
- * and nothing on MySQL. PostgreSQL also counts a rule ON DELETE, which rewrites the removal into
- * statements the file does not show, and reads each table through its ref (`RelationRef.table`),
+ * Whether `event` on any of `tables` fires a trigger, which runs code the statement does not show
+ * and so may delete or rewrite other data: a `delete` (DELETE, REPLACE, a cascade) fires DELETE
+ * triggers, an `insert` or `update` (INSERT, UPDATE, an upsert) INSERT or UPDATE ones, and a
+ * `truncate` PostgreSQL's TRUNCATE triggers and nothing on MySQL. PostgreSQL also counts a rule on
+ * the event, which rewrites the statement into statements the file does not show, and reads each table through its ref (`RelationRef.table`),
  * throwing when one does not resolve; MySQL reads the current database's triggers, SQLite every
  * trigger in `sqlite_master` on one of the tables.
  */
-export async function readRemovalTriggered(
+export async function readTriggered(
   db: unknown,
   dialect: SupportedDialect,
   tables: readonly string[],
-  removal: "delete" | "truncate"
+  event: TriggerEvent
 ): Promise<boolean> {
   if (tables.length === 0) return false;
   if (dialect === "postgresql") {
@@ -482,23 +494,24 @@ export async function readRemovalTriggered(
       tables.map(table => sql`to_regclass(${table})`),
       sql`, `
     );
+    const ruleEvent = event === "truncate" ? undefined : PG_RULE_EVENTS[event];
     const rule =
-      removal === "delete"
-        ? sql`OR EXISTS (SELECT 1 FROM pg_rewrite r
-                         WHERE r.ev_class IN (${relations}) AND r.ev_type = '4')`
-        : sql``;
+      ruleEvent === undefined
+        ? sql``
+        : sql`OR EXISTS (SELECT 1 FROM pg_rewrite r
+                         WHERE r.ev_class IN (${relations}) AND r.ev_type = ${ruleEvent})`;
     return probeReturnsRow(
       db,
       dialect,
       sql`SELECT 1 WHERE EXISTS (
             SELECT 1 FROM pg_trigger t
             WHERE t.tgrelid IN (${relations}) AND NOT t.tgisinternal
-              AND (t.tgtype::integer & ${PG_TRIGGER_BITS[removal]}::integer) <> 0
+              AND (t.tgtype::integer & ${PG_TRIGGER_BITS[event]}::integer) <> 0
           ) ${rule}`
     );
   }
   // Neither has a trigger a TRUNCATE fires: MySQL's TRUNCATE fires none, SQLite has no TRUNCATE.
-  if (removal === "truncate") return false;
+  if (event === "truncate") return false;
   const names = sql.join(
     tables.map(table => sql`${table.toLowerCase()}`),
     sql`, `
@@ -510,7 +523,7 @@ export async function readRemovalTriggered(
       sql`SELECT 1 FROM information_schema.TRIGGERS
           WHERE EVENT_OBJECT_SCHEMA = DATABASE()
             AND lower(EVENT_OBJECT_TABLE) IN (${names})
-            AND EVENT_MANIPULATION = 'DELETE'
+            AND EVENT_MANIPULATION = ${event.toUpperCase()}
           LIMIT 1`
     );
   }
@@ -518,7 +531,7 @@ export async function readRemovalTriggered(
     sql`SELECT sql FROM sqlite_master
         WHERE type = 'trigger' AND lower(tbl_name) IN (${names})`
   )) as { sql: string | null }[];
-  return rows.some(row => sqliteTriggerFiresOnDelete(row.sql ?? ""));
+  return rows.some(row => sqliteTriggerFiresOn(row.sql ?? "", event));
 }
 
 /**

@@ -63,6 +63,7 @@ import {
 } from "../../domains/schema/migrate/data-loss-consent";
 import {
   fileDeletions,
+  functionsDefinedBy,
   type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
 import {
@@ -592,23 +593,24 @@ export async function judgeStatements(
   // then the snapshot paired with the file before it (undefined when that
   // file has none, as a localisation file does).
   let before: NextlySchemaSnapshot | undefined = EMPTY_SNAPSHOT;
-  for (const baseName of getSortedBaseNames(groups)) {
-    const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
-    if (file === undefined) continue;
-    const content = await readFile(resolve(migrationsDir, file), "utf-8");
+  const files = await readSections(migrationsDir, groups, dialect);
+  // Without a catalog, a function counts as user-defined when a migration
+  // file defines it (a qualified one outside pg_catalog always does).
+  const functions = new Set(
+    files.flatMap(({ sections }) =>
+      sections.flatMap(([, statements]) =>
+        functionsDefinedBy(statements, dialect)
+      )
+    )
+  );
+  for (const { file, transaction, sections } of files) {
     // UP runs against the schema before the file, DOWN against the one the
     // file leaves, which its own snapshot records.
     const after = await pairedSnapshot(metaDir, file);
     const schemaFor = { UP: before, DOWN: after };
     before = after;
-    const transaction = !marksNoTransaction(content);
     if (!transaction) outsideTransaction.push(file);
-    const { upSql, downSql } = parseSqlSections(content);
-    for (const [section, sql] of [
-      ["UP", upSql],
-      ["DOWN", downSql],
-    ] as const) {
-      const statements = splitSqlStatements(sql, dialect, { transaction });
+    for (const [section, statements] of sections) {
       for (const refusal of statementRefusals(statements, dialect, {
         transaction,
         unit: "file",
@@ -618,7 +620,7 @@ export async function judgeStatements(
       const deletions = fileDeletions(
         statements,
         dialect,
-        offlineFacts(schemaFor[section])
+        offlineFacts(schemaFor[section], functions)
       );
       if (deletions.length > 0) destructive.push({ file, section, deletions });
     }
@@ -628,14 +630,51 @@ export async function judgeStatements(
 
 /**
  * The facts a section's deletions are judged against without a database.
- * No foreign key or function is known: the deletions named are the ones the
+ * No foreign key or trigger is known: the deletions named are the ones the
  * statements name, and the run itself judges what a removal reaches. The
+ * user-defined functions are `functions`, the ones a migration file defines. The
  * columns of the tables a SQLite rebuild rebuilds are read from `schema`, the
  * snapshot of the schema the section runs against, so a column the rebuild
  * leaves out is named. Without a snapshot, or for a table it does not hold, a
  * rebuild is left to the run unless it carries everything.
  */
-function offlineFacts(schema: NextlySchemaSnapshot | undefined): DeletionFacts {
+/** Each migration file in run order, the dialect's variant, with its UP and DOWN split into statements. */
+async function readSections(
+  migrationsDir: string,
+  groups: Awaited<ReturnType<typeof discoverMigrationGroups>>,
+  dialect: SupportedDialect
+): Promise<
+  {
+    file: string;
+    transaction: boolean;
+    sections: (readonly ["UP" | "DOWN", string[]])[];
+  }[]
+> {
+  const files = [];
+  for (const baseName of getSortedBaseNames(groups)) {
+    const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
+    if (file === undefined) continue;
+    const content = await readFile(resolve(migrationsDir, file), "utf-8");
+    const transaction = !marksNoTransaction(content);
+    const { upSql, downSql } = parseSqlSections(content);
+    const split = (sql: string) =>
+      splitSqlStatements(sql, dialect, { transaction });
+    files.push({
+      file,
+      transaction,
+      sections: [
+        ["UP", split(upSql)],
+        ["DOWN", split(downSql)],
+      ] as const satisfies (readonly ["UP" | "DOWN", string[]])[],
+    });
+  }
+  return files;
+}
+
+function offlineFacts(
+  schema: NextlySchemaSnapshot | undefined,
+  functions: ReadonlySet<string>
+): DeletionFacts {
   const columnTypes = new Map(
     (schema?.tables ?? []).map(table => [
       table.name.toLowerCase(),
@@ -655,9 +694,9 @@ function offlineFacts(schema: NextlySchemaSnapshot | undefined): DeletionFacts {
     nulledBy: () => [],
     // No trigger or inheritance tree is known without a database; the run
     // judges the ones a removal reaches.
-    deleteTriggered: () => false,
+    triggered: () => false,
     descendantsOf: () => [],
-    userFunctions: new Set(),
+    userFunctions: functions,
     unseenRebuild: "deferred",
     // Derived from the one reading of the types, so the two agree on which
     // columns a table has.

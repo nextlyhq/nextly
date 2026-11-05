@@ -89,9 +89,11 @@ import {
   assertPluginHistories,
   assertPluginListsSound,
 } from "../../domains/schema/migrate/plugin/plugin-history";
+import { pluginModuleStatements } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
+  pendingPluginModules,
   pluginMigrationArgs,
   previewPluginMigrations,
   runPluginMigrations,
@@ -920,8 +922,14 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  const pendingDeletions = await pendingRunDeletions(pendingFiles, db, dialect);
-  for (const { file: m, deletions } of pendingDeletions) {
+  const pendingDeletions = await pendingRunDeletions(
+    pendingFiles.map(file => fileUnit(file, dialect)),
+    db,
+    dialect
+  );
+  for (const [at, { deletions }] of pendingDeletions.entries()) {
+    const m = pendingFiles[at];
+    if (m === undefined) continue;
     previewPendingFile(m, deletions, dialect, logger);
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
@@ -1981,12 +1989,20 @@ async function judgeFileDeletions(
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
-  for (const { file, deletions } of await pendingRunDeletions(
-    listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : [])),
+  // The plugin modules a run applies first, then the app files within the
+  // step, read as one run in that order.
+  const units = [
+    ...(await moduleUnits(deps)),
+    ...listed.flatMap(({ file }) =>
+      plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
+    ),
+  ];
+  for (const { unit, deletions } of await pendingRunDeletions(
+    units,
     deps.db,
     deps.dialect
   )) {
-    const source = deletionSource(`${file.name}.sql`, file.upSql);
+    const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
   }
   // A refusal, or a no at the terminal (`DATA_LOSS_DECLINED`, exit 1),
@@ -2001,23 +2017,56 @@ async function judgeFileDeletions(
   });
 }
 
+/** One unit of a run as its consent judges it: its name in the listing, its text (for binding an agreement) and its statements. */
+interface RunUnit {
+  label: string;
+  text: string;
+  statements: string[];
+}
+
+/** An app migration file as a unit of the run: its UP section. */
+function fileUnit(file: ParsedMigration, dialect: SupportedDialect): RunUnit {
+  return {
+    label: `${file.name}.sql`,
+    text: file.upSql,
+    statements: splitSqlStatements(file.upSql, dialect, file),
+  };
+}
+
 /**
- * What each file of a run deletes, the run read as one list
- * (`runDeletions`): a file is judged against the schema as the files before
- * it leave it, so a table an earlier file creates holds only what the run
- * put there. The live facts are read once, for every file's statements.
+ * The plugin modules a run applies before the app files, in that order, as
+ * units of the run (`pendingPluginModules`), read against the applied
+ * checksums the history checks read.
+ */
+async function moduleUnits(deps: MigrateCoreDeps): Promise<RunUnit[]> {
+  const lists = deps.pluginMigrationSets ?? [];
+  if (lists.length === 0) return [];
+  const applied = await (
+    deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
+  )();
+  return pendingPluginModules(lists, applied, deps.step).map(
+    ({ filename, migration }) => {
+      const statements = pluginModuleStatements(migration, deps.dialect, "up");
+      return { label: filename, text: statements.join("\n;\n"), statements };
+    }
+  );
+}
+
+/**
+ * What each unit of a run deletes, the run read as one list
+ * (`runDeletions`): a unit is judged against the schema as the units before
+ * it leave it, so a table an earlier one creates holds only what the run
+ * put there. The live facts are read once, for every unit's statements.
  */
 async function pendingRunDeletions(
-  files: readonly ParsedMigration[],
+  units: readonly RunUnit[],
   db: unknown,
   dialect: SupportedDialect
-): Promise<{ file: ParsedMigration; deletions: Deletion[] }[]> {
-  const lists = files.map(file =>
-    splitSqlStatements(file.upSql, dialect, file)
-  );
+): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
+  const lists = units.map(unit => unit.statements);
   const facts = await readDeletionFacts(db, dialect, runStatements(lists));
-  const perFile = runDeletions(lists, dialect, facts);
-  return files.map((file, at) => ({ file, deletions: perFile[at] ?? [] }));
+  const perUnit = runDeletions(lists, dialect, facts);
+  return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
 }
 
 /**
