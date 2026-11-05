@@ -148,6 +148,36 @@ describe("the Single editor's document panel", () => {
     );
 
     expect(lastBar().documentStatus).toMatchObject({ status: "draft" });
+    // German has no content of its own: it is not a draft yet, as the
+    // Languages panel's "not translated" says of it.
+    expect(screen.getByRole("region", { name: "Status" })).toHaveTextContent(
+      "The German version isn't translated or published yet."
+    );
+  });
+
+  it("calls a language with its own unpublished content a draft", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    const drafted = {
+      id: "s1",
+      title: "Hello",
+      status: "published",
+      _translations: {
+        en: { translated: true, status: "published" },
+        de: { translated: true, status: "draft" },
+      },
+    } as never;
+    render(
+      <SingleForm
+        schema={schema}
+        document={drafted}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+
     expect(screen.getByRole("region", { name: "Status" })).toHaveTextContent(
       "The German version is a draft, not published yet."
     );

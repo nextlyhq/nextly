@@ -50,7 +50,10 @@ import {
   DocumentViewBody,
   type DocumentViewMount,
 } from "@admin/components/features/entries/EntryForm/DocumentViewBody";
-import { effectiveEntryStatus } from "@admin/components/features/entries/EntryForm/entry-address";
+import {
+  editedLanguageUntranslated,
+  effectiveEntryStatus,
+} from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -1118,6 +1121,7 @@ export function SingleForm({
   const editedStatus = {
     status: documentStatus,
     hasWorkingDraft: hasPendingWorkingDraft(document),
+    untranslated: editedLanguageUntranslated(document, locale, defaultLocale),
   };
 
   // One decision rather than three: which language the link is for, whether it
