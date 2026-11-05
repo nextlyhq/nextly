@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * What a collection loop gets back from `listLoopCollections`, and what it
+ * What a collection list gets back from `listLoopCollections`, and what it
  * asked.
  *
  * The two properties that fail quietly are the ADDRESS and the FAILURE: a
@@ -32,17 +32,42 @@ describe("listLoopCollections", () => {
     });
   });
 
-  it("keeps each collection and field of the promised shape, and drops the rest", async () => {
+  it("keeps each collection, field and relation of the promised shape, and drops the rest", async () => {
     readPluginRoute.mockResolvedValue({
       items: [
         {
           slug: "posts",
           label: "Blog posts",
-          sortFields: [
-            { name: "title", label: "Title", date: false },
-            { name: "broken", label: "Broken" },
+          singular: "Post",
+          fields: [
+            { name: "title", label: "Title", kind: "text" },
+            {
+              name: "kind",
+              label: "Kind",
+              kind: "choice",
+              options: [{ value: "news", label: "News" }, { value: 3 }],
+            },
+            {
+              name: "author",
+              label: "Author",
+              kind: "entry",
+              relationTo: "authors",
+            },
+            { name: "day", label: "Day", kind: "date", dateOnly: true },
+            { name: "broken", label: "Broken", kind: "relationship" },
+            { name: "unkinded", label: "Unkinded" },
           ],
+          relations: [
+            {
+              field: "categories",
+              label: "Categories",
+              collection: "categories",
+            },
+            { field: "nowhere", label: "Nowhere" },
+          ],
+          declared: ["id", "title", 4],
         },
+        { slug: "events", label: "Events" },
         { slug: 3, label: "Not a collection" },
       ],
       meta: {},
@@ -51,7 +76,40 @@ describe("listLoopCollections", () => {
       {
         slug: "posts",
         label: "Blog posts",
-        sortFields: [{ name: "title", label: "Title", date: false }],
+        singular: "Post",
+        fields: [
+          { name: "title", label: "Title", kind: "text" },
+          {
+            name: "kind",
+            label: "Kind",
+            kind: "choice",
+            options: [{ value: "news", label: "News" }],
+          },
+          {
+            name: "author",
+            label: "Author",
+            kind: "entry",
+            relationTo: "authors",
+          },
+          { name: "day", label: "Day", kind: "date", dateOnly: true },
+        ],
+        relations: [
+          {
+            field: "categories",
+            label: "Categories",
+            collection: "categories",
+          },
+        ],
+        declared: ["id", "title"],
+      },
+      // An answer from before singular names reads as its label, with nothing to name.
+      {
+        slug: "events",
+        label: "Events",
+        singular: "Events",
+        fields: [],
+        relations: [],
+        declared: [],
       },
     ]);
   });

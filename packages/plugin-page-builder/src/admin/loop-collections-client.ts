@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * A collection loop's read: the collections it can repeat over, each with the
- * fields its entries can be sorted by, through the loop collections route.
+ * A collection list's read: the collections it can repeat over, each with the
+ * fields its filters and sort may name and its to-many relations, through the
+ * loop collections route.
  *
  * A promise rather than a hook, for the reason `entries-client` gives: it is
  * the shape `@nextlyhq/builder`'s content services lend, and the builder
@@ -13,6 +14,7 @@
  *
  * @module admin/loop-collections-client
  */
+import { isListFieldKind } from "@nextlyhq/blocks-engine";
 import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -21,7 +23,9 @@ import {
   LOOP_COLLECTIONS_ROUTE_PATH,
   type LoopCollectionItem,
   type LoopCollectionsResponse,
-  type LoopSortFieldItem,
+  type LoopFieldOption,
+  type LoopListFieldItem,
+  type LoopRelationItem,
 } from "../loop-collections-contract";
 
 /** Said when the route answered with something that is not a list of collections. */
@@ -53,30 +57,84 @@ export async function listLoopCollections(): Promise<
   });
 }
 
+/** The entries of an array, each kept only when `read` accepts it. */
+function eachOf<T>(
+  value: unknown,
+  read: (item: unknown) => T | undefined
+): T[] {
+  return (Array.isArray(value) ? value : []).flatMap((item: unknown) => {
+    const each = read(item);
+    return each === undefined ? [] : [each];
+  });
+}
+
+/** An object's own fields, or `undefined` for anything else. */
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 /** One listed collection, or `undefined` for an item of another shape. */
 function collectionOf(item: unknown): LoopCollectionItem | undefined {
-  if (typeof item !== "object" || item === null) return undefined;
-  const { slug, label, sortFields } = item as Record<string, unknown>;
+  const record = recordOf(item);
+  if (record === undefined) return undefined;
+  const { slug, label, singular } = record;
   if (typeof slug !== "string" || typeof label !== "string") return undefined;
   return {
     slug,
     label,
-    sortFields: (Array.isArray(sortFields) ? sortFields : []).flatMap(
-      (field: unknown) => {
-        const each = sortFieldOf(field);
-        return each === undefined ? [] : [each];
-      }
+    singular: typeof singular === "string" ? singular : label,
+    fields: eachOf(record.fields, fieldOf),
+    relations: eachOf(record.relations, relationOf),
+    declared: eachOf(record.declared, name =>
+      typeof name === "string" ? name : undefined
     ),
   };
 }
 
-/** One sortable field, or `undefined` for an entry of another shape. */
-function sortFieldOf(field: unknown): LoopSortFieldItem | undefined {
-  if (typeof field !== "object" || field === null) return undefined;
-  const { name, label, date } = field as Record<string, unknown>;
-  return typeof name === "string" &&
-    typeof label === "string" &&
-    typeof date === "boolean"
-    ? { name, label, date }
+/** One choice, or `undefined` for an entry of another shape. */
+function optionOf(value: unknown): LoopFieldOption | undefined {
+  const record = recordOf(value);
+  return typeof record?.value === "string" && typeof record.label === "string"
+    ? { value: record.value, label: record.label }
+    : undefined;
+}
+
+/** One field a list may name, or `undefined` for an entry of another shape. */
+function fieldOf(value: unknown): LoopListFieldItem | undefined {
+  const record = recordOf(value);
+  if (record === undefined) return undefined;
+  const { name, label, kind, relationTo, dateOnly } = record;
+  if (
+    typeof name !== "string" ||
+    typeof label !== "string" ||
+    !isListFieldKind(kind)
+  ) {
+    return undefined;
+  }
+  return {
+    name,
+    label,
+    kind,
+    ...(Array.isArray(record.options)
+      ? { options: eachOf(record.options, optionOf) }
+      : {}),
+    ...(typeof relationTo === "string" ? { relationTo } : {}),
+    ...(dateOnly === true ? { dateOnly: true } : {}),
+  };
+}
+
+/** One related source, or `undefined` for an entry of another shape. */
+function relationOf(value: unknown): LoopRelationItem | undefined {
+  const record = recordOf(value);
+  return typeof record?.field === "string" &&
+    typeof record.label === "string" &&
+    typeof record.collection === "string"
+    ? {
+        field: record.field,
+        label: record.label,
+        collection: record.collection,
+      }
     : undefined;
 }
