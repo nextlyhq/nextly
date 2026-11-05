@@ -1029,3 +1029,40 @@ describe("one class object supplied in two library slots", () => {
     expect(css.split(".nx-c-card").length - 1).toBe(1);
   });
 });
+
+describe("a look, a class bound to one block type", () => {
+  // A look is the block type's named variant (Outline, Rounded): a shared
+  // style an author wears ON TOP of, so every shared style the site makes
+  // comes after it, whatever their positions in the library.
+  const outline: NamedClass = {
+    id: "look:core/box:outline",
+    slug: "box-outline",
+    orderIndex: 9,
+    blockType: "core/box",
+    styles: styles({ color: "red" }),
+  };
+
+  it("is written before every shared style, whatever its position", () => {
+    const { css } = compile(doc({ classes: [outline.id, card.id] }), [
+      outline,
+      card,
+    ]);
+    expect(at(css, ".nx-c-box-outline")).toBeLessThan(at(css, ".nx-c-card"));
+  });
+
+  it("keeps library order among looks", () => {
+    const rounded: NamedClass = {
+      ...outline,
+      id: "look:core/box:rounded",
+      slug: "box-rounded",
+      orderIndex: 2,
+    };
+    const { css } = compile(doc({ classes: [outline.id, rounded.id] }), [
+      outline,
+      rounded,
+    ]);
+    expect(at(css, ".nx-c-box-rounded")).toBeLessThan(
+      at(css, ".nx-c-box-outline")
+    );
+  });
+});

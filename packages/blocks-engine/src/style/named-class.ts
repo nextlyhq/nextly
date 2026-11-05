@@ -74,6 +74,25 @@ export interface NamedClass {
    * unlocked. Nothing compiled reads it.
    */
   locked?: true;
+  /**
+   * The block type this class is a look of (`core/button` for Outline), or absent for a shared
+   * style any block may wear.
+   *
+   * A look is a block type's named variant, worn under the shared styles a site makes: every
+   * look is written before every other class, whatever their positions, so a shared style and
+   * the block's own values still win over it. Among looks, `orderIndex` decides as usual.
+   *
+   * @experimental
+   */
+  blockType?: string;
+}
+
+/**
+ * Whether a class is a look: bound to one block type, so written before every shared style.
+ * A `blockType` that is not a string is read as absent, as persisted data may carry one.
+ */
+export function isLook(cls: NamedClass): boolean {
+  return typeof (cls as { blockType?: unknown } | null)?.blockType === "string";
 }
 
 /**
@@ -238,6 +257,8 @@ export function orderedNamedClassPositions(
     const left = classes[a];
     const right = classes[b];
     return (
+      // Looks first: a look is worn under the shared styles, whatever its index.
+      Number(!isLook(left)) - Number(!isLook(right)) ||
       index(left) - index(right) ||
       (id(left) < id(right) ? -1 : id(left) > id(right) ? 1 : 0) ||
       // Two entries that compare equal keep their stored order. `Array.prototype.sort` is
