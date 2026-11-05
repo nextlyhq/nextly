@@ -224,6 +224,40 @@ describe("a breakpoint removal counted across the site", () => {
     expect(stopped.complete).toBe(false);
   });
 
+  it("takes a nested value its bounds cut off for an unreadable document", async () => {
+    // Past the bounds a removed style could sit uncounted: no confident zero.
+    const deps = site([
+      {
+        host: { ...entry("entries", "rows"), path: [] },
+        access: "scan",
+        published: {
+          rows: [{ body: page(styled("a"), styled("b"), styled("c")) }],
+        },
+      },
+    ]);
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      limits: { ...DEFAULT_LIMITS, maxNodes: 2 },
+    });
+    expect(run).toMatchObject({ unreadable: 1, complete: true });
+    expect(run.removed[0]?.unaddressable).toBe(0);
+  });
+
+  it("stops at the deadline while a read is still outstanding", async () => {
+    // A read that stalls must not hold the request past its budget.
+    const deps = site([
+      { host: entry("pages", "p1"), published: page(styled("a")) },
+    ]);
+    const started = Date.now();
+    const run = await countRemoval(MOBILE, {
+      ...deps,
+      read: () => new Promise(() => {}),
+      deadline: new Date(Date.now() + 50),
+    });
+    expect(run.complete).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it("counts the shared styles, and walks nothing when nothing is removed", async () => {
     const classes: NamedClass[] = [
       {
