@@ -22,6 +22,7 @@ import type {
   BreakpointSet,
   NamedClass,
   NodeStyles,
+  SiteTokenSet,
   StyleState,
 } from "@nextlyhq/blocks-engine";
 import { findNode } from "@nextlyhq/blocks-engine";
@@ -30,6 +31,7 @@ import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
 import { useSurvivingReport } from "./builder-notices";
+import { LookTiles } from "./look-tiles-view";
 import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
@@ -294,6 +296,8 @@ export interface StyleTargetBarProps {
   /** Why the block's design is held, as {@link useStyleTarget} read it. */
   readonly held: string | undefined;
   readonly library: readonly NamedClass[] | undefined;
+  /** The site's tokens, for drawing the look tiles as the canvas shows them. */
+  readonly tokens?: SiteTokenSet;
   readonly libraryAbsence?: "pending" | "failed";
   readonly host: SharedStylesHost | undefined;
   /** The shared block verbs, for "Save as shared style…". */
@@ -386,6 +390,7 @@ export function StyleTargetBar({
   breakpoints,
   state,
   stateControl,
+  tokens,
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
   // The bar has no line of its own for a refusal, so it speaks through the
@@ -397,14 +402,25 @@ export function StyleTargetBar({
     host
   );
   const worn = target.worn;
+  // A look is worn beside a shared style, so "Apply" and "Save as" stay on
+  // offer while the block wears only a look.
+  const wearsSharedStyle = worn.some(row => row.look !== true);
   return (
-    <EditingBar
+    <>
+      <LookTiles
+        editor={editor}
+        library={library}
+        held={held}
+        tokens={tokens}
+      />
+      <EditingBar
       target={editTargetOf(target, reach)}
       chips={worn.map(row => ({
         id: row.id,
         name: row.name,
         className: row.className,
         locked: row.locked,
+        ...(row.look === true ? { look: true } : {}),
       }))}
       onTargetChange={host === undefined ? undefined : onChoose}
       {...chipActions(editor, nodeId, worn, report, breakpoints)}
@@ -413,7 +429,7 @@ export function StyleTargetBar({
       targetHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={
-        nodeId === null || worn.length > 0 || held !== undefined ? null : (
+        nodeId === null || wearsSharedStyle || held !== undefined ? null : (
           <BarActions
             editor={editor}
             nodeId={nodeId}
@@ -426,7 +442,8 @@ export function StyleTargetBar({
       device={device}
       state={state}
       stateControl={stateControl}
-    />
+      />
+    </>
   );
 }
 

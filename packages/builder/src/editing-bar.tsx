@@ -58,6 +58,8 @@ export interface EditingBarChip {
   readonly locked?: boolean;
   /** The class the page carries for it, as developers read it: ".nx-c-card". */
   readonly className: string;
+  /** A look of the block's type rather than a shared style: its own tone. */
+  readonly look?: boolean;
 }
 
 export interface EditingBarProps {

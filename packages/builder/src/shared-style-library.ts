@@ -145,6 +145,8 @@ export interface SharedStyleRow {
   readonly locked: boolean;
   /** Supplied by the site's code: shown, never renamed, locked or removed. */
   readonly inCode: boolean;
+  /** A look, bound to one block type, rather than a shared style. */
+  readonly look?: boolean;
   readonly styles: NodeStyles;
 }
 
@@ -164,6 +166,7 @@ export function sharedStyleRows(
     className: `.${namedClassName(entry.slug)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
+    ...(isLook(entry) ? { look: true } : {}),
     styles: entry.styles,
   }));
 }
