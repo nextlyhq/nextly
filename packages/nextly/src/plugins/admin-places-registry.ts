@@ -59,6 +59,15 @@ export function getDeclaredAdminPlaces(): ReadonlyMap<
 }
 
 /**
+ * A declared place name as a refusal quotes it: the string itself, or what
+ * kind of value stood in its place. Never a serialization of the value, which
+ * a bigint or a circular object would make throw before the refusal exists.
+ */
+function describeGiven(name: unknown): string {
+  return typeof name === "string" ? `"${name}"` : `given as ${typeof name}`;
+}
+
+/**
  * Whether this plugin may declare this place at all.
  *
  * Every refusal together, because they answer one question, who owns the
@@ -80,7 +89,7 @@ function assertPlaceDeclarable(
   if (typeof name !== "string" || !isWellFormedAdminPlaceName(name)) {
     throw resolutionError(
       "admin-place-malformed",
-      `Plugin "${pluginName}" declares the admin place ${JSON.stringify(name)}, which is not a place name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
+      `Plugin "${pluginName}" declares the admin place ${describeGiven(name)}, which is not a place name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
       { plugin: pluginName, place: name }
     );
   }
@@ -189,7 +198,7 @@ export interface AdminPlaceReference {
  * place the same way. A place in a plugin's namespace that no enabled plugin
  * declares names the namespace it belongs to: the plugin that owns it is
  * disabled, absent, or the name is misspelled, and a plugin that adds to
- * another's place should list it in `requires`.
+ * another's place should declare it in `dependsOn`.
  */
 export function assertPlacesExist(
   places: ReadonlyMap<string, DeclaredAdminPlace>,
@@ -212,7 +221,7 @@ export function assertPlacesExist(
 
     throw resolutionError(
       "admin-place-unknown",
-      `Plugin "${plugin}" adds ${what} to the admin place "${place}", which no enabled plugin declares. It belongs to the plugin whose slug is "${owningPrefix}": enable that plugin and list it in "${plugin}"'s \`requires\`, or correct the name.`,
+      `Plugin "${plugin}" adds ${what} to the admin place "${place}", which no enabled plugin declares. It belongs to the plugin whose admin slug is "${owningPrefix}": enable that plugin and declare it in the \`dependsOn\` of "${plugin}", or correct the name.`,
       { plugin, contribution: what, place, owningPrefix }
     );
   }

@@ -449,7 +449,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
         next:
           field(error, "owningPrefix") === ""
             ? `Name one of Nextly's admin places instead of "${field(error, "place")}".`
-            : `Enable the plugin whose admin slug is "${field(error, "owningPrefix")}" and list it in the \`requires\` of "${field(error, "plugin")}", or correct the place's name.`,
+            : `Enable the plugin whose admin slug is "${field(error, "owningPrefix")}" and declare it in the \`dependsOn\` of "${field(error, "plugin")}", or correct the place's name.`,
       })),
       ...resolved("principal-kind-invalid", error => {
         const parts = cut(detail(error), " cannot be used: ");

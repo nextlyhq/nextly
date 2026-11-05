@@ -173,8 +173,8 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // namespace or core's, or one declared twice, would otherwise surface as a
   // contribution rendered in the wrong place or nowhere. Last, so two plugins
   // sharing a slug are refused for the slug before their places collide on
-  // it. Checked here and published by `resolvePlugins`, once the whole list
-  // has resolved.
+  // it. Checked here; published by `resolveTransformedPlugins`, once the list
+  // the app will run has resolved.
   collectAdminPlaces(plugins);
 }
 
@@ -267,12 +267,7 @@ export function resolvePlugins(
   // Last, because it reads what the earlier validators already accepted: a
   // declared schemaVersion must be one the plugin's own migrations reach.
   validatePluginMigrations(plugins);
-  const sorted = topoSortPlugins(plugins);
-  // Only once every check has passed, so a list refused by any of them leaves
-  // the last resolved places in place for whoever reads them meanwhile, as in
-  // a development reload.
-  publishAdminPlaces(collectAdminPlaces(plugins));
-  return sorted;
+  return topoSortPlugins(plugins);
 }
 
 /**
@@ -318,6 +313,12 @@ export function resolveTransformedPlugins<
     opts
   );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
+  // The admin places of the list the app runs, published only now that it has
+  // passed every check, the declared list's and the transformed one's: a load
+  // refused anywhere, a \`setup\` transformer that throws included, leaves the
+  // last resolved places for whoever reads them meanwhile, as in a
+  // development reload.
+  publishAdminPlaces(collectAdminPlaces(plugins));
   // Decided here, once, from the copies every check above read: the grants
   // travel beside the config to whatever builds a plugin context, and a
   // manifest changed after this point grants nothing.

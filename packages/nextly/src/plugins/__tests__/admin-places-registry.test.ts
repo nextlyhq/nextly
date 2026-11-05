@@ -14,7 +14,7 @@ import {
   getDeclaredAdminPlaces,
 } from "../admin-places-registry";
 import type { PluginDefinition } from "../plugin-context";
-import { resolveDeclaredPlugins } from "../resolve";
+import { resolveDeclaredPlugins, resolveTransformedPlugins } from "../resolve";
 
 /** A plugin declaring `places`, as an author writes it. */
 function plugin(
@@ -187,6 +187,25 @@ describe("collecting the places plugins declare", () => {
     });
   });
 
+  it("refuses a name no serialization can quote, as a bigint, without failing on it", () => {
+    expect(
+      refusalOf(() =>
+        collectAdminPlaces([
+          {
+            name: "@acme/billing",
+            version: "1.0.0",
+            nextly: "*",
+            contributes: { admin: { places: [{ name: 10n }] as never } },
+          },
+        ])
+      )
+    ).toMatchObject({
+      code: "PLUGIN_RESOLUTION_ERROR",
+      reason: "admin-place-malformed",
+      logContext: { plugin: "@acme/billing" },
+    });
+  });
+
   it("refuses places that are not a list, as a plugin in plain JavaScript may give them", () => {
     expect(
       refusalOf(() =>
@@ -295,7 +314,7 @@ describe("a contribution's place", () => {
     expect((refused as Refusal).logMessage).toContain('"colection.list"');
   });
 
-  it("refuses a place whose owner is disabled or absent, naming its namespace and pointing to `requires`", () => {
+  it("refuses a place whose owner is disabled or absent, naming its namespace and pointing to `dependsOn`", () => {
     for (const [place, prefix] of [
       ["acme-docs.panel", "acme-docs"],
       ["acme-crm.contact", "acme-crm"],
@@ -306,10 +325,26 @@ describe("a contribution's place", () => {
         logContext: { place, owningPrefix: prefix },
       });
       expect((refused as Refusal).logMessage).toContain(`"${prefix}"`);
-      expect((refused as Refusal).logMessage).toContain("requires");
+      expect((refused as Refusal).logMessage).toContain("`dependsOn`");
     }
   });
 });
+
+/**
+ * A config load as the boot runs it: the declared list resolved, then the list
+ * the `setup` transformers return (`transformed`, the declared one unless
+ * given) resolved again.
+ */
+function load(
+  declared: PluginDefinition[],
+  transformed?: PluginDefinition[]
+): void {
+  const first = resolveDeclaredPlugins(declared, { coreVersion: "1.0.0" });
+  resolveTransformedPlugins(
+    { plugins: transformed ?? first.plugins },
+    { coreVersion: "1.0.0", declared: first.preSetup }
+  );
+}
 
 describe("at start", () => {
   it("refuses to start on a place outside the plugin's namespace", () => {
@@ -327,17 +362,14 @@ describe("at start", () => {
   });
 
   it("refuses two plugins sharing a slug for the slug, and publishes none of their places", () => {
-    resolveDeclaredPlugins([], { coreVersion: "1.0.0" });
+    load([]);
     expect(
       refusalOf(() =>
-        resolveDeclaredPlugins(
-          [
-            plugin("@acme/crm", ["acme-crm.contact"]),
-            plugin("@acme/billing", ["acme-billing.invoice"]),
-            plugin("acme-billing", ["acme-billing.receipt"]),
-          ],
-          { coreVersion: "1.0.0" }
-        )
+        load([
+          plugin("@acme/crm", ["acme-crm.contact"]),
+          plugin("@acme/billing", ["acme-billing.invoice"]),
+          plugin("acme-billing", ["acme-billing.receipt"]),
+        ])
       )
     ).toMatchObject({ reason: "duplicate-admin-slug" });
     // A start refused by any check, not only the places', publishes none.
@@ -345,43 +377,50 @@ describe("at start", () => {
   });
 
   it("publishes no places from a list a later check refuses", () => {
-    resolveDeclaredPlugins([], { coreVersion: "1.0.0" });
+    load([]);
     // Every manifest check passes; the dependency sort, after them, refuses.
     expect(
       refusalOf(() =>
-        resolveDeclaredPlugins(
-          [
-            plugin("@acme/crm", ["acme-crm.contact"], {
-              dependsOn: { "@acme/absent": "*" },
-            }),
-          ],
-          { coreVersion: "1.0.0" }
-        )
+        load([
+          plugin("@acme/crm", ["acme-crm.contact"], {
+            dependsOn: { "@acme/absent": "*" },
+          }),
+        ])
       )
     ).toMatchObject({ reason: "missing-dependency" });
     expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
   });
 
+  it("publishes no places when the list a setup transformer returns is refused", () => {
+    load([]);
+    // The declared list passes; the transformed one, which adds a plugin
+    // under core's segment, does not.
+    expect(
+      refusalOf(() =>
+        load(
+          [plugin("@acme/crm", ["acme-crm.contact"])],
+          [
+            plugin("@acme/crm", ["acme-crm.contact"]),
+            plugin("@acme/bad", ["collection.badge"]),
+          ]
+        )
+      )
+    ).toMatchObject({ reason: "admin-place-reserved" });
+    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
+  });
+
   it("publishes the places once every declaration passes, and keeps the last good set when one fails", () => {
-    resolveDeclaredPlugins(
-      [plugin("@acme/billing", ["acme-billing.invoice"])],
-      {
-        coreVersion: "1.0.0",
-      }
-    );
+    load([plugin("@acme/billing", ["acme-billing.invoice"])]);
     expect(getDeclaredAdminPlaces().get("acme-billing.invoice")?.owner).toBe(
       "@acme/billing"
     );
 
     expect(
       refusalOf(() =>
-        resolveDeclaredPlugins(
-          [
-            plugin("@acme/crm", ["acme-crm.contact"]),
-            plugin("@acme/bad", ["collection.badge"]),
-          ],
-          { coreVersion: "1.0.0" }
-        )
+        load([
+          plugin("@acme/crm", ["acme-crm.contact"]),
+          plugin("@acme/bad", ["collection.badge"]),
+        ])
       )
     ).toMatchObject({ reason: "admin-place-reserved" });
     // Nothing of the refused set was published.
