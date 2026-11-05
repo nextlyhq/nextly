@@ -105,6 +105,9 @@ function breakpointIdsUsed(
  * stored value cannot be read (inside a group or repeater, or a language not
  * ready), are not judged: nothing tells a new value from an old one.
  *
+ * Nor is a write made inside a transaction, for the reason given where it
+ * returns; an editor's own save is never one.
+ *
  * Nor is a create. It has no stored form to compare with, so every value it
  * holds would read as brought by it: a copy of a page holding values under a
  * breakpoint long removed would be refused for what the original holds. An
@@ -121,6 +124,13 @@ export async function newBreakpointIssues(
   }
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || !isTopLevel(args.path)) return [];
+  // The site's breakpoints are read through the pool, which inside a
+  // transaction is another connection: it can wait behind the one the
+  // transaction holds, and nothing a validation is handed reads the site's
+  // Single on the transaction's own. So a write in a transaction (an action
+  // route, a batch, an import) is not judged here; an editor's save is not
+  // made in one.
+  if (args.write?.inTransaction === true) return [];
   const limits = site.limits ?? DEFAULT_LIMITS;
   const added = await addedUndefinedIds(
     args,

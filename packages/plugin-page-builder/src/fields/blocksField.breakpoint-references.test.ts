@@ -243,6 +243,27 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
     expect(siteBreakpointIds).not.toHaveBeenCalled();
   });
 
+  it("does not judge a write inside a transaction, nor read the site's breakpoints for it", async () => {
+    /*
+     * The site's breakpoints are read on another connection than the
+     * transaction's, which it could wait behind; an editor's save is never
+     * made in one.
+     */
+    const { field, siteBreakpointIds } = setup();
+    const { write: stored } = write({ published: page([text("a")]) });
+    expect(
+      await validate(
+        page([text("a", colourAt("mobile"))]),
+        {
+          mode: "update",
+          write: { ...stored, inTransaction: true } as PluginFieldWrite,
+        },
+        field
+      )
+    ).toBe(true);
+    expect(siteBreakpointIds).not.toHaveBeenCalled();
+  });
+
   it("does not judge a create, which has no stored page to compare with", async () => {
     // A copy of a page still styled at a removed breakpoint is created whole.
     const { write: created } = write({});
