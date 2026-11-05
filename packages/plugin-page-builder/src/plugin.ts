@@ -1,4 +1,5 @@
 import {
+  breakpointContexts,
   DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
@@ -1388,6 +1389,19 @@ export const pageBuilder = (
             reason: found.reason,
           }
         );
+      // The site's style as a write is judged against: the code's defaults
+      // and the stored record of the Single as renamed, read when asked.
+      const siteStyleNow = async () => {
+        // Imported at call time, for the reason the readers above give: this
+        // entry reaches a browser bundle, where the Direct API has no place.
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        const nextly = await getCachedNextly();
+        return loadSiteStyle({
+          nextly: { findSingle: args => nextly.findSingle(args) },
+          defaults: configStyle,
+          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+        });
+      };
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -1414,19 +1428,19 @@ export const pageBuilder = (
         // applies, from the code's defaults and the stored record of the
         // Single as renamed, read per write so a style removed a moment ago
         // is gone for the next save.
-        siteClassIds: async () => {
-          // Imported at call time, for the reason the readers above give.
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = await getCachedNextly();
-          const style = await loadSiteStyle({
-            nextly: { findSingle: args => nextly.findSingle(args) },
-            defaults: configStyle,
-            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-          });
+        siteClassIds: async () =>
           // Capped and resolved as the compiler reads the library, so a page
           // may reference exactly the classes it applies.
-          return referableClassIds(style.classes ?? []);
-        },
+          referableClassIds((await siteStyleNow()).classes ?? []),
+        // The breakpoints a page may bring styles or hides under: the ones
+        // its stylesheet is emitted under, read per write like the classes,
+        // so a breakpoint removed a moment ago is gone for the next save.
+        siteBreakpointIds: async () =>
+          new Set(
+            breakpointContexts(siteBreakpoints(await siteStyleNow())).map(
+              context => context.id
+            )
+          ),
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,

@@ -23,8 +23,8 @@ import type {
 
 import { classUsageOf } from "../class-usage";
 
+import { addedUndefinedIds } from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
-import { readStoredForms } from "./lock-baselines";
 
 /** The engine's code for a reference to a class the site does not define. */
 const UNKNOWN_CLASS = "unknown-class";
@@ -55,23 +55,12 @@ export async function newClassReferenceIssues(
   const limits = site.limits ?? DEFAULT_LIMITS;
   // Every node the compiler reads, gated and hidden ones included: a class
   // there is applied whenever the node shows.
-  const { ids } = classUsageOf(value, limits);
-  if (ids.length === 0) return [];
-  const known = await site.classIds();
-  const undefinedHere = ids.filter(id => !known.has(id));
-  if (undefinedHere.length === 0) return [];
-  // Both stored forms: a reference either one holds is the page's already.
-  const stored = await readStoredForms(
-    args.write,
-    args.path,
-    [false, true],
-    (args.field as { localized?: unknown }).localized === true
+  const added = await addedUndefinedIds(
+    args,
+    classUsageOf(value, limits).ids,
+    site.classIds,
+    form => classUsageOf(form, limits).ids
   );
-  if (!stored.readable) return [];
-  const held = new Set(
-    stored.forms.flatMap(form => classUsageOf(form, limits).ids)
-  );
-  const added = undefinedHere.filter(id => !held.has(id));
   if (added.length === 0) return [];
   const named = added
     .slice(0, NAMED_AT_MOST)

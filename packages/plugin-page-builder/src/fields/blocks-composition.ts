@@ -215,6 +215,13 @@ export interface CompositionSetup {
    * Absent where the site style cannot be read, and then nothing is refused.
    */
   readonly siteClassIds?: () => Promise<ReadonlySet<string>>;
+  /**
+   * The ids of the breakpoints the site's stylesheet is emitted under, the
+   * base included, read per write. An update bringing a style or a hide under
+   * any other id is refused. Absent where the site style cannot be read, and
+   * then nothing is refused.
+   */
+  readonly siteBreakpointIds?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Which document a write is to: a collection or a single, its slug, an id. */

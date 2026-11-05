@@ -41,6 +41,7 @@ import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
+import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
 import {
   judgesLayersLocks,
@@ -230,13 +231,26 @@ export function blocksFieldType(
       // whatever the rules above answered, so one round fixes both. A value
       // judged on its own, or an emptied field, references none.
       const classIds = composition?.()?.siteClassIds;
-      const classes = (): Promise<readonly PluginFieldIssue[]> =>
-        emptied || classIds === undefined
-          ? Promise.resolve([])
-          : newClassReferenceIssues(value, args, label, {
-              classIds,
-              limits: composition?.()?.limits,
-            });
+      // Likewise the breakpoints a write brings styles or hides under.
+      const breakpointIds = composition?.()?.siteBreakpointIds;
+      const classes = async (): Promise<readonly PluginFieldIssue[]> => {
+        if (emptied) return [];
+        const limits = composition?.()?.limits;
+        return [
+          ...(classIds === undefined
+            ? []
+            : await newClassReferenceIssues(value, args, label, {
+                classIds,
+                limits,
+              })),
+          ...(breakpointIds === undefined
+            ? []
+            : await newBreakpointIssues(value, args, label, {
+                breakpointIds,
+                limits,
+              })),
+        ];
+      };
       // A value judged on its own, or a create, has no stored document to
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one and nothing else is asked.
