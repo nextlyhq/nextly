@@ -13,9 +13,11 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const readMedia = vi.fn<(id: string) => Promise<unknown>>();
+const identity = vi.fn<() => unknown>(() => null);
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
+  useDocumentIdentity: () => identity(),
 }));
 
 const { useCanvasPageContext } = await import("./canvas-page-context");
@@ -78,5 +80,17 @@ describe("the canvas's page context", () => {
     expect(result.current.resolveMedia).toBe(first.resolveMedia);
     rerender({ empty: new Set() });
     expect(result.current).toBe(first);
+  });
+
+  it("names the entry the document is stored on, so a list of its related entries reads it", () => {
+    identity.mockReturnValue({
+      kind: "collection",
+      slug: "stories",
+      documentId: "s1",
+    });
+    const { result } = renderHook(() => useCanvasPageContext());
+    expect(result.current.entry).toEqual({ id: "s1" });
+    expect(result.current.entryCollection).toBe("stories");
+    identity.mockReturnValue(null);
   });
 });

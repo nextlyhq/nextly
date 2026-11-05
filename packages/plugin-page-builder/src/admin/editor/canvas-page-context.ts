@@ -26,7 +26,10 @@ import {
   type PageContext,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
-import { useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentIdentity,
+  useMediaResolver,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
 
 import { canvasListData } from "../list-entries-client";
@@ -58,14 +61,25 @@ export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>
 ): PageContext {
   const readMedia = useMediaResolver();
+  // The entry the document is stored on, by its collection and id, so a list
+  // of its related entries reads the relation as a visitor reads the entry:
+  // again, through the canvas's reader, never from the form's values.
+  const identity = useDocumentIdentity();
+  const entryCollection =
+    identity?.kind === "collection" ? identity.slug : undefined;
+  const entryId =
+    identity?.kind === "collection" ? identity.documentId : undefined;
   const base = useMemo(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
         data: canvasListData(),
         diagnostics: true,
+        ...(entryCollection === undefined || entryId === undefined
+          ? {}
+          : { entry: { id: entryId }, entryCollection }),
       }),
-    [readMedia]
+    [readMedia, entryCollection, entryId]
   );
   return useMemo(
     () =>
