@@ -24,10 +24,14 @@
  * nesting to every tree in order to name a distinction no block currently
  * makes.
  *
- * **The limit that leaves, stated because it is not visible from the output:** a
- * block declaring two slots renders its children in one flat run here, so an
- * author could not tell which region a child sits in. That block does not exist
- * yet; when one does, this is the module that grows slot rows.
+ * **One block has two regions an author tells apart:** a collection list's
+ * template, repeated for each entry, and its empty state, drawn when none
+ * match. Its row names both ({@link LayerNode.slotRows}) and each child says
+ * which it sits in ({@link LayerNode.slot}), so the panel draws "Each entry"
+ * and "When empty" between the list and its blocks. The children stay one
+ * flat list here, so the breadcrumb, the search and every caller walking the
+ * tree read it as before. Any other block declaring two slots still renders
+ * its children in one flat run; this is the module that grows its rows too.
  *
  * Pure, and it takes a document rather than a registry lookup per row, so the
  * tree can be asserted without React and without a DOM.
@@ -36,6 +40,7 @@
  */
 
 import {
+  COLLECTION_LIST_TYPE,
   hiddenOnDevice,
   isComponentInstance,
   type BlockDocument,
@@ -136,8 +141,25 @@ export interface LayerNode {
    * where it is shown again.
    */
   readonly hiddenWith?: string;
+  /** The region of its parent this block sits in. */
+  readonly slot?: string;
+  /**
+   * The regions an author tells apart in this block, in order, each with
+   * what it is called: a collection list's "Each entry" and "When empty".
+   * Absent for a block whose children read as one run.
+   */
+  readonly slotRows?: readonly {
+    readonly slot: string;
+    readonly label: string;
+  }[];
   readonly children: readonly LayerNode[];
 }
+
+/** A collection list's regions, as Layers names them. */
+const LIST_SLOT_ROWS = [
+  { slot: "children", label: "Each entry" },
+  { slot: "empty", label: "When empty" },
+] as const;
 
 /**
  * The device the tree is read for: the site's breakpoints and the one being
@@ -247,6 +269,53 @@ export function blockNameOf(
   return kept.names.get(id);
 }
 
+/** Which region of `node` each of its children sits in, by the child. */
+function slotsOfChildren(
+  node: BlockNode
+): (child: BlockNode) => string | undefined {
+  const by = new Map<BlockNode, string>();
+  for (const [slot, children] of Object.entries(node.slots ?? {})) {
+    if (!Array.isArray(children)) continue;
+    for (const child of children) by.set(child, slot);
+  }
+  return child => by.get(child);
+}
+
+/** The id of a region's row in the panel, which names no block. */
+export function slotRowId(parentId: string, slot: string): string {
+  return `nx-slot:${slot}:${parentId}`;
+}
+
+/** The block and region a region row stands for, when `id` is one. */
+export function slotRowOf(
+  id: string
+): { readonly parentId: string; readonly slot: string } | undefined {
+  const match = /^nx-slot:([^:]+):(.+)$/.exec(id);
+  return match === null || match[1] === undefined || match[2] === undefined
+    ? undefined
+    : { slot: match[1], parentId: match[2] };
+}
+
+/**
+ * The region rows on the way to a node, for the panel to open with its
+ * ancestors: each list above it, by the region the path goes through.
+ */
+export function slotRowsTo(
+  document: BlockDocument,
+  id: string | null
+): string[] {
+  const path = pathTo(document, id);
+  const rows: string[] = [];
+  for (let index = 1; index < path.length; index += 1) {
+    const parent = path[index - 1];
+    const child = path[index];
+    if (parent?.slotRows !== undefined && child?.slot !== undefined) {
+      rows.push(slotRowId(parent.id, child.slot));
+    }
+  }
+  return rows;
+}
+
 /**
  * The document as a tree of rows.
  *
@@ -263,9 +332,11 @@ export function layersOf(
   const walk = (
     nodes: readonly BlockNode[],
     heldBy: string | undefined,
-    hiddenBy: string | undefined
+    hiddenBy: string | undefined,
+    slotOf: (child: BlockNode) => string | undefined = () => undefined
   ): LayerNode[] =>
     nodes.map(node => {
+      const slot = slotOf(node);
       const label = layerLabel(node, undefined, componentTitle);
       const locked = node.locked === true;
       const name = authoredName(node);
@@ -289,6 +360,10 @@ export function layersOf(
         // Kept on a row hidden itself as well: showing it here shows nothing
         // while the block around it is hidden, so the row offers no eye.
         ...(hiddenBy === undefined ? {} : { hiddenWith: hiddenBy }),
+        ...(slot === undefined ? {} : { slot }),
+        ...(node.type === COLLECTION_LIST_TYPE
+          ? { slotRows: LIST_SLOT_ROWS }
+          : {}),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
         // document was written in — so the tree matches the document rather
@@ -297,7 +372,8 @@ export function layersOf(
         children: walk(
           Object.values(node.slots ?? {}).flat(),
           locked ? label : heldBy,
-          hiddenHere ? label : hiddenBy
+          hiddenHere ? label : hiddenBy,
+          slotsOfChildren(node)
         ),
       };
     });
@@ -398,8 +474,14 @@ export function filterLayers(
       const children = prune(node.children);
       if (children.length === 0) return [];
       // Only a node kept BECAUSE of a descendant needs opening; a node that
-      // matched is visible where it stands.
+      // matched is visible where it stands. So does each region the kept
+      // children sit in, where the panel draws one.
       expand.push(node.id);
+      if (node.slotRows !== undefined) {
+        for (const slot of new Set(children.map(child => child.slot))) {
+          if (slot !== undefined) expand.push(slotRowId(node.id, slot));
+        }
+      }
       return [{ ...node, children }];
     });
 

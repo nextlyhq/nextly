@@ -9543,3 +9543,19 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: grid;
   grid-template-columns: 1fr 1fr;
 }
+
+/*
+ * A collection list's region in Layers: "Each entry" and "When empty",
+ * muted, as regions rather than blocks, with how many blocks each holds.
+ */
+.nx-layer-row[data-nx-layer-slot] .nx-layer-row__label,
+.nx-layer-row__slot-mark {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-layer-row__count {
+  margin-inline-start: auto;
+  padding-inline-end: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}

@@ -25,6 +25,9 @@ import {
   layerLabel,
   layersOf,
   pathTo,
+  slotRowId,
+  slotRowOf,
+  slotRowsTo,
 } from "./layers";
 
 const base = {
@@ -525,5 +528,57 @@ describe("hiddenHere", () => {
     expect(box?.hiddenHere).toBe(true);
     expect(box?.children[0]?.hiddenHere).toBe(false);
     expect(box?.children[0]?.hiddenWith).toBe("Hero");
+  });
+});
+
+describe("a collection list's regions", () => {
+  const list = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            { id: "card", type: "core/heading", version: 1, props: {} },
+          ],
+          empty: [
+            {
+              id: "none",
+              type: "core/heading",
+              version: 1,
+              props: {},
+              name: "No posts",
+            },
+          ],
+        },
+      },
+    ],
+  } as BlockDocument;
+
+  it("names both regions on the list, and the one each child sits in", () => {
+    const [row] = layersOf(list);
+    expect(row?.slotRows?.map(each => each.label)).toEqual([
+      "Each entry",
+      "When empty",
+    ]);
+    expect(row?.children.map(child => [child.id, child.slot])).toEqual([
+      ["card", "children"],
+      ["none", "empty"],
+    ]);
+  });
+
+  it("opens the region a match sits in, as it opens the list", () => {
+    const found = filterLayers(layersOf(list), "No posts");
+    expect(found.expand).toEqual(["list", slotRowId("list", "empty")]);
+    expect(slotRowsTo(list, "none")).toEqual([slotRowId("list", "empty")]);
+    expect(slotRowOf(slotRowId("list", "empty"))).toEqual({
+      parentId: "list",
+      slot: "empty",
+    });
+    expect(slotRowOf("list")).toBeUndefined();
   });
 });

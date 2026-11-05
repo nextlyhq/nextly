@@ -22,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
@@ -715,5 +716,82 @@ describe("the regions of the page's Layout in Layers", () => {
     const { header } = renderWithRegions();
     fireEvent.click(screen.getByRole("button", { name: /^Header/ }));
     expect(header).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a collection list's regions in Layers", () => {
+  function listDocument(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        node("list", "core/collection-loop", {
+          slots: {
+            children: [node("card", "core/heading", { name: "Post card" })],
+            empty: [],
+          },
+        }),
+      ],
+    } as BlockDocument;
+  }
+
+  function registerList(): void {
+    register();
+    if (hasBlock("core/collection-loop")) return;
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/collection-loop",
+          editor: { label: "Collection list", icon: "loop" },
+          slots: { children: {}, empty: {} },
+        },
+      ] as never,
+      { source: "layers-panel-test-list" }
+    );
+  }
+
+  it("draws Each entry and When empty between the list and its blocks", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    fireEvent.click(screen.getByRole("treeitem", { name: /Collection list/ }));
+    fireEvent.keyDown(
+      screen.getByRole("treeitem", { name: /Collection list/ }),
+      {
+        key: "ArrowRight",
+      }
+    );
+    await waitFor(() =>
+      expect(rows()).toEqual([
+        "Collection list",
+        "Each entry1 block",
+        "When emptyempty",
+      ])
+    );
+  });
+
+  it("selects the list and shows its empty state when When empty is chosen", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    const list = screen.getByRole("treeitem", { name: /Collection list/ });
+    fireEvent.click(list);
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    const empty = await screen.findByRole("treeitem", { name: /When empty/ });
+    fireEvent.click(empty);
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("list");
+      expect([...(editorRef?.listsShowingEmpty ?? [])]).toEqual(["list"]);
+    });
+    fireEvent.click(screen.getByRole("treeitem", { name: /Each entry/ }));
+    await waitFor(() => expect(editorRef?.listsShowingEmpty?.size).toBe(0));
+  });
+
+  it("opens the region a selection made elsewhere sits in", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    act(() => editorRef?.select("card"));
+    expect(
+      await screen.findByRole("treeitem", { name: /Post card/ })
+    ).toBeDefined();
   });
 });
