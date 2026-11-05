@@ -22,6 +22,23 @@ import {
 const countFailure = vi.hoisted(() => ({
   cause: undefined as Error | undefined,
 }));
+// The registries the guard reads its facts from, real unless a test makes the read fail.
+const registryFailure = vi.hoisted(() => ({
+  cause: undefined as Error | undefined,
+}));
+vi.mock("../../required-column-registries", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../required-column-registries")>();
+  return {
+    ...actual,
+    requiredColumnRegistries: (
+      ...args: Parameters<typeof actual.requiredColumnRegistries>
+    ) =>
+      registryFailure.cause === undefined
+        ? actual.requiredColumnRegistries(...args)
+        : Promise.reject(registryFailure.cause),
+  };
+});
 vi.mock("../../pipeline/classifier/count-helpers", async importOriginal => {
   const actual =
     await importOriginal<
@@ -285,6 +302,48 @@ describe("a unit run outside a transaction refused at a column made required", (
 
   // A count that fails at the statement comes after the write before it committed, so its
   // refusal names what ran and that it stayed, as a counted one does; it never says nothing ran.
+  // Reading what to count (the registries, the catalog) comes after the write before it too, so a
+  // read that fails is refused as a failed count is there, never as a bare error.
+  it("a fact read that fails there is refused naming the statements that ran and that they stayed", async () => {
+    sqlite.exec(`INSERT INTO parent VALUES ('p2', NULL)`);
+    const cause = new Error("registry unreadable");
+    registryFailure.cause = cause;
+    const thrown = await runMigrationStatements(
+      adapter,
+      [
+        "UPDATE parent SET label = 'two' WHERE id = 'p2'",
+        "CREATE TABLE __new_parent (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
+        "INSERT INTO __new_parent (id, label) SELECT id, label FROM parent",
+        "DROP TABLE parent",
+        "ALTER TABLE __new_parent RENAME TO parent",
+      ],
+      { source: "0002_label.sql", transaction: false }
+    )
+      .then(
+        () => undefined,
+        (caught: unknown) => caught
+      )
+      .finally(() => {
+        registryFailure.cause = undefined;
+      });
+    expect(NextlyError.is(thrown)).toBe(true);
+    const error = thrown as NextlyError;
+    expect(error.publicData).toMatchObject({
+      errors: [{ code: "REQUIRED_COLUMN_UNCOUNTED", path: "fields.label" }],
+    });
+    expect(error.publicMessage).toContain(
+      "0002_label.sql was refused at its statement 3."
+    );
+    expect(error.publicMessage).toContain(
+      "They ran outside a transaction, and stayed applied."
+    );
+    expect(error.logContext).toMatchObject({
+      phase: "at-statement",
+      statement: 3,
+    });
+    expect(error.cause).toBe(cause);
+  });
+
   it("a count that fails there is refused naming the statements that ran and that they stayed", async () => {
     sqlite.exec(`INSERT INTO parent VALUES ('p2', NULL)`);
     const cause = new Error("connection lost");

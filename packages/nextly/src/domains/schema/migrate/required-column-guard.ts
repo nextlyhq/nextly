@@ -380,6 +380,28 @@ async function readFacts(
   };
 }
 
+/**
+ * The facts for `targets`, read once: a read that fails (the registries, the catalog, the current
+ * database) refuses as a count that fails does, naming the first target's table, so no road ends
+ * with a bare introspection error for a change it could not judge.
+ */
+async function factsFor(
+  db: unknown,
+  dialect: SupportedDialect,
+  targets: readonly RequiredColumnTarget[]
+): Promise<RequiredColumnFacts> {
+  try {
+    return await readFacts(db, dialect, targets);
+  } catch (cause) {
+    const [first] = targets;
+    throw requiredColumnUncountedError({
+      table: first.table,
+      field: first.required,
+      cause,
+    });
+  }
+}
+
 /** MySQL's current database, lower-cased, as a statement's qualifier would be read. */
 async function currentDatabase(
   db: unknown,
@@ -512,7 +534,7 @@ async function requiredColumnBreaksBeforeRun(
   if (targets.length === 0) return [];
   return judgeRequiredColumnTargets(
     targets,
-    await readFacts(db, dialect, targets)
+    await factsFor(db, dialect, targets)
   );
 }
 
@@ -618,13 +640,13 @@ export function requiredColumnCheckpoint(
     const targets = byStatement.get(index);
     if (targets === undefined) return;
     const at = { index, statements, transaction: unit.transaction };
-    const breaks = await judgeRequiredColumnTargets(
-      targets,
-      await readFacts(db, dialect, targets)
-    ).catch((error: unknown) => {
-      // The statements before this one have run by now, so a count that fails here says so.
-      throw uncountedAtStatement(error, unit.source, dialect, at);
-    });
+    // Reading the facts and counting both come after the statements before this one have run,
+    // so either failing says so.
+    const breaks = await factsFor(db, dialect, targets)
+      .then(facts => judgeRequiredColumnTargets(targets, facts))
+      .catch((error: unknown) => {
+        throw uncountedAtStatement(error, unit.source, dialect, at);
+      });
     if (breaks.length === 0) return;
     throw requiredColumnMigrationRefusal(breaks, {
       source: unit.source,
