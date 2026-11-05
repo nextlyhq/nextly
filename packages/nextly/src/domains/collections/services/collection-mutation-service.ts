@@ -335,6 +335,7 @@ import {
   givenOf,
   judgedLanguage,
   judgeLanguageRow,
+  judgedBeforeDiscard,
   judgedLanguageStates,
   judgeMainRow,
   languagesJudged,
@@ -5608,13 +5609,12 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
         };
         const versions = new VersionsRepository(tx);
-        // Judged only when there is a change to lose, under the lock and
-        // before anything is removed: out of date, nothing is deleted.
-        const before =
-          judging.check.kind !== "unjudged" &&
-          (await versions.hasWorkingDraft(discardedRef, draftLocale))
-            ? await this.refuseIfPendingChangeMoved(tx, judging, staleWrite)
-            : undefined;
+        const before = await judgedBeforeDiscard(
+          { versions, ref: discardedRef, locale: draftLocale },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
+          { main: undefined, language: undefined }
+        );
         const removed = await versions.deleteWorkingDraft(
           discardedRef,
           draftLocale
@@ -5631,19 +5631,17 @@ export class CollectionMutationService extends BaseService {
             actorForWrite(params.actor, params.user)
           );
           // Discarded over a change since the read, by choice: recorded.
-          if (before) {
-            await this.recordOverwriteIfAsked(
-              tx,
-              judging.check,
-              {
-                collection: params.collectionName,
-                id: params.entryId,
-                actor: params.actor,
-                user: params.user,
-              },
-              { ...before, locale: judging.locale }
-            );
-          }
+          await this.recordOverwriteIfAsked(
+            tx,
+            judging.check,
+            {
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            { ...before, locale: judging.locale }
+          );
           if (params.onVersion) {
             params.onVersion(
               await documentVersionOn(tx, {

@@ -209,6 +209,7 @@ import {
   certainlyStale,
   type DocumentRevisionState,
   givenOf,
+  judgedBeforeDiscard,
   judgedLanguage,
   judgedLanguageStates,
   languagesJudged,
@@ -964,11 +965,8 @@ export class SingleMutationService extends BaseService {
       });
     }
     // Set by a refusal inside the transaction, answered once it rolls back.
-    const stale: PendingChangeStale = {
-      holder: {},
-      judging: await this.pendingChangeJudging(params, singleMeta),
-    };
-    const judging = stale.judging;
+    const judging = await this.pendingChangeJudging(params, singleMeta);
+    const stale: PendingChangeStale = { holder: {}, judging };
 
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
@@ -996,13 +994,12 @@ export class SingleMutationService extends BaseService {
           entryId,
         };
         const versions = new VersionsRepository(tx);
-        // Judged only when there is a change to lose, under the lock and
-        // before anything is removed: out of date, nothing is deleted.
-        const before =
-          judging.check.kind !== "unjudged" &&
-          (await versions.hasWorkingDraft(discardedRef, draftLocale))
-            ? await this.refuseIfPendingChangeMoved(tx, judging, entryId, stale)
-            : undefined;
+        const before = await judgedBeforeDiscard(
+          { versions, ref: discardedRef, locale: draftLocale },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
+          { main: undefined, language: undefined }
+        );
         const removed = await versions.deleteWorkingDraft(
           discardedRef,
           draftLocale
@@ -1019,18 +1016,16 @@ export class SingleMutationService extends BaseService {
             actorForWrite(params.actor ?? null, params.user)
           );
           // Discarded over a change since the read, by choice: recorded.
-          if (before) {
-            await this.recordOverwriteIfAsked(
-              tx,
-              judging.check,
-              {
-                slug: params.slug,
-                id: entryId,
-                options: { user: params.user, actor: params.actor },
-              },
-              { ...before, locale: judging.locale }
-            );
-          }
+          await this.recordOverwriteIfAsked(
+            tx,
+            judging.check,
+            {
+              slug: params.slug,
+              id: entryId,
+              options: { user: params.user, actor: params.actor },
+            },
+            { ...before, locale: judging.locale }
+          );
           if (params.onVersion) {
             // Asked of the catalog on this transaction, which a missing table
             // cannot abort, rather than taken from the write, which wrote no
