@@ -1,0 +1,135 @@
+/**
+ * The served address a claim is held under, spelled one way.
+ *
+ * Two documents may not share an address a visitor can reach, so the address
+ * a claim holds must have exactly one spelling: `/about`, `/about/`,
+ * `//about` and `/%61bout` are one address, and a claim taken under one of
+ * them must refuse the others. The key is built from the address's canonical
+ * segments, never from the text it arrived as.
+ *
+ * - The language is a part of its own, `<locale>|<path>`, since one path is a
+ *   different address in each language it is published in. How a language
+ *   prefixes the URL is the router's to decide, not the key's.
+ * - The path is held as segments, so an address of several segments needs no
+ *   change of format. Each segment is percent-encoded in the key, so a `/`
+ *   inside one can never read as a boundary between two.
+ * - No host or tenant is part of it: two sites served from one database
+ *   would see each other's addresses as taken.
+ *
+ * @module address-claims/claim-key
+ */
+import { isReservedPath } from "nextly/runtime";
+
+/** An address a document is served at, in its canonical form. */
+export interface ServedAddress {
+  /** The language it is served in. */
+  readonly locale: string;
+  /** The path's segments, decoded and NFC-normalised; none is empty. */
+  readonly segments: readonly string[];
+}
+
+/**
+ * What a claim row is: an address held by a document, a paginated list's
+ * page-segment space, a document waiting for an address another holds, or
+ * the row a space's claims are serialised on.
+ */
+export type ClaimKind = "address" | "space" | "waiting" | "lock";
+
+/**
+ * The key's namespace for each kind. `collection:` is kept for a collection's
+ * own address, which claims no path, so a page at `/blog` and a collection
+ * served from `/blog` are never compared.
+ */
+const NAMESPACE: Readonly<Record<ClaimKind, string>> = {
+  address: "addr",
+  space: "space",
+  waiting: "wait",
+  lock: "lock",
+};
+
+/** The segment that numbers a list's later pages: `/news/page/2`. */
+const PAGE_SEGMENT = "page";
+
+/** A page number as a list spells it: no sign, no leading zero. */
+const PAGE_NUMBER = /^[1-9]\d*$/;
+
+/** A URL's scheme and host, which are not part of the address it serves. */
+const SCHEME_AND_HOST = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*/i;
+
+/**
+ * The canonical address `path` names in `locale`, or null when it names none
+ * a document can be served at: a reserved path (`/admin`, `/api`, …), a `.`
+ * or `..` segment, a `/` encoded inside a segment, or bad percent-encoding.
+ * Those are refused rather than resolved, so a claim never holds an address
+ * other than the one it was asked for.
+ */
+export function servedAddress(
+  locale: string,
+  path: string
+): ServedAddress | null {
+  if (locale === "" || locale.includes("|")) return null;
+  const local = path
+    .trim()
+    .replace(SCHEME_AND_HOST, "")
+    .replace(/[?#].*$/s, "");
+  const segments: string[] = [];
+  // Empty pieces are the leading, trailing and doubled slashes.
+  for (const piece of local.split("/").filter(piece => piece !== "")) {
+    let segment: string;
+    try {
+      segment = decodeURIComponent(piece).normalize("NFC");
+    } catch {
+      return null;
+    }
+    if (segment === "." || segment === ".." || segment.includes("/")) {
+      return null;
+    }
+    segments.push(segment);
+  }
+  if (isReservedPath(`/${segments.join("/")}`)) return null;
+  return { locale, segments };
+}
+
+/** The address's path as a key spells it: each segment percent-encoded. */
+export function pathOf(address: ServedAddress): string {
+  return `/${address.segments.map(encodeURIComponent).join("/")}`;
+}
+
+/** The key of an address, space or lock claim on `address`. */
+export function claimKey(
+  kind: Exclude<ClaimKind, "waiting">,
+  address: ServedAddress
+): string {
+  return `${NAMESPACE[kind]}:${address.locale}|${pathOf(address)}`;
+}
+
+/**
+ * The key of `waiter`'s wait on the claim keyed `blocking`: one per blocking
+ * claim, so a document blocked twice is served only once both are released.
+ */
+export function waitingKey(
+  waiter: { readonly collection: string; readonly id: string },
+  blocking: string
+): string {
+  return `${NAMESPACE.waiting}:${encodeURIComponent(waiter.collection)}:${encodeURIComponent(waiter.id)}|${blocking}`;
+}
+
+/**
+ * The list whose page-segment space holds `address`, or null when `address`
+ * is not a later page of any list. `/news/page/2` is in the space of `/news`;
+ * `/news` itself is not, since the list's first page is a document's own
+ * address.
+ */
+export function spaceHolding(address: ServedAddress): ServedAddress | null {
+  const { segments } = address;
+  const number = segments.at(-1);
+  if (
+    segments.length < 2 ||
+    segments.at(-2) !== PAGE_SEGMENT ||
+    number === undefined ||
+    !PAGE_NUMBER.test(number)
+  ) {
+    return null;
+  }
+  return { locale: address.locale, segments: segments.slice(0, -2) };
+}

@@ -266,6 +266,9 @@ type Reader = StoreSourceDirectApi<SystemReading> &
     find(args: Record<string, unknown>): Promise<{ items: unknown[] }>;
   };
 
+/** The one read the reads by id need. */
+type FindReader = Pick<Reader, "find">;
+
 /** The resolved slugs and store a request is answered against. */
 interface Stores {
   readonly components: string;
@@ -298,7 +301,7 @@ function storesOf(
  * it would read as gone, or as one the caller may not read.
  */
 async function findByIds(
-  nextly: Reader,
+  nextly: FindReader,
   read: Record<string, unknown>,
   ids: readonly string[]
 ): Promise<unknown[]> {
@@ -368,11 +371,11 @@ export function systemReads(
 
 /**
  * The titles of `ids` the caller may read; an id absent here is hidden.
- * Exported for its tests.
+ * Exported for its tests and the address report.
  */
 export async function titlesAsCaller(
   ctx: Pick<PluginRouteContext, "caller">,
-  nextly: Reader,
+  nextly: FindReader,
   collection: string,
   ids: readonly string[]
 ): Promise<Map<string, string>> {
@@ -397,7 +400,7 @@ function titleOf(value: unknown): string {
  */
 async function readableAsCaller(
   ctx: Pick<PluginRouteContext, "caller">,
-  nextly: Reader,
+  nextly: FindReader,
   collection: string,
   ids: readonly string[]
 ): Promise<unknown[]> {
