@@ -108,7 +108,7 @@ function jobsOf(t: TestNextly): Promise<JobRow[]> {
 function windowsOf(t: TestNextly): Promise<WindowRow[]> {
   return t.adapter.select<WindowRow>("nextly_schedule_windows", {
     where: {
-      and: [{ column: "schedule_key", op: "=", value: `${PLUGIN}:tick` }],
+      and: [{ column: "scheduleKey", op: "=", value: `${PLUGIN}:tick` }],
     },
   });
 }
@@ -271,7 +271,7 @@ describe.each(getConfiguredTestDialects())(
         {
           where: {
             and: [
-              { column: "schedule_key", op: "=", value: `${PLUGIN}:monthly` },
+              { column: "scheduleKey", op: "=", value: `${PLUGIN}:monthly` },
             ],
           },
         }

@@ -38,6 +38,8 @@ import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleaseNoticeEmailJob } from "../../domains/releases/release-notice-email";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
+import { collectSchedules } from "../../domains/schedules/collect-schedules";
+import { scheduleWindows } from "../../domains/schedules/schedule-windows";
 import {
   IN_PASS_DRAIN_BOUNDS,
   type RunWebhookDrainOptions,
@@ -167,6 +169,13 @@ export function registerJobServices(ctx: RegistrationContext): void {
   // configuration error, and a configuration error should stop the boot that
   // introduced it.
   const declaredJobs = collectJobs(ctx.config, ctx.config.plugins ?? []);
+  // Collected eagerly for the same reason: a schedule that cannot run (an
+  // invalid cron or time zone, or a job its plugin does not declare) stops the
+  // start that introduced it, naming the plugin.
+  const declaredSchedules = collectSchedules(
+    ctx.config.plugins ?? [],
+    declaredJobs
+  );
 
   container.registerSingleton<JobsRepository>(
     "jobsRepository",
@@ -285,6 +294,19 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // sweeps a plugin may run as its own.
     for (const { definition, plugin } of declaredJobs) {
       registry.register(definition, { plugin });
+    }
+    // The plugins' schedules, swept by every jobs pass. A schedule whose
+    // window cannot be recorded is said out loud, and the others still run.
+    if (declaredSchedules.length > 0) {
+      registry.useSchedules(
+        scheduleWindows(adapter, declaredSchedules, {
+          onError: (error, scheduleKey) =>
+            logger.error("A plugin schedule could not be swept", {
+              scheduleKey,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+        })
+      );
     }
 
     return registry;

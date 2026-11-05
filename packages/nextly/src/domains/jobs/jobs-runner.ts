@@ -56,6 +56,9 @@ function executorOf(db: UsersReadDb): unknown {
  */
 export type JobsPassDatabase = JobsDatabase & UsersReadDb;
 
+/** How long a schedule's past windows are kept: 30 days. */
+export const SCHEDULE_WINDOW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Rows a single pass may remove, so a sweep cannot become a long delete. */
 export const DEFAULT_PRUNE_LIMIT = 100;
 
@@ -298,6 +301,14 @@ export async function runJobsPass(
     (options?.now ?? (() => new Date()))(),
     options?.onSweepError
   );
+  // The plugins' schedules, after the sweeps and before the drain for the
+  // same reason: the pass that enqueues a window's job is the pass that runs
+  // it. A schedule that cannot be swept is reported by the schedules
+  // themselves and never fails the pass.
+  await registry
+    .schedules()
+    ?.sweep((options?.now ?? (() => new Date()))())
+    .catch(() => undefined);
 
   const result = await runJobs(
     passDeps(adapter, registry, repository, options)
@@ -320,6 +331,18 @@ export async function runJobsPass(
       // ran its jobs into a pass that reports failure.
     }
   }
+  // Schedule windows are kept longer than finished jobs, and on their own
+  // clock: a window's record is what stops it being enqueued twice.
+  await registry
+    .schedules()
+    ?.prune(
+      new Date(
+        (options?.now ?? (() => new Date()))().getTime() -
+          SCHEDULE_WINDOW_RETENTION_MS
+      ),
+      options?.pruneLimit ?? DEFAULT_PRUNE_LIMIT
+    )
+    .catch(() => 0);
 
   return result;
 }

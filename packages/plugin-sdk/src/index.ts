@@ -234,7 +234,8 @@ export { isLocaleSelector } from "nextly";
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
- *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
+ *   `PluginEmailTemplate` (D65), `PluginSchedule` and the earlier, unexecuted
+ *   `ScheduledTask` — are also
  *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
  *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
@@ -259,6 +260,7 @@ export type {
   PluginFieldValidationResult,
   PluginFieldCodegen,
   PluginFieldCodegenImport,
+  PluginSchedule,
   ScheduledTask,
   PermissionSlug,
   ServiceOpts,
