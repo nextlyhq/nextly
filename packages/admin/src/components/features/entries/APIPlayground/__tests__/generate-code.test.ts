@@ -377,6 +377,47 @@ describe("sdk — the version an update sends", () => {
     expect(out).not.toContain("nextly.update(");
   });
 
+  it.each([
+    [
+      "an id the update does not name",
+      '{"ids":["a"],"revs":{"a":"3","z":"1"},"data":{"title":"t"}}',
+      'gives a version for ["z"]',
+    ],
+    [
+      "a value that is no version",
+      '{"ids":["a","b"],"revs":{"a":"3","b":"three"},"data":{"title":"t"}}',
+      'gives ["b"] a value that is not a version',
+    ],
+    [
+      "a language named twice",
+      '{"ids":["a"],"revs":{"a":"3.en:1,en:2"},"data":{"title":"t"}}',
+      'gives ["a"] a value that is not a version',
+    ],
+    [
+      "an overwrite beside them",
+      '{"ids":["a"],"revs":{"a":"3"},"data":{"title":"t","_overwrite":true}}',
+      "say two different things",
+    ],
+  ])("bulk update whose revs give %s offers no update", (_, body, says) => {
+    const out = toSdk(req({ action: "bulk-update", body }));
+    expect(out).toContain(says);
+    expect(out).not.toContain("nextly.update(");
+  });
+
+  // Core reads `_overwrite: false` as no choice at all, so such an update is
+  // made from a read like any other.
+  it("an update choosing not to overwrite still reads first and sends the version", () => {
+    const out = toSdk(
+      req({
+        action: "update",
+        entryId: "abc123",
+        body: '{"title":"New","_overwrite":false}',
+      })
+    );
+    expect(out).toContain("nextly.findByID(");
+    expect(out).toContain('"_rev": current?._rev');
+  });
+
   it("bulk update keeps an overwrite choice the body already makes", () => {
     const out = toSdk(
       req({

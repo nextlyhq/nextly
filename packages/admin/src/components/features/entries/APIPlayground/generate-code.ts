@@ -195,7 +195,8 @@ function versionedData(
   readsFirst: boolean;
 } {
   const data = bodyObject(body);
-  if (data === null || VERSION_KEY in data || OVERWRITE_KEY in data) {
+  // Only `true` chooses to overwrite: `false` is the same as leaving it out.
+  if (data === null || VERSION_KEY in data || data[OVERWRITE_KEY] === true) {
     return { data: dataArg(body), readsFirst: false };
   }
   return { data: withVersion(data, version), readsFirst: true };
@@ -207,6 +208,48 @@ function versionedData(
  * write sets it whatever is there.
  */
 const SINGLE_VERSION = `...(current ? { ${VERSION_KEY}: current.${VERSION_KEY} } : { ${OVERWRITE_KEY}: true })`;
+
+/**
+ * The shape of a version a read returns: `7`, `7.es:3`, `7.en:2,es:3`. The
+ * same shape the API judges a `_rev` by, with each language named once.
+ */
+const VERSION_SHAPE =
+  /^(\d+)(?:\.([A-Za-z0-9_-]+:\d+(?:,[A-Za-z0-9_-]+:\d+)*))?$/;
+
+function isVersion(raw: unknown): boolean {
+  const match = typeof raw === "string" ? VERSION_SHAPE.exec(raw) : null;
+  if (match === null || Number(match[1]) < 1) return false;
+  const codes = (match[2]?.split(",") ?? []).map(part => part.split(":")[0]);
+  return new Set(codes).size === codes.length;
+}
+
+/**
+ * Why the API refuses a bulk body's `revs` whole, before writing anything,
+ * or `null` when it takes them: the same checks, so the snippet never offers
+ * calls that would write some ids of a request the API refuses.
+ */
+function revsRefusal(
+  named: readonly string[],
+  revs: Record<string, unknown>,
+  data: Record<string, unknown>
+): string | null {
+  if (data[OVERWRITE_KEY] !== undefined && data[OVERWRITE_KEY] !== false) {
+    return `\`revs\` and \`${OVERWRITE_KEY}\` say two different things`;
+  }
+  const extra = Object.keys(revs).filter(id => !named.includes(id));
+  if (extra.length > 0) {
+    return `\`revs\` gives a version for ${JSON.stringify(extra)}, which the update does not name`;
+  }
+  const missing = named.filter(id => !Object.hasOwn(revs, id));
+  if (missing.length > 0) {
+    return `\`revs\` gives no version for ${JSON.stringify(missing)}`;
+  }
+  const malformed = named.filter(id => !isVersion(revs[id]));
+  if (malformed.length > 0) {
+    return `\`revs\` gives ${JSON.stringify(malformed)} a value that is not a version a read returned`;
+  }
+  return null;
+}
 
 /** A bulk body's `revs`, the version it gives each id, when it gives any. */
 function bulkRevs(
@@ -356,13 +399,13 @@ export function toSdk(req: CodeRequest): string {
         const named = Array.isArray(body?.ids)
           ? body.ids.map(String)
           : Object.keys(revs);
-        const missing = named.filter(id => typeof revs[id] !== "string");
         // The REST route refuses the whole request, writing nothing, so no
         // call is offered that would write the ids it does give a version.
-        if (missing.length > 0) {
+        const refused = revsRefusal(named, revs, data);
+        if (refused !== null) {
           return call([
-            `// \`revs\` gives no version for ${JSON.stringify(missing)}, so the API refuses`,
-            `// the whole request. Give every id its \`_rev\`.`,
+            `// ${refused}, so the API refuses the whole request.`,
+            `// Give each id it names the \`_rev\` a read of it returned.`,
           ]);
         }
         return call([
