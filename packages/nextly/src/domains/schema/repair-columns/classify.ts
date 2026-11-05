@@ -24,6 +24,7 @@ import type {
   ConversionJudgement,
 } from "../value-conversion/types";
 
+import { buildColumnConversion, type ColumnConversionPlan } from "./conversion";
 import type { ColumnLocation, ColumnState, RepairEntityKind } from "./types";
 
 /** Whether `column` is a JSON column. */
@@ -99,5 +100,32 @@ export async function classifyDifference(
     table: difference.liveTable,
     column: difference.liveColumn,
     keyedBy: difference.keyedBy,
+  });
+}
+
+/**
+ * How one difference would convert on this database: its statements, what they cost while they run
+ * and what the new type cannot keep, read from the live table. Null where the judgement found no
+ * conversion for the pair of types, which has no statements to build. Changes nothing.
+ */
+export async function planDifference(
+  db: unknown,
+  dialect: SupportedDialect,
+  difference: DifferenceToClass,
+  judgement: ConversionJudgement
+): Promise<ColumnConversionPlan | null> {
+  if (judgement.reasons.some(reason => reason.kind === "no-conversion")) {
+    return null;
+  }
+  // The same conversion the judgement read the rows for, so the statements and the judgement
+  // agree on whether this is the list conversion.
+  const conversion = conversionFor(difference, dialect);
+  return buildColumnConversion(db, {
+    dialect,
+    table: difference.liveTable,
+    column: difference.liveColumn,
+    from: difference.live,
+    to: difference.expected,
+    ...(conversion.referenceList === true ? { referenceList: true } : {}),
   });
 }

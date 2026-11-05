@@ -112,18 +112,22 @@ export async function holding(
 
 /** POST to one of the plugin's routes. */
 export async function post(
-  cookie: string,
+  /** A session cookie, or an API key sent as a bearer token. */
+  as: string | { readonly bearer: string },
   route: readonly string[],
   body: unknown = {}
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const handlers = createDynamicHandlers();
   const url = `${ORIGIN}/api/plugins/${PAGE_BUILDER_PLUGIN_NAME}/${route.join("/")}`;
+  const auth: Record<string, string> =
+    typeof as === "string"
+      ? { cookie: `${as}; nextly_csrf=${CSRF}`, "x-csrf-token": CSRF }
+      : { authorization: `Bearer ${as.bearer}` };
   const response = await handlers.POST(
     new Request(url, {
       method: "POST",
       headers: {
-        cookie: `${cookie}; nextly_csrf=${CSRF}`,
-        "x-csrf-token": CSRF,
+        ...auth,
         origin: ORIGIN,
         "content-type": "application/json",
       },

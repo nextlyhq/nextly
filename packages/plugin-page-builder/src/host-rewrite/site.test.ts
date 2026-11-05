@@ -6,9 +6,13 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
 import {
   singleToWalk,
+  siteHostReader,
   siteHostSource,
+  siteHostWriter,
   type RewriteSite,
   type SingleToWalk,
 } from "./site";
@@ -49,6 +53,59 @@ async function hostsOf(
   }
   return found;
 }
+
+/** Every host the walk yields, as `path@locale`, marked `~` where it may be one stored value. */
+async function sharedness(
+  declaration: unknown,
+  singles: readonly SingleToWalk[] = []
+): Promise<string[]> {
+  const found: string[] = [];
+  const source = siteHostSource(siteWith(declaration, singles));
+  for await (const document of source.documents(null)) {
+    for (const { host, maybeShared } of document.hosts) {
+      found.push(
+        `${host.path.join(".") || "*"}@${host.locale ?? "-"}${maybeShared === true ? "~" : ""}`
+      );
+    }
+  }
+  return found;
+}
+
+describe("which hosts may read one stored value in every language", () => {
+  it("knows a translated top-level field is stored per language", async () => {
+    const hosts = await sharedness({
+      localized: true,
+      fields: [{ type: "blocks", name: "content", localized: true }],
+    });
+    expect(hosts).toEqual(["content@en", "content@de"]);
+  });
+
+  it("marks what is read per language only because it is unknown", async () => {
+    // A Single made in the admin: its fields' own flags are unknown.
+    const home = singleToWalk(
+      { slug: "home", fields: [{ type: "blocks", name: "content" }] },
+      undefined,
+      true
+    );
+    expect(await sharedness({ fields: [] }, [home])).toEqual([
+      "content@en~",
+      "content@de~",
+    ]);
+    // A field under a named group, and a scan of the row.
+    expect(
+      await sharedness({
+        fields: [
+          {
+            type: "group",
+            name: "hero",
+            fields: [{ type: "blocks", name: "body" }],
+          },
+          { type: "fieldGroup", name: "more", group: "more-group" },
+        ],
+      })
+    ).toEqual(["hero.body@en~", "hero.body@de~", "*@en~", "*@de~"]);
+  });
+});
 
 describe("the languages each host is read in", () => {
   it("reads a field behind a field group in every language of an untranslated parent", async () => {
@@ -152,5 +209,75 @@ describe("the languages each host is read in", () => {
     }
 
     expect(scans).toEqual([[["content"]], [["content"]]]);
+  });
+});
+
+describe("the version a host write sends", () => {
+  // A rewrite's write is made from its read of the host, so it sends that
+  // read's version: a save of the row in between refuses it, and the run
+  // reports the host as changed rather than overwriting the save.
+  const host = {
+    kind: "collection" as const,
+    slug: "notes",
+    id: "n1",
+    path: ["content"],
+  };
+
+  function siteOver(nextly: Record<string, unknown>): RewriteSite {
+    return {
+      ...siteWith({ fields: [] }),
+      nextly: async () => nextly as never,
+    };
+  }
+
+  it("reads the live row's version", async () => {
+    const read = await siteHostReader(
+      siteOver({
+        findByID: async () => ({ id: "n1", content: { nodes: [] }, _rev: "7" }),
+      })
+    )(host);
+    expect(read.rev).toBe("7");
+  });
+
+  it("writes with the version the host was read at", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const writer = siteHostWriter(
+      siteOver({
+        update: async (args: { data: Record<string, unknown> }) => {
+          updates.push(args.data);
+          return {};
+        },
+      })
+    );
+    const result = await writer({
+      host,
+      value: { nodes: [] },
+      mode: "save",
+      expected: { form: "published", hash: "h" },
+      rev: "7",
+    });
+    expect(result).toEqual({ kind: "written" });
+    expect(updates).toEqual([{ content: { nodes: [] }, _rev: "7" }]);
+  });
+
+  it("reports a write refused as made from an out-of-date version as changed", async () => {
+    const writer = siteHostWriter(
+      siteOver({
+        update: async () => {
+          throw new NextlyError({
+            code: "STALE_VERSION",
+            publicMessage: "This document changed since the version you gave.",
+          });
+        },
+      })
+    );
+    const result = await writer({
+      host,
+      value: { nodes: [] },
+      mode: "save",
+      expected: { form: "published", hash: "h" },
+      rev: "7",
+    });
+    expect(result).toEqual({ kind: "changed" });
   });
 });

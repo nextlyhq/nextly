@@ -33,7 +33,10 @@ import type { JSX } from "react";
 import { Lock } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import type { DocumentLockNotice } from "./document-lock-affordances";
+import type {
+  DocumentLockNotice,
+  HeldChangeChoice,
+} from "./document-lock-affordances";
 
 export interface DocumentLockBannerProps {
   /** Null when there is nothing to say, which the banner answers by rendering nothing. */
@@ -44,6 +47,8 @@ export interface DocumentLockBannerProps {
   onRequestAccess: () => void;
   /** Ask again for the latest version of a gained document that failed to load. */
   onRetry?: () => void;
+  /** Answer someone else's change to the document this editor holds. */
+  onChoose?: (choice: HeldChangeChoice) => void;
   className?: string;
 }
 
@@ -68,6 +73,11 @@ const TONE_SURFACE: Record<DocumentLockNotice["tone"], string> = {
   loading: "border-border bg-muted/50",
   // The reader cannot edit a document they now hold, which is news.
   unloaded: "border-primary bg-primary/5",
+  // Someone else's change over the reader's unsaved edits: news they act on.
+  changed: "border-primary bg-primary/5",
+  // The form shows someone else's change, and nothing of the reader's was in
+  // it: told, quietly.
+  updated: "border-border bg-muted/50",
 };
 
 export function DocumentLockBanner({
@@ -75,6 +85,7 @@ export function DocumentLockBanner({
   onTakeOver,
   onRequestAccess,
   onRetry,
+  onChoose,
   className,
 }: DocumentLockBannerProps): JSX.Element | null {
   // Answered here rather than at each call site: two editors mount this, and a
@@ -102,7 +113,9 @@ export function DocumentLockBanner({
       )}
     >
       <Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-      <p className="flex-1 text-foreground">{notice.message}</p>
+      {/* Room for the sentence before any button: on a narrow screen the
+          buttons wrap under it rather than squeeze it into a column. */}
+      <p className="flex-[1_1_16rem] text-foreground">{notice.message}</p>
       {/*
         The confirmation is TEXT and not a disabled button. A control that stays
         on screen having stopped doing anything is the thing a reader cannot
@@ -129,6 +142,25 @@ export function DocumentLockBanner({
           {notice.retryLabel}
         </Button>
       ) : null}
+      {onChoose
+        ? notice.choices?.map(({ choice, label }) => (
+            <Button
+              key={choice}
+              type="button"
+              size="sm"
+              // The answer that acts is outlined; the ones that leave the
+              // form as it is are quiet.
+              variant={
+                choice === "load-current" || choice === "try-again"
+                  ? "outline"
+                  : "ghost"
+              }
+              onClick={() => onChoose(choice)}
+            >
+              {label}
+            </Button>
+          ))
+        : null}
       {notice.takeOverLabel ? (
         <Button type="button" size="sm" variant="outline" onClick={onTakeOver}>
           {notice.takeOverLabel}

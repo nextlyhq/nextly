@@ -60,22 +60,56 @@ export class StatementCursor {
    * something this reading decides. A string is never a name.
    */
   name(): string | undefined {
-    const token = this.peek();
-    let name: string | undefined;
-    if (typeof token === "string") {
-      if (!BARE_NAME.test(token)) return undefined;
-      name = token.toLowerCase();
-    } else if (
-      token !== undefined &&
-      token.name !== undefined &&
-      token.escaped !== true
-    ) {
-      name = token.name.toLowerCase();
-    }
+    const name = this.nameAt(0);
     if (name === undefined) return undefined;
     this.at += 1;
     if (this.isWord(".")) return undefined;
     return name;
+  }
+
+  /**
+   * Consumes a name with exactly one qualifier (`s.t`, `"s"."t"`) and returns
+   * both parts lower-cased, or undefined, consuming nothing, when the next
+   * tokens are not one. Which schema the qualifier names is the caller's to
+   * decide; `name()` still reads no qualified name.
+   */
+  qualifiedName(): { qualifier: string; name: string } | undefined {
+    // Unquoted, `s.t` is one word.
+    const word = this.peek();
+    if (typeof word === "string" && word.includes(".")) {
+      const [qualifier, name, ...more] = word.split(".");
+      if (
+        more.length > 0 ||
+        !BARE_NAME.test(qualifier) ||
+        !BARE_NAME.test(name)
+      ) {
+        return undefined;
+      }
+      this.at += 1;
+      return { qualifier: qualifier.toLowerCase(), name: name.toLowerCase() };
+    }
+    const qualifier = this.nameAt(0);
+    if (qualifier === undefined || !this.isWord(".", 1)) return undefined;
+    const name = this.nameAt(2);
+    if (name === undefined || this.isWord(".", 3)) return undefined;
+    this.at += 3;
+    return { qualifier, name };
+  }
+
+  /** The name the token at `offset` is, lower-cased, or undefined; a string is never a name. */
+  private nameAt(offset: number): string | undefined {
+    const token = this.peek(offset);
+    if (typeof token === "string") {
+      return BARE_NAME.test(token) ? token.toLowerCase() : undefined;
+    }
+    if (
+      token !== undefined &&
+      token.name !== undefined &&
+      token.escaped !== true
+    ) {
+      return token.name.toLowerCase();
+    }
+    return undefined;
   }
 
   /** The tokens from here to the end, consumed. */

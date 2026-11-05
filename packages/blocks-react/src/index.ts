@@ -32,6 +32,7 @@ export type {
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
+  ResolvedIcon,
   ResolvedMedia,
 } from "./context";
 export {

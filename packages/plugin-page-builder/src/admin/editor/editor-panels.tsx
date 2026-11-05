@@ -14,7 +14,6 @@ import {
 } from "@nextlyhq/blocks-react/blocks";
 import {
   browserStore,
-  DEFAULT_PREFERENCES,
   type LeftPanel,
   type PreferenceStore,
   type SavedPattern,
@@ -35,14 +34,7 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useMemo,
-  useState,
-  type SetStateAction,
-  type ReactNode,
-  type Dispatch,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -285,11 +277,9 @@ type PanelRequests = {
   openInsertPanel: (inside?: string) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
-  showEmptyElements: boolean;
-  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
 };
 
-/** Requests to open a panel from the canvas, and the empty-chrome switch. */
+/** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
@@ -338,28 +328,11 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   }
   const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
-  /*
-   * Whether the author wants empty-container chrome showing at all, mirrored
-   * from the shell so the appender mounted below can answer the same question
-   * the dashed placeholder box's own CSS rule already answers.
-   *
-   * Starts at the preference's own default rather than an assumed `true`: the
-   * shell reports the real value once it has read it, but that report lands
-   * one render after this component's first — an assumed value would be a
-   * SECOND declaration of the default that goes stale the day the shell's own
-   * changes and this one does not.
-   */
-  const [showEmptyElements, setShowEmptyElements] = useState(
-    DEFAULT_PREFERENCES.showEmptyElements
-  );
-
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
     insertInside,
-    showEmptyElements,
-    setShowEmptyElements,
   };
 }
 

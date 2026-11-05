@@ -44,6 +44,7 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
@@ -129,6 +130,26 @@ export interface LinkTarget {
   readonly path?: string;
 }
 
+/** One field a collection's entries can be ordered by. */
+export interface LoopSortField {
+  /** The key a sort stores: the field's name. */
+  readonly name: string;
+  /** What the author calls it: "Published date". */
+  readonly label: string;
+  /** Whether it holds a date, which the sort menu lists first. */
+  readonly date: boolean;
+}
+
+/** One collection a loop can repeat over, as its controls offer it. */
+export interface LoopCollection {
+  /** The slug a loop stores. */
+  readonly slug: string;
+  /** Its name, as the admin shows it: "Blog posts". */
+  readonly label: string;
+  /** The fields its entries can be ordered by, in the collection's order. */
+  readonly sortFields: readonly LoopSortField[];
+}
+
 /**
  * What the host lends the Content tab: the parts of the admin this package
  * cannot reach itself. Each is optional, and a control whose service is absent
@@ -154,6 +175,12 @@ export interface ContentServices {
   readonly findLinkTargets?: (
     query: LinkTargetQuery
   ) => Promise<readonly LinkTarget[]>;
+  /**
+   * The collections a collection loop can repeat over, each with the fields
+   * it can be sorted by, read with the signed-in author's own access. Absent,
+   * a loop's collection and sort are typed as text.
+   */
+  readonly listLoopCollections?: () => Promise<readonly LoopCollection[]>;
   /**
    * A media item by its id, read with the signed-in author's own access, so a
    * stored file is shown by its picture and name rather than as "a file".
@@ -203,6 +230,12 @@ export interface ContentControlProps {
    * is labelled by its list and its position.
    */
   readonly label?: string | undefined;
+  /**
+   * The block's other props as stored, read-only, for a control whose
+   * choices depend on one: a loop's sort offers the fields of the collection
+   * its `collectionProp` names. Absent inside a list's items.
+   */
+  readonly values?: Readonly<Record<string, unknown>> | undefined;
 }
 
 /** A content control: a label and the field it names. */
@@ -296,6 +329,23 @@ function TextishControl({
 }
 
 /**
+ * A `text` prop: typed, unless its block asks for a control that offers the
+ * values it can hold (`display: "collection"` or `display: "sort"`), which
+ * fall back to typing where the host cannot list them.
+ */
+function TextControl(props: ContentControlProps): React.JSX.Element {
+  const typed = <TextishControl {...props} />;
+  const display = props.prop.schema.display;
+  if (display === "collection") {
+    return <CollectionControl {...props} fallback={typed} />;
+  }
+  if (display === "sort") {
+    return <SortControl {...props} fallback={typed} />;
+  }
+  return typed;
+}
+
+/**
  * A yes-or-no prop, as a switch whose label says what "on" does ("Open by
  * default"), committed the moment it changes.
  */
@@ -329,9 +379,74 @@ function CheckboxControl({
 const CONTENT_ROW: SideBySideRoom = { maxCount: 6, maxEach: 9, maxTotal: 18 };
 
 /**
+ * The option a switch turns on and the one it turns off, for a select whose
+ * block asks for a switch (`display: "switch"`, `switchOn: "<option>"`), or
+ * `undefined` where the declaration is not one a switch can draw (anything
+ * but exactly two options, one of them `switchOn`) or `stored` is neither.
+ */
+function switchPairOf(
+  prop: EditableProp,
+  stored: string | undefined
+): readonly [on: string, off: string] | undefined {
+  const on = prop.schema.switchOn;
+  if (prop.schema.display !== "switch" || typeof on !== "string") {
+    return undefined;
+  }
+  if (prop.options.length !== 2 || !prop.options.includes(on)) return undefined;
+  const off = prop.options.find(option => option !== on);
+  if (off === undefined) return undefined;
+  return stored === undefined || stored === on || stored === off
+    ? [on, off]
+    : undefined;
+}
+
+/**
+ * A pair of options as one switch, named by the words of the option it turns
+ * on, with the block's `hint`, when it gives one, as its description.
+ */
+function PairSwitch({
+  id,
+  prop,
+  pair: [on, off],
+  on: checked,
+  disabled,
+  onCommit,
+}: Pick<ContentControlProps, "id" | "prop" | "disabled" | "onCommit"> & {
+  pair: readonly [on: string, off: string];
+  on: boolean;
+}): React.JSX.Element {
+  const hint =
+    typeof prop.schema.hint === "string" && prop.schema.hint !== ""
+      ? prop.schema.hint
+      : undefined;
+  return (
+    <div
+      className="nx-inspector__field"
+      data-content-control="select"
+      data-display="switch"
+    >
+      <Label htmlFor={id}>{optionLabel(prop.schema, on)}</Label>
+      <Switch
+        id={id}
+        disabled={disabled}
+        checked={checked}
+        {...(hint === undefined ? {} : { "aria-describedby": `${id}-hint` })}
+        onCheckedChange={next => onCommit(prop.name, next ? on : off)}
+      />
+      {hint === undefined ? null : (
+        <p className="nx-inspector__note" id={`${id}-hint`}>
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * One of a declared set of options, committed the moment it is chosen. A set
  * whose words fit side by side is drawn as a row of buttons, so every choice
- * is on screen; a longer one is a menu.
+ * is on screen; a longer one is a menu, and a pair the block asks to show as
+ * a switch is one.
  */
 function SelectControl({
   id,
@@ -345,6 +460,23 @@ function SelectControl({
   // The stored choice, or the block's default while none is stored.
   const shown = prop.value ?? prop.defaultValue;
   const stored = typeof shown === "string" ? shown : undefined;
+  // Two options and a block asking for a switch: one yes-or-no row, named by
+  // the words of the option it turns on. A stored value that is neither is
+  // left to the menu below, which can show it, rather than read as "off" and
+  // replaced at the first click.
+  const pair = switchPairOf(prop, stored);
+  if (pair !== undefined) {
+    return (
+      <PairSwitch
+        id={id}
+        prop={prop}
+        pair={pair}
+        on={stored === pair[0]}
+        disabled={disabled}
+        onCommit={onCommit}
+      />
+    );
+  }
   // A stored value outside the options is shown by the menu, which can say
   // what it is; a row of buttons would show none chosen and replace it.
   // A block can ask for a menu with `display: "menu"`, so one prop reads the
@@ -408,7 +540,7 @@ function SelectControl({
  * keys move the choice, as in any radio group, and only the chosen one (or the
  * first, with none chosen) is in the tab order.
  */
-function SegmentedChoice({
+export function SegmentedChoice({
   id,
   labelledBy,
   options,
@@ -475,11 +607,52 @@ function MediaControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
+  return (
+    <MediaField
+      id={id}
+      label={propLabel(prop.name, prop.schema)}
+      stored={
+        typeof prop.value === "string" && prop.value !== "" ? prop.value : null
+      }
+      accept={
+        typeof prop.schema.accept === "string" ? prop.schema.accept : undefined
+      }
+      disabled={disabled}
+      services={services}
+      onChange={next => onCommit(prop.name, next)}
+    />
+  );
+}
+
+/**
+ * A media field: the chosen file, the button that opens the host's picker,
+ * and Remove. Shared by the media control and an image's source, which
+ * writes the same id alongside the props it keeps in step.
+ */
+export function MediaField({
+  id,
+  label,
+  stored,
+  accept,
+  disabled,
+  services,
+  showAlt = true,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  /** The stored id, or `null` for none. */
+  stored: string | null;
+  accept: string | undefined;
+  disabled: boolean;
+  services: ContentServices | undefined;
+  /** Whether to show the library's alt text under the file's name. */
+  showAlt?: boolean;
+  /** Store an id, or `undefined` to remove it. */
+  onChange: (mediaId: string | undefined) => void;
+}): React.JSX.Element {
   // What the last pick was called, for this session; a stored id shows as set.
   const [picked, setPicked] = React.useState<PickedMedia | null>(null);
-  const label = propLabel(prop.name, prop.schema);
-  const stored =
-    typeof prop.value === "string" && prop.value !== "" ? prop.value : null;
   const Picker = services?.MediaPicker;
   const name = picked?.id === stored ? picked?.filename : undefined;
   return (
@@ -497,6 +670,7 @@ function MediaControl({
           read={services?.readMedia}
           pickedName={name}
           fallback="A file from the media library."
+          showAlt={showAlt}
         />
         {Picker === undefined ? (
           <p className="nx-inspector__note">
@@ -507,15 +681,11 @@ function MediaControl({
             Picker={Picker}
             label={label}
             stored={stored}
-            accept={
-              typeof prop.schema.accept === "string"
-                ? prop.schema.accept
-                : undefined
-            }
+            accept={accept}
             disabled={disabled}
             onChoose={first => {
               setPicked(first);
-              onCommit(prop.name, first.id);
+              onChange(first.id);
             }}
           />
         )}
@@ -526,7 +696,7 @@ function MediaControl({
             variant="ghost"
             disabled={disabled}
             aria-label={`Remove ${label}`}
-            onClick={() => onCommit(prop.name, undefined)}
+            onClick={() => onChange(undefined)}
           >
             Remove
           </Button>
@@ -547,11 +717,14 @@ export function ChosenMedia({
   read,
   pickedName,
   fallback,
+  showAlt = true,
 }: {
   mediaId: string | null;
   read: ContentServices["readMedia"];
   pickedName: string | undefined;
   fallback: string;
+  /** Whether to show its library alt text, where a row of its own does not. */
+  showAlt?: boolean;
 }): React.JSX.Element {
   const summary = useMediaSummary(read, mediaId);
   if (mediaId === null) {
@@ -572,7 +745,7 @@ export function ChosenMedia({
         <p className="nx-inspector__media-name" title={name}>
           {name}
         </p>
-        {summary?.alt === undefined ? null : (
+        {summary?.alt === undefined || !showAlt ? null : (
           // Named as the library's: a page's own Alt text, where the block
           // has one, wins over it, and this is only the fallback.
           <p className="nx-inspector__note">Library alt text: {summary.alt}</p>
@@ -587,7 +760,7 @@ export function ChosenMedia({
  * and for the id it was read for only, so a summary never shows beside
  * another file's id.
  */
-function useMediaSummary(
+export function useMediaSummary(
   read: ContentServices["readMedia"],
   mediaId: string | null
 ): MediaSummary | null | undefined {
@@ -681,8 +854,46 @@ interface RichTextSession {
 }
 
 /**
+ * A passage as one string, to tell one stored passage from another; empty
+ * for one that cannot be written out (a cycle), which no stored one is.
+ */
+function passageKey(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** The Content tab's rich-text prop: its name, and the passage under it. */
+function RichTextControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  services,
+}: ContentControlProps): React.JSX.Element {
+  return (
+    <div className="nx-inspector__field" data-content-control="richText">
+      <p className="nx-inspector__field-name" id={`${id}-label`}>
+        {propLabel(prop.name, prop.schema)}
+      </p>
+      <RichTextField
+        id={id}
+        labelledBy={`${id}-label`}
+        value={prop.value}
+        disabled={disabled}
+        onCommit={value => onCommit(prop.name, value)}
+        services={services}
+      />
+    </div>
+  );
+}
+
+/**
  * A rich-text passage, edited in the inspector with the admin's one rich-text
- * editor.
+ * editor. Shared by every surface that edits one: the Content tab's prop and a
+ * placement's exposed field, each with its own label and write path.
  *
  * The editor is attached when the field is focused, loaded with the stored
  * passage, and what it reads is committed once when the field is left, so an
@@ -692,13 +903,27 @@ interface RichTextSession {
  * Read-only is passed to the element itself: a disabled fieldset does not
  * stop typing in a `contenteditable`.
  */
-function RichTextControl({
+export function RichTextField({
   id,
-  prop,
+  labelledBy,
+  value,
   disabled,
   onCommit,
   services,
-}: ContentControlProps): React.JSX.Element {
+}: {
+  id: string;
+  /** The id of the element naming the field. */
+  labelledBy: string;
+  /** The passage stored, or `undefined` for none. */
+  value: unknown;
+  disabled: boolean;
+  /**
+   * Write the passage the editor reads; `null` when the write was refused,
+   * which keeps the passage open with the author's words.
+   */
+  onCommit: (value: unknown) => BlockDocument | null | void;
+  services: ContentServices | undefined;
+}): React.JSX.Element {
   const field = React.useRef<HTMLDivElement>(null);
   const session = React.useRef<RichTextSession | null>(null);
   // Whether the field still has focus, so an editor that finishes loading
@@ -708,7 +933,6 @@ function RichTextControl({
   const [refused, setRefused] = React.useState<
     "held" | "unsupported" | "unsaved" | null
   >(null);
-  const label = propLabel(prop.name, prop.schema);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
 
@@ -735,7 +959,7 @@ function RichTextControl({
       setLoading(false);
     }
     if (!focused.current || session.current !== null) return;
-    const attachment = editor.attach(element, prop.value);
+    const attachment = editor.attach(element, value);
     if (attachment.status === "refused") {
       setRefused(attachment.reason);
       return;
@@ -758,7 +982,7 @@ function RichTextControl({
       return null;
     }
     // Read and written BEFORE letting go: the words exist in the editor alone.
-    const written = onCommit(prop.name, live.read());
+    const written = onCommit(live.read());
     if (written === null) {
       // Refused (a size cap, a lock that arrived): the passage stays open with
       // the author's words, held against anything else taking the editor,
@@ -783,14 +1007,26 @@ function RichTextControl({
   // While no editor is attached, the field shows the passage's words, set on
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
-  const preview = isRichTextValue(prop.value)
-    ? richTextToPlainText(prop.value)
-    : "";
+  const preview = isRichTextValue(value) ? richTextToPlainText(value) : "";
+  // A stored passage that changes under words the document refused (a Reset,
+  // an undo) is what the page now holds: the refused draft is let go and the
+  // field shows the stored one, rather than the draft and its notice sitting
+  // over a value that has moved on. Keyed on the whole passage, so a change
+  // its plain text would not show is still seen.
+  const storedKey = passageKey(value);
+  const refusedNow = React.useRef(refused);
+  refusedNow.current = refused;
+  const latestLetGo = React.useRef(letGo);
+  latestLetGo.current = letGo;
   React.useEffect(() => {
+    const live = session.current;
+    if (live !== null && refusedNow.current === "unsaved") {
+      latestLetGo.current(live);
+    }
     if (session.current === null && field.current !== null) {
       field.current.textContent = preview;
     }
-  }, [preview]);
+  }, [storedKey, preview]);
 
   // A passage left open when the block changes or the panel goes is finished,
   // so nothing typed is lost and the shared editor is never left held. Read
@@ -816,17 +1052,14 @@ function RichTextControl({
   );
 
   return (
-    <div className="nx-inspector__field" data-content-control="richText">
-      <p className="nx-inspector__field-name" id={`${id}-label`}>
-        {label}
-      </p>
+    <>
       <div
         id={id}
         ref={field}
         className="nx-inspector__rich-text"
         role="textbox"
         aria-multiline="true"
-        aria-labelledby={`${id}-label`}
+        aria-labelledby={labelledBy}
         aria-readonly={!editable}
         aria-busy={loading}
         // Not editable until the shared editor attaches and makes it so:
@@ -861,7 +1094,7 @@ function RichTextControl({
           Rich text is edited on the canvas here.
         </p>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -1132,7 +1365,7 @@ export function UnsupportedField({
 
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
-  text: TextishControl,
+  text: TextControl,
   textarea: TextishControl,
   url: TextishControl,
   number: TextishControl,

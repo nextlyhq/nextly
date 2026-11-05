@@ -143,6 +143,12 @@ export interface PageItem {
    * says: a scheduled page can hold them too. Absent otherwise.
    */
   readonly pendingChange?: true;
+  /**
+   * The page's version as this answer read it, which a rename sends back so
+   * a save of the page since then refuses the rename. Absent from a server
+   * that issues no versions.
+   */
+  readonly rev?: string;
 }
 
 /**
@@ -234,4 +240,41 @@ export function pagesSearchPath(query: PagesSearchQuery = {}): string {
   return search === ""
     ? PAGES_SEARCH_ROUTE_PATH
     : `${PAGES_SEARCH_ROUTE_PATH}?${search}`;
+}
+
+/**
+ * Where the editor asks the address one page is served at, for Settings'
+ * address line. A read of its own rather than a search: Settings knows the
+ * page and asks only where it is, as the page is saved.
+ */
+export const PAGE_ADDRESS_ROUTE_PATH = "/pages/address";
+
+/** The address route's query parameter names, spelled once for both ends. */
+export const PAGE_ADDRESS_PARAMS = {
+  collection: "collection",
+  id: "id",
+  locale: "locale",
+} as const;
+
+/**
+ * What the address route answers: where the page is served as it is SAVED,
+ * resolved on the server from where the host said its pages are served, by
+ * the interpolation the pages search and the collection's preview use.
+ * `null` where it has none: another collection's page, a host that states no
+ * address for its pages, or a page whose saved fields cannot fill it yet.
+ */
+export interface PageAddressResponse {
+  readonly path: string | null;
+}
+
+/** The address route's path for one page, in the language being edited. */
+export function pageAddressPath(page: PageReference, locale?: string): string {
+  const params = new URLSearchParams({
+    [PAGE_ADDRESS_PARAMS.collection]: page.collection,
+    [PAGE_ADDRESS_PARAMS.id]: page.id,
+  });
+  if (locale !== undefined && locale !== "") {
+    params.set(PAGE_ADDRESS_PARAMS.locale, locale);
+  }
+  return `${PAGE_ADDRESS_ROUTE_PATH}?${params.toString()}`;
 }

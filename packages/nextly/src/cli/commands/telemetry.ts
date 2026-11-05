@@ -5,8 +5,51 @@
  */
 
 import * as telemetry from "@nextlyhq/telemetry";
+import type { Command } from "commander";
 
+import { createContext, type GlobalOptions } from "../context";
+import { reportDryRun } from "../dry-run";
 import { CLI_VERSION } from "../program";
+
+/** The options of `enable`, `disable` and `reset`. */
+export interface TelemetryChangeOptions {
+  /** Name the setting it would change; change nothing. @default false */
+  dryRun?: boolean;
+}
+
+/**
+ * A change to the user's telemetry setting: what it sets, as a dry run names
+ * it, how the real run makes it, and what the real run says once done.
+ */
+interface SettingChange {
+  sets: readonly string[];
+  apply: () => void;
+  done: string;
+}
+
+const ENABLE: SettingChange = {
+  sets: ["telemetry to enabled for this user"],
+  apply: () => telemetry.setEnabled(true),
+  done: "Telemetry enabled. Thanks for helping improve Nextly.",
+};
+
+const DISABLE: SettingChange = {
+  sets: ["telemetry to disabled for this user"],
+  apply: () => telemetry.setEnabled(false),
+  done: "Telemetry disabled.",
+};
+
+// A reset replaces the whole stored consent with a fresh one, which is
+// enabled and has not shown the notice: each of those is a change it makes.
+const RESET: SettingChange = {
+  sets: [
+    "a new anonymous telemetry ID for this user",
+    "telemetry to enabled for this user",
+    "the first-run telemetry notice to show again",
+  ],
+  apply: () => telemetry.resetConsent(),
+  done: "Telemetry consent reset. The first-run notice will show again.",
+};
 
 const REASONS: Record<string, string> = {
   DO_NOT_TRACK: "DO_NOT_TRACK=1 is set",
@@ -44,28 +87,48 @@ export async function telemetryStatusAction(): Promise<void> {
   });
 }
 
-/** The action of `nextly telemetry enable`, loaded when it runs. */
-export async function telemetryEnableAction(): Promise<void> {
+/**
+ * Makes `change`, or under `--dry-run` names it. A dry run does not open the
+ * consent store: opening it writes the file when there is none yet.
+ */
+async function changeSetting(
+  change: SettingChange,
+  options: TelemetryChangeOptions,
+  cmd: Command
+): Promise<void> {
+  if (options.dryRun) {
+    const globals: GlobalOptions = cmd.optsWithGlobals();
+    reportDryRun(createContext(globals).logger, {
+      changes: change.sets.map(target => ({ action: "set", target })),
+    });
+    return;
+  }
   await withTelemetry(() => {
-    telemetry.setEnabled(true);
-    console.log("Telemetry enabled. Thanks for helping improve Nextly.");
+    change.apply();
+    console.log(change.done);
   });
+}
+
+/** The action of `nextly telemetry enable`, loaded when it runs. */
+export async function telemetryEnableAction(
+  options: TelemetryChangeOptions,
+  cmd: Command
+): Promise<void> {
+  await changeSetting(ENABLE, options, cmd);
 }
 
 /** The action of `nextly telemetry disable`, loaded when it runs. */
-export async function telemetryDisableAction(): Promise<void> {
-  await withTelemetry(() => {
-    telemetry.setEnabled(false);
-    console.log("Telemetry disabled.");
-  });
+export async function telemetryDisableAction(
+  options: TelemetryChangeOptions,
+  cmd: Command
+): Promise<void> {
+  await changeSetting(DISABLE, options, cmd);
 }
 
 /** The action of `nextly telemetry reset`, loaded when it runs. */
-export async function telemetryResetAction(): Promise<void> {
-  await withTelemetry(() => {
-    telemetry.resetConsent();
-    console.log(
-      "Telemetry consent reset. The first-run notice will show again."
-    );
-  });
+export async function telemetryResetAction(
+  options: TelemetryChangeOptions,
+  cmd: Command
+): Promise<void> {
+  await changeSetting(RESET, options, cmd);
 }
