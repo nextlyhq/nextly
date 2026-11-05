@@ -753,6 +753,69 @@ describe("stripping retired values on every write", () => {
     expect((nodes[0].props as Row).overrides).toEqual({ body: "kept" });
   });
 
+  it("strips a blocks field inside named groups, leaving the rest of each group as written", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({
+      store,
+      collections: {
+        pages: [
+          {
+            name: "hero",
+            type: "group",
+            fields: [
+              { name: "heading", type: "text" },
+              {
+                name: "inner",
+                type: "group",
+                fields: [{ name: "body", type: "blocks" }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const data = {
+      hero: {
+        heading: "Hi",
+        inner: {
+          body: page([placing("i1", "hero", { title: "old", body: "kept" })]),
+        },
+      },
+    };
+
+    const written = (await run("beforeUpdate", "*", {
+      collection: "pages",
+      data,
+    })) as Row;
+
+    const hero = written.hero as { heading: string; inner: { body: Row } };
+    expect(hero.heading).toBe("Hi");
+    const nodes = (hero.inner.body as { nodes: Row[] }).nodes;
+    expect((nodes[0].props as Row).overrides).toEqual({ body: "kept" });
+    // The write's own objects are left as they came.
+    expect(
+      ((data.hero.inner.body as { nodes: Row[] }).nodes[0].props as Row)
+        .overrides
+    ).toEqual({ title: "old", body: "kept" });
+  });
+
+  it("leaves a document under a group the declaration does not name", async () => {
+    const { store } = retiredHero();
+    const { run } = harness({
+      store,
+      collections: { pages: [{ name: "settings", type: "json" }] },
+    });
+
+    const written = await run("beforeUpdate", "*", {
+      collection: "pages",
+      data: {
+        settings: { body: page([placing("i1", "hero", { title: "kept" })]) },
+      },
+    });
+
+    expect(written).toBeUndefined();
+  });
+
   it("leaves a write with nothing retired as it came", async () => {
     const { store } = memoryStore({
       other: { properties: ["title"], slots: [] },

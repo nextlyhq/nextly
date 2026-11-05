@@ -30,7 +30,8 @@
  *
  * Every write that carries a blocks value has the retired values of the
  * components it places taken out before validation sees it, so a page saved
- * after the removal never stores them again. It covers Singles and writes made
+ * after the removal never stores them again: at the top level and inside named
+ * groups, wherever a field's value has a fixed path. It covers Singles and writes made
  * inside a transaction, which the post-commit hooks decline: this changes only
  * the data being written, and needs no read of the document itself.
  *
@@ -55,7 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 
-import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { blocksFieldReach } from "./class-usage-blocks-fields";
 import { leavesDocumentPublished } from "./component-readiness-hook";
 import { asDocument } from "./component-store-source";
 import {
@@ -437,16 +438,20 @@ async function stripWrite(
   if (!isPlainRecord(data)) return undefined;
   // Asked of the values before the configuration, so a write carrying no
   // document, which is most of them, costs no registry read.
-  const candidates = Object.keys(data).filter(
-    key => asDocument(data[key]) !== null
-  );
-  if (candidates.length === 0) return undefined;
+  if (!Object.values(data).some(value => mayHoldDocument(value, 0))) {
+    return undefined;
+  }
   const slug = fields.collection;
   if (typeof slug !== "string") return undefined;
 
   try {
-    const blocks = await blocksFieldNames(args.ctx, slug, context);
-    const written = candidates.filter(name => blocks.has(name));
+    const written = (await blocksFieldPaths(args.ctx, slug, context)).flatMap(
+      path => {
+        const raw = valueAt(data, path);
+        const document = asDocument(raw);
+        return document === null ? [] : [{ path, raw, document }];
+      }
+    );
     if (written.length === 0) return undefined;
     return await stripped(args, slug, fields, data, written);
   } catch (error) {
@@ -459,9 +464,71 @@ async function stripWrite(
   }
 }
 
+/**
+ * How deep a write's named groups are looked into for a blocks value, as deep
+ * as the walk of a declaration follows them.
+ */
+const MAX_GROUP_DEPTH = 16;
+
+/**
+ * Whether a written value is, or inside its named groups holds, something a
+ * blocks value could be. Text is decoded only at the top level, where a value
+ * may arrive as JSON text; a group's own values arrive decoded.
+ */
+function mayHoldDocument(value: unknown, depth: number): boolean {
+  if (depth === 0 ? asDocument(value) !== null : isDocumentShaped(value)) {
+    return true;
+  }
+  return (
+    depth < MAX_GROUP_DEPTH &&
+    isPlainRecord(value) &&
+    Object.values(value).some(inner => mayHoldDocument(inner, depth + 1))
+  );
+}
+
+/** Whether a decoded value has a document's shape. */
+function isDocumentShaped(value: unknown): boolean {
+  return isPlainRecord(value) && Array.isArray(value.nodes);
+}
+
+/** The value at a path of a write's data, or `undefined` where none is. */
+function valueAt(
+  data: Record<string, unknown>,
+  path: readonly string[]
+): unknown {
+  let value: unknown = data;
+  for (const key of path) {
+    if (!isPlainRecord(value) || !Object.hasOwn(value, key)) return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+/**
+ * The data with `value` at `path`, every record on the way copied, so the
+ * write's own objects are never changed.
+ */
+function withValueAt(
+  data: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown
+): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined) return data;
+  const inner = data[key];
+  return {
+    ...data,
+    [key]:
+      rest.length === 0 || !isPlainRecord(inner)
+        ? value
+        : withValueAt(inner, rest, value),
+  };
+}
+
 /** One blocks value a write carries, decoded, with the form it arrived in. */
 interface WrittenDocument {
-  readonly name: string;
+  /** Where it is in the write: one key, or the named groups leading to it. */
+  readonly path: readonly string[];
   readonly raw: unknown;
   readonly document: BlockDocument;
 }
@@ -472,13 +539,9 @@ async function stripped(
   slug: string,
   fields: Record<string, unknown>,
   data: Record<string, unknown>,
-  names: readonly string[]
+  written: readonly WrittenDocument[]
 ): Promise<Record<string, unknown> | undefined> {
   const limits = args.limits();
-  const written = names.flatMap(name => {
-    const document = asDocument(data[name]);
-    return document === null ? [] : [{ name, raw: data[name], document }];
-  });
   const own =
     slug === args.componentCollection
       ? (idOf(fields.originalData) ?? idOf(data))
@@ -498,17 +561,21 @@ async function stripped(
   for (const entry of written) {
     const placements = stripRetiredExposures(entry.document, retired, limits);
     const self =
-      own !== undefined && entry.name === args.componentField
+      own !== undefined &&
+      entry.path.length === 1 &&
+      entry.path[0] === args.componentField
         ? withoutOwnRetired(placements.document, retired.get(own))
         : { document: placements.document, removed: 0 };
     if (placements.removed + self.removed === 0) continue;
-    next ??= { ...data };
     // In the encoding it arrived in: a value written as JSON text is stored as
     // text, and handing back an object would change what the write stores.
-    next[entry.name] =
+    next = withValueAt(
+      next ?? data,
+      entry.path,
       typeof entry.raw === "string"
         ? JSON.stringify(self.document)
-        : self.document;
+        : self.document
+    );
   }
   return next;
 }
@@ -575,17 +642,20 @@ function placedComponentIds(
 }
 
 /**
- * The names of the blocks fields the written collection or Single declares.
+ * Where the written collection or Single stores each blocks field it
+ * declares: one key at the top level, or the named groups leading to it. A
+ * field with no fixed path (inside a repeater) is not reached; its values are
+ * never drawn, and the cleanup reports where it found them.
  *
  * A Single's hooks are namespaced `single:<slug>`, and its declaration comes
  * from the Singles registry, which is the one place a plugin can read it
  * without creating the Single's row.
  */
-async function blocksFieldNames(
+async function blocksFieldPaths(
   ctx: RetiredExposurePluginContext,
   slug: string,
   context: HookContext<unknown>
-): Promise<ReadonlySet<string>> {
+): Promise<readonly (readonly string[])[]> {
   const declaration = slug.startsWith(SINGLE_HOOK_NAMESPACE)
     ? (
         await ctx.services.singles.list({
@@ -597,9 +667,9 @@ async function blocksFieldNames(
         slug,
         requestContextFor(context)
       );
-  return new Set(
-    blocksFieldsOf(declaration as { fields?: unknown }).map(field => field.name)
-  );
+  return blocksFieldReach(
+    declaration as { fields?: unknown; localized?: unknown }
+  ).fields.map(field => field.path);
 }
 
 /**
@@ -610,7 +680,7 @@ async function blocksFieldNames(
  * when a field is removed in the editor. Hands the same document back when
  * there is nothing to remove, and never changes the one passed in.
  */
-function withoutOwnRetired(
+export function withoutOwnRetired(
   document: BlockDocument,
   retired: RetiredExposures | undefined
 ): { document: BlockDocument; removed: number } {

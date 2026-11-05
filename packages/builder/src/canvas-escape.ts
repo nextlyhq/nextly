@@ -81,19 +81,36 @@ export function isTextEntry(element: Element | null): boolean {
    * "no" for most of the time an author is actually typing. `closest` follows
    * the inheritance the same way the browser does.
    */
-  // The NEAREST `contenteditable` decides, as it does for the browser: a
-  // `false` island inside editable text makes a control inside it a control
-  // again. `plaintext-only` is editable too: it is how the canvas's own line
-  // editor is.
-  const editable = element.closest("[contenteditable]");
-  const value = editable?.getAttribute("contenteditable");
-  if (value === "" || value === "true" || value === "plaintext-only") {
-    return true;
-  }
+  if (isEditableText(element)) return true;
   if (!isInput(element)) return false;
   // Buttons, checkboxes and radios are inputs that nobody types into, and
   // Escape over one of those is an ordinary "clear the selection".
   return !NON_TEXT_INPUT_TYPES.has(element.type);
+}
+
+/**
+ * Whether `contenteditable` makes an element editable, read the way the
+ * browser reads the attribute.
+ *
+ * The NEAREST recognised value decides: a `false` island inside editable text
+ * makes a control inside it a control again. The recognised values are ASCII
+ * case-insensitive (`TRUE` is `true`), and `plaintext-only` is editable too:
+ * it is how the canvas's own line editor is. Any other value is the inherit
+ * state, so the walk carries on outwards past it.
+ */
+export function isEditableText(element: Element): boolean {
+  for (
+    let host = element.closest("[contenteditable]");
+    host !== null;
+    host = host.parentElement?.closest("[contenteditable]") ?? null
+  ) {
+    const value = host.getAttribute("contenteditable")?.toLowerCase();
+    if (value === "" || value === "true" || value === "plaintext-only") {
+      return true;
+    }
+    if (value === "false") return false;
+  }
+  return false;
 }
 
 const NON_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([

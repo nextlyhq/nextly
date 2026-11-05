@@ -383,6 +383,20 @@ function insertionProps(
   };
 }
 
+/**
+ * A block's insert presets: its variations that are neither a look (one with
+ * styles, picked for a block already on the page) nor the block's own named
+ * look (`isDefault`). The one reading both the Add panel and the props a block
+ * could have been placed with take, so the two can't disagree.
+ */
+function insertVariations(
+  editor: AnyBlockDefinition["editor"]
+): NonNullable<NonNullable<AnyBlockDefinition["editor"]>["variations"]> {
+  return (editor?.variations ?? []).filter(
+    variation => variation.styles === undefined && variation.isDefault !== true
+  );
+}
+
 /** The props a block is placed with under one of its variations. */
 function variationProps(
   base: Record<string, unknown>,
@@ -402,7 +416,7 @@ export function insertionPropSets(
   const base = insertionProps(definition);
   return [
     base,
-    ...(definition.editor?.variations ?? []).map(variation =>
+    ...insertVariations(definition.editor).map(variation =>
       variationProps(base, variation)
     ),
   ];
@@ -476,7 +490,7 @@ export function catalogFrom(
       props: defaults,
     });
 
-    for (const variation of editor?.variations ?? []) {
+    for (const variation of insertVariations(editor)) {
       entries.push({
         kind: "block",
         id: `${definition.name}#${variation.name}`,

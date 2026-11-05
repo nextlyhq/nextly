@@ -5,7 +5,8 @@
  * Read as the SYSTEM, because a host the person running the rewrite cannot see
  * still renders the component. Written as that PERSON, through the identity
  * their request resolved, so a host they may not update (or, for a live row,
- * publish) is refused by the same rules their own save would meet.
+ * publish) is refused by the same rules their own save would meet. A run no
+ * person started writes as the system instead (see `WriteIdentity`).
  *
  * @module host-rewrite/site
  */
@@ -68,10 +69,14 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
   }): Promise<unknown>;
 }
 
-/** The identity a write runs as, as the caller's request resolved it. */
-export type WriteIdentity = Record<string, unknown> & {
-  readonly overrideAccess: false;
-};
+/**
+ * The identity a write runs as: the caller's request, as it resolved it, or
+ * the system, for a run no person started (removing a component's retired
+ * field values, which no reader is ever shown and every write already drops).
+ */
+export type WriteIdentity =
+  | (Record<string, unknown> & { readonly overrideAccess: false })
+  | { readonly overrideAccess: true };
 
 /** What the rewrite needs from the installed plugin and the person running it. */
 export interface RewriteSite {
@@ -95,7 +100,10 @@ export interface RewriteSite {
   >;
   /** The component being converted, for the Layout scan. */
   readonly componentId: string;
-  /** Who the writes are made as, resolved from the caller's own request. */
+  /**
+   * Who the writes are made as: resolved from the caller's own request, or the
+   * system for a run no person started.
+   */
   readonly identity: () => Promise<WriteIdentity>;
 }
 
