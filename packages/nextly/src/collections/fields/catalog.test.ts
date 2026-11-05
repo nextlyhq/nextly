@@ -182,7 +182,9 @@ describe("BLOCK_FIELD_TYPE_CATALOG", () => {
 
 // The catalog publishes the page-builder engine's binding vocabulary, so a
 // field the picker offers for a prop is one the renderer fills it from. Held
-// by identity, not by equal values: a copy agrees on the day it is made.
+// by identity, not by equal values: a copy agrees on the day it is made. This
+// holds the source; `scripts/postbuild.cjs` holds the built entry to the same
+// identity, which only an engine left external keeps.
 describe("one binding vocabulary with the engine", () => {
   it("publishes the engine's functions themselves", () => {
     expect(bindingKindOf).toBe(engine.bindingKindOf);

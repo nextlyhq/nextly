@@ -716,17 +716,19 @@ export function createPublicReader(
           logContext: { reason: "public-read-single-unsupported" },
         });
       }
-      const document = await readAsVisitor(() =>
-        findSingle.call(nextly, args)
-      ).catch((error: unknown) => {
-        // The Single route's answer: missing, unpublished and refused all
-        // read as nothing here, so the result does not tell them apart. Only
-        // the read itself is judged so: a failure after it, such as the
-        // hidden-field declarations refusing, is not a miss and throws as it
-        // does from `find` and `count`.
-        if (isMissOrDenied(error)) return null;
-        throw error;
-      });
+      // The Single route's answer: missing, unpublished and refused all read
+      // as nothing here, so the result does not tell them apart. Only the
+      // read itself is judged so, whether its source throws or rejects: a
+      // failure after it, such as the hidden-field declarations refusing, is
+      // not a miss and throws as it does from `find` and `count`.
+      const document = await (async () => {
+        try {
+          return await readAsVisitor(() => findSingle.call(nextly, args));
+        } catch (error) {
+          if (isMissOrDenied(error)) return null;
+          throw error;
+        }
+      })();
       if (document === null) return null;
       const hidden = await hiddenOf(binding, {
         kind: "single",
