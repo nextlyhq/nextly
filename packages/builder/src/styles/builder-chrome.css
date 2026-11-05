@@ -1216,7 +1216,7 @@
 
 .nx-editing-bar__item-reason {
   color: var(--nx-muted-foreground);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1.4;
   white-space: normal;
 }

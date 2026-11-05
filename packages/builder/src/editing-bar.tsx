@@ -444,7 +444,10 @@ function ChipMenu({
       >
         {onDetach === undefined ? null : (
           <DetachItem
-            reason={held ?? detachHeld?.(chip.id)}
+            held={held}
+            whyHeld={
+              detachHeld === undefined ? undefined : () => detachHeld(chip.id)
+            }
             onSelect={() => onDetach(chip.id)}
           />
         )}
@@ -467,12 +470,19 @@ function ChipMenu({
  * menu is open.
  */
 function DetachItem({
-  reason,
+  held,
+  whyHeld,
   onSelect,
 }: {
-  reason: string | undefined;
+  /** The block's lock, known already. */
+  held: string | undefined;
+  /** Why this style can't be detached, asked here, as the menu opens. */
+  whyHeld: (() => string | undefined) | undefined;
   onSelect: () => void;
 }): React.JSX.Element {
+  // Asked while drawing the open menu only: answering plans the detach,
+  // which the bar's every render need not pay for.
+  const reason = held ?? whyHeld?.();
   return (
     <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
       <span className="nx-editing-bar__item-words">
