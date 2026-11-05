@@ -150,7 +150,7 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     expect(innerImage).toContain("inner.png");
   });
 
-  test("Full screen stores 100svh and draws the Section the frame's height", async ({
+  test("Full screen stores 100svh and draws the Section at the frame.s height", async ({
     page,
   }) => {
     const { id } = await createPage(
@@ -166,11 +166,14 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     await expect
       .poll(async () =>
         drawn.evaluate(element => {
+          // The canvas is drawn at a zoom, so its box on screen is scaled:
+          // the min height the canvas resolves, in the frame's own pixels,
+          // is the frame's height.
           const frame = element.ownerDocument.defaultView;
-          return (
-            element.getBoundingClientRect().height >=
-            (frame?.innerHeight ?? Number.POSITIVE_INFINITY) - 1
+          const minHeight = Number.parseFloat(
+            getComputedStyle(element).minHeight
           );
+          return Math.abs(minHeight - (frame?.innerHeight ?? 0)) <= 1;
         })
       )
       .toBe(true);
