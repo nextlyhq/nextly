@@ -47,9 +47,12 @@ not read answers `readable: false` with no items, and the rest is still answered
 the editor's panels read with. `?locale=fr` reads component and Layout text
 in that language.
 
-Every id an action takes comes from here: `place-component` takes a component's `id`,
-`variant` takes a variant's `id` (not its label, which can change), and `values` is keyed
-by a field's `id`. The manifest's schema is published as `compositionManifestSchema`, so
+Every id a page action takes comes from here: `place-component` takes a component's `id`,
+`variant` takes a variant's `id` (not its label, which can change), `values` is keyed by a
+field's `id`, and `set-layout` takes a Layout's `id`. So do a definition edit's field,
+slot and variant ids. An edit that points at a block inside the component (`expose` and
+`retarget-exposure`) names it by its `nodeId` in the definition: read the component's row
+from `collections.components`, where `componentField` holds the definition. The manifest's schema is published as `compositionManifestSchema`, so
 a client can validate what it reads:
 
 ```ts
@@ -126,6 +129,9 @@ Content-Type: application/json
 
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
+
+Where the component store translates its definition field, an edit changes the default
+language's definition.
 
 The caller needs **update** on components; where `componentReadiness` names a collection
 of the site's own for them, the route edits that collection's document field and needs

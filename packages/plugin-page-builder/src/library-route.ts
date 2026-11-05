@@ -239,6 +239,8 @@ interface LibraryCaller {
 
 /** The capabilities the pattern route uses, named rather than imported whole. */
 export interface PatternLibraryContext extends LibraryCaller {
+  /** An API key's own grants, which its read is judged on rather than its owner's. */
+  authenticatedScope?: unknown;
   services: {
     collections: {
       listEntries(
@@ -455,7 +457,15 @@ export async function readPatternLibrary(
   // every caller with every row, whatever the collection's permissions say.
   // NO status predicate, deliberately — see the module docblock. And the same
   // deterministic order the component listing asks for, for the same reason.
-  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  // A key's own scope travels with the read, so the key is judged on its
+  // grants rather than its owner's, whether or not the request pinned it.
+  const asUser = {
+    as: "user" as const,
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+  };
   return envelope(
     await readTier(
       async at => {

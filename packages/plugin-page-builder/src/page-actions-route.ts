@@ -40,7 +40,7 @@ import {
   type DocumentLimits,
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
-import { pageActionSchema } from "@nextlyhq/builder/ops";
+import { pageActionJsonSchema, pageActionSchema } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
@@ -66,6 +66,7 @@ import {
   planRefusal,
   readJsonBody,
   readOrNull,
+  requestJsonSchema,
   savesLive,
   storeOf,
   type ActionAnswer,
@@ -101,6 +102,11 @@ const PageActionEnvelope = z.strictObject({
   expect: z.string().max(128).optional(),
   publish: z.boolean().optional(),
 });
+
+/** The JSON Schema of a page action request, as the route parses it. */
+export function pageActionRequestJsonSchema(): Record<string, unknown> {
+  return requestJsonSchema(PageActionEnvelope, pageActionJsonSchema());
+}
 
 /**
  * A page action request read from outside input: a route body, or what a

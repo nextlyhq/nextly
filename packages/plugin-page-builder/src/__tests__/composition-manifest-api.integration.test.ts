@@ -75,8 +75,12 @@ const composer = definePlugin({
       {
         method: "GET",
         path: "/manifest",
-        handler: async (_req, ctx) =>
-          Response.json(await service(ctx).manifest(ctx)),
+        handler: async (req, ctx) => {
+          const locale = new URL(req.url).searchParams.get("locale");
+          return Response.json(
+            await service(ctx).manifest(ctx, locale === null ? {} : { locale })
+          );
+        },
       },
       {
         method: "POST",
@@ -442,6 +446,24 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(served.status, JSON.stringify(served.body)).toBe(403);
       expect(await stored(t, COMPONENTS_SLUG, card)).toEqual(before);
+
+      // A language no route would take is refused by the service as well.
+      const longLocale = "x".repeat(36);
+      expect(
+        (
+          await call("GET", cookie, ["manifest"], {
+            query: `?locale=${longLocale}`,
+          })
+        ).status
+      ).toBe(400);
+      expect(
+        (
+          await call("GET", cookie, ["manifest"], {
+            plugin: COMPOSER,
+            query: `?locale=${longLocale}`,
+          })
+        ).status
+      ).toBe(400);
 
       // A request the route's schema refuses is refused by the service too.
       const malformed = await call("POST", cookie, ["page"], {

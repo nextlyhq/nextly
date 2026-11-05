@@ -10,9 +10,11 @@
  * panels use: the pattern and component libraries and the Layout choices. A
  * part the caller may not read is answered `readable: false` with no items,
  * rather than refusing the whole manifest, since an author who may place
- * components but not edit Layouts still composes pages. Every id an action
- * takes is one this answers, so a client never has to guess one or read the
- * raw collections to find it.
+ * components but not edit Layouts still composes pages. Every id a page
+ * action takes is one this answers, as are the field, slot and variant ids a
+ * definition edit takes, so a client need not guess one. An edit pointing at
+ * a block inside a component names it by its node id in the definition, which
+ * the component's row holds (`collections.components`, `componentField`).
  *
  * `compositionManifestSchema` is the answer's zod schema, published so a
  * client can validate what it read.
@@ -29,9 +31,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   DEFINITION_ACTION_KINDS,
-  definitionActionJsonSchema,
   PAGE_ACTION_KINDS,
-  pageActionJsonSchema,
 } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
@@ -48,7 +48,8 @@ import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   PAGE_ACTIONS_ROUTE_PATH,
 } from "./composition-actions-contract";
-import { storeOf } from "./composition-route-kit";
+import { parsedWith, storeOf } from "./composition-route-kit";
+import { definitionActionRequestJsonSchema } from "./definition-actions-route";
 import { LAYOUT_LOCALE_MAX } from "./layout-choices-contract";
 import { fenceStates, readLayoutChoices } from "./layout-choices-route";
 import { layoutRemovalStore } from "./layout-removal/store";
@@ -59,6 +60,7 @@ import {
   readPatternLibrary,
   type ComponentStore,
 } from "./library-route";
+import { pageActionRequestJsonSchema } from "./page-actions-route";
 
 /**
  * `GET /manifest`: the composition manifest, as the caller may read it.
@@ -454,8 +456,8 @@ let actions: CompositionManifest["actions"] | undefined;
 
 /**
  * The actions the manifest lists, built once: their schemas are fixed for
- * the life of the process. Each request's JSON Schema is the route's body,
- * with `action` the builder's own schema for it.
+ * the life of the process. Each request's JSON Schema is the one its route
+ * parses with: the route's envelope, with `action` the builder's schema.
  */
 export function manifestActions(): CompositionManifest["actions"] {
   actions ??= [
@@ -464,64 +466,32 @@ export function manifestActions(): CompositionManifest["actions"] {
       method: "POST",
       path: PAGE_ACTIONS_ROUTE_PATH,
       kinds: [...PAGE_ACTION_KINDS],
-      request: requestSchema(pageActionJsonSchema(), {
-        page: z.strictObject({
-          collection: id,
-          id,
-          field: id.optional(),
-          locale: id.optional(),
-        }),
-      }),
+      request: pageActionRequestJsonSchema(),
     },
     {
       name: "definitionAction",
       method: "POST",
       path: DEFINITION_ACTIONS_ROUTE_PATH,
       kinds: [...DEFINITION_ACTION_KINDS],
-      request: requestSchema(definitionActionJsonSchema(), {}),
+      request: definitionActionRequestJsonSchema(),
     },
   ];
   return actions;
 }
 
-/** A request body's JSON Schema: the shared options, `action`, and `extra`. */
-function requestSchema(
-  action: Record<string, unknown>,
-  extra: Record<string, z.ZodType>
-): Record<string, unknown> {
-  const envelope = z.toJSONSchema(
-    z.strictObject({
-      ...extra,
-      action: z.unknown(),
-      dryRun: z.boolean().optional(),
-      expect: z.string().max(128).optional(),
-      publish: z.boolean().optional(),
-    })
-  ) as { properties: Record<string, unknown>; required?: string[] };
-  const { $schema: _schema, ...actionSchemaBody } = action;
-  return {
-    ...envelope,
-    properties: { ...envelope.properties, action: actionSchemaBody },
-    required: [...new Set([...(envelope.required ?? []), "action"])],
-  };
-}
+/** What a manifest request may ask: a language, as a code. */
+const ManifestRequestInput = z.strictObject({
+  locale: z.string().max(LAYOUT_LOCALE_MAX).optional(),
+});
 
-/** The language a manifest request asks for, from its query. */
-function manifestRequestOf(url: string): ManifestRequest {
-  const raw = new URL(url).searchParams.get(MANIFEST_LOCALE_PARAM);
-  if (raw === null || raw === "") return {};
-  if (raw.length > LAYOUT_LOCALE_MAX) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: MANIFEST_LOCALE_PARAM,
-          code: "INVALID",
-          message: "That is not a language code.",
-        },
-      ],
-    });
-  }
-  return { locale: raw };
+/**
+ * A manifest request read from outside input, the route's query or what a
+ * caller of the service passed: an empty language is none, and one longer
+ * than a language code is refused.
+ */
+export function manifestRequestFrom(raw: unknown): ManifestRequest {
+  const { locale } = parsedWith(raw ?? {}, ManifestRequestInput);
+  return locale === undefined || locale === "" ? {} : { locale };
 }
 
 /** The manifest route declaration. */
@@ -537,7 +507,15 @@ export function manifestRoute(setup: ManifestSetup = {}): {
     // the caller may read its collection, and as the caller.
     handler: async (req, ctx) =>
       respondDoc(
-        await readCompositionManifest(ctx, setup, manifestRequestOf(req.url))
+        await readCompositionManifest(
+          ctx,
+          setup,
+          manifestRequestFrom({
+            locale:
+              new URL(req.url).searchParams.get(MANIFEST_LOCALE_PARAM) ??
+              undefined,
+          })
+        )
       ),
   };
 }

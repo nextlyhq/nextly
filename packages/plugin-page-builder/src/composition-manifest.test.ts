@@ -134,6 +134,15 @@ describe("the manifest's actions", () => {
       required: string[];
     };
     expect(pageRequest.required.sort()).toEqual(["action", "page"]);
+    // The route's own envelope, bounds and all: a page id the route refuses
+    // is one the advertised schema refuses too.
+    expect(
+      (
+        pageRequest.properties.page as {
+          properties?: Record<string, { maxLength?: number }>;
+        }
+      ).properties?.collection?.maxLength
+    ).toBe(512);
     expect(Object.keys(pageRequest.properties).sort()).toEqual([
       "action",
       "dryRun",

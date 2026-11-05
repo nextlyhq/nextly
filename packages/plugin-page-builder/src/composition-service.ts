@@ -38,6 +38,7 @@ import type {
   PageActionResult,
 } from "./composition-actions-contract";
 import {
+  manifestRequestFrom,
   readCompositionManifest,
   type CompositionManifest,
   type ManifestRequest,
@@ -128,7 +129,11 @@ export function compositionService(
   });
   return {
     manifest: (caller, request = {}) =>
-      readCompositionManifest(asRoute(caller), setup, request),
+      readCompositionManifest(
+        asRoute(caller),
+        setup,
+        manifestRequestFrom(request)
+      ),
     pageAction: (caller, request) =>
       runPageAction(asRoute(caller), pageActionRequestOf(request), setup),
     definitionAction: (caller, componentId, request) =>

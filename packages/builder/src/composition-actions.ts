@@ -134,29 +134,6 @@ export type DefinitionAction =
       readonly exposureId: string;
     };
 
-/** Every page action's `kind`, in the order the schema lists them. */
-export const PAGE_ACTION_KINDS: readonly PageAction["kind"][] = [
-  "insert-pattern",
-  "place-component",
-  "set-placement-values",
-  "choose-variant",
-  "set-layout",
-];
-
-/** Every definition action's `kind`, in the order the schema lists them. */
-export const DEFINITION_ACTION_KINDS: readonly DefinitionAction["kind"][] = [
-  "expose",
-  "rename-exposure",
-  "retarget-exposure",
-  "remove-exposure",
-  "remove-exposed-slot",
-  "add-variant",
-  "rename-variant",
-  "delete-variant",
-  "set-variant-value",
-  "reset-variant-value",
-];
-
 const id = z.string().min(1).max(512);
 const label = z.string().max(200);
 const position = z.union([
@@ -170,43 +147,53 @@ const position = z.union([
 const values = z.record(z.string().max(512), z.unknown());
 
 /**
+ * Each page action's shape, once: the schema is their union, and the kinds a
+ * client is told about are read off them, so the two cannot disagree.
+ */
+const pageActionOptions = [
+  z.strictObject({
+    kind: z.literal("insert-pattern"),
+    patternId: id,
+    at: position.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("place-component"),
+    componentId: id,
+    variant: id.optional(),
+    values: values.optional(),
+    at: position.optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("set-placement-values"),
+    instanceId: id,
+    values: values.optional(),
+    reset: z.array(z.string().max(512)).max(200).optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("choose-variant"),
+    instanceId: id,
+    variant: id.nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("set-layout"),
+    layout: id.nullable(),
+    noHeaderFooter: z.boolean().optional(),
+  }),
+] as const;
+
+/**
  * A page action, as the page actions route reads `action`.
  *
  * @experimental Settles when the composition API ships.
  */
 export const pageActionSchema: z.ZodType<PageAction> = z.discriminatedUnion(
   "kind",
-  [
-    z.strictObject({
-      kind: z.literal("insert-pattern"),
-      patternId: id,
-      at: position.optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("place-component"),
-      componentId: id,
-      variant: id.optional(),
-      values: values.optional(),
-      at: position.optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("set-placement-values"),
-      instanceId: id,
-      values: values.optional(),
-      reset: z.array(z.string().max(512)).max(200).optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("choose-variant"),
-      instanceId: id,
-      variant: id.nullable(),
-    }),
-    z.strictObject({
-      kind: z.literal("set-layout"),
-      layout: id.nullable(),
-      noHeaderFooter: z.boolean().optional(),
-    }),
-  ]
+  pageActionOptions
 );
+
+/** Every page action's `kind`, in the order the schema lists them. */
+export const PAGE_ACTION_KINDS: readonly PageAction["kind"][] =
+  pageActionOptions.map(option => option.shape.kind.value);
 
 /**
  * A prop path or the visibility switch. Both are optional in the shape, so
@@ -242,45 +229,48 @@ function oneTarget(
   });
 }
 
+/** Each definition action's shape, once, for the reason the page actions' are. */
+const definitionActionOptions = [
+  z
+    .strictObject({ kind: z.literal("expose"), label, ...target })
+    .superRefine(oneTarget),
+  z.strictObject({
+    kind: z.literal("rename-exposure"),
+    exposureId: id,
+    label,
+  }),
+  z
+    .strictObject({
+      kind: z.literal("retarget-exposure"),
+      exposureId: id,
+      ...target,
+    })
+    .superRefine(oneTarget),
+  z.strictObject({ kind: z.literal("remove-exposure"), exposureId: id }),
+  z.strictObject({ kind: z.literal("remove-exposed-slot"), slotId: id }),
+  z.strictObject({ kind: z.literal("add-variant"), label }),
+  z.strictObject({ kind: z.literal("rename-variant"), variantId: id, label }),
+  z.strictObject({ kind: z.literal("delete-variant"), variantId: id }),
+  z.strictObject({
+    kind: z.literal("set-variant-value"),
+    variantId: id,
+    exposureId: id,
+    value: z.unknown(),
+  }),
+  z.strictObject({
+    kind: z.literal("reset-variant-value"),
+    variantId: id,
+    exposureId: id,
+  }),
+] as const;
+
 /**
  * A definition action, as the definition actions route reads `action`.
  *
  * @experimental Settles when the composition API ships.
  */
 export const definitionActionSchema: z.ZodType<DefinitionAction> = z
-  .discriminatedUnion("kind", [
-    z
-      .strictObject({ kind: z.literal("expose"), label, ...target })
-      .superRefine(oneTarget),
-    z.strictObject({
-      kind: z.literal("rename-exposure"),
-      exposureId: id,
-      label,
-    }),
-    z
-      .strictObject({
-        kind: z.literal("retarget-exposure"),
-        exposureId: id,
-        ...target,
-      })
-      .superRefine(oneTarget),
-    z.strictObject({ kind: z.literal("remove-exposure"), exposureId: id }),
-    z.strictObject({ kind: z.literal("remove-exposed-slot"), slotId: id }),
-    z.strictObject({ kind: z.literal("add-variant"), label }),
-    z.strictObject({ kind: z.literal("rename-variant"), variantId: id, label }),
-    z.strictObject({ kind: z.literal("delete-variant"), variantId: id }),
-    z.strictObject({
-      kind: z.literal("set-variant-value"),
-      variantId: id,
-      exposureId: id,
-      value: z.unknown(),
-    }),
-    z.strictObject({
-      kind: z.literal("reset-variant-value"),
-      variantId: id,
-      exposureId: id,
-    }),
-  ])
+  .discriminatedUnion("kind", definitionActionOptions)
   .transform((parsed): DefinitionAction => {
     // A target as the contract types it: exactly the one of the two it names,
     // which the refinement above has already required.
@@ -291,6 +281,10 @@ export const definitionActionSchema: z.ZodType<DefinitionAction> = z
       ? { ...rest, visibility: true }
       : { ...rest, propPath };
   });
+
+/** Every definition action's `kind`, in the order the schema lists them. */
+export const DEFINITION_ACTION_KINDS: readonly DefinitionAction["kind"][] =
+  definitionActionOptions.map(option => option.shape.kind.value);
 
 /**
  * The JSON Schema form of a page action, as a client that does not run zod

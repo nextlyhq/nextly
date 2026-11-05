@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { slugify } from "nextly";
 import { requireNextly } from "nextly/runtime";
-import type { z } from "nextly/zod";
+import { z } from "nextly/zod";
 
 import type { CommittedWriteReconciler } from "./class-usage-hook";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
@@ -400,6 +400,30 @@ export function parsedWith<T>(
       message: issue.message,
     })),
   });
+}
+
+/**
+ * A request body's JSON Schema, as a client that does not run zod reads it:
+ * the route's own envelope, with `action` the builder's schema for it. Built
+ * from the envelope the route parses with, so what the manifest advertises
+ * and what the route accepts are one schema.
+ */
+export function requestJsonSchema(
+  envelope: z.ZodType,
+  action: Record<string, unknown>
+): Record<string, unknown> {
+  const body = z.toJSONSchema(envelope, { io: "input" }) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  const { $schema: _schema, ...actionBody } = action;
+  return {
+    ...body,
+    properties: { ...body.properties, action: actionBody },
+    // The envelope admits any `action`, so it does not list it; the route
+    // then refuses a request without one.
+    required: [...new Set([...(body.required ?? []), "action"])],
+  };
 }
 
 /**

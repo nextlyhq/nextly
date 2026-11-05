@@ -31,6 +31,7 @@ import {
   type VariantEditRefusal,
 } from "@nextlyhq/blocks-engine";
 import {
+  definitionActionJsonSchema,
   definitionActionSchema,
   planDefinitionAction,
 } from "@nextlyhq/builder/ops";
@@ -57,6 +58,7 @@ import {
   parsedWith,
   readJsonBody,
   readOrNull,
+  requestJsonSchema,
   savesLive,
   storeOf,
   type ActionAnswer,
@@ -80,6 +82,14 @@ const DefinitionActionEnvelope = z.strictObject({
   expect: z.string().max(128).optional(),
   publish: z.boolean().optional(),
 });
+
+/** The JSON Schema of a definition action request, as the route parses it. */
+export function definitionActionRequestJsonSchema(): Record<string, unknown> {
+  return requestJsonSchema(
+    DefinitionActionEnvelope,
+    definitionActionJsonSchema()
+  );
+}
 
 /**
  * A definition action request read from outside input: a route body, or what
