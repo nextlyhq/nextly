@@ -1181,15 +1181,20 @@ async function ensureLocalizedCompanionsForReload(
   // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
   // that has just removed its `localization` block still has companions to unwind, and asking for a
   // locale first would hide exactly those entities.
-  const { bindTransitionRecorder, resolveTransitionStore } = await import(
-    "../domains/i18n/migration/transition-recorder"
-  );
+  const {
+    bindTransitionRecorder,
+    resolveTransitionStore,
+    transitionDefaultLocale,
+  } = await import("../domains/i18n/migration/transition-recorder");
   const { beginI18nTransition, settleI18nTransition } = await import(
     "../domains/i18n/migration/transition-state"
   );
   const transitionStore = await resolveTransitionStore(adapter);
   // The same store, plus the locale a newly created companion gets recorded with.
-  const transitions = bindTransitionRecorder(transitionStore, config);
+  const transitions = bindTransitionRecorder(
+    transitionStore,
+    await transitionDefaultLocale(adapter, config)
+  );
 
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {

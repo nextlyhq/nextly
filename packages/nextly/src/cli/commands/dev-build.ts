@@ -23,6 +23,7 @@ import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity
 import {
   bindTransitionRecorder,
   resolveTransitionStore,
+  transitionDefaultLocale,
 } from "../../domains/i18n/migration/transition-recorder";
 import {
   beginI18nTransition,
@@ -1102,7 +1103,10 @@ export async function ensureLocalizedCompanions(
   // The same store, plus the locale a newly created companion gets recorded with. Undefined when
   // the app configures no default locale, in which case no entity can be localized and nothing
   // reaches the create below.
-  const transitions = bindTransitionRecorder(transitionStore, config);
+  const transitions = bindTransitionRecorder(
+    transitionStore,
+    await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
+  );
   // Each kind's entities and how its table is named, as the boot reads them too.
   const { localizableConfigEntities } = await import(
     "../../domains/i18n/runtime/localizable-config-entities"

@@ -355,6 +355,27 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ heading: "Made in the Builder", count: 4 });
     });
 
+    // A Draft/Published Single that is not translated publishes as a document too, so its
+    // per-language table holds values only: a `_status` there would stay `draft` and hide its
+    // translatable values from a published read.
+    it("lays out a Draft/Published Single the Schema Builder makes with no per-language status", async () => {
+      const t = await boot(dialect, true);
+      vi.stubEnv("NODE_ENV", "development");
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          status: true,
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      const columns = await columnsOf(t, ["single_notice_locales"]);
+      expect(columns.single_notice_locales).toContain("heading");
+      expect(columns.single_notice_locales).not.toContain("_status");
+    });
+
     // A Draft/Published collection that is not translated publishes as a document, so its
     // per-language table holds no `_status`: the process the Builder created it in must not
     // expect one either.

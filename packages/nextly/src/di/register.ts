@@ -5176,8 +5176,7 @@ async function refuseMixedStorageInConfig(
   entities.push(
     ...(await readLayoutScanEntities(
       adapter,
-      new Set(entities.map(entity => entity.tableName)),
-      perLanguage
+      new Set(entities.map(entity => entity.tableName))
     ))
   );
   await refuseMixedStorage(adapter, entities, perLanguage);

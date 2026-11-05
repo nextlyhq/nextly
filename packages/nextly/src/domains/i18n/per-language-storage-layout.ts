@@ -4,8 +4,8 @@
  * columns would be served from two layouts at once, and the schema push that follows would plan to
  * drop those columns. Storage is never mixed, so the boot stops first and names what it found.
  *
- * Only an entity that is not marked translatable can be in that state: a translatable one already
- * keeps its values per language, whatever the setting.
+ * Any entity can be in that state with the setting on, a translatable one too when it gained its
+ * flag in the same deployment; with it off, only one whose values the setting kept per language.
  *
  * @module domains/i18n/per-language-storage-layout
  * @experimental
@@ -14,6 +14,15 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { introspectLiveSnapshot } from "../schema/pipeline/diff/introspect-live";
+import {
+  readIdentifierCaseRules,
+  type IdentifierCaseAdapter,
+} from "../schema/utils/read-identifier-case";
+import {
+  indexCatalog,
+  resolveCatalogName,
+  type IdentifierCaseRules,
+} from "../schema/utils/resolve-catalog-name";
 
 import { deriveCompanionSpec } from "./migration/derive-companion-spec";
 
@@ -27,25 +36,48 @@ export interface LaidOutEntity {
 }
 
 /**
- * The live table named `name`, as the catalog reports it. MySQL with `lower_case_table_names=1`
- * (the default on macOS and Windows) reports every table in lower case, and its table names are
- * compared without case there, so a mixed-case `dbName` is found under either spelling.
+ * The live table named `name`, as this server compares table names: MySQL with
+ * `lower_case_table_names=1` (the default on macOS and Windows) reports every table in lower case
+ * and compares them without case, so a mixed-case `dbName` is found under either spelling, while
+ * one with `lower_case_table_names=0` keeps names differing only in case apart.
  */
 function liveTable<T extends { name: string }>(
   tables: readonly T[],
   name: string,
-  dialect: SupportedDialect
+  rules: IdentifierCaseRules
 ): T | undefined {
-  if (dialect !== "mysql") return tables.find(table => table.name === name);
-  const lower = name.toLowerCase();
-  return tables.find(table => table.name.toLowerCase() === lower);
+  const resolved = resolveCatalogName(
+    indexCatalog(
+      tables.map(table => table.name),
+      rules.tables
+    ),
+    name
+  );
+  return resolved === undefined
+    ? undefined
+    : tables.find(table => table.name === resolved);
+}
+
+/**
+ * Which of `columns` the live table holds, as this server compares column names: SQLite and MySQL
+ * compare them without case, so a column spelled `Headline` is the translatable `headline`.
+ */
+function columnsIn(
+  live: { columns: readonly { name: string }[] },
+  columns: readonly string[],
+  rules: IdentifierCaseRules
+): string[] {
+  const catalog = indexCatalog(
+    live.columns.map(column => column.name),
+    rules.columns
+  );
+  return columns.filter(
+    column => resolveCatalogName(catalog, column) !== undefined
+  );
 }
 
 /** What the refusal needs of the adapter: its dialect and a handle to introspect through. */
-interface LayoutAdapter {
-  dialect: SupportedDialect;
-  getDrizzle(): unknown;
-}
+type LayoutAdapter = IdentifierCaseAdapter;
 
 /**
  * The translatable columns `entity` would keep on its main table if it were not stored per
@@ -87,16 +119,21 @@ export async function refuseMixedStorage(
   entities: readonly LaidOutEntity[],
   perLanguage = true
 ): Promise<void> {
+  // With the setting on every entity keeps its translatable values per language, a translatable
+  // one too: one that gains `localized: true` in the same deployment still holds them on its main
+  // table. With it off a translatable entity keeps them per language as it always has.
   const candidates = entities
-    .filter(entity => entity.localized !== true)
+    .filter(entity => perLanguage || entity.localized !== true)
     .map(entity => ({
       entity,
       columns: translatableColumns(entity, adapter.dialect),
     }))
     .filter(({ columns }) => columns.length > 0);
   if (candidates.length === 0) return;
+  // How this server compares names, read once: the catalog reports them in its own spelling.
+  const rules = await readIdentifierCaseRules(adapter);
   if (!perLanguage) {
-    await refuseValuesKeptPerLanguage(adapter, candidates);
+    await refuseValuesKeptPerLanguage(adapter, candidates, rules);
     return;
   }
 
@@ -106,10 +143,9 @@ export async function refuseMixedStorage(
     candidates.map(({ entity }) => entity.tableName)
   );
   const found = candidates.flatMap(({ entity, columns }) => {
-    const live = liveTable(snapshot.tables, entity.tableName, adapter.dialect);
+    const live = liveTable(snapshot.tables, entity.tableName, rules);
     if (!live) return [];
-    const present = new Set(live.columns.map(column => column.name));
-    const onMain = columns.filter(column => present.has(column));
+    const onMain = columnsIn(live, columns, rules);
     return onMain.length > 0 ? [{ entity, onMain }] : [];
   });
   if (found.length === 0) return;
@@ -142,7 +178,8 @@ export async function refuseMixedStorage(
  */
 async function refuseValuesKeptPerLanguage(
   adapter: LayoutAdapter,
-  candidates: readonly { entity: LaidOutEntity; columns: string[] }[]
+  candidates: readonly { entity: LaidOutEntity; columns: string[] }[],
+  rules: IdentifierCaseRules
 ): Promise<void> {
   const snapshot = await introspectLiveSnapshot(
     adapter.getDrizzle(),
@@ -152,16 +189,17 @@ async function refuseValuesKeptPerLanguage(
       `${entity.tableName}_locales`,
     ])
   );
-  const columnsOf = (name: string) => {
-    const live = liveTable(snapshot.tables, name, adapter.dialect);
-    return live ? new Set(live.columns.map(column => column.name)) : null;
-  };
   const found = candidates.flatMap(({ entity, columns }) => {
-    const main = columnsOf(entity.tableName);
-    const companion = columnsOf(`${entity.tableName}_locales`);
+    const main = liveTable(snapshot.tables, entity.tableName, rules);
+    const companion = liveTable(
+      snapshot.tables,
+      `${entity.tableName}_locales`,
+      rules
+    );
     if (!main || !companion) return [];
-    const perLanguageOnly = columns.filter(
-      column => companion.has(column) && !main.has(column)
+    const onMain = new Set(columnsIn(main, columns, rules));
+    const perLanguageOnly = columnsIn(companion, columns, rules).filter(
+      column => !onMain.has(column)
     );
     return perLanguageOnly.length > 0 ? [{ entity, perLanguageOnly }] : [];
   });
