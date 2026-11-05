@@ -174,7 +174,6 @@ import type { SupportedDialect } from "../../../types/database";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
-  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -289,7 +288,7 @@ import {
   sweepDeletedDocument,
 } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
+import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -2121,7 +2120,7 @@ export class CollectionMutationService extends BaseService {
    * overwrite: whatever the collection keeps, in the write's transaction, so
    * a save that cannot record it is not kept either. Whom it replaced is read
    * from `before`, the rows as the save found them before writing. See
-   * `recordOverwriteEvent`.
+   * `recordOverwriteIfAsked` in `versions/overwrite-record`.
    */
   private async recordOverwriteIfAsked(
     tx: TransactionContext,
@@ -2140,24 +2139,17 @@ export class CollectionMutationService extends BaseService {
       locale: string | undefined;
     }
   ): Promise<void> {
-    if (check.kind !== "overwrite") return;
-    await recordOverwriteEvent(
+    await recordOverwriteIfAsked(
       tx,
       { adapter: this.adapter },
+      check,
       {
         subject: { kind: "collection", slug: target.collection, id: target.id },
         actor: actorForWrite(target.actor, target.user),
         personName: target.user?.name ?? null,
         locale: before.locale ?? null,
-        ...overwriteRecordOf(check, {
-          main: before.main?.main,
-          language: before.language,
-          // Every language a write over all of them judged, as the main row's
-          // read under the lock carries them, where none are given apart.
-          languages:
-            before.languages ?? Object.values(before.main?.languages ?? {}),
-        }),
-      }
+      },
+      before
     ).catch(err => {
       // See `recordHistoryEvent`: the transaction must not keep the write.
       throw markWriteIntegrityFailure(err);
@@ -8931,7 +8923,10 @@ export class CollectionMutationService extends BaseService {
       // Every language this moves is judged, so the version must name each
       // one: a read of one language cannot say whether another changed since.
       // Asked only once there is something to move, and before any work.
-      const languagesTable = translationTableOf(companion, companionPublishable);
+      const languagesTable = translationTableOf(
+        companion,
+        companionPublishable
+      );
       const judgedLocales = this.everyLanguageJudged(
         versionCheck,
         languagesTable
@@ -9066,24 +9061,6 @@ export class CollectionMutationService extends BaseService {
             entryVanished = true;
             return;
           }
-          // Judged under the lock, before anything is written: the entry's own
-          // row, then every language it moves. A refusal throws, rolling back
-          // whatever this transaction would have moved.
-          const mainBefore = await refuseIfMainMoved(
-            tx,
-            this.dialect,
-            versionCheck,
-            {
-              table: tableName,
-              id: params.entryId,
-              languages: languagesJudged(languagesTable, judgedLocales),
-            },
-            staleWrite
-          );
-          const languagesBefore = judgedLanguageStates(
-            mainBefore,
-            judgedLocales
-          );
           const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
           lockedPreviousStatus =
             typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
@@ -9158,6 +9135,26 @@ export class CollectionMutationService extends BaseService {
             publishDocDenied = outsideUnderLock;
             throw new StatusTransitionDeniedError();
           }
+
+          // Judged under the lock, once the caller is known to still be
+          // allowed to move the entry and before anything is written: the
+          // entry's own row, then every language it moves. A refusal throws,
+          // rolling back whatever this transaction would have moved.
+          const mainBefore = await refuseIfMainMoved(
+            tx,
+            this.dialect,
+            versionCheck,
+            {
+              table: tableName,
+              id: params.entryId,
+              languages: languagesJudged(languagesTable, judgedLocales),
+            },
+            staleWrite
+          );
+          const languagesBefore = judgedLanguageStates(
+            mainBefore,
+            judgedLocales
+          );
 
           // One instant for everything this attempt writes.
           const publishNow = new Date();
@@ -12611,7 +12608,6 @@ export class CollectionMutationService extends BaseService {
     assertVersionNamesEvery(given, locales);
     return locales;
   }
-
 
   /**
    * How a rewrite of one language's pending change is judged (taking the live

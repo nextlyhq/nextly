@@ -1016,7 +1016,7 @@ export class CollectionBulkService extends BaseService {
                 goingLiveBatch,
               },
               // Judged on this document's own version where one was given.
-              entryId in revs
+              Object.hasOwn(revs, entryId)
                 ? { ...params.data, [DOCUMENT_VERSION_KEY]: revs[entryId] }
                 : params.data
             );

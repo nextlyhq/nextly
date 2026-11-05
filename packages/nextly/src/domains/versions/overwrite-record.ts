@@ -13,12 +13,20 @@
  * @experimental
  */
 
-import type { OverwriteRecord } from "../content-events/write-event";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
+import {
+  recordOverwriteEvent,
+  type OverwriteRecord,
+  type WriteEventDeps,
+  type WriteEventInput,
+} from "../content-events/write-event";
 
 import {
   givenOf,
   lastChangerOf,
   staleParts,
+  type DocumentRevisionState,
   type PartState,
   type VersionCheck,
 } from "./stale-version";
@@ -65,4 +73,38 @@ export function overwriteRecordOf(
         }
       : null,
   };
+}
+
+/**
+ * Record `check`'s overwrite in the document's history, when the write said
+ * to overwrite, in the write's own transaction. Whom it replaced is read from
+ * `before`, the rows as the write found them under the lock: the main row,
+ * the language it saves, and every language for a write over all of them,
+ * which are the ones the main row's read carries unless given apart.
+ *
+ * @experimental
+ */
+export async function recordOverwriteIfAsked(
+  tx: TransactionContext,
+  deps: WriteEventDeps,
+  check: VersionCheck,
+  write: Pick<WriteEventInput, "subject" | "actor" | "personName"> & {
+    locale?: string | null;
+  },
+  before: {
+    main: DocumentRevisionState | undefined;
+    language?: PartState | undefined;
+    languages?: readonly PartState[];
+  }
+): Promise<void> {
+  if (check.kind !== "overwrite") return;
+  await recordOverwriteEvent(tx, deps, {
+    ...write,
+    ...overwriteRecordOf(check, {
+      main: before.main?.main,
+      language: before.language,
+      languages:
+        before.languages ?? Object.values(before.main?.languages ?? {}),
+    }),
+  });
 }

@@ -20,6 +20,7 @@ import type {
   DocumentActionOutcome,
   DocumentActions,
   DocumentSaveState,
+  StoreReadiness,
 } from "@nextlyhq/plugin-sdk/admin";
 
 expectTypeOf(
@@ -42,9 +43,16 @@ expectTypeOf<
   NonNullable<Extract<DocumentSaveState, { kind: "failed" }>["retry"]>
 >().returns.toEqualTypeOf<Promise<DocumentActionOutcome>>();
 
+// A handler is given the action and how to wait for the store's tracked
+// writes; one written for the action alone still fits.
 expectTypeOf(useBeforeDocumentAction)
   .parameter(0)
-  .toEqualTypeOf<(action: string) => void | Promise<void>>();
+  .toEqualTypeOf<
+    (action: string, store: StoreReadiness) => void | Promise<void>
+  >();
+expectTypeOf<StoreReadiness["writesSettled"]>().returns.toEqualTypeOf<
+  Promise<boolean>
+>();
 
 expectTypeOf(useTrackedWrite).returns.toEqualTypeOf<
   (label: string, write: Promise<unknown>) => void

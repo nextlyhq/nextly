@@ -749,6 +749,43 @@ test.describe("chrome drawn over the frame stays on the block", () => {
     })
   );
 
+  test("the toolbar takes the pointer on its buttons only, and fades over another block", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openEditorWith(page, NODES, "block-0");
+    await canvasBlock(page, "block-2").click();
+    const toolbar = canvasLayer(page).locator(".nx-block-toolbar");
+    const buttons = toolbar.locator("button");
+    await expect(buttons.nth(1)).toBeVisible();
+
+    // Between the first two buttons, and on one: what the page answers for a
+    // pointer there. The gap is the bar's, so it reaches what is under it.
+    const first = await box(buttons.nth(0));
+    const second = await box(buttons.nth(1));
+    const at = (x: number, y: number) =>
+      page.evaluate(
+        ([px, py]) =>
+          document.elementFromPoint(px, py)?.closest(".nx-block-toolbar") !==
+          null,
+        [x, y] as const
+      );
+    const gapX = (first.x + first.width + second.x) / 2;
+    const midY = first.y + first.height / 2;
+    expect(await at(gapX, midY), "the gap between two buttons").toBe(false);
+    expect(await at(first.x + first.width / 2, midY), "a button's middle").toBe(
+      true
+    );
+
+    // Over another block the bar fades; on a button it is back.
+    const opacity = () =>
+      toolbar.evaluate(element => getComputedStyle(element).opacity);
+    await canvasBlock(page, "block-0").hover();
+    await expect.poll(opacity).toBe("0");
+    await buttons.nth(0).hover();
+    await expect.poll(opacity).toBe("1");
+  });
+
   test("the selection ring and the toolbar, at Fit, 50% and 200%, and scrolled", async ({
     page,
   }) => {
