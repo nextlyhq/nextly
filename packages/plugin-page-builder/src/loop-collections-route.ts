@@ -370,6 +370,12 @@ function directLoopCollectionsReads(
     sortedRead: async (slug, keys) => {
       await findAsCaller(ctx, {
         collection: slug,
+        // Core judges every sort key before it reads, whatever the filter, so
+        // a filter no row can match still gets the caller's exact answer. A
+        // primary key is never null: the database answers this from the
+        // key's index, with no rows to sort or count, however large the
+        // collection or unindexed the field.
+        where: { id: { exists: false } },
         select: { id: true },
         sort: keys,
         limit: 1,
