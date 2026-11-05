@@ -21,6 +21,7 @@ import { commitOnEnter } from "./commit-on-enter";
 import { FocalFrame } from "./focal-frame";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
+import { radioGroupStep } from "./roving-radios";
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
@@ -93,12 +94,22 @@ function hintFor(fit: string | undefined): string {
   return fit === "cover" ? "Kept in view" : "Where it sits";
 }
 
-const ARROWS: Readonly<Record<string, readonly [number, number]>> = {
-  ArrowLeft: [-1, 0],
-  ArrowRight: [1, 0],
-  ArrowUp: [0, -1],
-  ArrowDown: [0, 1],
-};
+/**
+ * The point an arrow moves to: along its axis, by the step every radio group
+ * here takes for that key, wrapping at an edge to the opposite one rather
+ * than holding the key.
+ */
+function pointAfter(
+  key: string,
+  from: (typeof POINTS)[number]
+): (typeof POINTS)[number] | undefined {
+  const step = radioGroupStep(key);
+  if (step === null) return undefined;
+  const across = key === "ArrowLeft" || key === "ArrowRight";
+  const x = across ? (from.x + step + 3) % 3 : from.x;
+  const y = across ? from.y : (from.y + step + 3) % 3;
+  return POINTS.find(point => point.x === x && point.y === y);
+}
 
 export function FocalPointField({
   id,
@@ -133,13 +144,9 @@ export function FocalPointField({
   const choose = (point: (typeof POINTS)[number]) =>
     onCommit(point === chosen ? null : point.value);
   const move = (event: React.KeyboardEvent, from: (typeof POINTS)[number]) => {
-    const step = ARROWS[event.key];
-    if (step === undefined) return;
+    const next = pointAfter(event.key, from);
+    if (next === undefined) return;
     event.preventDefault();
-    const x = Math.min(2, Math.max(0, from.x + step[0]));
-    const y = Math.min(2, Math.max(0, from.y + step[1]));
-    const next = POINTS.find(point => point.x === x && point.y === y);
-    if (next === undefined || next === from) return;
     // A radio group's arrows choose as they move, as every radio group does.
     onCommit(next.value);
     grid.current

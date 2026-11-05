@@ -98,6 +98,15 @@ describe("FocalPointField", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Center");
   });
 
+  it("wraps an arrow at an edge to the opposite edge, as a radio group does", () => {
+    const onCommit = mount("right top");
+    const corner = screen.getByRole("radio", { name: "Top right" });
+    fireEvent.keyDown(corner, { key: "ArrowRight" });
+    expect(onCommit).toHaveBeenLastCalledWith("left top");
+    fireEvent.keyDown(corner, { key: "ArrowUp" });
+    expect(onCommit).toHaveBeenLastCalledWith("right bottom");
+  });
+
   it("says the default only while nothing is set", () => {
     mount();
     expect(screen.getByText("Center by default")).toBeDefined();
