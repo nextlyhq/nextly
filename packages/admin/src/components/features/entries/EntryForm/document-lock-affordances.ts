@@ -33,6 +33,23 @@ export type DocumentAccessRequest =
    */
   | { readonly kind: "sent"; readonly message: string };
 
+/**
+ * What an editor told of someone else's change may answer: load the current
+ * version (the edits kept as a recovery point), keep editing, or put away a
+ * sentence that asks nothing.
+ */
+export type HeldChangeChoice =
+  | "load-current"
+  | "keep-editing"
+  | "dismiss"
+  | "try-again";
+
+/** One answer to someone else's change, and what its button says. */
+export interface HeldChangeOption {
+  readonly choice: HeldChangeChoice;
+  readonly label: string;
+}
+
 /** What the strip above the document says, and what it offers. */
 export interface DocumentLockNotice {
   /**
@@ -47,7 +64,11 @@ export interface DocumentLockNotice {
     | "awaited"
     | "reader"
     | "loading"
-    | "unloaded";
+    | "unloaded"
+    /** Someone else changed the document this editor holds, over their edits. */
+    | "changed"
+    /** Someone else changed it, and the form, with no edits, now shows it. */
+    | "updated";
   /** A whole sentence: the banner is read on its own, without the chrome. */
   readonly message: string;
   /** Present when the editor may claim the document. */
@@ -69,6 +90,8 @@ export interface DocumentLockNotice {
    * asking for it again says.
    */
   readonly retryLabel?: string;
+  /** Present when someone else's change asks the editor what to do. */
+  readonly choices?: readonly HeldChangeOption[];
 }
 
 export interface DocumentLockAffordances {
