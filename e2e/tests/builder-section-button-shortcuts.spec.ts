@@ -167,14 +167,11 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     await expect
       .poll(async () =>
         drawn.evaluate(element => {
-          // The canvas is drawn at a zoom, so its box on screen is scaled:
-          // the min height the canvas resolves, in the frame's own pixels,
-          // is the frame's small viewport, which leaves out a scrollbar.
-          const minHeight = Number.parseFloat(
-            getComputedStyle(element).minHeight
-          );
-          return Math.abs(
-            minHeight - element.ownerDocument.documentElement.clientHeight
+          // Layout pixels, which the canvas's scale leaves alone: the Section
+          // is laid out at least as tall as the frame it is drawn in.
+          const frame = element.ownerDocument.defaultView;
+          return (
+            (frame?.innerHeight ?? 0) - (element as HTMLElement).offsetHeight
           );
         })
       )
