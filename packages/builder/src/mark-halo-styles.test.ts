@@ -29,7 +29,7 @@ function ruleWith(selector: string): string {
 
 describe("a mark with no halo band", () => {
   it.each(["data-clipped", "data-shaped"])(
-    "draws none when %s, a secondary selection's included",
+    "draws none when %s, a secondary or hovered mark's included",
     flag => {
       expect(ruleWith(`.nx-canvas-mark[${flag}]`)).toContain(
         "box-shadow: none;"
@@ -38,6 +38,11 @@ describe("a mark with no halo band", () => {
         ruleWith(
           `.nx-canvas-mark[data-mark="selected"][data-secondary][${flag}]`
         )
+      ).toContain("box-shadow: none;");
+      // A hovered mark's own halo rule is as specific as the plain one and
+      // later in the sheet, so a hovered clipped or shaped block needs its own.
+      expect(
+        ruleWith(`.nx-canvas-mark[data-mark="hovered"][${flag}]`)
       ).toContain("box-shadow: none;");
     }
   );

@@ -3688,6 +3688,19 @@
 }
 
 /*
+ * A hovered block an ancestor clips, or its own clip-path shapes, draws no
+ * halo band either: the hover rule above is as specific as the plain no-halo
+ * rules and comes later, so it would put the band back.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-clipped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-shaped] {
+  box-shadow: none;
+}
+
+/*
  * The hovered block's name, as a small tag over its outline's top left
  * corner, outside it, in the outline's colour; inside it at the top of what
  * is on screen, where it still shows. The selected block's toolbar takes that
