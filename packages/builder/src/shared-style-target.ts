@@ -40,6 +40,7 @@ import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
 import {
   renameSharedStyle,
   sharedStyleRows,
+  sharedStylesOnly,
   sharedStyleSlug,
   type SharedStyleRow,
 } from "./shared-style-library";
@@ -126,7 +127,11 @@ export function saveAsSharedStyleRefusal(
   if (offer.library === undefined) {
     return "This site's shared styles haven't been read yet.";
   }
-  const [worn] = nodeSharedStyles(offer.library, node.classes ?? []);
+  // A look is worn beside a shared style, so only a shared style refuses.
+  const [worn] = nodeSharedStyles(
+    sharedStylesOnly(offer.library),
+    node.classes ?? []
+  );
   if (worn !== undefined) return `This block already uses ${worn.name}.`;
   if (!hasOwnStyles(node.styles)) {
     return "This block has no styles of its own yet.";

@@ -16,6 +16,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -32,6 +36,10 @@ const PLAIN = "plain";
 let beforeChangeCalls = 0;
 /** Two languages, each with its own status. */
 const LIVE = "live";
+/** Readable only by AUTHOR, by its read rule; both people may update it. */
+const AUTHORS_ONLY = "authors_only";
+const AUTHOR = "single-author";
+const OTHER = "single-other";
 const ANA = {
   id: "user-ana",
   name: "Ana Ruiz",
@@ -76,6 +84,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "notice" })],
       }),
       defineSingle({
+        slug: AUTHORS_ONLY,
+        access: {
+          read: ({ user }: { user: { id: string } | null }) =>
+            user?.id === AUTHOR,
+          update: () => true,
+        },
+        fields: [text({ name: "notice" })],
+      }),
+      defineSingle({
         slug: LIVE,
         localized: true,
         status: true,
@@ -96,6 +113,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     createdAt: now,
     updatedAt: now,
   });
+  // A code rule only narrows a permission, so both people hold each one.
+  for (const person of [AUTHOR, OTHER]) {
+    await userWhoMay(current, person, "read", [AUTHORS_ONLY]);
+    await grantTo(current, person, "update", [AUTHORS_ONLY]);
+  }
   return current;
 }
 
@@ -401,6 +423,29 @@ describe.each(getConfiguredTestDialects())(
         { locale: "*" }
       );
       expect(swept).toMatchObject({ success: false, statusCode: 400 });
+    });
+
+    it("tells who changed it and when only to a caller its read rule lets read it", async () => {
+      const t = await boot(dialect);
+      const first = await save(t, AUTHORS_ONLY, { notice: "first" });
+      await save(t, AUTHORS_ONLY, { notice: "theirs" });
+      const refusalTo = (userId: string) =>
+        singlesOf(t).update(
+          AUTHORS_ONLY,
+          { notice: "mine", _rev: revOf(first) },
+          { overrideAccess: false, user: { id: userId } } as never
+        ) as Promise<Result>;
+      const author = await refusalTo(AUTHOR);
+      expect(author, JSON.stringify(author)).toMatchObject({
+        code: "STALE_VERSION",
+      });
+      expect(author.publicData).toHaveProperty("changedBy");
+      const other = await refusalTo(OTHER);
+      expect(other, JSON.stringify(other)).toMatchObject({
+        code: "STALE_VERSION",
+      });
+      expect(other.publicData).not.toHaveProperty("changedBy");
+      expect(other.publicData).not.toHaveProperty("changedAt");
     });
   }
 );

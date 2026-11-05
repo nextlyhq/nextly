@@ -22,9 +22,11 @@ import type {
   BreakpointSet,
   NamedClass,
   NodeStyles,
+  SiteTokenSet,
   StyleState,
+  TokenMode,
 } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
+import { findNode, getBlock } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -34,6 +36,8 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
+import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
+import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./op-vocabulary";
 import {
   sharedStyleReachSentence,
@@ -294,6 +298,10 @@ export interface StyleTargetBarProps {
   /** Why the block's design is held, as {@link useStyleTarget} read it. */
   readonly held: string | undefined;
   readonly library: readonly NamedClass[] | undefined;
+  /** The site's tokens, for drawing the look tiles as the canvas shows them. */
+  readonly tokens?: SiteTokenSet;
+  /** The mode the selected block is drawn in, which the tiles draw in. */
+  readonly tokenMode: TokenMode;
   readonly libraryAbsence?: "pending" | "failed";
   readonly host: SharedStylesHost | undefined;
   /** The shared block verbs, for "Save as shared style…". */
@@ -397,6 +405,8 @@ export function StyleTargetBar({
   breakpoints,
   state,
   stateControl,
+  tokens,
+  tokenMode,
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
   // The bar has no line of its own for a refusal, so it speaks through the
@@ -409,34 +419,104 @@ export function StyleTargetBar({
   );
   const worn = target.worn;
   return (
-    <EditingBar
-      target={editTargetOf(target, reach)}
-      chips={worn.map(row => ({
-        id: row.id,
-        name: row.name,
-        className: row.className,
-        locked: row.locked,
-      }))}
-      onTargetChange={host === undefined ? undefined : onChoose}
-      {...chipActions(editor, nodeId, worn, report, breakpoints)}
-      chipActionsHeld={held}
-      // The shared chips too: choosing one would edit the held design.
-      targetHeld={held}
-      sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
-      actions={
-        nodeId === null || worn.length > 0 || held !== undefined ? null : (
-          <BarActions
-            editor={editor}
-            nodeId={nodeId}
-            library={library}
-            libraryAbsence={libraryAbsence}
-            verbs={verbs}
-          />
-        )
-      }
-      device={device}
-      state={state}
-      stateControl={stateControl}
+    <>
+      <LookTiles
+        editor={editor}
+        library={library}
+        held={held}
+        tokens={tokens}
+        mode={tokenMode}
+        onRefused={report}
+      />
+      <EditingBar
+        target={editTargetOf(target, reach)}
+        chips={worn.map(row => ({
+          id: row.id,
+          name: row.name,
+          className: row.className,
+          locked: row.locked,
+        }))}
+        onTargetChange={host === undefined ? undefined : onChoose}
+        {...chipActions(editor, nodeId, worn, report, breakpoints)}
+        {...wornLookLine(editor, nodeId, worn, library)}
+        chipActionsHeld={held}
+        // The shared chips too: choosing one would edit the held design.
+        targetHeld={held}
+        sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
+        actions={offeredActions({
+          editor,
+          nodeId,
+          worn,
+          held,
+          library,
+          libraryAbsence,
+          verbs,
+        })}
+        device={device}
+        state={state}
+        stateControl={stateControl}
+      />
+    </>
+  );
+}
+
+/**
+ * The bar's line about the look the block wears, if it wears one: that an
+ * edit here changes this block only, and how to change the look everywhere.
+ */
+function wornLookLine(
+  editor: EditorState,
+  nodeId: string | null,
+  worn: readonly SharedStyleRow[],
+  library: readonly NamedClass[] | undefined
+): { wornLook?: { id: string; here: string; everywhere: string } } {
+  const node =
+    nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
+  if (node === undefined || library === undefined) return {};
+  // The look the canvas applies, as the tiles read it: one answer for both.
+  const id = wornLook(node.classes, looksOfType(library, node.type));
+  const look = worn.find(row => row.id === id);
+  if (look === undefined) return {};
+  const label = getBlock(node.type)?.editor?.label ?? "block";
+  return {
+    wornLook: {
+      id: look.id,
+      ...lookLineWords(look.name, label),
+    },
+  };
+}
+
+/**
+ * Line one's actions, or none: only for a block that wears no shared style
+ * and whose design isn't held. A look is worn beside a shared style, so
+ * "Apply" and "Save as" stay on offer while the block wears only a look.
+ */
+function offeredActions({
+  editor,
+  nodeId,
+  worn,
+  held,
+  library,
+  libraryAbsence,
+  verbs,
+}: {
+  editor: EditorState;
+  nodeId: string | null;
+  worn: readonly SharedStyleRow[];
+  held: string | undefined;
+  library: readonly NamedClass[] | undefined;
+  libraryAbsence: "pending" | "failed" | undefined;
+  verbs: CardVerbs | undefined;
+}): React.JSX.Element | null {
+  const wearsSharedStyle = worn.some(row => row.look !== true);
+  if (nodeId === null || wearsSharedStyle || held !== undefined) return null;
+  return (
+    <BarActions
+      editor={editor}
+      nodeId={nodeId}
+      library={library}
+      libraryAbsence={libraryAbsence}
+      verbs={verbs}
     />
   );
 }
