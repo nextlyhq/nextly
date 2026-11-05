@@ -122,8 +122,13 @@ vi.mock("../utils/config-loader", () => ({
     }),
 }));
 
-vi.mock("../commands/db-sync-registry", () => ({
+vi.mock("../commands/db-sync-registry", async importOriginal => ({
+  ...(await importOriginal<typeof import("../commands/db-sync-registry")>()),
   openCollectionRegistry: seen.openRegistry,
+  // The write runs as it is: these fakes have no database to lock, and what is under test here
+  // is the prompt, which comes before the lock.
+  withCollectionRegistryWrite: (_args: unknown, work: () => Promise<unknown>) =>
+    work(),
 }));
 
 vi.mock("../commands/migrate", () => ({
@@ -293,7 +298,10 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
       kills.push([pid, signal]);
       return true;
     });
-    seen.openRegistry.mockResolvedValue(seen.registry);
+    seen.openRegistry.mockResolvedValue({
+      registry: seen.registry,
+      adapter: { disconnect: vi.fn().mockResolvedValue(undefined) },
+    });
     seen.registry.getCollectionBySlug.mockResolvedValue({
       slug: "nw_posts",
       fields: [],
@@ -374,6 +382,9 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
       registry: db.registry as never,
       adapter: db.adapter as never,
       currentSlugs: [],
+      // Runs the drop as it is: this fake has no database to lock, and what is under test here is
+      // the cancelled prompt, which comes before the lock.
+      lock: work => work(),
       approve: pruneApproval({
         consent: resolveDataLossConsent({ env: {} }),
         interactive: true,

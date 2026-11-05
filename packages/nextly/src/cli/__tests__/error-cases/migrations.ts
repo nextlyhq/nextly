@@ -14,6 +14,7 @@ import {
   assertNotPartiallyApplied,
   concurrentRunError,
 } from "../../../domains/schema/migrate/drift-reconcile";
+import { planChangedAfterConsent } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import {
   resolveMigration,
   type ResolveMigrationArgs,
@@ -171,6 +172,16 @@ export const MIGRATION_CASES = {
     dataLossRefusal(await refusedVerdict(undefined)),
   DATA_LOSS_CONSENT_NOT_COVERED: async () =>
     dataLossRefusal(await refusedVerdict("dc_authors")),
+  // As `runPrune` in `cli/commands/prune.ts` throws it, once a table appeared after the consent.
+  PLAN_CHANGED_AFTER_CONSENT: () =>
+    planChangedAfterConsent({
+      command: "nextly prune",
+      message:
+        "What `nextly prune` would drop changed after it was agreed to, so nothing was dropped. " +
+        "Run `nextly prune` again to see what it would drop now.",
+      agreed: ["dc_tags"],
+      current: ["dc_tags", "dc_tags_locales"],
+    }),
   // The consent's own parser, given a list it cannot read.
   DATA_LOSS_CONSENT_MALFORMED: () => {
     try {

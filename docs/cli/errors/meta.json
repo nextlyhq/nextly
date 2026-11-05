@@ -95,6 +95,7 @@
     "ownership-takeover-refused",
     "package-install-failed",
     "password-clear-unconfirmed",
+    "plan-changed-after-consent",
     "plugin-admin-widget-not-json",
     "plugin-admin-widget-undrawable",
     "plugin-applied-migration-removed",

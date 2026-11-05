@@ -6,11 +6,42 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
+import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { asSentence, deepestMessage, sentences } from "../messages";
+
+/**
+ * A command's refusal once what the operator agreed to changed before it could act
+ * (`planChangedAfterConsent`). The error's log context names the command and both lists, so the
+ * lines say which command to run again and what changed; without the lists, the command's own
+ * message stands as the why.
+ */
+function planChangedParts(error: NextlyError): CliErrorParts {
+  const context = error.logContext ?? {};
+  const named =
+    typeof context.command === "string"
+      ? `\`${context.command}\``
+      : "the command";
+  const listed = (value: unknown): string | undefined =>
+    Array.isArray(value)
+      ? value.length === 0
+        ? "nothing"
+        : value.map(String).join("; ")
+      : undefined;
+  const agreed = listed(context.agreed);
+  const current = listed(context.current);
+  return {
+    what: `What you agreed to changed before ${named} could act on it, so nothing was changed.`,
+    why:
+      agreed !== undefined && current !== undefined
+        ? `You agreed to: ${agreed}.\nIt would act on now: ${current}.`
+        : error.publicMessage,
+    next: `Run ${named} again to see what it would do now.`,
+  };
+}
 
 /**
  * The lock's refusal, as its three parts.
@@ -448,6 +479,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "INVALID_INPUT",
         reason: "data-loss-not-covered",
         describe: error => dataLossParts(error.publicMessage),
+      },
+    ],
+  },
+  PLAN_CHANGED_AFTER_CONSENT: {
+    cause:
+      "What the command was agreed to do changed before it could act on it, so it changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: PLAN_CHANGED_AFTER_CONSENT,
+        describe: planChangedParts,
       },
     ],
   },
