@@ -428,6 +428,37 @@ function collectEarlier(
 }
 
 /**
+ * Hands each schedule of one plugin to `out`, refusing a slug the plugin uses
+ * twice or a key another schedule has (`keys`, across the installation).
+ */
+function admitter(
+  plugin: string,
+  keys: Set<string>,
+  out: CollectedSchedule[]
+): (schedule: CollectedSchedule) => void {
+  const seen = new Set<string>();
+  return schedule => {
+    if (seen.has(schedule.slug)) {
+      throw refuse(
+        plugin,
+        schedule.slug,
+        "another of the plugin's schedules has the same slug"
+      );
+    }
+    if (keys.has(schedule.key)) {
+      throw refuse(
+        plugin,
+        schedule.slug,
+        `another plugin's schedule has the same key "${schedule.key}"`
+      );
+    }
+    seen.add(schedule.slug);
+    keys.add(schedule.key);
+    out.push(schedule);
+  };
+}
+
+/**
  * Every enabled plugin's schedules, checked.
  *
  * @throws NextlyError.invalidInput naming the plugin, for a schedule that
@@ -446,43 +477,21 @@ export function collectSchedules(
   // Keys across the installation, compared as stored, byte for byte: two
   // schedules with one key would share each other's windows.
   const keys = new Set<string>();
-  for (const plugin of plugins) {
-    // `enabled` is optional and absent means enabled, as for jobs.
-    if (plugin.enabled === false) continue;
+  // `enabled` is optional and absent means enabled, as for jobs.
+  for (const plugin of plugins.filter(each => each.enabled !== false)) {
     const ownJobs = new Set(
       jobs
         .filter(collected => collected.plugin === plugin.name)
         .map(collected => collected.definition.slug)
     );
-    const seen = new Set<string>();
-    const admit = (schedule: CollectedSchedule) => {
-      if (seen.has(schedule.slug)) {
-        throw refuse(
-          plugin.name,
-          schedule.slug,
-          "another of the plugin's schedules has the same slug"
-        );
-      }
-      if (keys.has(schedule.key)) {
-        throw refuse(
-          plugin.name,
-          schedule.slug,
-          `another plugin's schedule has the same key "${schedule.key}"`
-        );
-      }
-      seen.add(schedule.slug);
-      keys.add(schedule.key);
-      out.push(schedule);
-    };
+    const admit = admitter(plugin.name, keys, out);
     const entries = plugin.contributes?.schedules ?? [];
     // The current shape first, wherever it is listed: an earlier-shape entry
     // never takes a slug or key a current one then has to be refused for.
-    for (const entry of entries) {
-      if (!isEarlierShape(entry))
-        admit(collectOne(plugin.name, entry, ownJobs));
+    for (const entry of entries.filter(each => !isEarlierShape(each))) {
+      admit(collectOne(plugin.name, entry, ownJobs));
     }
-    for (const entry of entries) {
-      if (!isEarlierShape(entry)) continue;
+    for (const entry of entries.filter(isEarlierShape)) {
       const job = collectEarlier(
         plugin.name,
         entry as ScheduledTask,
