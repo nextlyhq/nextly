@@ -33,10 +33,11 @@ export async function listWebhooks(): Promise<WebhookEndpointSummary[]> {
   return result.items;
 }
 
-/** The event types an endpoint may subscribe to: core's and every enabled plugin's. */
-export async function listWebhookEventTypes(): Promise<
-  WebhookEventTypeEntry[]
-> {
+/**
+ * The event types an endpoint may subscribe to: core's and every enabled
+ * plugin's. Reached through {@link webhookApi}, as its callers use it.
+ */
+async function listWebhookEventTypes(): Promise<WebhookEventTypeEntry[]> {
   const result = await fetcher<ListResponse<WebhookEventTypeEntry>>(
     "/webhooks/event-types",
     {},
