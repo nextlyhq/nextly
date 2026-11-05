@@ -14,6 +14,8 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  clearPageReference,
+  LAYOUT_CLEAR_CONTEXT_KEY,
   layoutFenceFloor,
   registerPageReferenceGuard,
 } from "./page-reference-guard";
@@ -311,5 +313,81 @@ describe("a page write that landed while its Layout was removed", () => {
     const { run, updates } = guard(row({ step: "checked" }), page);
     await run("afterCreate", { data: page });
     expect(updates).toHaveLength(0);
+  });
+});
+
+describe("a clear that read the page before another author changed it", () => {
+  const clearing = { [LAYOUT_CLEAR_CONTEXT_KEY]: FENCED };
+
+  it("is refused at its write when the page names another Layout by then", async () => {
+    const changed = { id: "p1", layout: "other", status: "draft" };
+    const { run } = guard(null, changed);
+
+    const refused = await refusal(
+      run("beforeUpdate", {
+        data: { layout: null },
+        originalData: changed,
+        context: clearing,
+      })
+    );
+
+    expect(NextlyError.isCode(refused, "CONFLICT")).toBe(true);
+  });
+
+  it("is let through while the page still names the Layout it read", async () => {
+    const page = { id: "p1", layout: FENCED, status: "draft" };
+    const { run } = guard(null, page);
+
+    expect(
+      await run("beforeUpdate", {
+        data: { layout: null },
+        originalData: page,
+        context: clearing,
+      })
+    ).toBeUndefined();
+  });
+
+  /** A Direct API whose page reads answer `reads` in turn, and whose update throws `refused`. */
+  function racing(reads: PageRead[], refused: unknown) {
+    const answers = [...reads];
+    return {
+      find: vi.fn(),
+      findByID: vi.fn(async () => answers.shift() ?? null),
+      update: vi.fn(async () => {
+        throw refused;
+      }),
+    };
+  }
+
+  it("answers that it cleared nothing, carrying the Layout it read, when the page moved on", async () => {
+    const nextly = racing(
+      [
+        { id: "p1", layout: FENCED, status: "draft" },
+        { id: "p1", layout: "other", status: "draft" },
+      ],
+      NextlyError.conflict()
+    );
+
+    expect(
+      await clearPageReference(nextly as never, "pages", "p1", FENCED)
+    ).toBe(false);
+    expect(nextly.update).toHaveBeenCalledWith(
+      expect.objectContaining({ context: clearing })
+    );
+  });
+
+  it("passes on a refusal that was not the page moving on", async () => {
+    const conflict = NextlyError.conflict();
+    const nextly = racing(
+      [
+        { id: "p1", layout: FENCED, status: "draft" },
+        { id: "p1", layout: FENCED, status: "draft" },
+      ],
+      conflict
+    );
+
+    expect(
+      await refusal(clearPageReference(nextly as never, "pages", "p1", FENCED))
+    ).toBe(conflict);
   });
 });

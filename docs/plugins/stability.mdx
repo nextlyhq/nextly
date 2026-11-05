@@ -71,8 +71,9 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `VersionPinHolderDefinition` and `VersionRef`
 - `PluginMigration.transaction` — `false` runs a migration module outside a
   transaction, statement by statement
-- `onInstall` / `onUninstall`, called by `nextly plugins install` and
-  `nextly plugins uninstall`, never at boot
+- `onReady`, run once per boot after every plugin has initialised and routes
+  are registered, and `onInstall` / `onUninstall`, called by
+  `nextly plugins install` and `nextly plugins uninstall`, never at boot
 - `contributes.transforms` — changing entities another plugin declared
 - `ctx.db.contributed(table, columns)` — reading and writing the hidden
   columns a plugin contributed to a table it does not own
@@ -88,6 +89,25 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `schema.adoptTable` and `db.schema.afterDrizzle`
 - Collection `db` options: `db.idType`, `db.allowIdOnCreate`
 - `db.postgres.schema` (accepts only `"public"` for now)
+- The manifest's declaration of reach: `capabilities` (`net.outbound`,
+  `db.rawSql`, `secrets`, `auth.login`), `provides` and `requires`
+- The stateful runtime surfaces, each present only once declared:
+  `contributes.settings` / `ctx.settings`, `capabilities.net.outbound` /
+  `ctx.fetch`, and `contributes.audit` / `ctx.audit`
+- The route options `rateLimit`, `limitKey`, `rawBody`, `csrf` and `noStore`
+- Auth extensibility (D71/D57): `contributes.auth` (auth-flow hooks,
+  challenges, sign-in UI), `auth.strategies`, and finishing an external
+  sign-in with `ctx.auth.completeLogin`
+- Typed hook points: `contributes.hookPoints`, `ctx.filters.decide` and the
+  `HookPointPayloads` map
+- `ctx.security`: the password helpers, and the opaque and one-purpose secret
+  stores
+- Account events: `UserEvents` — core emits `user.created` and `user.deleted`
+  with `{ userId }` after the change commits; a plugin subscribes and cannot
+  emit either
+- The `/db` query operators, and `collectDeclarations` for reading what other
+  plugins declared
+- Sign-in challenge views: `ChallengeViewProps`, `ChallengeResolveResult`
 
 Each graduates once a first-party plugin exercises it.
 
