@@ -1644,6 +1644,9 @@ async function runMigrationStreams(
     logger: deps.logger,
     knownJunctions: deps.knownJunctions,
     declared: deps.declared,
+    ...(deps.refuseUnrecognisedBuilderFiles === true
+      ? { refuseUnrecognisedBuilderFiles: true }
+      : {}),
   });
   return { pluginModulesApplied, applied };
 }
@@ -1707,6 +1710,12 @@ export async function migrateCore(
         ...deps,
         command: deps.lockCommand ?? "nextly migrate",
       });
+      // And again under the lock, before anything writes (the checksum check
+      // below records a missing checksum): a file changed while this run
+      // waited for the lock is judged as it now reads.
+      if (deps.refuseUnrecognisedBuilderFiles === true) {
+        await refuseUnrecognised(deps);
+      }
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -1715,11 +1724,6 @@ export async function migrateCore(
           command: deps.lockCommand ?? "nextly migrate",
         }
       );
-      // And again under the lock, before the first write: a file changed
-      // while this run waited for the lock is judged as it now reads.
-      if (deps.refuseUnrecognisedBuilderFiles === true) {
-        await refuseUnrecognised(deps);
-      }
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -2019,7 +2023,9 @@ async function refuseUnrecognisedBuilderFiles(
     file => !file.lacks.includes("snapshot")
   );
   if (snapshotless.length === 0) return;
-  // The pending files as the run and the dry run find them, so all agree.
+  // The pending files as the run and the dry run find them, so all agree,
+  // each by the file its dialect selects: a migration may exist only as one
+  // dialect's variant, and only the file that would run is judged.
   const pending = new Set(
     (
       await findPendingFiles(
@@ -2030,7 +2036,7 @@ async function refuseUnrecognisedBuilderFiles(
         deps.logger,
         deps.declared
       )
-    ).map(m => `${m.name}.sql`)
+    ).map(m => basename(m.filePath))
   );
   const refused = snapshotless.filter(file => pending.has(file.file));
   if (refused.length === 0) return;
@@ -2461,8 +2467,15 @@ export async function runFileMigrations(args: {
   knownJunctions?: ReadonlySet<string>;
   /** What the declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
+  refuseUnrecognisedBuilderFiles?: boolean;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
+  // The files about to run judged once more, as they read now: the folder may
+  // have changed since the run's earlier checks.
+  if (args.refuseUnrecognisedBuilderFiles === true) {
+    await refuseUnrecognisedBuilderFiles(args);
+  }
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(
     migrationsDir,

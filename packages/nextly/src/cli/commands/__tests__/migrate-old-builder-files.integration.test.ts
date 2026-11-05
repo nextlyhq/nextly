@@ -44,7 +44,11 @@ import { CollectionFileManager } from "../../../services/collection-file-manager
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
-import { assertAppliedFilesPresent, runMigrate } from "../migrate";
+import {
+  assertAppliedFilesPresent,
+  runFileMigrations,
+  runMigrate,
+} from "../migrate";
 import { runMigrateCheck } from "../migrate-check";
 import { runMigrateStatus } from "../migrate-status";
 
@@ -368,6 +372,44 @@ describe.each(getConfiguredTestDialects())(
       const { code, said } = await migrate();
       expect(code, said.join("\n")).toBe(1);
       expect(said.join("\n")).toContain(file);
+    });
+
+    // A Builder-named file can exist only as a dialect's variant, the file the
+    // run selects and executes: it is refused as the base file would be.
+    it("refuses an unrecognised Builder-named file that exists only as a dialect variant", async () => {
+      const t = instance!;
+      const file = `1761732000002_update_posts.${dialect}.sql`;
+      writeFileSync(
+        join(dir, "migrations", file),
+        `ALTER TABLE ${q}post_tag_links${q} RENAME TO ${q}post_tag_refs${q};\n`
+      );
+      const before = await state(t, dialect);
+      const { code, said } = await migrate();
+      expect(code, said.join("\n")).toBe(1);
+      expect(said.join("\n")).toMatch(/not recognised as an earlier Builder's/);
+      expect(said.join("\n")).toContain(file);
+      expect(await state(t, dialect)).toEqual(before);
+    });
+
+    // The files that run are judged again right before they run, whatever
+    // the folder held when the run began.
+    it("refuses an unrecognised file at the point the files phase runs", async () => {
+      const t = instance!;
+      writeFileSync(
+        join(dir, "migrations", "1761732000003_update_posts.sql"),
+        `ALTER TABLE ${q}post_tag_links${q} RENAME TO ${q}post_tag_refs${q};\n`
+      );
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await expect(
+        runFileMigrations({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir: join(dir, "migrations"),
+          logger: createLogger({ quiet: true }),
+          refuseUnrecognisedBuilderFiles: true,
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING" });
     });
 
     it("a hand-written file with no snapshot still applies as written", async () => {

@@ -591,6 +591,9 @@ describe("a Builder-named file the signature does not recognise", () => {
       refuseUnrecognisedBuilderFilesFn: vi.fn(async () => {
         order.push("refuse");
       }),
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        order.push("checksums");
+      }),
       withLock: vi.fn(
         async (_a: unknown, _d: unknown, fn: () => Promise<unknown>) => {
           order.push("lock");
@@ -603,7 +606,9 @@ describe("a Builder-named file the signature does not recognise", () => {
       }),
     });
     await migrateCore(d as never);
-    expect(order).toEqual(["refuse", "lock", "refuse", "core"]);
+    // Ahead of the checksum check, which records a missing checksum: a run
+    // refused for an unrecognised file writes nothing.
+    expect(order).toEqual(["refuse", "lock", "refuse", "checksums", "core"]);
   });
 });
 
