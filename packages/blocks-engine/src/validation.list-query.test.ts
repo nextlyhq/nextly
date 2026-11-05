@@ -9,7 +9,13 @@ import type { BindingFieldShape } from "./binding-rules";
 import { DOCUMENT_FORMAT_VERSION, type BlockDocument } from "./document";
 import {
   COLLECTION_LIST_TYPE,
+  isListFieldKind,
   LIST_ISSUE_CODES,
+  listFieldKind,
+  listKindSortable,
+  listQueryIssues,
+  listRelationTarget,
+  listSortText,
   readListQuery,
   type ListFields,
   type ListFieldSource,
@@ -509,5 +515,112 @@ describe("readListQuery", () => {
       { field: "title", op: "equals", value: "a" },
     ]);
     expect(problems.map(problem => problem.prop)).toEqual(["limit", "filters"]);
+  });
+});
+
+describe("listSortText", () => {
+  it("writes keys as the stored comma string that reads back as the same keys", () => {
+    const keys = [
+      { field: "publishedAt", descending: true },
+      { field: "title", descending: false },
+    ];
+    const text = listSortText(keys);
+    expect(text).toBe("-publishedAt,title");
+    expect(readListQuery({ sort: text }).query.sort).toEqual(keys);
+  });
+
+  it("writes nothing for no keys, which removes the sort", () => {
+    expect(listSortText([])).toBeUndefined();
+  });
+});
+
+describe("a list field's kind", () => {
+  it("names each scalar a list filters by, from the binding vocabulary", () => {
+    const kinds = [
+      { name: "a", type: "text" },
+      { name: "b", type: "email" },
+      { name: "c", type: "number" },
+      { name: "d", type: "date" },
+      { name: "e", type: "select", options: ["x"] },
+      { name: "f", type: "radio", options: ["x"] },
+      { name: "g", type: "checkbox" },
+      { name: "h", type: "relationship", relationTo: "authors" },
+    ].map(listFieldKind);
+    expect(kinds).toEqual([
+      "text",
+      "text",
+      "number",
+      "date",
+      "choice",
+      "choice",
+      "boolean",
+      "entry",
+    ]);
+  });
+
+  it("offers none for a field holding several values, a time of day or no scalar", () => {
+    expect(
+      [
+        { name: "a", type: "text", hasMany: true },
+        {
+          name: "b",
+          type: "relationship",
+          relationTo: "tags",
+          hasMany: true,
+        },
+        { name: "c", type: "date", timeOnly: true },
+        { name: "d", type: "richText" },
+        { name: "e", type: "json" },
+        { name: "f", type: "upload", relationTo: "media" },
+        { name: "g", type: "relationship", relationTo: ["a", "b"] },
+        { name: "h", type: "group" },
+      ].map(listFieldKind)
+    ).toEqual(Array(8).fill(undefined));
+  });
+
+  it("reads a kind off the wire only when it is one of the set", () => {
+    expect(isListFieldKind("choice")).toBe(true);
+    expect(isListFieldKind("relationship")).toBe(false);
+    expect(isListFieldKind(undefined)).toBe(false);
+  });
+
+  it("sorts by every kind but a relation", () => {
+    expect(listKindSortable("date")).toBe(true);
+    expect(listKindSortable("entry")).toBe(false);
+  });
+});
+
+describe("listRelationTarget", () => {
+  it("names the collection of a to-many relation, and nothing for any other field", () => {
+    expect(
+      listRelationTarget({
+        name: "categories",
+        type: "relationship",
+        relationTo: "categories",
+        hasMany: true,
+      })
+    ).toBe("categories");
+    expect(
+      listRelationTarget({
+        name: "author",
+        type: "relationship",
+        relationTo: "authors",
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("listQueryIssues", () => {
+  it("names the list each issue is about, so an editor shows it there", () => {
+    const issues = listQueryIssues(
+      [
+        list("fine", { collection: "posts", limit: 3 }),
+        list("wrong", { collection: "posts", limit: 0 }),
+      ],
+      { fields }
+    );
+    expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
+      ["wrong", "list-limit-invalid"],
+    ]);
   });
 });

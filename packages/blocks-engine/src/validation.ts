@@ -647,6 +647,8 @@ export function validateDocument(
   if (!overLimits) {
     const entry = ctx.bindingEntry;
     issues.push(
+      // As validation issues: the path names the list, so the block's id the
+      // judgement also carries is left to the editor that asks for it.
       ...listQueryIssues(envelope.nodes, {
         ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
         ...(entry !== undefined && "collection" in entry
@@ -654,7 +656,7 @@ export function validateDocument(
           : {}),
         ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
         maxNodes: survey.limits.maxNodes,
-      })
+      }).map(({ nodeId: _nodeId, ...issue }) => issue)
     );
   }
 

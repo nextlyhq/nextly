@@ -36,6 +36,7 @@
  * @module list-query
  */
 import type { BindingFieldShape } from "./binding-rules";
+import { bindingKindOf } from "./binding-vocabulary";
 import type { BlockDocument } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
@@ -92,8 +93,8 @@ export const LIST_LIMIT_MIN = 1;
 export const LIST_LIMIT_MAX = 100;
 
 /** How many filter rows one list may hold, and values one `in` row. */
-const MAX_FILTERS = 20;
-const MAX_LIST_VALUES = 100;
+export const LIST_MAX_FILTERS = 20;
+export const LIST_MAX_VALUES = 100;
 
 /** A list's query as stored, each part present only when it was stored well. */
 export interface ListQuery {
@@ -217,8 +218,8 @@ function listValueProblem(value: unknown): string | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return "takes a list of one value or more";
   }
-  if (value.length > MAX_LIST_VALUES) {
-    return `takes at most ${String(MAX_LIST_VALUES)} values`;
+  if (value.length > LIST_MAX_VALUES) {
+    return `takes at most ${String(LIST_MAX_VALUES)} values`;
   }
   return value.every(isScalar)
     ? undefined
@@ -344,6 +345,19 @@ function readSort(
   return { keys };
 }
 
+/**
+ * Sort keys as the block stores them: one string, comma-separated, `-` for
+ * descending, or `undefined` for no keys, which removes the sort. The one
+ * spelling {@link readListQuery} reads back, so an editor writing keys and
+ * the reader ordering by them cannot disagree about it.
+ */
+export function listSortText(keys: readonly ListSortKey[]): string | undefined {
+  if (keys.length === 0) return undefined;
+  return keys
+    .map(key => (key.descending ? `-${key.field}` : key.field))
+    .join(",");
+}
+
 /** A whole number within bounds, or why it is not. */
 function wholeNumber(
   value: unknown,
@@ -440,9 +454,9 @@ function readFilters(value: unknown): {
   if (!Array.isArray(value)) {
     return refused("The filters are not a list of filter rows.");
   }
-  if (value.length > MAX_FILTERS) {
+  if (value.length > LIST_MAX_FILTERS) {
     return refused(
-      `A list holds at most ${String(MAX_FILTERS)} filters; this one holds ${String(value.length)}.`
+      `A list holds at most ${String(LIST_MAX_FILTERS)} filters; this one holds ${String(value.length)}.`
     );
   }
   const filters: ListFilter[] = [];
@@ -649,13 +663,82 @@ function fieldFindings(
   return found;
 }
 
-/** Whether a field shape is a to-many relation to one collection. */
-function toManyTarget(shape: BindingFieldShape): string | undefined {
+/**
+ * The collection a field's entries are in, when the field is a to-many
+ * relation to one collection: the fields a related list may show, and the
+ * one test of it, asked by the judgement below and by an editor offering
+ * related sources alike.
+ */
+export function listRelationTarget(
+  shape: BindingFieldShape
+): string | undefined {
   return (shape.type === "relationship" || shape.type === "upload") &&
     shape.hasMany === true &&
     typeof shape.relationTo === "string"
     ? shape.relationTo
     : undefined;
+}
+
+/**
+ * The kinds of value a field holds, as a list's filter and sort offer it:
+ * what decides the operators a filter row may use and the control its value
+ * is chosen with.
+ */
+export const LIST_FIELD_KINDS = [
+  "text",
+  "number",
+  "date",
+  "choice",
+  "boolean",
+  "entry",
+] as const;
+
+/** One of {@link LIST_FIELD_KINDS}. */
+export type ListFieldKind = (typeof LIST_FIELD_KINDS)[number];
+
+/** Whether a value names one of {@link LIST_FIELD_KINDS}, as read off the wire. */
+export function isListFieldKind(value: unknown): value is ListFieldKind {
+  return (LIST_FIELD_KINDS as readonly unknown[]).includes(value);
+}
+
+/**
+ * A field's kind as a list may filter by it, or `undefined` for one a list
+ * offers no filter on: a field holding several values (whose operators read
+ * it as one value, so it matches nothing), a time of day (stored on a
+ * placeholder date, so a day compares nothing), and anything that is not one
+ * scalar: rich text, media, a list, JSON, a container. Read from the
+ * engine's binding vocabulary, the one place a field type's value is named.
+ */
+export function listFieldKind(
+  shape: BindingFieldShape
+): ListFieldKind | undefined {
+  if (shape.hasMany === true || shape.timeOnly === true) return undefined;
+  switch (bindingKindOf(shape)) {
+    case "text":
+    case "url":
+      return "text";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "date":
+      return "date";
+    case "option":
+      return "choice";
+    case "reference":
+      // One target, so the value is a bare id an entry picker can choose.
+      return typeof shape.relationTo === "string" ? "entry" : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Whether a list may sort by a field of this kind. A relation orders by its
+ * stored id, which says nothing an author could mean, so it filters only.
+ */
+export function listKindSortable(kind: ListFieldKind): boolean {
+  return kind !== "entry";
 }
 
 /** Where a related list's relation field lives, or why it has none. */
@@ -698,7 +781,7 @@ function relationFieldProblem(
     collection: source,
   });
   if (!("shape" in judged)) return { prop: "relation", ...judged };
-  const target = toManyTarget(judged.shape);
+  const target = listRelationTarget(judged.shape);
   if (target === undefined) {
     return {
       prop: "relation",
@@ -864,6 +947,8 @@ export function listQueryIssues(
   judgement: ListQueryJudgement = {}
 ): {
   readonly path: string;
+  /** The list block the issue is about, so an editor shows it on that block. */
+  readonly nodeId: string;
   readonly code: ListShapeCode | ListFieldCode;
   readonly message: string;
   readonly severity: "error" | "warning";
@@ -879,6 +964,7 @@ export function listQueryIssues(
   );
   return findings.map(finding => ({
     path: finding.path,
+    nodeId: finding.nodeId,
     code: finding.code,
     message: finding.message,
     severity: held.has(signature(finding)) ? "warning" : "error",
