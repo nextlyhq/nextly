@@ -88,6 +88,23 @@ describe("collectPluginWebhookEventTypes", () => {
     }
   });
 
+  it("refuses a label or description that is not text", () => {
+    for (const declared of [
+      { type: "acme-shop.order.paid", label: 42 },
+      { type: "acme-shop.order.paid", description: { text: "paid" } },
+      { type: "acme-shop.order.paid", label: BigInt(1) },
+    ]) {
+      expect(
+        refusal([
+          plugin("@acme/shop", [declared as unknown as PluginWebhookEventType]),
+        ]),
+        JSON.stringify(declared, (_k, v: unknown) =>
+          typeof v === "bigint" ? `${v}n` : v
+        )
+      ).toBe("plugin-webhook-event-text");
+    }
+  });
+
   it("names the plugin and the type in what it refuses", () => {
     try {
       collectPluginWebhookEventTypes([

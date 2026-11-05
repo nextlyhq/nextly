@@ -86,6 +86,28 @@ function assertDeclarableEventType(
 }
 
 /**
+ * Refuse a declared type's `label` or `description` that is not a string. A
+ * plugin written in JavaScript has no compiler to stop one, and the list is
+ * sent to the admin as it is published: a number or an object breaks the
+ * answer's shape, and a value JSON cannot hold fails the request.
+ */
+function assertEventTypeText(
+  pluginName: string,
+  declared: { type: string; label?: unknown; description?: unknown }
+): void {
+  for (const field of ["label", "description"] as const) {
+    const value = declared[field];
+    if (value !== undefined && typeof value !== "string") {
+      throw resolutionError(
+        "plugin-webhook-event-text",
+        `Plugin "${pluginName}" declares the webhook event type "${declared.type}" with a ${field} that is not text.`,
+        { plugin: pluginName, type: declared.type, field }
+      );
+    }
+  }
+}
+
+/**
  * Every enabled plugin's declared webhook event types, each checked by
  * {@link assertDeclarableEventType}. A disabled plugin is skipped, as the
  * other declarations are: it runs nothing, so it has nothing to deliver and
@@ -100,6 +122,7 @@ export function collectPluginWebhookEventTypes(
     if (plugin.enabled === false) continue;
     for (const declared of plugin.contributes?.webhookEvents ?? []) {
       assertDeclarableEventType(plugin.name, declared.type, seen);
+      assertEventTypeText(plugin.name, declared);
       seen.add(declared.type);
       collected.push({
         type: declared.type,

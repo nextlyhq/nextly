@@ -24,8 +24,27 @@ import { isSubscribableEventType } from "../../domains/webhooks/event-type-regis
 import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../domains/webhooks/secret-entries";
 import {
   REDACTED_HEADER_VALUE,
+  WEBHOOK_EVENT_TYPES,
   WEBHOOK_EVENT_WILDCARD,
 } from "../../domains/webhooks/types";
+
+/**
+ * Core's event types, as their literals. Published from `nextly/schemas` and
+ * kept as it was: core's list alone, which is what it has always named. An
+ * endpoint's subscriptions are judged by {@link SubscribableEventSchema}, which
+ * also accepts the types plugins declare.
+ */
+export const WebhookEventTypeSchema = z.enum(WEBHOOK_EVENT_TYPES);
+
+/**
+ * One of core's event types or the wildcard. Published from `nextly/schemas`
+ * and kept as it was; an endpoint's subscriptions are judged by
+ * {@link SubscribableEventSchema} instead, which also accepts plugins' types.
+ */
+export const WebhookEventSubscriptionSchema = z.union([
+  z.literal(WEBHOOK_EVENT_WILDCARD),
+  WebhookEventTypeSchema,
+]);
 
 /**
  * One subscription entry: an event type an endpoint may subscribe to now, or
@@ -38,7 +57,7 @@ import {
  * declares, or whose plugin is disabled, is refused and named, rather than
  * stored as a subscription nothing may ever send.
  */
-const WebhookEventSubscriptionSchema = z.union([
+const SubscribableEventSchema = z.union([
   z.literal(WEBHOOK_EVENT_WILDCARD),
   z.string().superRefine((type, ctx) => {
     if (!isSubscribableEventType(type)) {
@@ -56,7 +75,7 @@ const WebhookEventSubscriptionSchema = z.union([
  * already covers them, so a mix is contradictory rather than additive).
  */
 const EventSubscriptionsSchema = z
-  .array(WebhookEventSubscriptionSchema)
+  .array(SubscribableEventSchema)
   .min(1, "Subscribe to at least one event type.")
   // A duplicate would not change delivery, but it would make the stored
   // subscription disagree with what the user typed.

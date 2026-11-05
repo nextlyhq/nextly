@@ -149,6 +149,33 @@ describe("CreateWebhookSchema", () => {
   });
 });
 
+describe("the webhook schemas nextly/schemas publishes", () => {
+  it("still publishes core's event-type schemas, naming core's types alone", async () => {
+    // Read from the published entry, so removing either export from the
+    // barrel fails here rather than in a consumer's build.
+    const published = await import("../../index");
+
+    expect(
+      published.WebhookEventTypeSchema.safeParse("entry.created").success
+    ).toBe(true);
+    expect(
+      published.WebhookEventTypeSchema.safeParse("acme-shop.order.paid").success
+    ).toBe(false);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse("*").success
+    ).toBe(true);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse(
+        "form.submission.created"
+      ).success
+    ).toBe(true);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse("acme-shop.order.paid")
+        .success
+    ).toBe(false);
+  });
+});
+
 describe("UpdateWebhookSchema", () => {
   it("accepts a single field", () => {
     expect(UpdateWebhookSchema.safeParse({ name: "Renamed" }).success).toBe(
