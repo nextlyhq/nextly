@@ -5,7 +5,7 @@
  * such values unwritten, so this is the editor opened before a removal,
  * saving work that would never reach the page.
  */
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { DEFAULT_LIMITS, MAX_SCANNED_KEYS } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -61,17 +61,18 @@ function write(stored: { published?: unknown; draft?: unknown }) {
 const SITE_BREAKPOINTS = new Set(["base", "tablet"]);
 
 function setup() {
-  const siteBreakpointIds = vi.fn(async () => SITE_BREAKPOINTS);
-  const siteClassIds = vi.fn(async () => new Set(["c-card"]));
+  const siteDefinitions = vi.fn(async () => ({
+    classIds: new Set(["c-card"]),
+    breakpointIds: SITE_BREAKPOINTS,
+  }));
   const composition: CompositionSetup = {
     store: { collection: "components", field: "definition" },
     limits: DEFAULT_LIMITS,
     composesDocuments: false,
-    siteClassIds,
-    siteBreakpointIds,
+    siteDefinitions,
   };
   return {
-    siteBreakpointIds,
+    siteDefinitions,
     field: blocksFieldType(undefined, () => composition),
   };
 }
@@ -231,7 +232,7 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
   });
 
   it("asks nothing about a page styled at the base alone", async () => {
-    const { field, siteBreakpointIds } = setup();
+    const { field, siteDefinitions } = setup();
     const { write: stored } = write({ published: page([]) });
     expect(
       await validate(
@@ -240,7 +241,7 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
         field
       )
     ).toBe(true);
-    expect(siteBreakpointIds).not.toHaveBeenCalled();
+    expect(siteDefinitions).not.toHaveBeenCalled();
   });
 
   it("does not judge a write inside a transaction, nor read the site's breakpoints for it", async () => {
@@ -249,7 +250,7 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
      * transaction's, which it could wait behind; an editor's save is never
      * made in one.
      */
-    const { field, siteBreakpointIds } = setup();
+    const { field, siteDefinitions } = setup();
     const { write: stored } = write({ published: page([text("a")]) });
     expect(
       await validate(
@@ -261,7 +262,7 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
         field
       )
     ).toBe(true);
-    expect(siteBreakpointIds).not.toHaveBeenCalled();
+    expect(siteDefinitions).not.toHaveBeenCalled();
   });
 
   it("does not judge a create, which has no stored page to compare with", async () => {
@@ -275,13 +276,58 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
     ).toBe(true);
   });
 
-  it("reports a removed breakpoint and an undefined shared style together", async () => {
-    // Both judged on the one write, so one round fixes both.
+  it("reports a removed breakpoint and an undefined shared style together, from one read", async () => {
+    // Both judged on the one write, so one round fixes both, and against one
+    // read of the site's style, so both see the same version of it.
+    const { field, siteDefinitions } = setup();
     const { write: stored } = write({ published: page([text("a")]) });
     const result = await validate(
       page([{ ...text("a", colourAt("mobile")), classes: ["c-gone"] }]),
-      { mode: "update", write: stored }
+      { mode: "update", write: stored },
+      field
     );
     expect(codes(result)).toEqual(["unknown-class", "removed-breakpoint"]);
+    expect(siteDefinitions).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes an empty entry for no use of the breakpoint", async () => {
+    // The compiler emits nothing for it, so nothing would be lost.
+    const { write: stored } = write({ published: page([text("a")]) });
+    expect(
+      await validate(page([text("a", { styles: { base: { mobile: {} } } })]), {
+        mode: "update",
+        write: stored,
+      })
+    ).toBe(true);
+  });
+
+  it("leaves a per-device setting that is not one to its own rule", async () => {
+    const { write: stored } = write({ published: page([text("a")]) });
+    expect(
+      codes(
+        await validate(
+          page([text("a", { visibility: { devices: { mobile: "hidden" } } })]),
+          { mode: "update", write: stored }
+        )
+      )
+    ).toEqual(["invalid-visibility"]);
+  });
+
+  it("reads a style map no wider than the engine reads one", async () => {
+    // A corrupt map with more keys than the engine's bound: the keys past it
+    // are not read, here or by the compiler, so one there is not judged.
+    const wide: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SCANNED_KEYS; i += 1) wide[`empty-${i}`] = {};
+    wide.mobile = { color: "#1155cc" };
+    const { write: stored } = write({ published: page([text("a")]) });
+    const result = codes(
+      await validate(page([text("a", { styles: { base: wide } })]), {
+        mode: "update",
+        write: stored,
+      })
+    );
+    // The rules refuse the map for its width; this check adds nothing.
+    expect(result).not.toContain("removed-breakpoint");
+    expect(result).toContain("style-issues-truncated");
   });
 });

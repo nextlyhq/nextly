@@ -90,6 +90,19 @@ export const BLOCKS_FIELD_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#BlocksField";
 
 /** The policy a field declares, in the loosest shape worth reading. */
+/**
+ * `read`, asked at most once: every caller shares the first call's answer,
+ * so the checks judging one write see one read. Nothing when there is no
+ * `read`.
+ */
+function onceAsked<T>(
+  read: (() => Promise<T>) | undefined
+): (() => Promise<T>) | undefined {
+  if (read === undefined) return undefined;
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= read());
+}
+
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
   // Delegated rather than repeated. The admin editor asks the same question of
   // the same declaration, and a field validated under one reading and edited
@@ -227,35 +240,30 @@ export function blocksFieldType(
         : judgedByRules(value, args, breakpoints, composition);
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
-      // The classes a write adds must be ones the site defines, judged
-      // whatever the rules above answered, so one round fixes both. A value
-      // judged on its own, or an emptied field, references none.
-      const classIds = composition?.()?.siteClassIds;
-      // Likewise the breakpoints a write brings styles or hides under.
-      const breakpointIds = composition?.()?.siteBreakpointIds;
+      // The classes a write adds, and the breakpoints it brings styles or
+      // hides under, must be ones the site defines, judged whatever the rules
+      // above answered, so one round fixes both. A value judged on its own,
+      // or an emptied field, references none.
+      const definitions = onceAsked(composition?.()?.siteDefinitions);
       const classes = async (): Promise<readonly PluginFieldIssue[]> => {
-        if (emptied) return [];
+        if (emptied || definitions === undefined) return [];
         const limits = composition?.()?.limits;
         return [
-          ...(classIds === undefined
-            ? []
-            : await newClassReferenceIssues(value, args, label, {
-                classIds,
-                limits,
-              })),
-          ...(breakpointIds === undefined
-            ? []
-            : await newBreakpointIssues(value, args, label, {
-                breakpointIds,
-                limits,
-              })),
+          ...(await newClassReferenceIssues(value, args, label, {
+            classIds: async () => (await definitions()).classIds,
+            limits,
+          })),
+          ...(await newBreakpointIssues(value, args, label, {
+            breakpointIds: async () => (await definitions()).breakpointIds,
+            limits,
+          })),
         ];
       };
       // A value judged on its own, or a create, has no stored document to
       // hold a lock, and keeps the answer it always got, synchronously where
       // the rules gave one and nothing else is asked.
       if (!judgesLayersLocks(args)) {
-        if (args.write === undefined || emptied || classIds === undefined) {
+        if (args.write === undefined || emptied || definitions === undefined) {
           return verdict;
         }
         return Promise.resolve(verdict).then(answered =>

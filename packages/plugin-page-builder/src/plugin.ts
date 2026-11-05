@@ -1424,23 +1424,24 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
-        // The classes a page may add a reference to: the ones the compiler
-        // applies, from the code's defaults and the stored record of the
-        // Single as renamed, read per write so a style removed a moment ago
-        // is gone for the next save.
-        siteClassIds: async () =>
-          // Capped and resolved as the compiler reads the library, so a page
-          // may reference exactly the classes it applies.
-          referableClassIds((await siteStyleNow()).classes ?? []),
-        // The breakpoints a page may bring styles or hides under: the ones
-        // its stylesheet is emitted under, read per write like the classes,
-        // so a breakpoint removed a moment ago is gone for the next save.
-        siteBreakpointIds: async () =>
-          new Set(
-            breakpointContexts(siteBreakpoints(await siteStyleNow())).map(
-              context => context.id
-            )
-          ),
+        // What a page may refer to, from one read of the site style: the
+        // code's defaults and the stored record of the Single as renamed,
+        // read per write so a style or a breakpoint removed a moment ago is
+        // gone for the next save.
+        siteDefinitions: async () => {
+          const style = await siteStyleNow();
+          return {
+            // Capped and resolved as the compiler reads the library, so a
+            // page may reference exactly the classes it applies.
+            classIds: referableClassIds(style.classes ?? []),
+            // The ones its stylesheet is emitted under.
+            breakpointIds: new Set(
+              breakpointContexts(siteBreakpoints(style)).map(
+                context => context.id
+              )
+            ),
+          };
+        },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,

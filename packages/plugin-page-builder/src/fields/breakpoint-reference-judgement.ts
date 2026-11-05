@@ -26,6 +26,7 @@ import {
   BASE_BREAKPOINT,
   DEFAULT_LIMITS,
   isPlainRecord,
+  MAX_SCANNED_KEYS,
   selectNodes,
   STYLE_STATES,
   type DocumentLimits,
@@ -50,16 +51,49 @@ const REMOVED_BREAKPOINT_MESSAGE =
   "That breakpoint was removed from the site. Reload to keep editing.";
 
 /**
- * The breakpoint ids a style envelope (states × breakpoints) stores under, in
- * the states the compiler writes: one it does not know is reported as such and
- * never written, whatever breakpoint it names.
+ * The keys of a stored record that `holds` says keep something, read no
+ * further than the engine reads one record: a record wider than that is
+ * corrupt, and enumerating it whole would cost what the engine's bound exists
+ * to prevent. Read with an early break rather than `Object.keys`, which
+ * builds every key before anything can stop it.
+ */
+function* keysHolding(
+  record: Record<string, unknown>,
+  holds: (value: unknown) => boolean
+): Generator<string> {
+  let read = 0;
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    read += 1;
+    if (read > MAX_SCANNED_KEYS) return;
+    if (holds(record[key])) yield key;
+  }
+}
+
+/** Whether a stored per-device setting is one. */
+function isBoolean(value: unknown): boolean {
+  return typeof value === "boolean";
+}
+
+/** Whether a breakpoint's style values hold at least one value to emit. */
+function holdsValues(values: unknown): boolean {
+  if (!isPlainRecord(values)) return false;
+  for (const key in values) if (Object.hasOwn(values, key)) return true;
+  return false;
+}
+
+/**
+ * The breakpoint ids a style envelope (states × breakpoints) stores a value
+ * under, in the states the compiler writes: one it does not know is reported
+ * as such and never written, whatever breakpoint it names. An empty entry is
+ * no value: the compiler emits nothing for it.
  */
 function addEnvelopeIds(styles: unknown, into: Set<string>): void {
   if (!isPlainRecord(styles)) return;
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const id of Object.keys(byBreakpoint)) into.add(id);
+    for (const id of keysHolding(byBreakpoint, holdsValues)) into.add(id);
   }
 }
 
@@ -86,7 +120,8 @@ function breakpointIdsUsed(
       ? read.visibility.devices
       : undefined;
     if (isPlainRecord(devices)) {
-      for (const id of Object.keys(devices)) ids.add(id);
+      // A stored setting is a boolean; anything else applies nothing.
+      for (const id of keysHolding(devices, isBoolean)) ids.add(id);
     }
   }
   const settings = document.settings;
