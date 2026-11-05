@@ -120,6 +120,11 @@ export interface BreakpointRemovalService {
    * their claim on them (`readdedIds`).
    */
   retire(ids: readonly string[]): Promise<void>;
+  /**
+   * The save that opened a run has stored its set, or may have: the run is
+   * walked from now on. Until then nobody walks it.
+   */
+  publish(runId: string): Promise<void>;
 }
 
 /** What the installed plugin hands the service. */
@@ -136,6 +141,15 @@ export interface RemovalInstall {
    */
   readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
 }
+
+/** What a call on a run its save has not published yet answers: nothing done. */
+const NOT_WALKED: RewriteReport = {
+  rewritten: [],
+  unchanged: [],
+  left: [],
+  caughtByFinalWalk: [],
+  finished: false,
+};
 
 /** What a call on a removal that is already done answers. */
 const NOTHING_LEFT: RewriteReport = {
@@ -181,17 +195,12 @@ function openedAt(runId: string): number | undefined {
 }
 
 /**
- * Whether an open run is still being prepared by its save: the site still
- * defines every id it removes, and it was opened moments ago. One older than
- * that is a save that failed after opening it, which the walk then closes.
+ * Whether a run being prepared has outlived its save: opened longer ago than
+ * any save takes, so the save stopped before it published the run.
  */
-async function preparing(
-  run: BreakpointRun,
-  installed: RemovalInstall
-): Promise<boolean> {
+function staleWhilePreparing(run: BreakpointRun): boolean {
   const at = openedAt(run.id);
-  if (at === undefined || Date.now() - at >= PREPARING_MS) return false;
-  return (await removalNow(run, installed)).ids.size === 0;
+  return at === undefined || Date.now() - at >= PREPARING_MS;
 }
 
 /** How many pages left for a pending draft one pass checks. */
@@ -241,6 +250,9 @@ export function breakpointRemovalService(
         logContext: { reason: "breakpoint-removal-no-run", runId },
       });
     }
+    // Nobody walks a run its save has not published: its set may yet be
+    // refused, and nothing it strips could be put back.
+    if (run.preparing) return NOT_WALKED;
     const installed = install();
     const removal = await removalNow(run, installed);
     if (removal.ids.size === 0) {
@@ -303,10 +315,15 @@ export function breakpointRemovalService(
     carryOn: async budget => {
       const store = runs();
       const open = await store.openRun();
-      // A run whose save has not stored its set yet is that save's to walk:
-      // walked now, it would find its ids still defined and close with
-      // nothing done, and the save's own walk would then report it finished.
-      if (open !== null && (await preparing(open, install()))) return;
+      // A run its save is still preparing is that save's to publish. One
+      // older than any save takes is a save that stopped before publishing
+      // it, its set stored or not: published here, its walk strips only the
+      // ids the site does not define, so a set that never landed strips
+      // nothing and the run closes.
+      if (open?.preparing === true) {
+        if (!staleWhilePreparing(open)) return;
+        await store.publish(open.id);
+      }
       // The open run first: it holds the one open slot, and a done run
       // cannot be opened again while it does.
       const owed =
@@ -319,5 +336,6 @@ export function breakpointRemovalService(
       await walk(owed.id, budget);
     },
     retire: ids => runs().retire(ids),
+    publish: runId => runs().publish(runId),
   };
 }

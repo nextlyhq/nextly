@@ -116,6 +116,7 @@ function fakeService(over: Partial<BreakpointRemovalService> = {}) {
     openRemovalAsSaved: async () => null,
     carryOn: async () => {},
     retire: async () => {},
+    publish: async () => {},
     ...over,
   };
   return { service, abandon };
@@ -161,7 +162,7 @@ const ctx: BreakpointsRouteContext = {
 const post = (breakpoints: unknown) =>
   new Request("http://local/site/breakpoints", {
     method: "POST",
-    body: JSON.stringify({ breakpoints, confirmRemoval: true }),
+    body: JSON.stringify({ breakpoints, confirmRemoval: true, version: "1" }),
   });
 
 async function refusal(run: Promise<unknown>): Promise<unknown> {

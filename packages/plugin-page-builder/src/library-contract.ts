@@ -603,6 +603,14 @@ export interface SiteBreakpointsRequest {
    * @experimental
    */
   readonly confirmRemoval?: boolean;
+  /**
+   * With `confirmRemoval`: the `version` the dry run answered with. A
+   * confirmed removal is refused when the site style has changed since, so
+   * it removes exactly what the person was shown.
+   *
+   * @experimental
+   */
+  readonly version?: string;
 }
 
 /**

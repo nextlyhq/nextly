@@ -63,6 +63,11 @@ export interface BreakpointRun extends WalkedRun {
   readonly startedBy: string;
   /** Whether the run is still open: not yet walked to the end. */
   readonly open: boolean;
+  /**
+   * Opened by a save that has not stored its set yet: open, holding the one
+   * slot, and walked by nobody until that save publishes it (`publish`).
+   */
+  readonly preparing: boolean;
 }
 
 /** The removal runs' table, through the plugin's database surface. */
@@ -126,6 +131,11 @@ export interface RemovalRunStore extends RunStore {
    */
   retire(ids: readonly string[]): Promise<void>;
   /**
+   * The save that opened a run has stored its set: the run goes on its
+   * converting walk, where the walk starts. Nothing for a run past preparing.
+   */
+  publish(runId: string): Promise<void>;
+  /**
    * Documents done runs left for `reason`, with the run each waits on, at
    * most `limit` of them.
    */
@@ -142,11 +152,25 @@ export interface HoldingRun {
   readonly leftReasons: readonly string[];
 }
 
+/** How many times a retirement is tried against a row another save moved. */
+const RETIRE_ATTEMPTS = 5;
+
+/** What a save is told when old removals could not give up an id it re-adds. */
+const RETIRE_LOST =
+  "The site's breakpoints are being changed by someone else right now. Try saving again.";
+
 /** Why a document written back with removed values waits on a done run. */
 export const WRITTEN_BACK = "written-back";
 
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
+
+/**
+ * The phase a run is opened in, before its save has stored its set. Not one
+ * of the walk's phases: no walk moves a run out of it, so none starts on a
+ * run whose set may yet be refused.
+ */
+const PREPARING = "preparing";
 
 /** A stored phase, read strictly: anything else is the converting walk. */
 function phaseOf(value: string): RunPhase {
@@ -233,6 +257,7 @@ function runOf(row: {
     phase: phaseOf(row.phase),
     cursor: row.cursor,
     open: row.openKey !== null,
+    preparing: row.phase === PREPARING,
   };
 }
 
@@ -295,7 +320,7 @@ export function removalRunStore(
               emitted: before.emitted ?? null,
             }),
             startedBy,
-            phase: "converting",
+            phase: PREPARING,
             openKey: OPEN,
           })
         );
@@ -306,13 +331,7 @@ export function removalRunStore(
         throw anotherRunning();
       }
     },
-    runById: async runId => {
-      const row = await db
-        .select(breakpointRemovals)
-        .where(eq(columns().id, runId))
-        .first();
-      return row === null ? null : runOf(row);
-    },
+    runById: oneRun,
     openRun: async () => {
       const row = await db
         .select(breakpointRemovals)
@@ -344,9 +363,16 @@ export function removalRunStore(
           // finds the run back on its converting walk, so the pending row
           // below is never written for a run that has just closed. A run
           // already done matches nothing here and is opened again below.
+          // A run still being prepared keeps its phase: it is walked from
+          // the start once published, and the pending row waits for it.
           await tx
             .update(breakpointRemovals, { phase: "converting", cursor: null })
-            .where(both(eq(t.id, runId), isNotNull(t.openKey)));
+            .where(
+              both(
+                both(eq(t.id, runId), isNotNull(t.openKey)),
+                inArray(t.phase, ["converting", "final"])
+              )
+            );
           const run = await tx
             .select(breakpointRemovals)
             .where(eq(t.id, runId))
@@ -384,24 +410,25 @@ export function removalRunStore(
     retire: async ids => {
       if (ids.length === 0) return;
       const asked = new Set(ids);
-      await db.transaction(async tx => {
-        const t = tx.table(breakpointRemovals);
-        // Done runs only: the open key is null on every one of them.
-        const rows = await tx
-          .select(breakpointRemovals)
-          .where(eq(t.phase, "done"))
-          .all();
-        for (const row of rows) {
-          if (row.openKey !== null) continue;
+      const t = columns();
+      // Every run, open ones included: a run a late write reopened after the
+      // save read the runs would otherwise keep its claim. Giving it up is
+      // safe for an open run too, since a walk strips only the ids the site
+      // does not define, and these are about to be defined.
+      for (const first of await db.select(breakpointRemovals).all()) {
+        let row: typeof first | null = first;
+        for (let attempt = 1; row !== null; attempt += 1) {
           const stored = storedIdsOf(row.removedIds, row.id);
           const readded = new Set(stored.readded);
           const fresh = stored.ids.filter(
             id => asked.has(id) && !readded.has(id)
           );
-          if (fresh.length === 0) continue;
-          // Conditional on the record read, so two saves re-adding at once
-          // cannot drop each other's ids.
-          await tx
+          if (fresh.length === 0) break;
+          // Conditional on the record as read: two saves re-adding at once
+          // cannot drop each other's ids. A lost race reads the row again and
+          // tries again; still lost, the save is refused rather than stored
+          // with the claim in place.
+          const moved = await db
             .update(breakpointRemovals, {
               removedIds: JSON.stringify({
                 ids: stored.ids,
@@ -409,8 +436,26 @@ export function removalRunStore(
               } satisfies StoredIds),
             })
             .where(both(eq(t.id, row.id), eq(t.removedIds, row.removedIds)));
+          if (moved > 0) break;
+          if (attempt >= RETIRE_ATTEMPTS) {
+            throw NextlyError.conflict({
+              reason: "state",
+              message: RETIRE_LOST,
+              logContext: { reason: "breakpoint-retire-lost", runId: row.id },
+            });
+          }
+          row = await db
+            .select(breakpointRemovals)
+            .where(eq(t.id, row.id))
+            .first();
         }
-      });
+      }
+    },
+    publish: async runId => {
+      const t = db.table(breakpointRemovals);
+      await db
+        .update(breakpointRemovals, { phase: "converting", cursor: null })
+        .where(both(eq(t.id, runId), eq(t.phase, PREPARING)));
     },
     leftFor: async (reason, limit) => {
       const h = db.table(componentDeletionHosts);
@@ -473,6 +518,15 @@ export function removalRunStore(
       }
     },
   };
+
+  /** One run by its id; `null` when there is none. */
+  async function oneRun(runId: string): Promise<BreakpointRun | null> {
+    const row = await db
+      .select(breakpointRemovals)
+      .where(eq(columns().id, runId))
+      .first();
+    return row === null ? null : runOf(row);
+  }
 
   /** Every run. One row per removal ever saved, so a short table. */
   async function runs(): Promise<BreakpointRun[]> {

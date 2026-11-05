@@ -159,7 +159,7 @@ function sealedCard(): BlockNode {
  * page builder's tables through its own `ctx.db`: the test's way to the run
  * store, as the write report calls it.
  */
-function probePlugin(holder: { runs?: RemovalRunStore }): PluginDefinition {
+function probePlugin(holder: Probe): PluginDefinition {
   return definePlugin({
     name: "@test/breakpoint-removal-probe",
     version: "1.0.0",
@@ -167,8 +167,53 @@ function probePlugin(holder: { runs?: RemovalRunStore }): PluginDefinition {
     dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
     init(ctx) {
       holder.runs = removalRunStore(ctx.db, ctx.dialect);
+      // A store whose first read of every run lands another save's write
+      // before it answers: how a test races a retirement.
+      holder.raced = afterRead => {
+        let done = false;
+        const db = new Proxy(ctx.db, {
+          get(target, key, receiver) {
+            const value: unknown = Reflect.get(target, key, receiver);
+            if (key !== "select" || typeof value !== "function") return value;
+            return (...args: unknown[]) => {
+              const query = Reflect.apply(value, target, args) as {
+                all: () => Promise<unknown[]>;
+              };
+              return new Proxy(query, {
+                get(q, k, r) {
+                  const member: unknown = Reflect.get(q, k, r);
+                  if (k !== "all" || typeof member !== "function") {
+                    return typeof member === "function"
+                      ? member.bind(q)
+                      : member;
+                  }
+                  return async () => {
+                    const rows = (await Reflect.apply(
+                      member,
+                      q,
+                      []
+                    )) as unknown[];
+                    if (!done) {
+                      done = true;
+                      await afterRead();
+                    }
+                    return rows;
+                  };
+                },
+              });
+            };
+          },
+        });
+        return removalRunStore(db, ctx.dialect);
+      };
     },
   });
+}
+
+/** What the probe hands the tests. */
+interface Probe {
+  runs?: RemovalRunStore;
+  raced?: (afterRead: () => Promise<void>) => RemovalRunStore;
 }
 
 /** The plugin's removal job, as a jobs pass runs it. */
@@ -204,11 +249,12 @@ describe.each(getConfiguredTestDialects())(
       svc: BreakpointRemovalService;
       cookie: string;
       runs: () => RemovalRunStore;
+      raced: (afterRead: () => Promise<void>) => RemovalRunStore;
       jobPass: () => Promise<unknown>;
       owner: string;
     }> {
       const plugin = pageBuilder();
-      const probe: { runs?: RemovalRunStore } = {};
+      const probe: Probe = {};
       current = await createTestNextly({
         dialect,
         plugins: [plugin, probePlugin(probe)],
@@ -271,6 +317,10 @@ describe.each(getConfiguredTestDialects())(
         runs: () => {
           if (probe.runs === undefined) throw new Error("no probe");
           return probe.runs;
+        },
+        raced: afterRead => {
+          if (probe.raced === undefined) throw new Error("no probe");
+          return probe.raced(afterRead);
         },
         jobPass: removalJobPass(plugin),
         owner: await sessionOf(owner.item.id, owner.item.email, "Owner"),
@@ -376,12 +426,24 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    /** A save the person confirmed after the dry run, as the editor sends it. */
-    const save = (cookie: string, viewport: unknown[]) =>
-      post(cookie, ["site", "breakpoints"], {
-        breakpoints: { viewport, container: [] },
-        confirmRemoval: true,
+    /**
+     * A save the person confirmed after the dry run, as the editor sends it:
+     * the dry run first, then the confirmation with the version it answered.
+     */
+    const save = async (cookie: string, viewport: unknown[]) => {
+      const breakpoints = { viewport, container: [] };
+      const checked = await post(cookie, ["site", "breakpoints"], {
+        breakpoints,
+        dryRun: true,
       });
+      const version = (checked.body.item as { version?: unknown } | undefined)
+        ?.version;
+      return post(cookie, ["site", "breakpoints"], {
+        breakpoints,
+        confirmRemoval: true,
+        ...(typeof version === "string" ? { version } : {}),
+      });
+    };
 
     /** A stored blocks value's nodes, in one form. */
     async function nodesOf(
@@ -670,6 +732,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
 
       const readded = await save(cookie, [TABLET, MOBILE]);
       expect(readded.status).toBe(409);
@@ -701,6 +764,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
 
       const carried = await post(cookie, ["site", "breakpoints", "removal"], {
         runId: run.id,
@@ -717,14 +781,17 @@ describe.each(getConfiguredTestDialects())(
       expect(await svc.openRun()).toBeNull();
     });
 
-    it("closes a removal whose set was never stored, stripping nothing the site still defines", async () => {
+    it("closes a published removal whose breakpoints the site still defines, stripping nothing", async () => {
       const { t, svc, cookie } = await boot();
       const id = await create(t, "pages", {
         title: "Home",
         slug: "home",
         content: doc("page", [heading("a", styledAtMobile)]),
       });
+      // A save that stopped before storing its set: its run published by
+      // the removal job once it was past being prepared.
       const run = await svc.begin(["mobile"], null, "user:someone");
+      await svc.publish(run.id);
 
       const carried = await post(cookie, ["site", "breakpoints", "removal"], {
         runId: run.id,
@@ -754,6 +821,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
       // Walked until the converting walk has passed the page.
       for (let call = 0; call < 50; call += 1) {
         await svc.walk(run.id, { maxDocuments: 1 });
@@ -799,6 +867,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
       // Walked until the page is stripped and the run is not yet done.
       for (let call = 0; call < 50; call += 1) {
         const report = await svc.walk(run.id, { maxDocuments: 1 });
@@ -1017,6 +1086,7 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
       const key = documentKeyOf({ kind: "collection", slug: "pages", id });
       // Re-queued while the run is open.
       expect(await runs().requeueDocument(run.id, key)).toBe("requeued");
@@ -1305,11 +1375,13 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
 
       await jobPass();
+      // Walked by nobody before it is published, the save's route included.
+      expect((await svc.walk(run.id, {})).finished).toBe(false);
 
-      // Not closed with nothing done: still open, on its converting walk.
+      // Not closed with nothing done: still open, still being prepared.
       expect(await svc.runById(run.id)).toMatchObject({
         open: true,
-        phase: "converting",
+        preparing: true,
       });
       // The save stores its set and walks: the page is stripped.
       await t.nextly.updateSingle({
@@ -1318,9 +1390,93 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
+      await svc.publish(run.id);
       await walkToTheEnd(svc, run.id);
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
         heading("a", styledAfter)
+      );
+    });
+
+    it("retires a re-added id from an open run too", async () => {
+      const { svc, runs } = await boot();
+      const run = await svc.begin(["tablet", "mobile"], null, "user:someone");
+      await svc.publish(run.id);
+
+      await runs().retire(["mobile"]);
+
+      expect(await svc.runById(run.id)).toMatchObject({
+        open: true,
+        removedIds: ["tablet"],
+        readdedIds: ["mobile"],
+      });
+    });
+
+    it("retires every id two saves re-add at once from one run", async () => {
+      const { svc, cookie, runs, raced } = await boot();
+      // Tablet and Mobile removed together, the run done.
+      await save(cookie, [DESKTOP]);
+      const [run] = await runs().runs();
+      if (run === undefined) throw new Error("no run");
+      // One save retires Tablet while another, which has read the run,
+      // retires Mobile.
+      await raced(() => runs().retire(["tablet"])).retire(["mobile"]);
+
+      expect(await svc.runById(run.id)).toMatchObject({
+        removedIds: [],
+        readdedIds: expect.arrayContaining(["tablet", "mobile"]),
+      });
+    });
+
+    it("refuses a confirmed removal the site style changed under since its dry run", async () => {
+      const { t, cookie, runs } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const breakpoints = { viewport: [TABLET], container: [] };
+      const checked = await post(cookie, ["site", "breakpoints"], {
+        breakpoints,
+        dryRun: true,
+      });
+      const version = (checked.body.item as { version?: unknown }).version;
+      expect(typeof version).toBe("string");
+      // Another manager changes the site's style after the dry run.
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          breakpoints: {
+            viewport: [
+              TABLET,
+              MOBILE,
+              { id: "wide", label: "Wide", maxWidth: 1400 },
+            ],
+            container: [],
+          },
+        },
+        overrideAccess: true,
+        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+      });
+
+      const confirmed = await post(cookie, ["site", "breakpoints"], {
+        breakpoints,
+        confirmRemoval: true,
+        version,
+      });
+      const unversioned = await post(cookie, ["site", "breakpoints"], {
+        breakpoints,
+        confirmRemoval: true,
+      });
+
+      expect(confirmed.status).toBe(409);
+      expect(JSON.stringify(confirmed.body)).toContain(
+        "The site's breakpoints changed after you checked what removing them drops."
+      );
+      expect(unversioned.status).toBe(400);
+      // Nothing opened, nothing stripped.
+      expect(await runs().runs()).toEqual([]);
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
       );
     });
 

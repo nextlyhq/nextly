@@ -118,6 +118,9 @@ const BreakpointsBody = z.strictObject({
   // seeing the dry run. Without it a set removing breakpoints is stored and
   // nothing stored under them is touched.
   confirmRemoval: z.boolean().optional(),
+  // The version of the site style the dry run answered from: a confirmed
+  // removal is made from exactly what the person was shown.
+  version: z.string().optional(),
 });
 
 /** A refusal naming what is wrong with the breakpoints sent. */
@@ -136,6 +139,7 @@ async function readBreakpoints(req: Request): Promise<{
   breakpoints: SiteBreakpointsRequest["breakpoints"];
   dryRun: boolean;
   confirmRemoval: boolean;
+  version: string | undefined;
 }> {
   let raw: unknown;
   try {
@@ -156,6 +160,7 @@ async function readBreakpoints(req: Request): Promise<{
     breakpoints: value ?? null,
     dryRun: parsed.data.dryRun === true,
     confirmRemoval: parsed.data.confirmRemoval === true,
+    version: parsed.data.version,
   };
 }
 
@@ -287,6 +292,11 @@ function breakpointsAfter(
 interface SiteBreakpointsDryRun extends RemovalDryRun {
   readonly dryRun: true;
   readonly breakpoints: SiteBreakpointsRequest["breakpoints"];
+  /**
+   * The version of the site style this was counted from, which a confirmed
+   * removal sends back; absent where the site issues no versions.
+   */
+  readonly version?: string;
 }
 
 /**
@@ -299,7 +309,8 @@ async function dryRunBreakpoints(
   ctx: BreakpointsRouteContext,
   removal: BreakpointRemoval
 ): Promise<Response> {
-  const current = currentStyle(removal, await removal.stored(ctx));
+  const stored = await removal.stored(ctx);
+  const current = currentStyle(removal, stored);
   const removed = removedBreakpoints(
     siteBreakpoints(current),
     breakpointsAfter(removal, breakpoints)
@@ -307,7 +318,12 @@ async function dryRunBreakpoints(
   const counted = await removal.count(removed, current.classes ?? [], ctx);
   return respondMutation<SiteBreakpointsDryRun>(
     "Nothing was saved: this is what saving these breakpoints would drop.",
-    { dryRun: true, breakpoints, ...counted }
+    {
+      dryRun: true,
+      breakpoints,
+      ...counted,
+      ...(stored.version === undefined ? {} : { version: stored.version }),
+    }
   );
 }
 
@@ -657,16 +673,21 @@ async function beginRemoval(args: {
       await service.abandon(run.id);
       throw error;
     }
-    // Unknown: the run is kept and the save refused. Had the set landed,
-    // the removal job walks the run; had it not, the job closes it once it
-    // is past being prepared (`service`), its ids still defined.
-    if (landed === undefined) throw error;
+    // Unknown: the run is published and the save refused. Had the set
+    // landed, the run strips what it removed; had it not, its walk finds
+    // every id still defined, strips nothing and closes.
+    if (landed === undefined) {
+      await service.publish(run.id).catch(() => undefined);
+      throw error;
+    }
     removal.cascade.logError?.(
       "[page-builder] a breakpoint removal's write threw after its set was " +
         "stored; the removal goes on.",
       { runId: run.id, error }
     );
   }
+  // Stored: from here the run is walked, by this save and by anyone after.
+  await service.publish(run.id);
   return { run, counted };
 }
 
@@ -684,6 +705,45 @@ async function setLanded(
     return sameStoredValue(readStoredJson(read.breakpoints), breakpoints);
   } catch {
     return undefined;
+  }
+}
+
+/** What a confirmed removal not made from a dry run is told. */
+const CONFIRMED_WITHOUT_DRY_RUN =
+  "Check what removing these breakpoints drops before confirming it.";
+
+/** What a confirmed removal made from an earlier set is told. */
+const CHANGED_SINCE_SHOWN =
+  "The site's breakpoints changed after you checked what removing them drops. Check again before removing them.";
+
+/**
+ * Refuse a confirmed removal that is not of exactly what its dry run showed:
+ * one naming no version, or one whose site style has changed since (another
+ * manager added or removed a breakpoint, or edited a shared style). Then the
+ * set it removes, and what each removed breakpoint holds, may not be what the
+ * person was shown and agreed to.
+ */
+function refuseUnshownRemoval(
+  confirmation: { readonly shownAt: string | undefined },
+  stored: VersionedSiteStyle
+): void {
+  if (confirmation.shownAt === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "version",
+          code: "INVALID_VALUE",
+          message: CONFIRMED_WITHOUT_DRY_RUN,
+        },
+      ],
+    });
+  }
+  if (confirmation.shownAt !== stored.version) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: CHANGED_SINCE_SHOWN,
+      logContext: { reason: "breakpoint-removal-changed-since-shown" },
+    });
   }
 }
 
@@ -707,8 +767,12 @@ async function saveBreakpoints(
   ctx: BreakpointsRouteContext,
   nextly: SiteSettingsDirectApi,
   removal: BreakpointRemoval & { readonly cascade: BreakpointCascade },
-  /** Whether the person confirmed stripping what removed breakpoints held. */
-  confirmed: boolean
+  /**
+   * The person's confirmation of stripping what removed breakpoints held,
+   * with the version of the site style their dry run answered from;
+   * `undefined` for a save not confirmed.
+   */
+  confirmation: { readonly shownAt: string | undefined } | undefined
 ): Promise<Response> {
   const service = removal.cascade.service();
   // Read BEFORE the runs are asked, and every write below hands its version
@@ -726,12 +790,13 @@ async function saveBreakpoints(
   // Before the set is stored, and refusing the save when it fails: see
   // `retireReadded`.
   await retireReadded(service, now, after);
-  if (removed.size === 0 || !confirmed) {
+  if (removed.size === 0 || confirmation === undefined) {
     await writeSiteStyle(nextly, ctx, { breakpoints }, versionToWrite(stored));
     return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
       breakpoints,
     });
   }
+  refuseUnshownRemoval(confirmation, stored);
   const { run, counted } = await beginRemoval({
     breakpoints,
     ctx,
@@ -814,7 +879,8 @@ export async function writeSiteBreakpoints(
   nextly: SiteSettingsDirectApi,
   removal?: BreakpointRemoval
 ): Promise<Response> {
-  const { breakpoints, dryRun, confirmRemoval } = await readBreakpoints(req);
+  const { breakpoints, dryRun, confirmRemoval, version } =
+    await readBreakpoints(req);
   if (dryRun) {
     // Counted only where the installed plugin can walk the site.
     if (removal === undefined) {
@@ -832,7 +898,7 @@ export async function writeSiteBreakpoints(
       ctx,
       nextly,
       { ...removal, cascade },
-      confirmRemoval
+      confirmRemoval ? { shownAt: version } : undefined
     );
   }
   // Without the installed plugin's removal, this route reads nothing before
