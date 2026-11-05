@@ -46,4 +46,29 @@ describe("a dry run against a SQLite file that is not there", () => {
     },
     NEXTLY_RUN_TIMEOUT
   );
+
+  it(
+    "build --dry-run checks no migrations against it and makes nothing",
+    async () => {
+      const project = mkdtempSync(join(tmpdir(), "nextly-dry-missing-db-"));
+      projects.push(project);
+      // A collection, so the build reaches its migration check.
+      writeFileSync(
+        join(project, "nextly.config.ts"),
+        'export default { collections: [{ slug: "posts", fields: [{ name: "title", type: "text" }] }] };\n'
+      );
+      const before = folderSnapshot(project);
+
+      const run = await runNextly(["build", "--dry-run"], project, {
+        DB_DIALECT: "sqlite",
+        DATABASE_URL: `file:${join(project, "data/app.db")}`,
+      });
+
+      expect(run.status, run.stdout + run.stderr).toBe(0);
+      expect(run.stdout).toContain("Dry run: nothing was changed.");
+      expect(existsSync(join(project, "data"))).toBe(false);
+      expect(folderSnapshot(project)).toEqual(before);
+    },
+    NEXTLY_RUN_TIMEOUT
+  );
 });

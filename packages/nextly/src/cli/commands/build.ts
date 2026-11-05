@@ -63,6 +63,7 @@ import {
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
+  openDryRunAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
@@ -916,11 +917,23 @@ async function checkMigrationStatus(
   // Try to connect to database
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createCliAdapter({
+    const connection = {
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
       logger: options.verbose ? logger : undefined,
-    });
+    };
+    // A dry run opens the database read-only; one that is not there has no
+    // migrations to check, as a database the build cannot reach has none.
+    if (options.dryRun === true) {
+      const opened = await openDryRunAdapter(connection);
+      if ("missing" in opened) {
+        logger.debug(`Cannot check migrations: ${opened.missing}`);
+        return result;
+      }
+      adapter = opened;
+    } else {
+      adapter = await createCliAdapter(connection);
+    }
     logger.debug(`Connected to ${getDialectDisplayName(dialect)}`);
   } catch (error) {
     logger.debug(`Cannot check migrations: ${describeError(error)}`);
