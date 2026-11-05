@@ -26,7 +26,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import { VersionDiffView } from "./diff/VersionDiffView";
 import { predecessorOf, type PairResolution } from "./version-pairing";
-import { resolvePair } from "./version-search-params";
+import { resolvePair, type ComparisonFrom } from "./version-search-params";
 import { VersionTimelineRail } from "./VersionTimelineRail";
 
 export interface VersionComparePageProps {
@@ -44,8 +44,11 @@ export interface VersionComparePageProps {
   readOnlyHref: string;
   /** The document's title, so the page says which document it is about. */
   documentTitle?: string;
-  /** The pair from the URL. Either may be absent on a link that names none. */
-  from?: number;
+  /**
+   * The pair from the URL. Either may be absent on a link that names none;
+   * `from` may name the version before `to` in its language (`previous`).
+   */
+  from?: ComparisonFrom;
   to?: number;
   /**
    * The language the address names. The page then lists that language's
@@ -298,7 +301,7 @@ export function VersionComparePage({
  */
 export function versionsHref(
   scope: VersionScope,
-  pair?: { from: number; to: number },
+  pair?: { from: ComparisonFrom; to: number },
   locale?: string | null
 ): string {
   const path =
