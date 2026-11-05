@@ -204,6 +204,11 @@ export function useHeldDocumentChange({
   /** Nothing unsaved: the current version replaces the copy, said once it has. */
   const refreshClean = useCallback(
     async (said: string, changed: DocumentLockChange): Promise<void> => {
+      // 🔴 Let go of any hold first, this refresh's own from a failed try
+      // included: a held form turns the read away, while the told version
+      // would still be taken as the copy's, and a save would then send the
+      // older values as current, over the change, with nothing refused.
+      pieces.current.release();
       setHolding(true);
       try {
         await reloadCurrent();
@@ -251,9 +256,6 @@ export function useHeldDocumentChange({
     const said = changedSentence(changed);
     answering.current = { said, change: changed };
     if (!pieces.current.dirty()) {
-      // A hold kept from an earlier "Keep editing" whose edits are gone would
-      // turn the reload away: nothing is left for it to keep.
-      pieces.current.release();
       void refreshClean(said, changed);
       return;
     }

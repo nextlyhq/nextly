@@ -208,7 +208,13 @@ describe("someone else's change to a document this editor holds", () => {
     expect(result.current.holding).toBe(false);
 
     fails = false;
+    calls.length = 0;
     await act(async () => result.current.choose("try-again"));
+    // The failed try's hold is let go before the read, or the form would turn
+    // the read away while the told version was taken as the copy's.
+    await waitFor(() => expect(calls).toContain("reload"));
+    expect(calls.indexOf("release")).toBeGreaterThan(-1);
+    expect(calls.indexOf("release")).toBeLessThan(calls.indexOf("reload"));
     await waitFor(() =>
       expect(result.current.notice?.message).toMatch(
         /so it now shows the latest version\.$/
