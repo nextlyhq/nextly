@@ -179,6 +179,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await titleOf(t, c.id)).toBe(`batch ${c.id}`);
     });
 
+    it("keeps a conflict's version when the batch stops at it and rolls back", async () => {
+      const t = await boot(dialect);
+      const [a, b, c] = await three(t);
+      const current = await anaSaves(t, b.id, "Ana's");
+
+      const entries = (
+        t.getService("collectionsHandler") as CollectionsHandler
+      ).getEntryService();
+      const batch = await entries.updateEntries(
+        { collectionName: NOTES, overrideAccess: true },
+        [a, b, c].map(note => ({
+          id: note.id,
+          data: { title: `batch ${note.id}`, _rev: note.rev },
+        })),
+        { stopOnError: true }
+      );
+
+      expect(batch.successful, JSON.stringify(batch)).toBe(0);
+      // The conflict still says the version to read again from, as it does
+      // when the batch goes on past it.
+      expect(batch.errors).toContainEqual(
+        expect.objectContaining({
+          index: 1,
+          code: "STALE_VERSION",
+          data: expect.objectContaining({ currentVersion: current }),
+        })
+      );
+      expect(await titleOf(t, a.id)).not.toBe(`batch ${a.id}`);
+    });
+
     it("refuses the second of two items naming one document from the same version", async () => {
       const t = await boot(dialect);
       const [a] = await three(t);
