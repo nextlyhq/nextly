@@ -123,6 +123,7 @@ export function FocalPointField({
     text === undefined && inherited !== undefined
       ? pointOf(inherited)
       : undefined;
+  const shownPosition = text ?? inherited;
   const [writing, setWriting] = React.useState(false);
   const grid = React.useRef<HTMLDivElement>(null);
   // One tab stop: the chosen point, else the one shown, else the middle.
@@ -168,6 +169,10 @@ export function FocalPointField({
             aria-hidden="true"
             style={{
               objectFit: (fit ?? "cover") as React.CSSProperties["objectFit"],
+              // The point in force, so the preview crops as the page does.
+              ...(shownPosition === undefined
+                ? {}
+                : { objectPosition: shownPosition }),
             }}
           />
         )}

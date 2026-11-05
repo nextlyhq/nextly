@@ -337,6 +337,11 @@ const IMAGE_PARTS = {
         base: {
           fontSize: "0.875em",
           margin: { blockStart: "0.5em" },
+          // As wide as the figure, which is as wide as its picture: no width
+          // of its own to give, so a long caption wraps under a small picture
+          // rather than widening the figure and the picture with it.
+          width: "0",
+          minWidth: "100%",
         },
       },
     },

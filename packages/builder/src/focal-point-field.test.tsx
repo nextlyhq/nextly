@@ -128,6 +128,16 @@ describe("FocalPointField", () => {
     expect(document.querySelector(".nx-focal__swatch")).not.toBeNull();
   });
 
+  it("previews the crop the chosen point gives", () => {
+    // The preview is the square frame's, not the block's: without the point
+    // it would show a centred crop the page does not.
+    mount("right top", { picture: "/team.png", fit: "cover" });
+    const backdrop = document.querySelector(
+      ".nx-focal__picture"
+    ) as HTMLImageElement | null;
+    expect(backdrop?.style.objectPosition).toBe("right top");
+  });
+
   it("shows an exact point as written, and writes one as CSS", () => {
     const onCommit = mount("30% 70%");
     expect(checked()).toEqual([]);

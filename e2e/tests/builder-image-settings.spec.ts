@@ -68,8 +68,11 @@ async function createPage(
  * Serve the picture the page names, wider and taller than the block's box,
  * so the picture really has to be cropped or fitted into it.
  */
-async function servePicture(page: Page): Promise<void> {
-  const picture = pngBuffer(180, 0, { width: 960, height: 640 });
+async function servePicture(
+  page: Page,
+  size: { width: number; height: number } = { width: 960, height: 640 }
+): Promise<void> {
+  const picture = pngBuffer(180, 0, size);
   await page.route("**/example.jpg", async route => {
     try {
       await route.fulfill({ contentType: "image/png", body: picture });
@@ -157,6 +160,50 @@ test.describe("an image's settings", () => {
         timeout: 15_000,
       })
       .toMatchObject({ href: "/about" });
+  });
+
+  test("a long caption does not widen a small picture", async ({ page }) => {
+    // The figure is as wide as its picture: a caption longer than the picture
+    // wraps under it rather than stretching the picture to its own width.
+    const id = await createPage(page.request, {
+      width: "auto",
+      height: "auto",
+    });
+    await page.request.patch(`${ENTRIES}/${id}`, {
+      data: {
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: IMAGE,
+              type: "core/image",
+              version: 1,
+              props: {
+                src: "/example.jpg",
+                alt: "The team",
+                caption:
+                  "A caption much longer than the picture it sits under, which wraps beneath it.",
+              },
+            },
+          ],
+        },
+      },
+    });
+    await servePicture(page, { width: 120, height: 80 });
+    await openImage(page, id);
+    const picture = canvasFrame(page)
+      .locator(`.nx-canvas [data-nx-node="${IMAGE}"] img`)
+      .first();
+    await expect
+      .poll(() =>
+        picture.evaluate(element => (element as HTMLImageElement).naturalWidth)
+      )
+      .toBeGreaterThan(0);
+    const width = await picture.evaluate(
+      element => element.getBoundingClientRect().width
+    );
+    expect(width).toBeLessThanOrEqual(120.5);
   });
 
   test("the focal point moves with the arrow keys, and the picture follows it", async ({
