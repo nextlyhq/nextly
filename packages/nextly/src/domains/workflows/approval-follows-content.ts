@@ -24,10 +24,16 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { z } from "zod";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors";
 import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
+import {
+  contentEventKind,
+  registerContentEventKind,
+  type ContentEventKind,
+} from "../content-events/kinds";
 import {
   recordWriteEvent,
   type StatusMove,
@@ -52,21 +58,56 @@ import {
   readDocumentReviewStates,
   readReviewState,
   updateReviewState,
+  type ReviewApproval,
   type ReviewDocument,
   type ReviewPart,
   type ReviewState,
   type ReviewStatesDb,
 } from "./review-state-repository";
-import {
-  ensureWorkflowContentEventKinds,
-  WORKFLOW_CONTENT_EVENT_KINDS,
-} from "./steps";
+import type { Workflow } from "./types";
 import {
   enteredReviewSlot,
   pinPart,
   releasePartPins,
   workflowPins,
 } from "./workflow-pins";
+
+/**
+ * A withdrawal's payload: why the approval went (`edited`, a save changed the approved content;
+ * `definition-changed`, a deploy changed the workflow), and, for an edit through an API key, the
+ * key's owner.
+ */
+const withdrawalPayload = z
+  .object({
+    cause: z.enum(["edited", "definition-changed"]),
+    ownerId: z.string().min(1).optional(),
+  })
+  .strict();
+
+/**
+ * The content event kinds an approval withdrawn without a step is recorded as: by an edit, and by
+ * a deploy that changed the definition, so history never reads a deploy as an edit. Named with the
+ * `workflow-` prefix every workflow kind carries.
+ */
+const WITHDRAWAL_KINDS = {
+  edited: {
+    name: "workflow-approval-withdrawn",
+    label: "Approval withdrawn: edited by {actor}",
+    payload: withdrawalPayload,
+  },
+  definitionChanged: {
+    name: "workflow-approval-withdrawn-by-definition",
+    label: "Approval withdrawn: the workflow changed",
+    payload: withdrawalPayload,
+  },
+} as const satisfies Record<string, ContentEventKind>;
+
+/** Registers each withdrawal kind not registered yet; safe on every write. */
+function ensureWithdrawalKinds(): void {
+  for (const kind of Object.values(WITHDRAWAL_KINDS)) {
+    if (!contentEventKind(kind.name)) registerContentEventKind(kind);
+  }
+}
 
 /** How often a withdrawal is tried again over a review state a step moved meanwhile. */
 const MAX_WITHDRAW_ATTEMPTS = 3;
@@ -108,6 +149,36 @@ const entityOf = (document: ReviewDocument) =>
     : ("collection" as const);
 
 /**
+ * The shared values a save wrote in place, when they change what `part` shows: another language
+ * than the one written, on a translated document. Null when the part shows only its own version.
+ */
+function sharedOverlay(
+  document: ReviewDocument,
+  part: string | null,
+  save: RecordedSave,
+  saved: VersionRow | undefined
+): Record<string, unknown> | null {
+  const translated = save.inPlaceTranslated;
+  if (part === null || part === save.locale) return null;
+  if (translated === null || saved === undefined) return null;
+  const left = new Set([
+    ...translated,
+    ...documentSystemKeys(entityOf(document)),
+  ]);
+  return Object.fromEntries(
+    Object.entries(snapshotRecord(saved.snapshot)).filter(
+      ([key]) => !left.has(key)
+    )
+  );
+}
+
+/** A part's content now, and the version it is read from. */
+interface PartContent {
+  snapshot: unknown;
+  versionNo: number | null;
+}
+
+/**
  * A part's content now: its newest recorded version, and for another language than the one a
  * save wrote in place, that version with the shared values the save wrote over it. Null for a part
  * with no recorded version.
@@ -118,28 +189,28 @@ async function contentNow(
   part: string | null,
   save: RecordedSave,
   saved: VersionRow | undefined
-): Promise<{ snapshot: unknown; versionNo: number | null } | null> {
+): Promise<PartContent | null> {
   const shown = await shownVersionOn(tx, document, part);
   if (!shown) return null;
-  const overlaid =
-    part !== null &&
-    part !== save.locale &&
-    save.inPlaceTranslated !== null &&
-    saved !== undefined;
-  if (!overlaid)
-    return { snapshot: shown.snapshot, versionNo: shown.versionNo };
-  const translated = new Set(save.inPlaceTranslated);
-  const system = documentSystemKeys(entityOf(document));
-  const shared = Object.entries(snapshotRecord(saved.snapshot)).filter(
-    ([key]) => !translated.has(key) && !system.has(key)
-  );
-  return {
-    snapshot: {
-      ...snapshotRecord(shown.snapshot),
-      ...Object.fromEntries(shared),
-    },
-    versionNo: shown.versionNo,
-  };
+  const overlay = sharedOverlay(document, part, save, saved);
+  const snapshot =
+    overlay === null
+      ? shown.snapshot
+      : { ...snapshotRecord(shown.snapshot), ...overlay };
+  return { snapshot, versionNo: shown.versionNo };
+}
+
+/** The owner of the API key `keyId`, read on the save's own transaction. */
+async function keyOwner(
+  tx: TransactionContext,
+  keyId: string
+): Promise<string | null> {
+  const [row] = await tx.select<{ userId: string }>("api_keys", {
+    columns: ["userId"],
+    where: { and: [{ column: "id", op: "=", value: keyId }] },
+    limit: 1,
+  });
+  return row?.userId ?? null;
 }
 
 /** Whom a save counts as for the stage it moves a part to, and a key's owner for its event. */
@@ -151,13 +222,8 @@ async function accountableFor(
     return { accountable: actor.id, ownerId: null };
   }
   if (actor.type === "apiKey" && actor.id) {
-    // A key's act counts as its owner's, read on the save's own transaction.
-    const [row] = await tx.select<{ userId: string }>("api_keys", {
-      columns: ["userId"],
-      where: { and: [{ column: "id", op: "=", value: actor.id }] },
-      limit: 1,
-    });
-    const owner = row?.userId ?? null;
+    // A key's act counts as its owner's.
+    const owner = await keyOwner(tx, actor.id);
     return { accountable: owner, ownerId: owner };
   }
   // Trusted code and a plugin-defined person are no staff user: the part keeps the accountable
@@ -171,11 +237,120 @@ interface Withdrawn {
   from: string;
 }
 
+/** What judging and withdrawing each approved part of one save needs. */
+interface SaveWithdrawal {
+  tx: TransactionContext;
+  save: RecordedSave;
+  registered: RegisteredWorkflow;
+  /** The version the save recorded, whose shared values other languages may show. */
+  saved: VersionRow | undefined;
+  accountable: string | null;
+  now: Date;
+}
+
+/** Whether `content` is still what `approval` named, the stage's exempt fields left out. */
+function asApproved(
+  c: SaveWithdrawal,
+  approval: ReviewApproval,
+  content: PartContent | null
+): boolean {
+  // A part with no recorded version has nothing left that the approval names.
+  if (content === null) return false;
+  const digest = approvalDigest(
+    content.snapshot,
+    entityOf(c.save.document),
+    c.registered.workflow.onEdit.exemptFields
+  );
+  return digest === approval.digest;
+}
+
+/**
+ * Pins the version a part entered review at, when moving it from `from` to `to` enters review: a
+ * withdrawal that returns a part to review opens a cycle at the version it holds now.
+ */
+async function pinEnteringReview(
+  tx: TransactionContext,
+  workflow: Workflow,
+  part: ReviewPart,
+  move: { from: string; to: string; versionNo: number | null | undefined }
+): Promise<void> {
+  if (!entersReview(workflow, move.from, move.to)) return;
+  if (typeof move.versionNo !== "number") return;
+  await pinPart(tx, refOf(part), enteredReviewSlot(part.part), move.versionNo);
+}
+
+/**
+ * Withdraws one part's approval over the revision it was read at, moving it to `onEdit.to` with
+ * the editor accountable. False when a step moved it since, having written nothing.
+ */
+async function withdrawPart(
+  c: SaveWithdrawal,
+  state: ReviewState,
+  content: PartContent | null
+): Promise<boolean> {
+  const { workflow, definitionHash } = c.registered;
+  const written = await updateReviewState(c.tx, state, state.revision, {
+    approval: null,
+    stage: workflow.onEdit.to,
+    enteredAt: c.now,
+    definitionHash,
+    ...(c.accountable !== null ? { enteredBy: c.accountable } : {}),
+  });
+  if (!written) return false;
+  await pinEnteringReview(c.tx, workflow, state, {
+    from: state.stage,
+    to: workflow.onEdit.to,
+    versionNo: content?.versionNo,
+  });
+  return true;
+}
+
+/**
+ * Judges one approved part and withdraws its approval when the content moved off it. A part a
+ * step moved while this ran is judged again as it is now; one still moving after a few tries
+ * refuses the save, which then keeps nothing.
+ */
+async function withdrawIfChanged(
+  c: SaveWithdrawal,
+  first: ReviewState
+): Promise<Withdrawn | null> {
+  let state: ReviewState | null = first;
+  for (let attempt = 1; attempt <= MAX_WITHDRAW_ATTEMPTS; attempt++) {
+    if (!state?.approval) return null;
+    const content = await contentNow(
+      c.tx,
+      c.save.document,
+      state.part,
+      c.save,
+      c.saved
+    );
+    if (asApproved(c, state.approval, content)) return null;
+    if (await withdrawPart(c, state, content)) {
+      return { part: state.part, from: state.stage };
+    }
+    state = await readReviewState(c.tx, state);
+  }
+  throw NextlyError.conflict({
+    reason: "state",
+    logContext: { refusal: "workflow-withdraw-contended", part: first.part },
+  });
+}
+
+/** The parts of a document a save could withdraw an approval from: those holding one. */
+async function approvedParts(
+  tx: TransactionContext,
+  document: ReviewDocument
+): Promise<ReviewState[]> {
+  const db: ReviewStatesDb = tx;
+  return (await readDocumentReviewStates(db, document)).filter(
+    state => state.approval !== null
+  );
+}
+
 /**
  * Withdraws each approval a save left behind, in the save's transaction `tx`: see the module.
  * Does nothing for a save that recorded no version, a document no workflow is attached to, or one
- * with no approved part. A part a step moved while this ran is judged again; one still moving
- * after a few tries refuses the save, which then keeps nothing.
+ * with no approved part.
  *
  * @experimental
  */
@@ -184,99 +359,56 @@ export async function withdrawApprovalsOnSave(
   deps: WriteEventDeps,
   save: RecordedSave
 ): Promise<void> {
-  if (save.versionNo === null) return;
-  const registered = workflowAttachedTo(
-    save.document.scopeKind,
-    save.document.scopeSlug
-  );
+  const { document, versionNo } = save;
+  if (versionNo === null) return;
+  const registered = workflowAttachedTo(document.scopeKind, document.scopeSlug);
   if (!registered) return;
-  const db: ReviewStatesDb = tx;
-  const approved = (await readDocumentReviewStates(db, save.document)).filter(
-    state => state.approval !== null
-  );
+  const approved = await approvedParts(tx, document);
   if (approved.length === 0) return;
-
-  const { workflow, definitionHash } = registered;
-  const saved = await new VersionsRepository(tx).findByVersionNo(
-    refOf(save.document),
-    save.versionNo
-  );
   const { accountable, ownerId } = await accountableFor(tx, save.actor);
-  const now = new Date();
+  const c: SaveWithdrawal = {
+    tx,
+    save,
+    registered,
+    saved: await new VersionsRepository(tx).findByVersionNo(
+      refOf(document),
+      versionNo
+    ),
+    accountable,
+    now: new Date(),
+  };
   const withdrawn: Withdrawn[] = [];
-  for (const first of approved) {
-    let state: ReviewState | null = first;
-    for (let attempt = 1; ; attempt++) {
-      if (!state?.approval) break;
-      const content = await contentNow(
-        tx,
-        save.document,
-        state.part,
-        save,
-        saved
-      );
-      // A part with no recorded version has nothing left that the approval names.
-      if (
-        content !== null &&
-        approvalDigest(
-          content.snapshot,
-          entityOf(save.document),
-          workflow.onEdit.exemptFields
-        ) === state.approval.digest
-      ) {
-        break;
-      }
-      const part: ReviewPart = { ...save.document, part: state.part };
-      const written = await updateReviewState(db, part, state.revision, {
-        approval: null,
-        stage: workflow.onEdit.to,
-        enteredAt: now,
-        definitionHash,
-        ...(accountable !== null ? { enteredBy: accountable } : {}),
-      });
-      if (written) {
-        // An edit that returns the part to review opens a cycle at the version it holds now.
-        if (
-          entersReview(workflow, state.stage, workflow.onEdit.to) &&
-          typeof content?.versionNo === "number"
-        ) {
-          await pinPart(
-            tx,
-            refOf(save.document),
-            enteredReviewSlot(state.part),
-            content.versionNo
-          );
-        }
-        withdrawn.push({ part: state.part, from: state.stage });
-        break;
-      }
-      if (attempt >= MAX_WITHDRAW_ATTEMPTS) {
-        throw NextlyError.conflict({
-          reason: "state",
-          logContext: {
-            refusal: "workflow-withdraw-contended",
-            part: state.part,
-          },
-        });
-      }
-      // A step moved the part since it was read: judge it as it is now.
-      state = await readReviewState(db, part);
-    }
+  for (const state of approved) {
+    const done = await withdrawIfChanged(c, state);
+    if (done) withdrawn.push(done);
   }
   await recordWithdrawals(tx, deps, {
-    document: save.document,
+    document,
     withdrawn,
-    to: workflow.onEdit.to,
+    to: registered.workflow.onEdit.to,
     actor: save.actor,
     personName: save.personName ?? null,
-    versionNo: save.versionNo,
-    payload: {
-      cause: "edited",
-      ...(ownerId !== null ? { ownerId } : {}),
-    },
-    kind: WORKFLOW_CONTENT_EVENT_KINDS.approvalWithdrawn,
-    definitionHash,
+    versionNo,
+    payload: editedPayload(ownerId),
+    kind: WITHDRAWAL_KINDS.edited,
+    definitionHash: registered.definitionHash,
   });
+}
+
+/** An edit's withdrawal payload: its cause, and a key's owner where a key saved. */
+function editedPayload(ownerId: string | null): Record<string, unknown> {
+  return { cause: "edited", ...(ownerId !== null ? { ownerId } : {}) };
+}
+
+/** Each part of `group` as the record names it: its languages, and whether the shared part. */
+function withdrawnParts(group: readonly Withdrawn[]): {
+  locales: string[];
+  shared: boolean;
+} {
+  return {
+    locales: group.flatMap(entry => (entry.part === null ? [] : [entry.part])),
+    shared: group.some(entry => entry.part === null),
+  };
 }
 
 /** One event per stage the withdrawn parts left, on `tx`. */
@@ -291,16 +423,13 @@ async function recordWithdrawals(
     personName: string | null;
     versionNo: number | null;
     payload: Record<string, unknown>;
-    kind: (typeof WORKFLOW_CONTENT_EVENT_KINDS)[
-      | "approvalWithdrawn"
-      | "approvalWithdrawnByDefinition"];
+    kind: (typeof WITHDRAWAL_KINDS)[keyof typeof WITHDRAWAL_KINDS];
     definitionHash: string;
   }
 ): Promise<void> {
   if (args.withdrawn.length === 0) return;
-  ensureWorkflowContentEventKinds();
-  for (const from of [...new Set(args.withdrawn.map(entry => entry.from))]) {
-    const group = args.withdrawn.filter(entry => entry.from === from);
+  ensureWithdrawalKinds();
+  for (const from of new Set(args.withdrawn.map(entry => entry.from))) {
     await recordWriteEvent(tx, deps, {
       subject: {
         kind: args.document.scopeKind,
@@ -310,12 +439,9 @@ async function recordWithdrawals(
       kind: args.kind,
       actor: args.actor,
       personName: args.personName,
-      parts: {
-        locales: group.flatMap(entry =>
-          entry.part === null ? [] : [entry.part]
-        ),
-        shared: group.some(entry => entry.part === null),
-      },
+      parts: withdrawnParts(
+        args.withdrawn.filter(entry => entry.from === from)
+      ),
       fromState: from,
       toState: args.to,
       versionNo: args.versionNo,
@@ -323,6 +449,16 @@ async function recordWithdrawals(
       definitionHash: args.definitionHash,
     });
   }
+}
+
+/** Whether `move` published its part, by the rule that decides a publish everywhere else. */
+function publishes(move: StatusMove, write: { isCreate?: boolean }): boolean {
+  if (typeof move.to !== "string") return false;
+  return statusEventsFor({
+    from: move.from ?? null,
+    to: move.to,
+    isCreate: write.isCreate === true,
+  }).includes("entry.published");
 }
 
 /**
@@ -341,20 +477,43 @@ export async function releaseWorkflowPinsOnPublish(
 ): Promise<void> {
   if (!workflowAttachedTo(document.scopeKind, document.scopeSlug)) return;
   const ref = refOf(document);
-  for (const move of moves) {
-    if (typeof move.to !== "string") continue;
-    const published = statusEventsFor({
-      from: move.from ?? null,
-      to: move.to,
-      isCreate: write.isCreate === true,
-    }).includes("entry.published");
-    if (!published) continue;
+  for (const move of moves.filter(candidate => publishes(candidate, write))) {
     if (move.locale === undefined) {
       await workflowPins.releaseAll(tx, ref);
       return;
     }
     await releasePartPins(tx, ref, move.locale);
   }
+}
+
+/**
+ * The review states of one collection's or Single's documents holding an approval given under
+ * another definition than `definitionHash`, read on `db`.
+ */
+async function approvalsUnderOtherHash(
+  db: ReviewStatesDb,
+  entity: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  definitionHash: string
+): Promise<ReviewState[]> {
+  const rows = await db.select<{ entryId: string; part: string | null }>(
+    REVIEW_STATES_TABLE,
+    {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: entity.scopeKind },
+          { column: "scopeSlug", op: "=", value: entity.scopeSlug },
+          { column: "approvedVersionNo", op: "IS NOT NULL" },
+          { column: "definitionHash", op: "!=", value: definitionHash },
+        ],
+      },
+    }
+  );
+  const found: ReviewState[] = [];
+  for (const row of rows) {
+    const state = await readReviewState(db, { ...entity, ...row });
+    if (state) found.push(state);
+  }
+  return found;
 }
 
 /**
@@ -365,40 +524,82 @@ async function approvalsUnderEarlierDefinitions(
   db: ReviewStatesDb,
   registered: RegisteredWorkflow
 ): Promise<ReviewState[]> {
-  const found: ReviewState[] = [];
-  const targets = [
-    ...registered.collections.map(slug => ["collection", slug] as const),
-    ...registered.singles.map(slug => ["single", slug] as const),
+  const entities = [
+    ...registered.collections.map(scopeSlug => ({
+      scopeKind: "collection" as const,
+      scopeSlug,
+    })),
+    ...registered.singles.map(scopeSlug => ({
+      scopeKind: "single" as const,
+      scopeSlug,
+    })),
   ];
-  for (const [scopeKind, scopeSlug] of targets) {
-    const rows = await db.select<{
-      entryId: string;
-      part: string | null;
-    }>(REVIEW_STATES_TABLE, {
-      where: {
-        and: [
-          { column: "scopeKind", op: "=", value: scopeKind },
-          { column: "scopeSlug", op: "=", value: scopeSlug },
-          { column: "approvedVersionNo", op: "IS NOT NULL" },
-          {
-            column: "definitionHash",
-            op: "!=",
-            value: registered.definitionHash,
-          },
-        ],
-      },
-    });
-    for (const row of rows) {
-      const state = await readReviewState(db, {
-        scopeKind,
-        scopeSlug,
-        entryId: row.entryId,
-        part: row.part,
-      });
-      if (state) found.push(state);
-    }
+  const found: ReviewState[] = [];
+  for (const entity of entities) {
+    found.push(
+      ...(await approvalsUnderOtherHash(db, entity, registered.definitionHash))
+    );
   }
   return found;
+}
+
+/**
+ * Withdraws one part's approval given under an earlier definition, in its own transaction `tx`:
+ * see {@link withdrawApprovalsUnderEarlierDefinitions}.
+ */
+async function withdrawUnderDefinition(
+  tx: TransactionContext,
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  stale: ReviewState
+): Promise<void> {
+  const { workflow, definitionHash } = registered;
+  // The document's lock first, the order a save takes it in before it writes review state.
+  await lockDocument(tx, refOf(stale));
+  const state = await readReviewState(tx, stale);
+  // Approved again under this definition, or withdrawn, since it was found: nothing left to do.
+  if (!state?.approval || state.definitionHash === definitionHash) return;
+  const to = workflow.approvalsWithdrawnTo;
+  const written = await updateReviewState(tx, state, state.revision, {
+    approval: null,
+    stage: to,
+    enteredAt: new Date(),
+    definitionHash,
+  });
+  if (!written) return;
+  const shown = await shownVersionOn(tx, state, state.part);
+  await pinEnteringReview(tx, workflow, state, {
+    from: state.stage,
+    to,
+    versionNo: shown?.versionNo,
+  });
+  await recordWithdrawals(
+    tx,
+    { adapter },
+    {
+      document: state,
+      withdrawn: [{ part: state.part, from: state.stage }],
+      to,
+      actor: { type: "system" },
+      personName: null,
+      versionNo: state.approval.versionNo,
+      payload: { cause: "definition-changed" },
+      kind: WITHDRAWAL_KINDS.definitionChanged,
+      definitionHash,
+    }
+  );
+}
+
+/** Whether the database holds the review states table: none before its migrations. */
+async function reviewStatesTableExists(
+  adapter: DrizzleAdapter
+): Promise<boolean> {
+  const live = await liveColumnNames(
+    adapter.getDrizzle(),
+    adapter.getCapabilities().dialect,
+    [REVIEW_STATES_TABLE]
+  );
+  return live.has(REVIEW_STATES_TABLE);
 }
 
 /**
@@ -419,69 +620,16 @@ export async function withdrawApprovalsUnderEarlierDefinitions(
     registered => !registered.workflow.keepApprovals
   );
   if (withdrawing.length === 0) return;
-  const live = await liveColumnNames(
-    adapter.getDrizzle(),
-    adapter.getCapabilities().dialect,
-    [REVIEW_STATES_TABLE]
-  );
-  if (!live.has(REVIEW_STATES_TABLE)) return;
+  if (!(await reviewStatesTableExists(adapter))) return;
   for (const registered of withdrawing) {
-    const { workflow, definitionHash } = registered;
     // Read on a transaction of its own: the review states surface is a transaction's.
     const found = await adapter.transaction(tx =>
       approvalsUnderEarlierDefinitions(tx, registered)
     );
     for (const stale of found) {
-      await adapter.transaction(async tx => {
-        const document: ReviewDocument = {
-          scopeKind: stale.scopeKind,
-          scopeSlug: stale.scopeSlug,
-          entryId: stale.entryId,
-        };
-        // The document's lock first, the order a save takes it in before it writes review state.
-        await lockDocument(tx, refOf(document));
-        const state = await readReviewState(tx, {
-          ...document,
-          part: stale.part,
-        });
-        // Approved again, or withdrawn, since it was found: nothing left to do.
-        if (!state?.approval || state.definitionHash === definitionHash) return;
-        const written = await updateReviewState(tx, state, state.revision, {
-          approval: null,
-          stage: workflow.approvalsWithdrawnTo,
-          enteredAt: new Date(),
-          definitionHash,
-        });
-        if (!written) return;
-        if (
-          entersReview(workflow, state.stage, workflow.approvalsWithdrawnTo)
-        ) {
-          const shown = await shownVersionOn(tx, document, state.part);
-          if (typeof shown?.versionNo === "number") {
-            await pinPart(
-              tx,
-              refOf(document),
-              enteredReviewSlot(state.part),
-              shown.versionNo
-            );
-          }
-        }
-        await recordWithdrawals(
-          tx,
-          { adapter },
-          {
-            document,
-            withdrawn: [{ part: state.part, from: state.stage }],
-            to: workflow.approvalsWithdrawnTo,
-            actor: { type: "system" },
-            personName: null,
-            versionNo: state.approval.versionNo,
-            payload: { cause: "definition-changed" },
-            kind: WORKFLOW_CONTENT_EVENT_KINDS.approvalWithdrawnByDefinition,
-            definitionHash,
-          }
-        );
-      });
+      await adapter.transaction(tx =>
+        withdrawUnderDefinition(tx, adapter, registered, stale)
+      );
     }
   }
 }

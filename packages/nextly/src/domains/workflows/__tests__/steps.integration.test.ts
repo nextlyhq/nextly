@@ -266,6 +266,31 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a rule that answers by language", () => {
+      it("judges a step needing update in the part's own language: allowed on Spanish, which the rule allows, and refused on English", async () => {
+        t = await bootSteps(dialect);
+        const dave = await person(t, "dave", [["update", "translations"]]);
+        const doc = await entry(t, "translations");
+        const opts = { slug: "translations" };
+
+        const sent = await step(doc, "send", dave, { ...opts, part: "es" });
+        expect(sent.moved).toEqual([
+          { part: "es", from: "writing", to: "legal", revision: 1 },
+        ]);
+
+        await expect(
+          step(doc, "send", dave, { ...opts, part: "en" })
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: {
+            reason: "no-permission",
+            permission: "update-translations",
+          },
+        });
+        expect(await stateOf(t, partOf("translations", doc, "en"))).toBeNull();
+      });
+    });
+
     describe("approvals come only from a signed-in person", () => {
       const callers: Array<[string, () => WorkflowCaller]> = [
         [

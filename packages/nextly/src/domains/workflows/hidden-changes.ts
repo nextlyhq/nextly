@@ -108,6 +108,57 @@ export async function hiddenFrom(
   );
 }
 
+/** What the people who could approve instead are judged on. */
+interface ApproversQuestion {
+  document: ReviewDocument;
+  action: string;
+  parts: ReadonlyArray<{ shown: unknown; changed: readonly string[] }>;
+  excluded: ReadonlySet<string>;
+}
+
+/** A person as the approvers question reads them. */
+interface PersonRow {
+  id: string;
+  name: string | null;
+  isActive: boolean | number | null;
+}
+
+/** Whether `person` can read every changed field of every part in full. */
+async function readsEveryChange(
+  question: ApproversQuestion,
+  person: PersonRow
+): Promise<boolean> {
+  const grants = await resolvedCallerGrants({ id: person.id });
+  for (const part of question.parts) {
+    const hidden = await hiddenFrom(
+      question.document,
+      part.shown,
+      part.changed,
+      person,
+      grants
+    );
+    if (hidden.length > 0) return false;
+  }
+  return true;
+}
+
+/** Whether `person` could approve in place of the refused reviewer. */
+async function couldApprove(
+  adapter: DrizzleAdapter,
+  question: ApproversQuestion,
+  person: PersonRow
+): Promise<boolean> {
+  // SQLite stores a boolean as 0 or 1.
+  if (!person.isActive || question.excluded.has(person.id)) return false;
+  const holds = await holderAnswer(
+    adapter,
+    { kind: "user", id: person.id },
+    question.action,
+    question.document.scopeSlug
+  );
+  return holds === "holds" && (await readsEveryChange(question, person));
+}
+
 /**
  * The people who could approve `parts` in place of a refused reviewer: active, not `excluded`
  * (the reviewer, and whoever the step refuses as accountable for a part's stage), holding the
@@ -119,18 +170,9 @@ export async function hiddenFrom(
  */
 export async function possibleApprovers(
   adapter: DrizzleAdapter,
-  args: {
-    document: ReviewDocument;
-    action: string;
-    parts: ReadonlyArray<{ shown: unknown; changed: readonly string[] }>;
-    excluded: ReadonlySet<string>;
-  }
+  question: ApproversQuestion
 ): Promise<PossibleApprover[]> {
-  const people = await adapter.select<{
-    id: string;
-    name: string | null;
-    isActive: boolean | number | null;
-  }>("users", {
+  const people = await adapter.select<PersonRow>("users", {
     columns: ["id", "name", "isActive"],
     orderBy: [{ column: "id", direction: "asc" }],
     limit: MAX_PEOPLE_ASKED,
@@ -138,31 +180,7 @@ export async function possibleApprovers(
   const found: PossibleApprover[] = [];
   for (const person of people) {
     if (found.length >= MAX_APPROVERS) break;
-    // SQLite stores a boolean as 0 or 1.
-    if (!person.isActive || args.excluded.has(person.id)) continue;
-    const holds = await holderAnswer(
-      adapter,
-      { kind: "user", id: person.id },
-      args.action,
-      args.document.scopeSlug
-    );
-    if (holds !== "holds") continue;
-    const grants = await resolvedCallerGrants({ id: person.id });
-    let readsAll = true;
-    for (const part of args.parts) {
-      const hidden = await hiddenFrom(
-        args.document,
-        part.shown,
-        part.changed,
-        person,
-        grants
-      );
-      if (hidden.length > 0) {
-        readsAll = false;
-        break;
-      }
-    }
-    if (readsAll) {
+    if (await couldApprove(adapter, question, person)) {
       found.push({ kind: "user", id: person.id, name: person.name ?? null });
     }
   }
