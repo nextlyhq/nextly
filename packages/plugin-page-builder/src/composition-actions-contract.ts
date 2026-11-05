@@ -24,6 +24,8 @@ import type {
   BlockDocument,
   BuilderOp,
   ComponentDocument,
+  ListFilter,
+  ListRelation,
   OpPosition,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
@@ -76,6 +78,18 @@ export type PageAction =
       readonly variant: string | null;
     }
   /**
+   * Change a collection list's query: its source, filters, sort, limit and
+   * offset, each part set when given, removed when `null`, and kept as
+   * stored when absent. The write is judged as an editor save is, so a limit
+   * outside 1 to 100, a negative offset, a field the collection lacks or
+   * visitors can't see, and a related list nested too deep are refused.
+   */
+  | {
+      readonly kind: "set-list-query";
+      readonly listId: string;
+      readonly query: ListQueryChange;
+    }
+  /**
    * Choose the page's Layout: a Layout's id, or `null` for the site's default.
    * `noHeaderFooter: true` switches the Layout off for this page; absent, it
    * is turned back on, as choosing a Layout in the editor does.
@@ -85,6 +99,28 @@ export type PageAction =
       readonly layout: string | null;
       readonly noHeaderFooter?: boolean;
     };
+
+/**
+ * The parts of a collection list's query a `set-list-query` action changes:
+ * each one set when given, removed when `null`, kept when absent. Shaped as
+ * the block stores them (`ListQuery` in the engine reads them back).
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface ListQueryChange {
+  /** The collection read, or the one a related source's entries are in. */
+  readonly collection?: string | null;
+  /** A to-many relation of the page's entry or of the outer list's item. */
+  readonly relation?: ListRelation | null;
+  /** Rows an entry must all meet. */
+  readonly filters?: readonly ListFilter[] | null;
+  /** Sort keys, comma-separated, `-` for descending: `-publishedAt,title`. */
+  readonly sort?: string | null;
+  /** How many entries to show, 1 to 100. */
+  readonly limit?: number | null;
+  /** How many matching entries to skip, from 0. */
+  readonly offset?: number | null;
+}
 
 /** @experimental Settles when the composition API ships. */
 export interface PageActionRequest {

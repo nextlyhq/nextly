@@ -112,6 +112,7 @@ import type {
   LayersLockUnjudged,
 } from "./fields/blocks-composition";
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
+import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import { registerFencedWriteReport } from "./host-rewrite/after-commit";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
@@ -1482,6 +1483,19 @@ export const pageBuilder = (
         // code's defaults and the stored record of the Single as renamed,
         // read per write so a style or a breakpoint removed a moment ago is
         // gone for the next save.
+        // What a page's collection lists may filter and sort by: each
+        // collection's declared fields from its record, and the ones the
+        // public may read as a published page's bindings are judged. Read per
+        // write, so a field hidden a moment ago is refused at the next save.
+        listFields: listFieldsFrom({
+          record: collection =>
+            ctx.services.collections.getCollection(collection, {}),
+          readable: async collection => {
+            // Imported at call time, for the reason the readers above give.
+            const { bindingFieldShapes } = await import("nextly/runtime");
+            return bindingFieldShapes({ collection });
+          },
+        }),
         siteDefinitions: async () => {
           const style = await siteStyleNow();
           return {
