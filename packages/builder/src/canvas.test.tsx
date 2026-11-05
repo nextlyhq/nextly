@@ -2177,6 +2177,45 @@ describe("the site's ground and text on the canvas root", () => {
     expect(opaque("var(--elsewhere)")).toBe(false);
   });
 
+  it("judges the ground by the colour it resolves to, which host CSS can change", () => {
+    /*
+     * The tokens say opaque, but the host's own CSS sets the token's
+     * property to a half-transparent colour. What the canvas paints is the
+     * resolved value, so that is what decides whether the page repeats it.
+     */
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") return "rgba(0, 0, 0, 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");

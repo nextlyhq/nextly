@@ -1012,6 +1012,41 @@ function setMark(
   else element.setAttribute(attribute, value);
 }
 
+/**
+ * The marks the site's surface puts on the canvas root, written before paint:
+ * the nearest theme marker above it (`useNearestThemeMarker`), and whether the
+ * site's ground is fully opaque.
+ *
+ * Only an opaque ground is repeated on the rendered page as well as the
+ * canvas: painted twice, an opaque ground looks exactly as it does once, while
+ * a translucent one would darken where the layers overlap. Judged from the
+ * colour the root's background RESOLVES to, because the host's own CSS can
+ * set the token's property to something the token set does not say. The
+ * token set's answer stands where the resolved colour says nothing: one that
+ * cannot be read, or one fully transparent, which is what a root painting no
+ * ground of its own resolves to (a page the site serves), and a transparent
+ * ground repeated on the page paints nothing either way.
+ */
+function useSiteSurfaceMarks(
+  rootRef: React.RefObject<HTMLElement | null>,
+  opaqueByTokens: boolean
+): void {
+  useNearestThemeMarker(rootRef);
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const resolved =
+      root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ??
+      "";
+    const alpha = alphaOf(resolved.trim());
+    setFlag(
+      root,
+      "data-nx-site-ground-opaque",
+      alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+    );
+  });
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -2010,8 +2045,8 @@ export function Canvas({
     dragPointerDown: dragHandlers?.onPointerDown,
   });
 
-  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
+  useSiteSurfaceMarks(root, surface?.opaqueGround === true);
   // The scale the page is painted at, for chrome drawn inside it to undo.
   const canvasScale = useCanvasFrame().scale;
 
@@ -2074,15 +2109,10 @@ export function Canvas({
        * not rendered here: see that hook.
        */
       /*
-       * Whether the site's ground is fully opaque, in every mode. Only then
-       * does the rendered page carry the ground as well as the canvas: painted
-       * twice, an opaque ground looks exactly as it does once, while a
-       * translucent one would darken where the layers overlap. See the page
-       * root's rule in `builder-chrome.css` for why the page wants it.
+       * `data-nx-site-ground-opaque`, whether the site's ground is fully
+       * opaque, is written onto this element by `useSiteSurfaceMarks` from the
+       * colour it resolves to, not rendered here: see that hook.
        */
-      data-nx-site-ground-opaque={
-        surface?.opaqueGround === true ? "" : undefined
-      }
       /*
        * What the pointer means, for the cursor.
        *
