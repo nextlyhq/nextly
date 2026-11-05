@@ -136,7 +136,7 @@ import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
-import { versionOf } from "@admin/lib/document-version";
+import { versionForLanguage, versionOf } from "@admin/lib/document-version";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import {
@@ -903,7 +903,25 @@ export function SingleForm({
   // header for singles too, so the document side has to answer it the same
   // way — without this, a click in the panel publishes a version nothing
   // draws.
-  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  // The Single's version in a language, for a restore from its history: the
+  // version this copy started from in its own language, else read.
+  const { defaultLocale: shownDefaultLocale } = useLocalization();
+  const versionFor = useCallback(
+    (wanted: string | null) =>
+      versionForLanguage({
+        wanted,
+        shown: locale ?? shownDefaultLocale ?? null,
+        startedFrom: version.startedFrom(),
+        readIn: inLocale =>
+          singleApi.getDocument(schema.slug, { locale: inLocale }),
+      }),
+    [locale, shownDefaultLocale, version, schema.slug]
+  );
+  const viewedVersionHost = useViewedVersion(
+    allFields,
+    takeoverTypes,
+    versionFor
+  );
   const {
     viewingVersion,
     documentHistory,
@@ -1418,7 +1436,10 @@ export function SingleForm({
     }
     submissionLatch.current = true;
     try {
-      await discardMutation.mutateAsync();
+      // With the version the copy started from: a discard moves the Single's
+      // version, so the copy then starts from the one it answered.
+      const result = await discardMutation.mutateAsync(version.startedFrom());
+      version.adoptRead(result.item);
     } finally {
       submissionLatch.current = false;
     }

@@ -59,6 +59,7 @@ import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
+import { versionForLanguage } from "@admin/lib/document-version";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -411,6 +412,7 @@ export function EntryForm({
     versionConflict,
     saveAnyway,
     loadCurrentVersion,
+    versionStartedFrom,
   } = useEntryForm({
     collection,
     entry,
@@ -590,7 +592,26 @@ export function EntryForm({
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
-  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  // The entry's version in a language, for a restore from its history: the
+  // version this copy started from in its own language, else read.
+  const versionFor = useCallback(
+    (wanted: string | null) =>
+      versionForLanguage({
+        wanted,
+        shown: locale ?? defaultLocale ?? null,
+        startedFrom: versionStartedFrom(),
+        readIn: inLocale =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale: inLocale,
+          }),
+      }),
+    [locale, defaultLocale, versionStartedFrom, collection.name, entry?.id]
+  );
+  const viewedVersionHost = useViewedVersion(
+    allFields,
+    takeoverTypes,
+    versionFor
+  );
   const {
     viewingVersion,
     documentHistory,

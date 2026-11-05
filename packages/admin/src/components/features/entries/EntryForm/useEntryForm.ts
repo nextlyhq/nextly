@@ -381,6 +381,8 @@ export interface UseEntryFormReturn {
    * version. Rejects, replacing nothing, when the edits cannot be kept.
    */
   loadCurrentVersion: () => Promise<void>;
+  /** The version the copy on screen started from, sent with every write. */
+  versionStartedFrom: () => string | undefined;
 }
 
 // ============================================================================
@@ -1066,7 +1068,10 @@ export function useEntryForm({
     }
     submissionLatch.current = true;
     try {
-      const result = await discardMutation.mutateAsync();
+      // With the version the copy started from: a discard moves the entry's
+      // version, so the copy then starts from the one it answered.
+      const result = await discardMutation.mutateAsync(version.startedFrom());
+      version.adoptRead(result.item);
       form.reset(getDefaultValues(fields, result.item));
       // The discard answers with the live row as the API populates it, which
       // leaves out a related item the editor may not read, so a save of these
@@ -1092,6 +1097,7 @@ export function useEntryForm({
     fields,
     onError,
     submissionLatch,
+    version,
   ]);
 
   // Cancel handler
@@ -1120,5 +1126,6 @@ export function useEntryForm({
     versionConflict: version.conflict,
     saveAnyway,
     loadCurrentVersion,
+    versionStartedFrom: version.startedFrom,
   };
 }

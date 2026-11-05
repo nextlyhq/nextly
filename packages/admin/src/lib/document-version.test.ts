@@ -4,11 +4,12 @@
  * changed it since. The keys themselves are pinned to the server's in
  * `version-keys-parity.test.ts`.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   STALE_VERSION_CODE,
   changerName,
+  versionForLanguage,
   staleVersionOf,
   versionOf,
 } from "./document-version";
@@ -97,5 +98,38 @@ describe("changerName", () => {
     [undefined, "Someone"],
   ] as const)("names %j as %s", (changedBy, expected) => {
     expect(changerName(changedBy)).toBe(expected);
+  });
+});
+
+describe("versionForLanguage", () => {
+  const readIn = vi.fn((locale: string) =>
+    Promise.resolve({ id: "e1", _rev: `9.${locale}:2` })
+  );
+
+  it("is the version the copy started from, for the language on screen or none", async () => {
+    for (const wanted of ["en", null]) {
+      readIn.mockClear();
+      await expect(
+        versionForLanguage({
+          wanted,
+          shown: "en",
+          startedFrom: "7.en:1",
+          readIn,
+        })
+      ).resolves.toBe("7.en:1");
+      expect(readIn).not.toHaveBeenCalled();
+    }
+  });
+
+  it("reads another language's version, which the copy never held", async () => {
+    await expect(
+      versionForLanguage({
+        wanted: "es",
+        shown: "en",
+        startedFrom: "7.en:1",
+        readIn,
+      })
+    ).resolves.toBe("9.es:2");
+    expect(readIn).toHaveBeenCalledWith("es");
   });
 });

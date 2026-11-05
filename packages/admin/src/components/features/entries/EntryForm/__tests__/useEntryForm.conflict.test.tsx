@@ -13,9 +13,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
 
-const { update, saveAutosave } = vi.hoisted(() => ({
+const { update, saveAutosave, discard } = vi.hoisted(() => ({
   update: vi.fn(),
   saveAutosave: vi.fn(),
+  discard: vi.fn(),
 }));
 
 vi.mock("@admin/hooks/queries/useCreateEntry", () => ({
@@ -31,7 +32,7 @@ vi.mock("@admin/hooks/queries/useDeleteEntry", () => ({
   useDeleteEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock("@admin/hooks/queries/useDiscardWorkingDraft", () => ({
-  useDiscardWorkingDraft: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDiscardWorkingDraft: () => ({ mutateAsync: discard, isPending: false }),
 }));
 vi.mock("@admin/services/versionApi", async importOriginal => {
   const actual =
@@ -86,6 +87,7 @@ const answered = (item: Record<string, unknown>) => ({
 afterEach(() => {
   update.mockReset();
   saveAutosave.mockReset();
+  discard.mockReset();
 });
 
 function render(initial: Record<string, unknown> = stored) {
@@ -158,6 +160,27 @@ describe("the version the editor's copy started from", () => {
       await result.current.writeStatus("published");
     });
     expect(update).toHaveBeenCalledWith({ status: "published", _rev: "3" });
+  });
+
+  it("is sent with a discard, and moves to the version the discard answered", async () => {
+    // A discard of the pending change moves the entry's version too.
+    discard.mockResolvedValueOnce({
+      message: "Working draft discarded.",
+      item: { ...stored, _rev: "4" },
+    });
+    const rendered = render();
+    await act(async () => {
+      await rendered.result.current.handleDiscardWorkingDraft();
+    });
+    expect(discard).toHaveBeenCalledWith("3");
+    // The page hands the entry over again, as stored after the discard.
+    act(() => rendered.rerender({ entry: { ...stored, _rev: "4" } }));
+
+    update.mockResolvedValueOnce(answered({ ...stored, _rev: "5" }));
+    await typeAndSave(rendered, "Mine");
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _rev: "4" })
+    );
   });
 
   it("moves to a newer version a read brings while nothing is pinned", async () => {

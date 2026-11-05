@@ -62,6 +62,8 @@ describe("useDiscardSingleWorkingDraft", () => {
 
     expect(discardSpy).toHaveBeenCalledWith(
       { kind: "single", slug: "homepage", documentId: "s1" },
+      undefined,
+      // No version: the request sends none.
       undefined
     );
     expect(toastSuccessSpy).toHaveBeenCalledWith("Working draft discarded");
@@ -87,7 +89,9 @@ describe("useDiscardSingleWorkingDraft", () => {
 
     expect(discardSpy).toHaveBeenCalledWith(
       { kind: "single", slug: "homepage", documentId: "s1" },
-      "es"
+      "es",
+      // No version: the request sends none.
+      undefined
     );
   });
 

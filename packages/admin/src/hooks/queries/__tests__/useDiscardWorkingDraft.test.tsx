@@ -67,6 +67,8 @@ describe("useDiscardWorkingDraft", () => {
         slug: "posts",
         entryId: "e1",
       },
+      undefined,
+      // No version: the request sends none.
       undefined
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
@@ -99,7 +101,9 @@ describe("useDiscardWorkingDraft", () => {
 
     expect(discardSpy).toHaveBeenCalledWith(
       { kind: "collection", slug: "posts", entryId: "e1" },
-      "es"
+      "es",
+      // No version: the request sends none.
+      undefined
     );
   });
 

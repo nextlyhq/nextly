@@ -30,6 +30,7 @@ import type {
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 
 // The diff wire types live in core (the engine produces them); re-exported here
 // so admin components import them from the same place as the other version types.
@@ -225,6 +226,8 @@ export interface AutosaveDetail {
 export interface RestoreVersionResponse {
   message: string;
   restoredFrom: number;
+  /** The document's version after the restore. */
+  _rev?: string;
   /**
    * Snapshot keys the current schema no longer accepts. A restore with a
    * non-empty list succeeded but did not bring the document back in full.
@@ -310,11 +313,16 @@ export const versionApi = {
    */
   restore: (
     scope: VersionScope,
-    versionNo: number
+    versionNo: number,
+    /**
+     * The version of the document the restore writes over, as the editor
+     * holds it: a restore is refused when the document changed since.
+     */
+    version?: string
   ): Promise<RestoreVersionResponse> =>
     protectedApi.post<RestoreVersionResponse>(
       `${basePath(scope)}/${versionNo}/restore`,
-      {}
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
     ),
 
   /**
@@ -365,10 +373,16 @@ export const versionApi = {
    */
   discardWorkingDraft: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version the editor's copy started from. A discard moves the
+     * document's version, and is refused when the document changed since.
+     */
+    version?: string
   ): Promise<DiscardWorkingDraftResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
+    if (version) search.set(DOCUMENT_VERSION_KEY, version);
     const query = search.toString();
 
     return protectedApi.delete<DiscardWorkingDraftResponse>(

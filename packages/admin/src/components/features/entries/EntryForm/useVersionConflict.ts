@@ -45,6 +45,8 @@ export interface VersionConflictState {
   conflict: VersionConflict | null;
   /** Whether a refused save holds the form: no read may reset it. */
   pinned: () => boolean;
+  /** The version the copy on screen started from. */
+  startedFrom: () => string | undefined;
   /** `payload` with the version the copy started from, when it has one. */
   withVersion: <T extends Record<string, unknown>>(payload: T) => T;
   /** The copy was replaced by `doc`, as read. */
@@ -82,6 +84,7 @@ export function useVersionConflict(): VersionConflictState {
   const [conflict, setConflict] = useState<VersionConflict | null>(null);
 
   const pinned = useCallback(() => pin.current !== null, []);
+  const currentStart = useCallback(() => startedFrom.current, []);
 
   const withVersion = useCallback(
     <T extends Record<string, unknown>>(payload: T): T =>
@@ -171,6 +174,7 @@ export function useVersionConflict(): VersionConflictState {
     () => ({
       conflict,
       pinned,
+      startedFrom: currentStart,
       withVersion,
       adoptRead,
       adoptAnswered,
@@ -184,6 +188,7 @@ export function useVersionConflict(): VersionConflictState {
     [
       conflict,
       pinned,
+      currentStart,
       withVersion,
       adoptRead,
       adoptAnswered,

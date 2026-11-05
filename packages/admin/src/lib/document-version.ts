@@ -131,3 +131,22 @@ export function changerName(changedBy: VersionChanger | undefined): string {
       return "Someone";
   }
 }
+
+/**
+ * The version a write in `wanted`'s language sends, from an editor showing
+ * `shown`: the version its copy started from, for its own language or a
+ * write of no language; another language's, which the copy never held, read
+ * now. Such a write is judged from that read rather than from what the
+ * editor showed, which held none of that language.
+ */
+export async function versionForLanguage(args: {
+  wanted: string | null;
+  shown: string | null;
+  startedFrom: string | undefined;
+  readIn: (locale: string) => Promise<unknown>;
+}): Promise<string | undefined> {
+  if (args.wanted === null || args.wanted === args.shown) {
+    return args.startedFrom;
+  }
+  return versionOf(await args.readIn(args.wanted));
+}
