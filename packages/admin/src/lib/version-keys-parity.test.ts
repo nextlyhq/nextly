@@ -1,10 +1,12 @@
 /**
  * The keys the admin sends with a save are the server's own.
  *
- * The server's constants are loaded at run time, by a path the type checker
- * doesn't follow: their modules import the server's database code, which the
- * admin's bundle must never reach. A rename on the server fails here rather
- * than leaving every admin save sending a key the server ignores.
+ * Read from what the server tells a client that sent none: the refusal of a
+ * bulk update without versions names each key it takes. Its module is loaded
+ * at run time, by a path the type checker doesn't follow: it imports the
+ * server's database code, which the admin's bundle must never reach. A rename
+ * on the server fails here rather than leaving every admin save sending a key
+ * the server ignores.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,13 +22,9 @@ import {
 } from "./document-version";
 
 // Joined from this file's own folder: the bundler rewrites a
-// \`new URL(path, import.meta.url)\` into a URL it serves.
+// `new URL(path, import.meta.url)` into a URL it serves.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(HERE, "../../../nextly/src");
-const SERVER_REVISION = path.join(
-  SERVER,
-  "domains/versions/document-revision.ts"
-);
 const SERVER_STALE_VERSION = path.join(
   SERVER,
   "domains/versions/stale-version.ts"
@@ -41,19 +39,19 @@ describe("the keys the admin sends with a save", () => {
     staleStatus: unknown;
   };
   beforeAll(async () => {
-    const revision = (await import(
-      /* @vite-ignore */ SERVER_REVISION
-    )) as Record<string, unknown>;
-    const stale = (await import(
-      /* @vite-ignore */ SERVER_STALE_VERSION
-    )) as Record<string, unknown>;
+    const stale = (await import(/* @vite-ignore */ SERVER_STALE_VERSION)) as {
+      versionRequiredFor: (bulk: "ids") => {
+        publicData?: Record<string, unknown>;
+      };
+    };
+    const keys = stale.versionRequiredFor("ids").publicData ?? {};
     const codes = (await import(/* @vite-ignore */ SERVER_ERROR_CODES)) as {
       NEXTLY_ERROR_STATUS: Record<string, unknown>;
     };
     server = {
-      version: revision.DOCUMENT_VERSION_KEY,
-      overwrite: revision.DOCUMENT_OVERWRITE_KEY,
-      revs: stale.DOCUMENT_REVS_KEY,
+      version: keys.versionKey,
+      overwrite: keys.overwriteKey,
+      revs: keys.revsKey,
       staleStatus: codes.NEXTLY_ERROR_STATUS[STALE_VERSION_CODE],
     };
   }, 60_000);
