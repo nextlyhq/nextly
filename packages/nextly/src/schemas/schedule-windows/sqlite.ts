@@ -3,8 +3,6 @@
  *
  * @module schemas/schedule-windows/sqlite
  */
-// fallow-ignore-file code-duplication
-
 import {
   integer,
   primaryKey,

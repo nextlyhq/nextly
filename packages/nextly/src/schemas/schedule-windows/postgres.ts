@@ -9,10 +9,6 @@
  *
  * @module schemas/schedule-windows/postgres
  */
-// The same table in each dialect's Drizzle builders: each dialect's column
-// functions are distinct, so the declarations cannot be shared.
-// fallow-ignore-file code-duplication
-
 import { pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 
 export const nextlyScheduleWindowsPg = pgTable(

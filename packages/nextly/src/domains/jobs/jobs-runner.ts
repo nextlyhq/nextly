@@ -57,7 +57,7 @@ function executorOf(db: UsersReadDb): unknown {
 export type JobsPassDatabase = JobsDatabase & UsersReadDb;
 
 /** How long a schedule's past windows are kept: 30 days. */
-export const SCHEDULE_WINDOW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const SCHEDULE_WINDOW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Rows a single pass may remove, so a sweep cannot become a long delete. */
 export const DEFAULT_PRUNE_LIMIT = 100;

@@ -77,25 +77,26 @@ function cronOf(source: string, plugin: string, slug: string): CronExpression {
   }
 }
 
-/** One plugin's schedule, read and checked against the jobs it declares. */
-function collectOne(
-  plugin: string,
-  entry: unknown,
-  ownJobs: ReadonlySet<string>
-): CollectedSchedule {
-  const named =
-    typeof entry === "object" && entry !== null && "slug" in entry
-      ? String(entry.slug)
-      : "";
+/** The slug an entry names, for a refusal of an entry whose shape is wrong. */
+function namedSlug(entry: unknown): string {
+  return typeof entry === "object" && entry !== null && "slug" in entry
+    ? String(entry.slug)
+    : "";
+}
+
+/** `entry` in the current shape, or the plugin's schedule refused saying why not. */
+function readShape(plugin: string, entry: unknown) {
   const parsed = scheduleShape.safeParse(entry);
-  if (!parsed.success) {
-    throw refuse(
-      plugin,
-      named,
-      parsed.error.issues[0]?.message ?? "its shape is wrong"
-    );
-  }
-  const { slug, cron, job, tz, input } = parsed.data;
+  if (parsed.success) return parsed.data;
+  throw refuse(
+    plugin,
+    namedSlug(entry),
+    parsed.error.issues[0]?.message ?? "its shape is wrong"
+  );
+}
+
+/** The schedule's key, refused when it is too long to store. */
+function keyOf(plugin: string, slug: string): string {
   const key = `${plugin}:${slug}`;
   if (key.length > MAX_PORTABLE_KEY_LENGTH) {
     throw refuse(
@@ -104,10 +105,25 @@ function collectOne(
       `its key "${key}" is longer than ${MAX_PORTABLE_KEY_LENGTH} characters`
     );
   }
+  return key;
+}
+
+/** The time zone a schedule names, UTC when none, refused when unknown. */
+function timeZoneOf(plugin: string, slug: string, tz: string | undefined) {
   const timeZone = tz ?? "UTC";
   if (!isTimeZone(timeZone)) {
     throw refuse(plugin, slug, `"${timeZone}" is not a time zone`);
   }
+  return timeZone;
+}
+
+/** The job a schedule runs, refused unless the plugin itself declares it. */
+function jobOf(
+  plugin: string,
+  slug: string,
+  job: string,
+  ownJobs: ReadonlySet<string>
+): string {
   const runs = normalizeJobSlug(job);
   if (!ownJobs.has(runs)) {
     throw refuse(
@@ -116,13 +132,23 @@ function collectOne(
       `it runs the job "${runs}", which the plugin does not declare`
     );
   }
+  return runs;
+}
+
+/** One plugin's schedule, read and checked against the jobs it declares. */
+function collectOne(
+  plugin: string,
+  entry: unknown,
+  ownJobs: ReadonlySet<string>
+): CollectedSchedule {
+  const { slug, cron, job, tz, input } = readShape(plugin, entry);
   return {
-    key,
+    key: keyOf(plugin, slug),
     plugin,
     slug,
     cron: cronOf(cron, plugin, slug),
-    timeZone,
-    job: runs,
+    timeZone: timeZoneOf(plugin, slug, tz),
+    job: jobOf(plugin, slug, job, ownJobs),
     input: input ?? {},
   };
 }

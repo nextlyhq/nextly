@@ -3,8 +3,6 @@
  *
  * @module schemas/schedule-windows/mysql
  */
-// fallow-ignore-file code-duplication
-
 import {
   datetime,
   mysqlTable,

@@ -129,6 +129,22 @@ async function insertIfAbsent(
   return written.length > 0;
 }
 
+/** The latest window recorded for `scheduleKey`, if any. */
+async function latestWindowOf(
+  drizzle: WindowReadDb,
+  dialect: SupportedDialect,
+  scheduleKey: string
+): Promise<Date | undefined> {
+  const table = tableOf(dialect);
+  const [latest] = await drizzle
+    .select({ windowAt: table.windowAt })
+    .from(table)
+    .where(eq(table.scheduleKey, scheduleKey))
+    .orderBy(desc(table.windowAt))
+    .limit(1);
+  return latest?.windowAt;
+}
+
 /** Claim `schedule`'s latest window at `now`, and enqueue its job if this claim is the one. */
 async function sweepOne(
   db: ScheduleWindowsDatabase,
@@ -141,12 +157,7 @@ async function sweepOne(
   const table = tableOf(db.dialect);
   await db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
-    const known = await drizzle
-      .select({ windowAt: table.windowAt })
-      .from(table)
-      .where(eq(table.scheduleKey, schedule.key))
-      .orderBy(desc(table.windowAt))
-      .limit(1);
+    const known = await latestWindowOf(drizzle, db.dialect, schedule.key);
     const claimed = await insertIfAbsent(tx, db.dialect, {
       scheduleKey: schedule.key,
       windowAt,
@@ -155,7 +166,7 @@ async function sweepOne(
     });
     // First sight: the window is recorded with no job, so the schedule's
     // first job is for the next window to open.
-    if (!claimed || known.length === 0) return;
+    if (!claimed || known === undefined) return;
     const { id } = await enqueue(tx, db.dialect, {
       slug: schedule.job,
       // The window last, so the schedule's own input cannot replace it.
@@ -190,14 +201,9 @@ async function pruneOne(
   const table = tableOf(db.dialect);
   return db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
-    const [latest] = await drizzle
-      .select({ windowAt: table.windowAt })
-      .from(table)
-      .where(eq(table.scheduleKey, schedule.key))
-      .orderBy(desc(table.windowAt))
-      .limit(1);
+    const latest = await latestWindowOf(drizzle, db.dialect, schedule.key);
     if (latest === undefined) return 0;
-    const cutoff = latest.windowAt < before ? latest.windowAt : before;
+    const cutoff = latest < before ? latest : before;
     const old = await drizzle
       .select({ windowAt: table.windowAt })
       .from(table)
