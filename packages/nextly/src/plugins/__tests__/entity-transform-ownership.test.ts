@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../../di/register";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../domains/i18n/per-language-storage";
 import type { SingleConfig } from "../../singles/config/types";
 import type { EntityTransform } from "../entity-transforms";
 import type { PluginDefinition } from "../plugin-context";
@@ -278,6 +282,29 @@ describe("a transform of another plugin's entity", () => {
     );
 
     expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+  });
+
+  // Under `experimental.perLanguageStorage` a text field of an untranslated entity is kept per
+  // language, so marking it `localized: false` moves the owner's stored values to the main table.
+  it("may not move an owner's field out of its per-language table under the setting", () => {
+    setPerLanguageStorage(true);
+    try {
+      const refused = refusalOf(() =>
+        fold([
+          shop(),
+          changing("reviews", entity => ({
+            ...entity,
+            fields: replacing(fieldsOf(entity), "title", f => ({
+              ...f,
+              localized: false,
+            })),
+          })),
+        ])
+      );
+      expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("may not make an owner's column required", () => {

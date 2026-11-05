@@ -23,6 +23,7 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { MetaService } from "../../meta/services/meta-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { withSchemaLock } from "../../schema/pipeline/schema-lock";
@@ -1272,8 +1273,10 @@ export async function readRegistryRows(
       String(row.table_name),
       recordedRenames
     );
+    // A group keeps a companion when it is translated, or under `experimental.perLanguageStorage`
+    // whatever its flag; the catalog then says whether that companion was created.
     const hasCompanion =
-      isLocalized(row.localized) &&
+      storesPerLanguage({ localized: isLocalized(row.localized) }) &&
       (resolveCatalogName(catalog, `${row.table_name}${suffix}`) !==
         undefined ||
         (counterpart !== null &&

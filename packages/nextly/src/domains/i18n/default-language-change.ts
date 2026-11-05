@@ -13,6 +13,8 @@ import { sql } from "drizzle-orm";
 
 import { resolveFieldGroupRegistryName } from "../field-groups/storage/resolve-storage-names";
 
+import { storesPerLanguage } from "./per-language-storage";
+
 export interface DefaultChangeSummary {
   from: string;
   to: string;
@@ -46,7 +48,12 @@ async function translationTables(adapter: DrizzleAdapter): Promise<string[]> {
     });
     for (const row of rows) {
       const companion = `${row.tableName}_locales`;
-      if (Boolean(row.localized) && existing.has(companion)) {
+      // Every entity kept per language has its values there: a translated one, or any under
+      // `experimental.perLanguageStorage`.
+      if (
+        storesPerLanguage({ localized: Boolean(row.localized) }) &&
+        existing.has(companion)
+      ) {
         tables.push(companion);
       }
     }
