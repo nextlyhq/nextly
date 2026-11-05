@@ -925,23 +925,24 @@ function useWriteClassStyles(
          * as a style removed through the Shared styles tab.
          */
         const undo = change.invert(entry.styles);
+        /*
+         * The code the stored entry was last rebased onto: the code this
+         * edit was made against, then whatever each replay rebased it onto,
+         * so a second change to the code between undo and redo is told
+         * from the site's own.
+         */
+        let baseline = configured;
+        const replay =
+          (step: SharedStyleChange) =>
+          (held: unknown): SiteStyleReplayed => {
+            const now = configuredNow.current;
+            const out = classChangeOn(held, baseline, now, classId, step);
+            if (out.kind !== "gone") baseline = now;
+            return out;
+          };
         const result = await slot.save(classOverrideOf(configured, next), {
-          undo: held =>
-            classChangeOn(
-              held,
-              configured,
-              configuredNow.current,
-              classId,
-              undo
-            ),
-          redo: held =>
-            classChangeOn(
-              held,
-              configured,
-              configuredNow.current,
-              classId,
-              change
-            ),
+          undo: replay(undo),
+          redo: replay(change),
         });
         const refused = refusalOf(
           result,

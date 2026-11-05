@@ -889,6 +889,62 @@ describe("redoing an edit the code has since made itself", () => {
   });
 });
 
+describe("replaying across two changes to the code", () => {
+  it("rebases each replay from the code the last one rebased onto", async () => {
+    const at = (opacity: number) => ({
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111", opacity } } },
+    });
+    // Renamed, so the override outlives the undo.
+    const renamed = { ...at(0.5), label: "Mine" };
+    clientConfig = { siteStyle: { classes: [at(0.5)] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    const follow = (opacity: number) => {
+      clientConfig = { siteStyle: { classes: [at(opacity)] } };
+      storedRead = {
+        data: { classes: saved.at(-1)?.classes },
+        isPending: false,
+        error: null,
+      };
+      rerender(<Host />);
+    };
+    follow(0.6);
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(saved.at(-1)).toEqual({
+      classes: [{ ...at(0.6), label: "Mine" }],
+    });
+    follow(0.7);
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({
+      classes: [
+        {
+          ...at(0.7),
+          label: "Mine",
+          styles: { base: { base: { color: "#222222", opacity: 0.7 } } },
+        },
+      ],
+    });
+  });
+});
+
 describe("undoing a shared style's edit after the library changed elsewhere", () => {
   const card = {
     id: "c-card",
