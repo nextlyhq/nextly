@@ -5,7 +5,7 @@ description: What the admin tells you when someone else has the same entry or Si
 
 When you open an existing entry or a Single in the admin, it is claimed for you while the editor is open. Anyone else who opens it is told that you are editing it, and sees it read-only until they decide what to do. Plugin views that open inside the editor, such as the Visual Page Builder, share the same claim.
 
-The claim is a courtesy between people using the admin. It tells your colleagues you are working on the document, and lets them take over when they need to. It does not stop a program, an integration or a plugin from saving the document.
+The claim is a courtesy between people using the admin. It tells your colleagues you are working on the document, and lets them take over when they need to. It does not stop a program, an integration or a plugin from saving the document. Saves are checked separately: a save made from a copy someone else has changed since is refused, whoever makes it, so nobody's work is replaced without them knowing (see [When your save is refused](#when-your-save-is-refused)).
 
 ## What each message means
 
@@ -66,6 +66,30 @@ A reload gives the document back to you, not to someone waiting. When the editor
 
 If someone takes over while you are typing, nothing you typed is thrown away. It stays on screen, read-only, so you can copy what you need. Your autosave also keeps it as a recovery point, and when you next open the document the editor offers to restore it.
 
+## When your save is refused
+
+Every save remembers the version of the document you started editing. If someone else saved it after you started, your save is refused and nothing is written, so neither of you loses work without knowing. A dialog opens, titled "This document changed since you started editing". It says who changed it and when, "Ana changed it at Nov 5, 2026, 10:42 AM.", or "Someone else saved it after you started." when there is nobody to name, then "Your edits are still here, not saved."
+
+| Choice | What happens |
+| --- | --- |
+| **Keep editing** | The dialog closes and your edits stay. Your next save is refused again until you load the current version or save anyway. |
+| **Load current version** | The editor shows the document as it is now. Your edits are kept as a recovery point you can restore. When the document keeps no recovery points, the dialog says your edits are discarded instead. |
+| **Save anyway** | Asks first: "Replace Ana's changes?" Saving anyway replaces the changes Ana made with yours, and the document's history records that you replaced them. Choose **Replace their changes**, or **Back** to return. |
+
+Where the document keeps versions, the dialog links to "See what Ana changed", which opens the comparison in a new tab so your edits stay where they are.
+
+If someone else is editing the document when you choose **Save anyway**, nothing is saved: "Someone else is editing this document now, so nothing was saved."
+
+The same dialog appears for Singles and in the Visual Page Builder.
+
+A recovery point remembers which version its edits began from. When you restore one after someone else changed the document, the offer says so: "These edits began from an older version. Ana changed the document at Nov 5, 2026, 10:42 AM. Restoring them replaces those changes." For a recovery point saved before Nextly kept versions, it says "The version these edits began from is unknown." Restored edits are saved as edits of the version they began from, so saving them after someone else's change opens the same dialog.
+
+A few actions are refused the same way and tell you in a short message instead of a dialog:
+
+- **Publish every language:** "This document changed since you opened it. It now shows the current version; publish again if you still want to."
+- **Discarding a draft:** the same, ending "discard again if you still want to."
+- **Restore a version from the history:** "Someone changed this document since you opened it. Load its current version, then restore again."
+
 ## Two tabs
 
 You count as one person, however many tabs you have open, so opening a document you are editing in a second tab is never a takeover. The tab you opened last is the one that edits. The earlier tab says "You opened this document in another tab", keeps what you typed there on screen, and offers **Continue editing here**, which makes it the editing tab again with your typing intact. The other tab is then told the same. Nothing is recorded in the history.
@@ -77,6 +101,6 @@ A list open in another tab does not update when you save in this one; it shows t
 - **No editing together.** Only one person edits a document at a time. There are no live cursors, and edits are never merged.
 - **One person is named.** The strip names whoever holds the document, not everyone who has it open.
 - **Existing documents only.** A new entry is not claimed while it is being created.
-- **The site style isn't checked yet.** Changes to the shared styles in the [page editor](/docs/page-builder/editor) are saved over whatever is stored, so when two people change them at the same time, the later save wins.
+- **The site style isn't checked yet.** Changes to the shared styles in the [page editor](/docs/page-builder/editor) are saved over whatever is stored, so when two people change them at the same time, the later save wins. Each of these saves shows in the site style's history as "Saved as an overwrite (no version given)".
 - **Programs don't take part.** The REST API, the Direct API and plugins don't see claims, and a claim doesn't stop them writing. Developers can read who holds a document through the [REST API](/docs/api-reference/rest-api#document-locks). A program that sends the version it read has its save refused when the document changed since, so it can't replace someone's work unseen (see [Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts)).
 - **Your own API key counts as you.** If a program using an API key you made claims a document you have open, your editor says you opened it in another tab, not that the key took it. And if your key holds a document when you open it, you get the document straight away, without being told the key had it.
