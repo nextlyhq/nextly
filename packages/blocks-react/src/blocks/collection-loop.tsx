@@ -111,13 +111,44 @@ function diagnosticNote(
   );
 }
 
+/**
+ * Why a list an author is looking at draws its empty state: they chose to
+ * see it, no entry matched, or the read failed. Written on the list's root
+ * for the editor's chrome, which tags the list with it, and only while an
+ * author is looking.
+ */
+type EmptyBecause = "chosen" | "none" | "failed";
+
+/** The marks on a list's root saying it draws its empty state, and why. */
+function emptyMarks(
+  ctx: PageContext,
+  because: EmptyBecause | undefined
+): Record<string, string> {
+  return ctx.diagnostics === true && because !== undefined
+    ? { "data-nx-list-shows": "empty", "data-nx-list-empty-because": because }
+    : {};
+}
+
 export async function renderCollectionLoop({
   props,
+  node,
   renderSlot,
   spacingMode,
   className,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
+  // An author asked to design what visitors see when nothing matches: the
+  // empty state alone, with nothing read. Only where an author is looking.
+  if (
+    ctx.diagnostics === true &&
+    ctx.listsShowingEmpty?.has(node.id) === true
+  ) {
+    return (
+      <div className={className} {...emptyMarks(ctx, "chosen")}>
+        {renderSlot("empty")}
+      </div>
+    );
+  }
   // A cleared text field persists as an empty string, which is a collection
   // nobody named rather than a collection called "". Querying for it fails, the
   // failure is swallowed below, and the block renders empty instead of showing
@@ -150,6 +181,10 @@ export async function renderCollectionLoop({
     claim: () => ctx.queries?.take() !== false,
   });
   const note = diagnosticNote(outcome, ctx);
+  const marks = emptyMarks(
+    ctx,
+    outcome.items.length > 0 ? undefined : outcome.failed ? "failed" : "none"
+  );
   // Nothing matched, or the read failed: the designable empty state, as a
   // visitor sees it. Otherwise each entry, drawn with the template.
   const content =
@@ -171,9 +206,11 @@ export async function renderCollectionLoop({
         ));
   // The note, when an author is looking, goes above what visitors see.
   return note === null ? (
-    <div className={className}>{content}</div>
+    <div className={className} {...marks}>
+      {content}
+    </div>
   ) : (
-    <div className={className}>
+    <div className={className} {...marks}>
       {note}
       {content}
     </div>
@@ -206,15 +243,31 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
     props: {
       // Still text, as stored: `display` asks the editor to offer the site's
       // collections, and the sort keys of the collection `collectionProp`
-      // names, rather than a field to type a slug or a key into.
-      collection: { label: "Collection", type: "text", display: "collection" },
-      limit: { label: "Number of items", type: "number", min: 1, max: 100 },
+      // names, rather than a field to type a slug or a key into. The editor
+      // draws all of a list's query as one group where `collection` sits,
+      // asked for by `display: "listFilters"`; the shapes are the engine's
+      // `readListQuery`, which every reader shares.
+      collection: { label: "Source", type: "text", display: "collection" },
+      relation: {
+        label: "Related entries",
+        type: "object",
+        display: "listRelation",
+        collectionProp: "collection",
+      },
+      filters: {
+        label: "Filters",
+        type: "array",
+        display: "listFilters",
+        collectionProp: "collection",
+      },
       sort: {
         label: "Sort by",
         type: "text",
         display: "sort",
         collectionProp: "collection",
       },
+      limit: { label: "Number of items", type: "number", min: 1, max: 100 },
+      offset: { label: "Skip the first", type: "number", min: 0 },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },

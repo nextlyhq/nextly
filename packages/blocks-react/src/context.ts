@@ -456,6 +456,16 @@ export interface PageContext {
    * @experimental
    */
   fieldShapes?: BlocksFieldShapes;
+  /**
+   * The collection lists, by node id, an author has asked to see in their
+   * empty state: the editor's "Canvas shows: When empty". Such a list draws
+   * its empty slot in place of its entries. Honoured only where
+   * {@link diagnostics} says an author is looking, so no page a visitor is
+   * served can be made to hide its entries.
+   *
+   * @experimental
+   */
+  listsShowingEmpty?: ReadonlySet<string>;
 }
 
 /**

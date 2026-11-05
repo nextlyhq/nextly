@@ -605,3 +605,72 @@ describe("a collection list's query, rendered", () => {
     });
   });
 });
+
+describe("a list's empty state, as an author looks at it", () => {
+  it("draws the empty state alone, reading nothing, when the author chose to see it", async () => {
+    const { provider, queries } = source({ posts: POSTS });
+    const host = await drawn(
+      page(list({ collection: "posts" })),
+      context({
+        data: provider,
+        diagnostics: true,
+        listsShowingEmpty: new Set(["list"]),
+      })
+    );
+    expect(headings(host)).toEqual(["Nothing here yet"]);
+    expect(queries).toEqual([]);
+    const marked = host.querySelector("[data-nx-list-shows]");
+    expect(marked?.getAttribute("data-nx-list-shows")).toBe("empty");
+    expect(marked?.getAttribute("data-nx-list-empty-because")).toBe("chosen");
+  });
+
+  it("never hides a published page's entries, whatever the context names", async () => {
+    const { provider } = source({ posts: POSTS });
+    const host = await drawn(
+      page(list({ collection: "posts" })),
+      context({ data: provider, listsShowingEmpty: new Set(["list"]) })
+    );
+    expect(headings(host)).toEqual(["One", "Two", "Three"]);
+    expect(host.querySelector("[data-nx-list-shows]")).toBeNull();
+  });
+
+  it("says why it draws its empty state: nothing matched, or the read failed", async () => {
+    const { provider } = source({ posts: [] });
+    const none = await drawn(
+      page(list({ collection: "posts" })),
+      context({ data: provider, diagnostics: true })
+    );
+    expect(
+      none
+        .querySelector("[data-nx-list-shows]")
+        ?.getAttribute("data-nx-list-empty-because")
+    ).toBe("none");
+    const failed = await drawn(
+      page(list({ collection: "posts" })),
+      context({
+        data: { find: () => Promise.reject(new Error("down")) },
+        diagnostics: true,
+      })
+    );
+    expect(
+      failed
+        .querySelector("[data-nx-list-shows]")
+        ?.getAttribute("data-nx-list-empty-because")
+    ).toBe("failed");
+  });
+
+  it("marks nothing on a list showing its entries, or for a visitor", async () => {
+    const { provider } = source({ posts: POSTS });
+    const shown = await drawn(
+      page(list({ collection: "posts" })),
+      context({ data: provider, diagnostics: true })
+    );
+    expect(shown.querySelector("[data-nx-list-shows]")).toBeNull();
+    const visitor = await drawn(
+      page(list({ collection: "posts" })),
+      context({ data: source({ posts: [] }).provider })
+    );
+    expect(headings(visitor)).toEqual(["Nothing here yet"]);
+    expect(visitor.querySelector("[data-nx-list-shows]")).toBeNull();
+  });
+});
