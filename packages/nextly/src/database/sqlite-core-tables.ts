@@ -493,6 +493,14 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_workflow_settings_workflow_uidx"
       ON "nextly_workflow_settings" ("workflow")`,
+    // A plugin schedule's windows. Columns match schemas/schedule-windows/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_schedule_windows" (
+      "schedule_key" TEXT NOT NULL,
+      "window_at" INTEGER NOT NULL,
+      "job_id" TEXT,
+      "created_at" INTEGER NOT NULL,
+      PRIMARY KEY ("schedule_key", "window_at")
+    )`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
