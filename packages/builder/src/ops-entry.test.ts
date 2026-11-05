@@ -66,12 +66,31 @@ describe("the ops subpath is published", () => {
 });
 
 describe("the ops module stays server-safe", () => {
-  it("imports the engine and nothing else", () => {
+  it("imports the engine, its own actions module and nothing else", () => {
     // Asserted as the WHOLE import list rather than as "no react". A module
     // that grew an import of the design system, the plugin SDK or a DOM helper
     // would satisfy a react-only check and still be unloadable on a server.
     const specifiers = [...importedSpecifiers(read("src/ops.ts"), "ops.ts")];
 
-    expect(specifiers).toEqual(["@nextlyhq/blocks-engine"]);
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "./composition-actions",
+      "@nextlyhq/blocks-engine",
+    ]);
+  });
+
+  it("reaches through its actions module only the engine and zod", () => {
+    // The one local module the entry re-exports is held to the same whole
+    // list: it is bundled into the entry, so what it imports, the entry loads.
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/composition-actions.ts"),
+        "composition-actions.ts"
+      ),
+    ];
+
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "@nextlyhq/blocks-engine",
+      "zod",
+    ]);
   });
 });

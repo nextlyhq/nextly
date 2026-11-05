@@ -143,7 +143,11 @@ describe.each(getConfiguredTestDialects())(
             slug: "site_components",
             fields: [
               text({ name: "title" }),
-              { name: "blocks", type: BLOCKS_TYPE } as never,
+              {
+                name: "blocks",
+                type: BLOCKS_TYPE,
+                blocks: { kinds: ["component"] },
+              } as never,
             ],
           }),
           defineCollection({

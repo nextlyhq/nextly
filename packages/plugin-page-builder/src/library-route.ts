@@ -394,7 +394,7 @@ export async function readingAsUser(
   };
 }
 
-function directComponentReads(
+export function directComponentReads(
   ctx: Pick<PluginRouteContext, "caller">,
   locale?: string
 ): ComponentReads {

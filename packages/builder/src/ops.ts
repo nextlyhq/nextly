@@ -13,6 +13,12 @@
  * import path across all of them for no gain. One path in, one place to change
  * if the engine ever reorganises.
  *
+ * The planners travel the same way, and for the same reason: each composition
+ * action an editor takes is a planner from the engine, and a server or an
+ * agent planning that action must reach the same function rather than a copy.
+ * Beside them are the actions as data (`./composition-actions`): the schemas
+ * the page builder's routes parse with, and the definition planner they run.
+ *
  * @module ops
  */
 export {
@@ -29,3 +35,58 @@ export {
   type OpPosition,
   type SlotAddress,
 } from "@nextlyhq/blocks-engine";
+
+export {
+  planAddVariant,
+  planConvertToComponent,
+  planDeleteVariant,
+  planDetach,
+  planDuplicateComponent,
+  planExposeProperty,
+  planInsertPattern,
+  planRemoveExposedSlot,
+  planRemoveExposure,
+  planRenameExposure,
+  planRenameVariant,
+  planResetVariantValue,
+  planRetargetExposure,
+  planSaveAsComponent,
+  planSaveAsPattern,
+  planSetVariantValue,
+  planUpdatePatternFromSelection,
+  type CompositionPlan,
+  type CreatePlanResult,
+  type ExposeRequest,
+  type ExposureEdit,
+  type ExposureEditProblem,
+  type ExposureEditRefusal,
+  type ExposureEditResult,
+  type ExposureSources,
+  type ExposureTarget,
+  type InsertTarget,
+  type NewVariantSources,
+  type PlanProblem,
+  type PlanRefusal,
+  type PlanResult,
+  type PrunedVariant,
+  type StoredPattern,
+  type VariantEdit,
+  type VariantEditProblem,
+  type VariantEditRefusal,
+  type VariantEditResult,
+} from "@nextlyhq/blocks-engine";
+
+export {
+  DEFINITION_ACTION_KINDS,
+  definitionActionJsonSchema,
+  definitionActionSchema,
+  PAGE_ACTION_KINDS,
+  pageActionJsonSchema,
+  pageActionSchema,
+  planDefinitionAction,
+  type ActionPosition,
+  type DefinitionAction,
+  type DefinitionActionSources,
+  type ExposureTargetInput,
+  type PageAction,
+} from "./composition-actions";

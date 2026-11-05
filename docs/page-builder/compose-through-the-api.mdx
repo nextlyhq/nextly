@@ -15,7 +15,50 @@ ask what a change would do before making it.
 
 The routes are plugin routes under `/admin/api/plugins/@nextlyhq/plugin-page-builder`.
 They run as the caller, signed in or with an API key, with the same checks as the
-admin, and answer in the usual `{ message, item }` shape.
+admin, and answer in the usual `{ message, item }` shape. Start by reading the
+[manifest](#read-the-manifest): it lists every id the actions take.
+
+## Read the manifest
+
+```http
+GET /admin/api/plugins/@nextlyhq/plugin-page-builder/manifest
+```
+
+The manifest describes what the caller may compose with, read as the caller:
+
+- **`collections`**: where pages, patterns, components and Layouts live on this site,
+  under the names it gave them, and `componentField`, the field a component's
+  definition is stored in.
+- **`patterns.items`**: each pattern's `id`, `title`, and `granularity` where it has one.
+- **`components.items`**: each component's `id` and `title`, with the `fields` a
+  placement may set (`id`, `label`, `type`, and `options` for a select), the `slots` it
+  may fill, and its `variants` (`id` and `label`). Every component lists all three, empty
+  where it has none.
+- **`layouts.items`**: each Layout's `id`, `title`, whether it is `published`, whether it
+  `isDefault`, and the `regions` it draws (`area` and `componentId`). `layouts.defaultLayout`
+  is the site default's id. A Layout being removed is left out, since a page cannot
+  choose it.
+- **`actions`**: the actions below, each with its `path`, every `kind` it takes and the
+  JSON Schema of its `request` body.
+
+Each part says whether the caller could read it. A part whose collection the caller may
+not read answers `readable: false` with no items, and the rest is still answered.
+`truncated: true` means the site holds more than one read returns, under the same bounds
+the editor's panels read with. `?locale=fr` reads component and Layout text
+in that language.
+
+Every id an action takes comes from here: `place-component` takes a component's `id`,
+`variant` takes a variant's `id` (not its label, which can change), and `values` is keyed
+by a field's `id`. The manifest's schema is published as `compositionManifestSchema`, so
+a client can validate what it reads:
+
+```ts
+import { compositionManifestSchema } from "@nextlyhq/plugin-page-builder";
+
+const manifest = compositionManifestSchema.parse(await response.json());
+const card = manifest.components.items.find(item => item.title === "Card");
+const dark = card?.variants.find(variant => variant.label === "Dark");
+```
 
 ## How every action works
 
@@ -116,3 +159,61 @@ code, such as `label-taken`.
   `dryRun`, and their answers carry `by`.
 - [Importing a file](/docs/page-builder/moving-between-sites#through-the-api) takes
   `dryRun` and `expect` in the same way.
+
+## Validate and plan an action yourself
+
+The actions' schemas and planners are published from `@nextlyhq/builder/ops`, which
+loads on a server and in a browser alike. The routes parse their bodies with the same
+schemas, so an action the schema refuses is one the route refuses:
+
+```ts
+import {
+  definitionActionSchema,
+  pageActionSchema,
+  planDefinitionAction,
+} from "@nextlyhq/builder/ops";
+import { registryBlockSource } from "@nextlyhq/blocks-engine";
+
+const action = definitionActionSchema.parse({ kind: "add-variant", label: "Dark" });
+// The edit the route would make to this definition, or the planner's refusal.
+const plan = planDefinitionAction(definition, action, {
+  definitions: registryBlockSource(),
+});
+```
+
+`pageActionJsonSchema()` and `definitionActionJsonSchema()` give the same schemas as
+JSON Schema, for a tool that registers them as inputs. The editor's planners are
+published there too: `planInsertPattern`, `planSaveAsPattern`, `planSaveAsComponent`,
+`planExposeProperty`, `planAddVariant` and the rest.
+
+## Call the actions from your own server code
+
+A plugin route serving a request of its own, such as an endpoint an agent connects to,
+reaches the same actions without an HTTP round trip, through the page builder's
+`composition` service:
+
+```ts
+import {
+  COMPOSITION_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+  type CompositionService,
+} from "@nextlyhq/plugin-page-builder";
+
+// Inside your plugin's route handler, with its `ctx`:
+const composition = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[
+  COMPOSITION_SERVICE
+] as CompositionService;
+
+const manifest = await composition.manifest(ctx);
+const { message, item } = await composition.pageAction(ctx, {
+  page: { collection: "pages", id: pageId },
+  action: { kind: "choose-variant", instanceId, variant: "v-dark" },
+  dryRun: true,
+});
+```
+
+The first argument is the route context of the request being served: each call runs as
+that caller, with every check its route makes, the definition route's **update** right
+included, and answers what the route answers. A call with no signed-in caller is refused.
+Pass the context Nextly gave your handler, never one built by hand. Outside a plugin the
+service is `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.

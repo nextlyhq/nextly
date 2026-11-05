@@ -338,9 +338,16 @@ export async function readBodyWith<T extends z.ZodType>(
   schema: T,
   action: string
 ): Promise<z.infer<T>> {
-  let raw: unknown;
+  return parsedWith(await readJsonBody(req, action), schema);
+}
+
+/** A request's JSON body, or the refusal saying it is not one. */
+export async function readJsonBody(
+  req: Request,
+  action: string
+): Promise<unknown> {
   try {
-    raw = await req.json();
+    return (await req.json()) as unknown;
   } catch {
     throw NextlyError.validation({
       errors: [
@@ -352,13 +359,55 @@ export async function readBodyWith<T extends z.ZodType>(
       ],
     });
   }
+}
+
+/**
+ * What a schema reads: zod's own, from `nextly/zod` or from the builder's
+ * published actions, without asking that both name one copy of zod.
+ */
+export interface InputSchema<T> {
+  safeParse(value: unknown):
+    | { readonly success: true; readonly data: T }
+    | {
+        readonly success: false;
+        readonly error: {
+          readonly issues: readonly {
+            readonly path: readonly PropertyKey[];
+            readonly message: string;
+          }[];
+        };
+      };
+}
+
+/**
+ * `raw` parsed by `schema`, or the refusal naming what is wrong, each issue's
+ * path under `at` when the value sits inside a larger request.
+ */
+export function parsedWith<T>(
+  raw: unknown,
+  schema: InputSchema<T>,
+  at?: string
+): T {
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw NextlyError.validation({
     errors: parsed.error.issues.map(issue => ({
-      path: issue.path.join(".") || "body",
+      path:
+        [...(at === undefined ? [] : [at]), ...issue.path.map(String)].join(
+          "."
+        ) || "body",
       code: "INVALID",
       message: issue.message,
     })),
   });
+}
+
+/**
+ * What an action answers before it becomes a response: the mutation
+ * envelope's message and item. The route wraps it in `respondMutation`; the
+ * service hands it back as it is.
+ */
+export interface ActionAnswer<T> {
+  readonly message: string;
+  readonly item: T;
 }
