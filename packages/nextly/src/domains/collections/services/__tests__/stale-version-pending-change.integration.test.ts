@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { superAdminUser } from "../../../../__tests__/fixtures/permission-holders";
 import { defineCollection, number, text } from "../../../../config";
 import type { ApiKeyService } from "../../../auth/services/api-key-service";
+import { definePlugin } from "../../../../plugins/plugin-context";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -29,6 +30,26 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  versions = undefined;
+});
+
+/** The plugin service's history writes, as a plugin is handed them. */
+type PluginVersions = {
+  deleteWorkingDraft(
+    ref: { scopeKind: "collection"; scopeSlug: string; entryId: string },
+    locale: string | null,
+    opts?: unknown,
+    version?: Record<string, unknown>
+  ): Promise<number>;
+};
+let versions: PluginVersions | undefined;
+const probe = definePlugin({
+  name: "pending-change-version-probe",
+  version: "1.0.0",
+  nextly: ">=0.0.1",
+  init: ctx => {
+    versions = ctx.services.versions as unknown as PluginVersions;
+  },
 });
 
 const ARTICLES = "pc_articles";
@@ -40,6 +61,7 @@ type Doc = Record<string, unknown>;
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    plugins: [probe],
     collections: [
       defineCollection({
         slug: ARTICLES,
@@ -323,6 +345,37 @@ describe.each(getConfiguredTestDialects())(
         await save(t, id, "en", { title: "Ana's draft" }, ANA);
         const discarded = await restDiscard(t, id, {});
         expect(discarded.status, JSON.stringify(discarded.json)).toBe(200);
+      });
+
+      it("refuses a plugin's discard from an out-of-date version", async () => {
+        const t = await boot(dialect);
+        const id = await englishBehindSpanish(t);
+        const read = await englishRev(t, id);
+        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        const asAnaLeftIt = await pendingTitle(t, id);
+        const ref = {
+          scopeKind: "collection" as const,
+          scopeSlug: ARTICLES,
+          entryId: id,
+        };
+
+        let code: unknown;
+        try {
+          await versions!.deleteWorkingDraft(ref, "en", undefined, {
+            _rev: read,
+          });
+        } catch (error) {
+          code = (error as { code?: unknown }).code;
+        }
+        expect(code).toBe("STALE_VERSION");
+        expect(await pendingTitle(t, id)).toBe(asAnaLeftIt);
+
+        // From the current version, the plugin's discard goes ahead.
+        expect(
+          await versions!.deleteWorkingDraft(ref, "en", undefined, {
+            _rev: await englishRev(t, id),
+          })
+        ).toBe(1);
       });
 
       it("refuses a version that is not one, discarding nothing", async () => {
