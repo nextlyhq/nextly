@@ -8436,6 +8436,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  * glyph of its tracks over its name. The glyphs are muted foreground, enough
  * contrast as graphics in both schemes, and filled where chosen.
  */
+/* The tiles take the panel's width, under their label, so each reads whole. */
+.nx-inspector__field.nx-columns-layout__layout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.375rem;
+}
+
 .nx-columns-layout__tiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

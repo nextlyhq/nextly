@@ -89,7 +89,7 @@ export function ColumnsLayoutControl({
   };
   return (
     <div className="nx-columns-layout" data-control="columns-layout">
-      <div className="nx-inspector__field">
+      <div className="nx-inspector__field nx-columns-layout__layout">
         <span className="nx-inspector__field-name" id={labelId}>
           Layout
         </span>
