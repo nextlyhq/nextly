@@ -343,7 +343,9 @@ function singleFormDefaults(
  */
 function useSingleWriteGate(
   shown: { slug: string; documentId: string; locale: string | undefined },
-  resetToDocument: () => void
+  resetToDocument: () => void,
+  /** The version the editor's copy started from, which a take sends. */
+  version: () => string | undefined
 ) {
   const submissionLatch = useRef(false);
   const writesHeldNow = useRef(false);
@@ -371,6 +373,7 @@ function useSingleWriteGate(
     latch: submissionLatch,
     saveWithoutPublishing,
     resetToDocument,
+    version,
   });
   return {
     submissionLatch,
@@ -749,7 +752,8 @@ export function SingleForm({
       // it counts as a save too: the preview pane moves past the values it
       // replaced, and a recovery point from before it is withdrawn.
       setSavedCount(n => n + 1);
-    }
+    },
+    version.startedFrom
   );
 
   useEffect(() => {

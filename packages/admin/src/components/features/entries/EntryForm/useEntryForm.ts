@@ -551,6 +551,8 @@ function useEntryWriteGate(gate: {
     (() => Promise<DocumentActionOutcome>) | undefined
   >;
   onRecovered: (() => void) | undefined;
+  /** The version the editor's copy started from, which a take sends. */
+  version: () => string | undefined;
 }) {
   const submissionLatch = useRef(false);
   const scope = JSON.stringify([
@@ -571,6 +573,7 @@ function useEntryWriteGate(gate: {
       gate.form.reset(gate.defaultValues);
       gate.onRecovered?.();
     },
+    version: gate.version,
   });
   return { submissionLatch, scopeNow, refusedForm, recovering };
 }
@@ -688,6 +691,7 @@ export function useEntryForm({
       writesHeld,
       saveWithoutPublishing,
       onRecovered,
+      version: version.startedFrom,
     });
 
   useEffect(() => {

@@ -398,7 +398,12 @@ export const versionApi = {
    */
   takeLiveSharedValues: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version of the pending change's language the editor holds: a take
+     * is refused when the document changed since.
+     */
+    version?: string
   ): Promise<TakeLiveSharedValuesResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
@@ -406,7 +411,7 @@ export const versionApi = {
 
     return protectedApi.post<TakeLiveSharedValuesResponse>(
       `${basePath(scope)}/working-draft/take-live${query ? `?${query}` : ""}`,
-      {}
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
     );
   },
 
