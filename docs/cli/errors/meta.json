@@ -162,6 +162,8 @@
     "record-snapshot-needs-app-migration",
     "record-snapshot-storage-missing",
     "refused-statement",
+    "required-column-has-nulls",
+    "required-column-uncounted",
     "resolve-file-not-found",
     "resolve-lock-released",
     "resolve-mode-required",

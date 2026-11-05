@@ -91,6 +91,10 @@ import {
   findRegistryDisagreements,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
+import {
+  previewRequiredColumns,
+  refuseRequiredColumnsOverNulls,
+} from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -886,8 +890,17 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) {
+  for (const [at, m] of pendingFiles.entries()) {
     previewPendingFile(m, dialect, logger);
+    // The required columns a real run would refuse it over, from the same count: only for the
+    // first migration the run applies, since nothing before a later one is run here.
+    await previewRequiredColumns(
+      db,
+      dialect,
+      m,
+      logger,
+      at > 0 || pendingModules.length > 0
+    );
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
@@ -1326,6 +1339,10 @@ export async function runPluginPhase(
       readLiveTables(deps.db, deps.dialect, [statements]),
     liveIndexTables: statements =>
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
+    // The same before-run count an app file gets: a plugin's module reaches the shared runner
+    // through this phase, not through `runFileMigrations`.
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -2394,6 +2411,8 @@ export async function runFileMigrations(args: {
       transaction: m.transaction,
       unit: "file",
     });
+    // A column made required over rows that would break it: refused here, before any statement.
+    await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
     // A file adding per-language unique indexes is refused here, before the ledger records an
     // attempt and before any statement, where one cannot hold. It also answers with the UP to
     // run on THIS database, which leaves out an index already installed here.
