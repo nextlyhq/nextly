@@ -892,6 +892,7 @@ Every entry and Single carries a version, `_rev`, on every result that returns i
 
 ```typescript
 const post = await nextly.findByID({ collection: "posts", id: "abc-123" });
+if (!post) throw new Error("No such post");
 
 const { item } = await nextly.update({
   collection: "posts",
@@ -912,6 +913,8 @@ written. Its `publicData` carries `currentVersion`, and, where the caller may re
 `changedBy` and `changedAt` (a trusted call may):
 
 ```typescript
+import { NextlyError } from "nextly";
+
 try {
   await nextly.update({
     collection: "posts",
