@@ -314,9 +314,9 @@ export class CollectionEntryService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       /** A grant waiving the collection's read hooks, honoured by the query service. */
       hookExemptRead?: HookExemptRead;
-    } /** The sort and offset, as the query service reads them. */ & Pick<
+    } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort"
+      "sort" | "offset" | "unknownSort" | "hiddenFields"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -360,6 +360,8 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /** Fields the read leaves out, refused in its filter; see the query service. */
+    hiddenFields?: ReadonlySet<string>;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??

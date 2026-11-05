@@ -36,11 +36,6 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
-  hiddenPathsFor,
-  refuseHiddenQuery,
-  withoutHiddenFields,
-} from "./hidden-fields";
-import {
   accessOptions,
   buildMutationMessage,
   callerAccess,
@@ -48,6 +43,7 @@ import {
   isNotFoundError,
   mergeConfig,
 } from "./helpers";
+import { hiddenFieldRead } from "./hidden-fields";
 
 /**
  * Find multiple documents in a collection.
@@ -65,19 +61,19 @@ export async function find<TSlug extends CollectionSlug>(
   args: FindArgs<TSlug>
 ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
-  // Judged before the read: a filter or a sort on a field this read leaves
-  // out is refused, since the rows it keeps would reveal the value.
-  const hidden = await hiddenPathsFor(config, {
-    kind: "collection",
-    slug: args.collection,
-  });
-  refuseHiddenQuery(args, hidden);
+  // One per call: the refusal and every row returned read each source's
+  // declarations once.
+  const hiding = hiddenFieldRead(config);
+  const source = { kind: "collection", slug: args.collection } as const;
 
   const result = await ctx.collectionsHandler.listEntries({
     collectionName: args.collection,
     page: args.page,
     offset: args.offset,
     unknownSort: args.unknownSort,
+    // A filter or a sort on a field this read leaves out is refused past the
+    // read gate, since the rows it keeps would reveal the value.
+    hiddenFields: await hiding.pathsOf(source),
     limit: args.limit,
     where: args.where,
     // From `args`, never from `config`: an exemption that `mergeConfig` could
@@ -113,12 +109,7 @@ export async function find<TSlug extends CollectionSlug>(
 
   return {
     items: await Promise.all(
-      legacy.docs.map(doc =>
-        withoutHiddenFields(doc, config, {
-          kind: "collection",
-          slug: args.collection,
-        })
-      )
+      legacy.docs.map(doc => hiding.without(doc, source))
     ),
     meta: {
       total,
@@ -167,9 +158,8 @@ export async function findByID<TSlug extends CollectionSlug>(
       throw createErrorFromResult(result);
     }
 
-    return await withoutHiddenFields(
+    return await hiddenFieldRead(config).without(
       result.data as RowFromCollectionSlug<TSlug>,
-      config,
       { kind: "collection", slug: args.collection }
     );
   } catch (error) {
@@ -421,6 +411,22 @@ export async function deleteEntry<
 }
 
 /**
+ * The fields an aggregate refuses in its filter or its key, where its call
+ * passes `showHiddenFields: false`: the count, the buckets or the timeline
+ * would reveal the value a read leaves out. Refused past the read gate, as
+ * `find` refuses them.
+ */
+function aggregateHiddenFields(
+  config: Parameters<typeof hiddenFieldRead>[0],
+  collection: string
+): Promise<ReadonlySet<string>> {
+  return hiddenFieldRead(config).pathsOf({
+    kind: "collection",
+    slug: collection,
+  });
+}
+
+/**
  * Count documents matching a query.
  *
  * `collectionsHandler.countEntries()` service still produces the legacy
@@ -435,6 +441,7 @@ export async function count(
 
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
+    hiddenFields: await aggregateHiddenFields(config, args.collection),
     where: args.where,
     // From `args`, never `config` -- same reason as `find`: an inheritable
     // exemption would reach nested reads a caller's own `where` travels into.
@@ -475,6 +482,7 @@ export async function group(
 
   const result = await ctx.collectionsHandler.groupEntries({
     collectionName: args.collection,
+    hiddenFields: await aggregateHiddenFields(config, args.collection),
     groupBy: args.groupBy,
     where: args.where,
     // From `args`, never `config`, for the reason `count` takes it from
@@ -539,6 +547,7 @@ export async function timeseries(
 
   const result = await ctx.collectionsHandler.timeseriesEntries({
     collectionName: args.collection,
+    hiddenFields: await aggregateHiddenFields(config, args.collection),
     dateField: args.dateField,
     interval: args.interval,
     where: args.where,

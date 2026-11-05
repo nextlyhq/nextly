@@ -610,6 +610,11 @@ export class CollectionsHandler {
     offset?: number;
     /** Refuse a sort key that names no sortable field instead of dropping it. */
     unknownSort?: "drop" | "refuse";
+    /**
+     * Fields the read leaves out of its rows: a filter or sort naming one is
+     * refused, after the read gate. See the query service's `hiddenFields`.
+     */
+    hiddenFields?: ReadonlySet<string>;
     /** Number of documents per page (default: 10, max: 500) */
     limit?: number;
     /** Search query to filter entries by searchable fields */
@@ -889,6 +894,8 @@ export class CollectionsHandler {
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
     request?: Request;
+    /** Fields the read leaves out, refused in its filter after the read gate. */
+    hiddenFields?: ReadonlySet<string>;
   }) {
     return this.entryService.countEntries(params);
   }
