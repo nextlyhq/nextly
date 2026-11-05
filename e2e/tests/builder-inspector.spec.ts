@@ -569,14 +569,15 @@ test.describe("the inspector", () => {
       const section =
         trigger?.closest("[data-section]")?.getAttribute("data-section") ??
         null;
+      // Read BEFORE the press: the press starts Size's own animation, which
+      // would otherwise answer "still moving" for a section above that had
+      // already come to rest.
+      const stillMoving =
+        (document
+          .querySelector(".nx-style-inspector")
+          ?.getAnimations({ subtree: true }).length ?? 0) > 0;
       if (trigger instanceof HTMLElement) trigger.click();
-      return {
-        section,
-        stillMoving:
-          (document
-            .querySelector(".nx-style-inspector")
-            ?.getAnimations({ subtree: true }).length ?? 0) > 0,
-      };
+      return { section, stillMoving };
     });
     expect(hit.section).toBe("size");
     expect(hit.stillMoving, "pressed while the section above opens").toBe(true);
