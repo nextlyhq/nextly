@@ -54,12 +54,12 @@ import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
-  namedClassName,
   namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  classNameOf,
   isLook,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
@@ -2338,7 +2338,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         cls.styles,
-        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        `${pageRoot} .${escapeIdentifier(classNameOf(cls))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
         pointer(pointer("/classes", String(position)), "styles"),
@@ -2363,7 +2363,7 @@ export function compilePageCss(
     // A class that makes a container flex or grid swaps the flow margin for
     // `gap` on each container type that wears it here, exactly as a node's
     // own display does below.
-    const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
+    const classSelector = `.${escapeIdentifier(classNameOf(cls))}`;
     for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
       const flow = flowGaps.get(type);
       if (flow === undefined) continue;
@@ -2613,7 +2613,7 @@ export function compilePageCss(
           });
           continue;
         }
-        names.push(namedClassName(cls.slug));
+        names.push(classNameOf(cls));
       }
     }
     attributeClasses.set(node.id, names.join(" "));

@@ -1047,7 +1047,7 @@ describe("a look, a class bound to one block type", () => {
       outline,
       card,
     ]);
-    expect(at(css, ".nx-c-box-outline")).toBeLessThan(at(css, ".nx-c-card"));
+    expect(at(css, ".nx-l-box-outline")).toBeLessThan(at(css, ".nx-c-card"));
   });
 
   it("keeps library order among looks", () => {
@@ -1061,8 +1061,8 @@ describe("a look, a class bound to one block type", () => {
       outline,
       rounded,
     ]);
-    expect(at(css, ".nx-c-box-rounded")).toBeLessThan(
-      at(css, ".nx-c-box-outline")
+    expect(at(css, ".nx-l-box-rounded")).toBeLessThan(
+      at(css, ".nx-l-box-outline")
     );
   });
 });

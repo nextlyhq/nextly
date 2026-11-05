@@ -682,9 +682,10 @@ function lookKept(
   after: readonly NodeStyles[],
   own: NodeStyles,
   set: BreakpointSet | undefined
-): NodeStyles {
+): NodeStyles | undefined {
   let kept = own;
-  for (const situation of lookSituations(set)) {
+  const situations = lookSituations(set);
+  for (const situation of situations) {
     const now = shownIn([...after, kept], situation);
     for (const [key, was] of shownIn([...before, own], situation)) {
       const shown = now.get(key);
@@ -697,8 +698,39 @@ function lookKept(
       );
     }
   }
-  return kept;
+  /*
+   * Checked as a whole once written: a look that depends on a viewport and a
+   * container width together can need two values at one place, which the
+   * block's own rules, having no combined queries, cannot hold. Detach then
+   * keeps nothing rather than a look that differs somewhere.
+   */
+  const keeps = situations.every(situation =>
+    sameLook(
+      shownIn([...before, own], situation),
+      shownIn([...after, kept], situation)
+    )
+  );
+  return keeps ? kept : undefined;
 }
+
+/** Whether two situations show every leaf alike, none missing from either. */
+function sameLook(
+  was: ReadonlyMap<string, StyleLeafValue>,
+  now: ReadonlyMap<string, StyleLeafValue>
+): boolean {
+  if (was.size !== now.size) return false;
+  for (const [key, leaf] of was) {
+    const shown = now.get(key);
+    if (shown === undefined || !sameStyleValue(shown.value, leaf.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Why a style can't be detached when its look can't be kept exactly. */
+export const DETACH_LOOK_NOT_KEPT =
+  "This look depends on screen and container width together, so it can't be detached yet.";
 
 /**
  * "Detach": keep the look on this block only. The style is taken off the
@@ -706,7 +738,9 @@ function lookKept(
  * every state and at every width: the detached style's values where they win,
  * and, since the block's own rules come after every style's, a later style's
  * narrower or interaction-state value wherever the copy would otherwise beat
- * it. The block's own values are kept as they are. A page edit, so a locked
+ * it. The block's own values are kept as they are. Where that can't be done
+ * exactly (a look that depends on a viewport and a container width
+ * together), it refuses and the style stays worn. A page edit, so a locked
  * style may be detached; the block's own lock refuses.
  *
  * @param worn - every shared style the block wears, in library order
@@ -727,12 +761,15 @@ export function planDetachSharedStyle(
   const listed = worn.some(row => row.id === style.id);
   const before = [...(listed ? [] : [style]), ...worn].map(row => row.styles);
   const after = worn.filter(row => row.id !== style.id).map(row => row.styles);
+  const kept = lookKept(before, after, node.styles ?? {}, breakpoints);
+  // Refused, the style still worn, rather than a look changed quietly.
+  if (kept === undefined) return { ok: false, reason: DETACH_LOOK_NOT_KEPT };
   return {
     ok: true,
     ops: [
       nodeStylesAndClassesOp(
         nodeId,
-        lookKept(before, after, node.styles ?? {}, breakpoints),
+        kept,
         withClassRemoved(node.classes ?? [], style.id)
       ),
     ],

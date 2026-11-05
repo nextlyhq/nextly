@@ -7,7 +7,12 @@ import { MAX_NAMED_CLASSES } from "../document";
 
 import { blockLooks, lookClassId } from "./block-looks";
 import { compilePageCss } from "./compile-page";
-import { isLook, namedClassesRead } from "./named-class";
+import {
+  classNameOf,
+  isLook,
+  isUsableNamedClass,
+  namedClassesRead,
+} from "./named-class";
 
 const colour = (color: string): NodeStyles =>
   ({ base: { base: { color } } }) as unknown as NodeStyles;
@@ -76,10 +81,10 @@ describe("a block type's looks, as the site receives them", () => {
       );
     // The control: on a button the look's class is put on the element.
     expect(on("core/button").classes.get("n1")).toContain(
-      "nx-c-button-outline"
+      "nx-l-button-outline"
     );
     const box = on("core/box");
-    expect(box.classes.get("n1") ?? "").not.toContain("nx-c-button-outline");
+    expect(box.classes.get("n1") ?? "").not.toContain("nx-l-button-outline");
     expect(box.warnings.map(each => each.code)).toContain(
       "look-for-another-block"
     );
@@ -112,8 +117,8 @@ describe("a block type's looks, as the site receives them", () => {
       namedClasses: [card, outline],
     });
     // The population first: both rules are written.
-    expect(css).toContain(".nx-c-button-outline { color: red }");
-    expect(css.indexOf(".nx-c-button-outline")).toBeLessThan(
+    expect(css).toContain(".nx-l-button-outline { color: red }");
+    expect(css.indexOf(".nx-l-button-outline")).toBeLessThan(
       css.indexOf(".nx-c-card")
     );
   });
@@ -132,5 +137,40 @@ describe("looks and the library cap", () => {
     const read = namedClassesRead([...looks, ...shared]);
     expect(read.filter(each => !isLook(each))).toHaveLength(MAX_NAMED_CLASSES);
     expect(read.filter(each => isLook(each))).toHaveLength(looks.length);
+  });
+});
+
+describe("a look's own name and binding", () => {
+  it("is written under its own prefix, apart from shared styles", () => {
+    expect(
+      classNameOf({ slug: "image-rounded", blockType: "core/image" })
+    ).toBe("nx-l-image-rounded");
+    expect(classNameOf({ slug: "image-rounded" })).toBe("nx-c-image-rounded");
+  });
+
+  it("refuses a binding that is not a block type", () => {
+    const bound = (blockType: unknown) =>
+      isUsableNamedClass({
+        id: "x",
+        slug: "x",
+        orderIndex: 0,
+        styles: {},
+        blockType,
+      });
+    expect(bound("core/button")).toBe(true);
+    expect(bound(undefined)).toBe(true);
+    expect(bound("")).toBe(false);
+    expect(bound("button")).toBe(false);
+  });
+
+  it("reads no more than the look cap, even in a small library", () => {
+    const many = Array.from({ length: 600 }, (_, index) => ({
+      id: `look:core/button:l${index}`,
+      slug: `button-l${index}`,
+      orderIndex: index,
+      blockType: "core/button",
+      styles: colour("red"),
+    }));
+    expect(namedClassesRead(many)).toHaveLength(512);
   });
 });

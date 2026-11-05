@@ -75,6 +75,11 @@ export interface EditingBarProps {
   readonly onRemove?: (id: string) => void;
   /** Keep the style's look on this block only. Absent withholds the item. */
   readonly onDetach?: (id: string) => void;
+  /**
+   * Why one style can't be detached, when its look can't be kept exactly:
+   * asked as its menu opens, so the item is held with the reason beside it.
+   */
+  readonly detachHeld?: (id: string) => string | undefined;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
   /**
@@ -111,6 +116,7 @@ export function EditingBar({
   onTargetChange,
   onRemove,
   onDetach,
+  detachHeld,
   chipActionsHeld,
   targetHeld,
   actions,
@@ -179,6 +185,7 @@ export function EditingBar({
                   chip={chip}
                   onRemove={onRemove}
                   onDetach={onDetach}
+                  detachHeld={detachHeld}
                   held={chipActionsHeld}
                 />
               </span>
@@ -407,11 +414,13 @@ function ChipMenu({
   chip,
   onRemove,
   onDetach,
+  detachHeld,
   held,
 }: {
   chip: EditingBarChip;
   onRemove: ((id: string) => void) | undefined;
   onDetach: ((id: string) => void) | undefined;
+  detachHeld: ((id: string) => string | undefined) | undefined;
   held: string | undefined;
 }): React.JSX.Element | null {
   if (onRemove === undefined && onDetach === undefined) return null;
@@ -430,17 +439,19 @@ function ChipMenu({
         </button>
       </DropdownMenuTrigger>
       {/* Kept clear of the window's edge. */}
-      <DropdownMenuContent align="start" collisionPadding={8}>
+      <DropdownMenuContent
+        align="start"
+        collisionPadding={8}
+        className="nx-editing-bar__menu"
+      >
         {onDetach === undefined ? null : (
-          <DropdownMenuItem
-            disabled={held !== undefined}
+          <DetachItem
+            held={held}
+            whyHeld={
+              detachHeld === undefined ? undefined : () => detachHeld(chip.id)
+            }
             onSelect={() => onDetach(chip.id)}
-          >
-            Detach: keep the look on this block only
-            {held === undefined ? null : (
-              <span className="nx-block-card__reason"> — {held}</span>
-            )}
-          </DropdownMenuItem>
+          />
         )}
         {onRemove === undefined ? null : (
           <DropdownMenuItem
@@ -452,6 +463,41 @@ function ChipMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * "Detach", or why it is held: the block's lock, or a look that can't be
+ * kept exactly. Its own component, so the reason is asked only while the
+ * menu is open.
+ */
+function DetachItem({
+  held,
+  whyHeld,
+  onSelect,
+}: {
+  /** The block's lock, known already. */
+  held: string | undefined;
+  /** Why this style can't be detached, asked here, as the menu opens. */
+  whyHeld: (() => string | undefined) | undefined;
+  onSelect: () => void;
+}): React.JSX.Element {
+  // Asked while drawing the open menu only: answering plans the detach,
+  // which the bar's every render need not pay for.
+  const reason = held ?? whyHeld?.();
+  return (
+    <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
+      <span className="nx-editing-bar__item-words">
+        <span>Detach: keep the look on this block only</span>
+        {reason === undefined ? null : (
+          <span className="nx-editing-bar__item-reason">
+            {/* Heard as one sentence; read as a line of its own. */}
+            <span className="nx-sr-only"> — </span>
+            {reason}
+          </span>
+        )}
+      </span>
+    </DropdownMenuItem>
   );
 }
 
