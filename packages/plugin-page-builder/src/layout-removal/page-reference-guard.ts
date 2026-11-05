@@ -58,7 +58,11 @@ import type { Nextly } from "nextly";
 import { relationId } from "../default-layout/store";
 import { documentVersionOf, withVersionFrom } from "../document-version";
 
-import { confirmedGone, unlessGone } from "./layout-references";
+import {
+  confirmedGone,
+  unlessGone,
+  type PersonReads,
+} from "./layout-references";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
@@ -81,6 +85,7 @@ interface PageHookContext {
   operation?: unknown;
   data?: unknown;
   originalData?: unknown;
+  context?: Record<string, unknown>;
   executor?: unknown;
   req?: { nextly?: unknown };
 }
@@ -215,6 +220,33 @@ async function judgeInTransaction(
   return undefined;
 }
 
+/**
+ * The hook-context key a clear carries the Layout it read under, so the write
+ * is refused if the page names another one by the time core judges it.
+ * Namespaced by plugin so no other caller's key collides with it.
+ */
+export const LAYOUT_CLEAR_CONTEXT_KEY = "pageBuilder.layoutClear";
+
+/**
+ * The before-update check for a clear: the page must still name the Layout the
+ * clear read. Another author's choice made since that read is newer than the
+ * clear, so it is kept and the clear refused, rather than overwritten.
+ */
+async function refuseStaleClear(
+  hook: PageHookContext,
+  args: PageReferenceGuardArgs
+): Promise<void> {
+  const expected = hook.context?.[LAYOUT_CLEAR_CONTEXT_KEY];
+  if (typeof expected !== "string") return;
+  if ((await storedLayoutOf(hook, args.pages)) === expected) return;
+  throw NextlyError.conflict({
+    logContext: { reason: PAGE_CHANGED_SINCE_READ, layoutId: expected },
+  });
+}
+
+/** The log reason a clear refused for a page that moved on carries. */
+const PAGE_CHANGED_SINCE_READ = "page-layout-changed-since-read";
+
 /** Whether a removal is past the point where it can still stop. */
 function pastItsFinalCheck(removal: LayoutRemoval): boolean {
   return (
@@ -233,6 +265,12 @@ const CLEAR_ATTEMPTS = 3;
  * unpublished one. Answers whether it cleared anything. The write leaves the
  * status out, so a published page's live row is untouched.
  *
+ * The write runs as the system, for a page write already in flight that the
+ * fence could not stop, unless `writeAs` names a person: then it runs as them,
+ * their own access deciding, and a page they may not edit is refused with
+ * their write's own error. The read of where the page stands is the system's
+ * either way: it decides only whether there is anything to clear.
+ *
  * Sent with the version of the read it was decided on, so a save of the page
  * in between refuses it rather than being undone. The page is then read
  * again and judged afresh: cleared if it still names the Layout, left alone
@@ -242,11 +280,12 @@ export async function clearPageReference(
   nextly: PageReads,
   pages: string,
   pageId: string,
-  layoutId: string
+  layoutId: string,
+  writeAs?: PersonReads
 ): Promise<boolean> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await clearOnce(nextly, pages, pageId, layoutId);
+      return await clearOnce(nextly, pages, pageId, layoutId, writeAs);
     } catch (error) {
       if (
         attempt >= CLEAR_ATTEMPTS ||
@@ -263,7 +302,8 @@ async function clearOnce(
   nextly: PageReads,
   pages: string,
   pageId: string,
-  layoutId: string
+  layoutId: string,
+  writeAs: PersonReads | undefined
 ): Promise<boolean> {
   const current = await currentPage(nextly, pages, pageId);
   if (current === null || relationId(current.layout) !== layoutId) {
@@ -271,17 +311,43 @@ async function clearOnce(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
-  // A page deleted since the read has nothing left to clear.
-  const cleared = await unlessGone(
-    nextly.update({
-      collection: pages,
-      id: pageId,
-      data: withVersionFrom({ layout: null }, documentVersionOf(current)),
-      overrideAccess: true,
-    }),
-    () => confirmedGone(nextly, pages, pageId)
-  );
-  return cleared !== null;
+  // A page deleted since the read has nothing left to clear, and one that
+  // names another Layout by the time its write is judged keeps that choice.
+  try {
+    const cleared = await unlessGone(
+      nextly.update({
+        collection: pages,
+        id: pageId,
+        data: withVersionFrom({ layout: null }, documentVersionOf(current)),
+        context: { [LAYOUT_CLEAR_CONTEXT_KEY]: layoutId },
+        ...(writeAs ?? { overrideAccess: true }),
+      }),
+      () => confirmedGone(nextly, pages, pageId)
+    );
+    return cleared !== null;
+  } catch (error) {
+    if (await movedOnSinceTheRead(nextly, pages, pageId, layoutId, error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether a refused clear was refused because the page no longer names the
+ * Layout. Decided by reading the page again, not by the refusal's details,
+ * which core replaces on the way out of a hook.
+ */
+async function movedOnSinceTheRead(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  error: unknown
+): Promise<boolean> {
+  if (!NextlyError.isCode(error, "CONFLICT")) return false;
+  const current = await currentPage(nextly, pages, pageId);
+  return current === null || relationId(current.layout) !== layoutId;
 }
 
 /** The page and the Layout a committed page write names, or null. */
@@ -341,9 +407,10 @@ export function registerPageReferenceGuard(args: PageReferenceGuardArgs): void {
   ctx.hooks.on("beforeCreate", pages, context =>
     refuseAddedReference(context as PageHookContext, args, true)
   );
-  ctx.hooks.on("beforeUpdate", pages, context =>
-    refuseAddedReference(context as PageHookContext, args, false)
-  );
+  ctx.hooks.on("beforeUpdate", pages, async context => {
+    await refuseStaleClear(context as PageHookContext, args);
+    return refuseAddedReference(context as PageHookContext, args, false);
+  });
   ctx.hooks.on("afterCreate", pages, context =>
     clearInFlight(context as PageHookContext, args, "afterCreate")
   );

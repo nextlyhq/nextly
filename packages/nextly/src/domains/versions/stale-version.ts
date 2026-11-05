@@ -684,10 +684,12 @@ async function staleVersionRefusal(args: {
 }
 
 /**
- * Whether the caller of a refused update may read the document: the same
- * decision a read of it gets (`assertVersionDocumentReadable`, draft and
- * published visibility, row rules and read hooks included). A trusted server
- * caller may; a caller with no account may not be told who changed it.
+ * Whether the caller of a refused update may be told who changed the document
+ * and when: whether their own read of it returns it in each language the
+ * refusal reports (`readsAsItsCaller`, the read rule and its filter, draft and
+ * published visibility and read hooks included). A trusted server caller may. An anonymous visitor
+ * never is, even one the Public role lets read the document: who changed it is
+ * part of its history, which visitors are never shown.
  *
  * @experimental
  */
@@ -704,27 +706,71 @@ async function callerMayReadDocument(args: {
 }): Promise<boolean> {
   if (args.trusted) return true;
   if (!args.user) return false;
-  // Loaded when a refusal is built, not with the write path: the gate reads
-  // the version and access services, which an ordinary save never needs.
-  const { assertVersionDocumentReadable } = await import(
-    "../../api/versions-access"
-  );
-  try {
-    await assertVersionDocumentReadable(
-      args.scopeKind,
-      args.slug,
-      args.entryId,
-      args.user,
-      args.authenticatedScope,
-      args.hookInputs ?? {},
-      args.locales ?? []
-    );
-    return true;
-  } catch (error) {
-    // The gate answers "not found" for a document the caller may not read.
-    if (NextlyError.is(error) && error.code === "NOT_FOUND") return false;
-    throw error;
+  // In each language the refusal reports, or the default one.
+  const locales: readonly (string | undefined)[] =
+    args.locales && args.locales.length > 0 ? args.locales : [undefined];
+  for (const locale of locales) {
+    if (!(await readsAsItsCaller({ ...args, user: args.user, locale }))) {
+      return false;
+    }
   }
+  return true;
+}
+
+/**
+ * Whether the caller's own read of the document, in `locale`, would return
+ * it: the whole read decision, the collection's or Single's read rule and its
+ * filter included. Not a route's: an update request carries no read verdict,
+ * so a read asked as one a route already authorized would allow every
+ * signed-in caller without asking the rule. Anything but a read that returns
+ * this document counts as "may not read", so who changed it is never told on
+ * a failure.
+ */
+async function readsAsItsCaller(args: {
+  scopeKind: "collection" | "single";
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  hookInputs?: { request?: Request; context?: Record<string, unknown> };
+  locale: string | undefined;
+}): Promise<boolean> {
+  // Loaded when a refusal is built, not with the write path: the reads go
+  // through the services an ordinary save never needs.
+  if (args.scopeKind === "single") {
+    const { singleDocumentReadable } = await import(
+      "../singles/services/single-document-access"
+    );
+    try {
+      return await singleDocumentReadable(args.slug, {
+        user: args.user,
+        routeAuthorized: false,
+        ...(args.authenticatedScope === undefined
+          ? {}
+          : { actor: args.authenticatedScope }),
+        ...(args.locale === undefined ? {} : { locale: args.locale }),
+        ...args.hookInputs,
+      });
+    } catch {
+      return false;
+    }
+  }
+  const { getService } = await import("../../di");
+  const result = (await getService("collectionsHandler").getEntry({
+    collectionName: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    authenticatedScope: args.authenticatedScope,
+    // Drafts too: the refusal is about the document as it is stored.
+    status: "all",
+    ...args.hookInputs,
+    ...(args.locale === undefined ? {} : { locale: args.locale }),
+  } as never)) as { success: boolean; resolvedEntryId?: unknown };
+  // The read must be of this document: a hook may rewrite the id a read
+  // resolves, and another document's rules would not decide this one.
+  return result.success && result.resolvedEntryId === args.entryId;
 }
 
 /**

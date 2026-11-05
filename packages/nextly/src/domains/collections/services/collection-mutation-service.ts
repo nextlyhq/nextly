@@ -249,6 +249,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  type CompanionReadiness,
   companionFoundMissing,
   companionNotReadyMessage,
   isCompanionReady,
@@ -414,7 +415,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
-import { entryWriteContext } from "./stored-field-read";
+import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -3196,6 +3197,49 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * Whether a collection's translation table is ready to be written: what a
+   * localized write decides from (`splitLocalizedWriteData`), and what a
+   * save's version is judged by, so a save is judged on a language exactly
+   * when its write goes to that language's row. Inside a caller's
+   * transaction (`executor`) only a remembered verdict is read; see there.
+   */
+  private async companionReadinessOf(
+    companion: {
+      companionTableName: string;
+      localizedFields: readonly { column: string }[];
+    },
+    executor?: unknown
+  ): Promise<CompanionReadiness | undefined> {
+    return executor
+      ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
+      : await resolveCompanionReadiness(this.adapter, {
+          companionTableName: companion.companionTableName,
+          mainTableName: companion.companionTableName.replace(/_locales$/, ""),
+          localizedColumns: companion.localizedFields.map(f => f.column),
+        });
+  }
+
+  /**
+   * A collection's translation schema when its table is ready to be written,
+   * else null: the languages a save's version must name are those of a ready
+   * table, as a read's version names them only then.
+   */
+  private async readyCompanionOf(
+    collectionName: string,
+    executor?: unknown
+  ): Promise<{ companionTableName: string } | null> {
+    if (!this.localization) return null;
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      executor
+    );
+    if (!companion) return null;
+    return (await this.companionReadinessOf(companion, executor)) === "ready"
+      ? companion
+      : null;
+  }
+
   private async splitLocalizedWriteData(
     collectionName: string,
     entryData: Record<string, unknown>,
@@ -3238,7 +3282,6 @@ export class CollectionMutationService extends BaseService {
     //
     // Resolved here, before the transaction opens. Everything downstream — including the read-back
     // that runs inside it — reads the answer rather than asking again.
-    const mainTableName = companion.companionTableName.replace(/_locales$/, "");
     // Inside a caller's transaction the verdict may only be REMEMBERED, never
     // resolved: resolving issues a pooled query, which waits for the
     // connection this transaction holds, and on PostgreSQL a query against a
@@ -3260,13 +3303,7 @@ export class CollectionMutationService extends BaseService {
     // turn the first case into an error to buy a better message for the
     // second. Unknown is handled below as any other
     // not-ready answer is, which is the same fallback as before.
-    const readiness = executor
-      ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
-      : await resolveCompanionReadiness(this.adapter, {
-          companionTableName: companion.companionTableName,
-          mainTableName,
-          localizedColumns: companion.localizedFields.map(f => f.column),
-        });
+    const readiness = await this.companionReadinessOf(companion, executor);
     if (readiness !== "ready") {
       // The main table carries no language of its own, so anything written there
       // while the companion is missing is later read as the DEFAULT language —
@@ -12761,30 +12798,27 @@ export class CollectionMutationService extends BaseService {
     // and named in the answer so it can be sent back with the same save.
     // Read before any hook has split the body, so taken from the request:
     // every language for a sweep, else the one it names or the default.
-    const companion = this.localization
-      ? await this.fileManager.loadCompanionSchema(params.collectionName)
-      : null;
+    const companion = await this.readyCompanionOf(params.collectionName);
+    const requested = this.localization
+      ? resolveRequestedLocale(this.localization, params.locale)
+      : undefined;
     const locales =
-      companion && this.localization
+      companion && this.localization && requested !== undefined
         ? sweep
           ? this.localization.locales.map(l => l.code)
-          : [resolveRequestedLocale(this.localization, params.locale)]
+          : [requested]
         : [];
-    // A version from a read of another language, or for a sweep one that
-    // does not name every language, can't be judged: refused here, before
-    // any hook runs, as the validation error it is.
-    if (locales.length > 0) {
-      try {
-        if (sweep) assertVersionNamesEvery(check.given, locales);
-        else judgedLanguage(check.given, locales[0]);
-      } catch (error) {
-        return errorToServiceResult(
-          error,
-          { defaultMessage: "Failed to update entry" },
-          this.dialect
-        );
+    const unjudgeable = await this.unjudgeableVersionAnswer(
+      params,
+      check.given,
+      {
+        ready: companion !== null,
+        requested,
+        locales,
+        sweep,
       }
-    }
+    );
+    if (unjudgeable) return unjudgeable;
     const at: StaleWrite =
       companion && locales.length > 0
         ? { table, languages: { table: companion.companionTableName, locales } }
@@ -12797,6 +12831,48 @@ export class CollectionMutationService extends BaseService {
       languages: at.languages,
     });
     return stale ? this.staleVersionAnswer(params, check.given, at) : null;
+  }
+
+  /**
+   * The refusal of a version that can't be judged, before any hook runs, as
+   * the validation error it is: one from a read of another language, one for
+   * a sweep that does not name every language, or, before the translation
+   * table is ready, one for a save in another language than the default,
+   * which has nowhere to go and whose read named no language. Null for a
+   * version that can be judged.
+   */
+  private async unjudgeableVersionAnswer(
+    params: { collectionName: string },
+    given: DecodedVersion,
+    args: {
+      /** Whether the translation table is ready. */
+      ready: boolean;
+      /** The save's language, as the request names it. */
+      requested: string | undefined;
+      /** The languages it is judged on, where the table is ready. */
+      locales: readonly string[];
+      sweep: boolean;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const notReadyLanguage =
+      !args.ready &&
+      !args.sweep &&
+      args.requested !== undefined &&
+      args.requested !== this.localization?.defaultLocale &&
+      (await this.fileManager.loadCompanionSchema(params.collectionName)) !==
+        null;
+    try {
+      if (notReadyLanguage) judgedLanguage(given, args.requested);
+      else if (args.sweep) assertVersionNamesEvery(given, args.locales);
+      else if (args.locales.length > 0) judgedLanguage(given, args.locales[0]);
+      return null;
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
   }
 
   /**
@@ -13013,9 +13089,9 @@ export class CollectionMutationService extends BaseService {
     let outOfDateShared:
       | { fields: string[]; live: Record<string, unknown> }
       | undefined;
-    // A promotion refused under the row lock, for what its stored relations
-    // hold once locked; read after the transaction, as the adapter wraps
-    // what is thrown out of it.
+    // A write refused under the row lock: a promotion, for what its stored
+    // relations hold once locked, or a conditional write, for a value no
+    // longer the one its writer read; read after the transaction, as above.
     const lockedPromotion: { refusal?: NextlyError } = {};
     // Set when the version the caller gave is found out of date inside the
     // transaction: where to read the current one once it has rolled back.
@@ -13563,9 +13639,11 @@ export class CollectionMutationService extends BaseService {
       // judged on, or for a sweep of every language, each of them, all of
       // which a sweep's version names and all of which it is judged on.
       const sweepCompanion =
-        // An overwrite reads them too, to say whose change it replaced.
+        // An overwrite reads them too, to say whose change it replaced. Only
+        // where the translation table is ready, as a read names languages
+        // only then.
         sweepAllLocales && versionCheck.kind !== "unjudged"
-          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          ? await this.readyCompanionOf(params.collectionName)
           : null;
       const judgedLanguages = sweepCompanion
         ? {
@@ -13988,6 +14066,19 @@ export class CollectionMutationService extends BaseService {
               params.entryId,
               writeFilters
             )
+          );
+          // A conditional write is judged here, under the lock and after the
+          // access it owes, against the value as committed now; a refused one
+          // writes nothing.
+          await holdStoredExpectation(
+            params.context,
+            {
+              kind: "collection",
+              slug: params.collectionName,
+              id: params.entryId,
+            },
+            { tx, localization: this.localization, locale: params.locale },
+            lockedPromotion
           );
 
           // The status event uses the true prior value even after a conflict
@@ -16471,18 +16562,9 @@ export class CollectionMutationService extends BaseService {
     // pre-migration state, keeps its translated values on the main table, so
     // the filter reads them there. Resolved on the pool, or read from the
     // verdict already resolved where the write holds a transaction.
-    const readiness = !companion
-      ? undefined
-      : executor
-        ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
-        : await resolveCompanionReadiness(this.adapter, {
-            companionTableName: companion.companionTableName,
-            mainTableName: companion.companionTableName.replace(
-              /_locales$/,
-              ""
-            ),
-            localizedColumns: companion.localizedFields.map(f => f.column),
-          });
+    const readiness = companion
+      ? await this.companionReadinessOf(companion, executor)
+      : undefined;
     const ready = readiness === "ready" ? (companion ?? null) : null;
     const writeLocale = options.locale ?? this.localization?.defaultLocale;
     return {
@@ -18470,20 +18552,28 @@ export class CollectionMutationService extends BaseService {
       }
       // Judged once the caller is known to reach this entry, so a refusal
       // never tells one the row filter excludes that the entry exists.
-      // The default language, the one a batch writes, when the version names
-      // it: judged with the main row, and named in a refusal so the answer
-      // can be sent back with the same save.
+      // The default language, the one a batch writes, where its translation
+      // table is ready: the version must name it, as a single save's must,
+      // and a refusal for a version that does not is given here, before any
+      // hook runs. It is judged with the main row, and named in a refusal so
+      // the answer can be sent back with the same save.
       const defaultLocale = this.localization?.defaultLocale;
+      const given = givenOf(versionCheck);
       const batchCompanion =
-        versionCheck.kind !== "unjudged" &&
-        defaultLocale !== undefined &&
-        versionCheck.given !== undefined &&
-        Object.hasOwn(versionCheck.given.languages, defaultLocale)
-          ? await this.fileManager.loadCompanionSchema(
-              params.collectionName,
-              tx.getDrizzle()
-            )
+        given !== undefined && defaultLocale !== undefined
+          ? await this.readyCompanionOf(params.collectionName, tx.getDrizzle())
           : null;
+      if (batchCompanion && defaultLocale !== undefined) {
+        try {
+          judgedLanguage(given, defaultLocale);
+        } catch (error) {
+          return errorToServiceResult(
+            error,
+            { defaultMessage: "Failed to update entry" },
+            this.dialect
+          );
+        }
+      }
       const batchAt: StaleWrite =
         batchCompanion && defaultLocale !== undefined
           ? {

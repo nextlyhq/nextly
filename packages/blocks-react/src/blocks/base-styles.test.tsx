@@ -359,6 +359,11 @@ describe("every default the core library declares", () => {
       "core/form#control",
       "core/form#submit",
       "core/image#caption",
+      "core/image#frame",
+      "core/image#link",
+      "core/image#linked",
+      "core/image#picture",
+      "core/image#relay",
       "core/quote#attribution",
       "core/quote#quotation",
     ]);
