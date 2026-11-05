@@ -89,6 +89,8 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { manifestRoute } from "./composition-manifest";
+import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
 import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
@@ -1753,6 +1755,17 @@ export const pageBuilder = (
         // A read finding no model while this process is still deciding one,
         // at start or in a sweep, waits for that decision, so a first render
         // is not drawn under a default the site is about to replace.
+        // The composition API for code serving a request of its own (another
+        // plugin's route, the MCP endpoint): the manifest and the page and
+        // definition actions, each the function its route runs, as the
+        // caller handed in. Bound to this plugin's own context, so a caller
+        // from another plugin is read against this plugin's collections.
+        [COMPOSITION_SERVICE]: ctx =>
+          compositionService(ctx, {
+            store: componentStoreOf(opts),
+            limits: () => opts.limits ?? DEFAULT_LIMITS,
+            readRetired: readRetiredFor,
+          }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -2003,6 +2016,13 @@ export const pageBuilder = (
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
+        }),
+        // What an API client or an agent reads before composing: the
+        // patterns, components (fields, slots, variants) and Layouts it may
+        // read, and the actions above with their request schemas.
+        manifestRoute({
+          store: componentStoreOf(opts),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({
