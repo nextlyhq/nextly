@@ -103,7 +103,7 @@ import {
   type LockRefusalFacts,
 } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
-import type { OpPosition } from "./ops";
+import type { OpPosition } from "./op-vocabulary";
 import {
   nextTargetSwitchState,
   NO_TARGET,

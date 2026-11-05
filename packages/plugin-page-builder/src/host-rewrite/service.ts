@@ -115,7 +115,11 @@ export interface RewriteInstall {
  * owner's and so is a different person to a run. Refused for a request with
  * no caller.
  */
-function runStarterOf(caller: RewriteCaller): string {
+export function runStarterOf(
+  caller: Pick<RewriteCaller, "caller"> & {
+    readonly user: { readonly id: string } | null;
+  }
+): string {
   const who = caller.caller;
   if (who === null) {
     throw NextlyError.forbidden({
@@ -128,7 +132,9 @@ function runStarterOf(caller: RewriteCaller): string {
 }
 
 /** The signed-in user's id, which a route's caller always carries. */
-function userIdOf(caller: RewriteCaller): string {
+function userIdOf(caller: {
+  readonly user: { readonly id: string } | null;
+}): string {
   const id = caller.user?.id;
   if (id !== undefined && id !== "") return id;
   throw NextlyError.forbidden({

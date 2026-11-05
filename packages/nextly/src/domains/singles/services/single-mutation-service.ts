@@ -2953,18 +2953,19 @@ export class SingleMutationService extends BaseService {
             // overwrite, and that row is what a conditional write is judged by.
             let insertedHere = false;
             let didSeedCompanionDefaults = false;
-            // First-write auto-create, committed atomically with the update. A
-            // failed update/component/companion/version write rolls the insert
-            // back rather than orphaning a default row, and no compensating
-            // delete is needed. Idempotent: a `beforeUpdate` hook that read the
-            // Single may already have auto-created the row (via `get`), and a
-            // version-conflict retry re-enters this closure — in both cases the
-            // existing row is reused instead of inserting a duplicate.
+            // First-write auto-create, atomic with the update: a failed write
+            // rolls the insert back, with no compensating delete. Idempotent: a
+            // hook's read (`get`) may have auto-created the row, and a retry
+            // re-enters here; either way the existing row is reused. A
+            // conditional write reads it under locks (see `firstWriteRead`).
             if (autoCreated && pendingAutoCreateValues) {
-              const committed = await tx.selectOne<SingleDocument>(
-                singleMeta.tableName,
-                {}
-              );
+              const committed =
+                await storedFieldRead.firstWriteRead<SingleDocument>(
+                  tx,
+                  singleMeta,
+                  options.context,
+                  () => tx.selectOne<SingleDocument>(singleMeta.tableName, {})
+                );
               if (committed) {
                 existingDoc = committed;
               } else {

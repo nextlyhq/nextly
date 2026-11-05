@@ -1074,6 +1074,9 @@ importers:
       '@nextlyhq/blocks-react':
         specifier: workspace:*
         version: link:../blocks-react
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@nextlyhq/module-specifiers':
         specifier: workspace:*

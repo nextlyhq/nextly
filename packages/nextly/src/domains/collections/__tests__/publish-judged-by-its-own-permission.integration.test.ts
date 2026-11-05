@@ -441,11 +441,12 @@ describe.each(getConfiguredTestDialects())(
       const id = await draft(POSTS, "t");
       const where = { id: { equals: id } };
 
+      // Refused for the field it names, not for want of a version.
       await expect(
         as(PUBLISHER).update({
           collection: POSTS,
           where,
-          data: { status: "published", title: "edited" },
+          data: { status: "published", title: "edited", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect(await stored(POSTS, id)).toMatchObject({
@@ -453,10 +454,11 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
 
+      // A status set on every match whatever each holds: still a publish.
       await as(PUBLISHER).update({
         collection: POSTS,
         where,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });

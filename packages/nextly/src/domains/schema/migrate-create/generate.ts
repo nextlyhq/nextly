@@ -67,7 +67,11 @@ import type {
   LeavingSettingsSpec,
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
-import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
+import {
+  companionMigrationPath,
+  writeCompanionMigrationFile,
+  type WriteCompanionMigrationOpts,
+} from "../../i18n/migration/write-migration-file";
 import {
   perLanguageStorageEnabled,
   publishesPerLanguage,
@@ -119,6 +123,7 @@ import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  snapshotPathOf,
   writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
@@ -263,11 +268,35 @@ export interface GenerateArgs {
    * `new Date()`.
    */
   now?: Date;
+  /**
+   * `--dry-run`: plan the migration exactly as a real run does, prompts included, and write
+   * nothing. The result names the files the real run would write.
+   */
+  dryRun?: boolean;
+}
+
+/** A translation-table migration file a run writes beside the main one, by what it is for. */
+export interface CompanionFileOf {
+  kind: WriteCompanionMigrationOpts["kind"];
+  entity: I18nTransitionKind;
+  /** The slug of the entity the file is about. */
+  slug: string;
+  /** Where the file is written; on a dry run, where it would be. */
+  path: string;
 }
 
 export interface GenerateResult {
+  /** Where the migration is written; on a dry run, where it would be. */
   sqlPath: string;
+  /** Where its snapshot is written; on a dry run, where it would be. */
   snapshotPath: string;
+  /** The migration's text, as it is written to `sqlPath`. */
+  sqlContent: string;
+  /**
+   * The translation-table migration files written beside the migration, in the order they are
+   * written; on a dry run, the ones that would be.
+   */
+  companionFiles: CompanionFileOf[];
   /** Operation count AFTER rename collapsing. */
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
@@ -688,35 +717,46 @@ export async function generateMigration(
       downSql: plan.downSql,
     })),
   ];
+  // Every companion file in the order it is written, so a dry run reports the files a real run
+  // writes from the same list.
+  const companionFiles: Array<{
+    spec: CompanionMigrationSpec;
+    opts: WriteCompanionMigrationOpts;
+  }> = [];
   beforeMain.forEach(({ spec, ...file }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, spec, {
-      ...file,
-      now: new Date(now.getTime() - (beforeMain.length - i)),
+    companionFiles.push({
+      spec,
+      opts: {
+        ...file,
+        now: new Date(now.getTime() - (beforeMain.length - i)),
+      },
     });
   });
   forwardPlans.forEach(({ plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
-      // `none` plans are filtered out by the planner, so the kind is always writable here.
-      kind: plan.kind === "none" ? "create-only" : plan.kind,
-      entity,
-      upSql: plan.upSql,
-      downSql: plan.downSql,
-      now: new Date(now.getTime() + i + 1),
+    companionFiles.push({
+      spec: plan.spec,
+      opts: {
+        // `none` plans are filtered out by the planner, so the kind is always writable here.
+        kind: plan.kind === "none" ? "create-only" : plan.kind,
+        entity,
+        upSql: plan.upSql,
+        downSql: plan.downSql,
+        now: new Date(now.getTime() + i + 1),
+      },
     });
   });
   fieldLeavesPlans.forEach(({ plan, entity, settings }, i) => {
     // Recorded again here, so a run that stopped between the two files is checked before this one.
-    writeCompanionMigrationFile(
-      args.migrationsDir,
-      withLeavingSettings(plan.shared.spec, settings),
-      {
+    companionFiles.push({
+      spec: withLeavingSettings(plan.shared.spec, settings),
+      opts: {
         kind: "shared",
         entity,
         upSql: plan.shared.upSql,
         downSql: plan.shared.downSql,
         now: new Date(now.getTime() + forwardPlans.length + i + 1),
-      }
-    );
+      },
+    });
   });
   //    - A translated field's per-language unique index that is new: last, once every column it
   //      keys on exists.
@@ -736,16 +776,31 @@ export async function generateMigration(
           ]
     )
     .forEach(({ spec, ...file }, i) => {
-      writeCompanionMigrationFile(args.migrationsDir, spec, {
-        ...file,
-        kind: "unique",
-        now: new Date(now.getTime() + createsAfter + i + 1),
+      companionFiles.push({
+        spec,
+        opts: {
+          ...file,
+          kind: "unique",
+          now: new Date(now.getTime() + createsAfter + i + 1),
+        },
       });
     });
+  if (args.dryRun !== true) {
+    for (const { spec, opts } of companionFiles) {
+      writeCompanionMigrationFile(args.migrationsDir, spec, opts);
+    }
+  }
 
   return {
     sqlPath,
     snapshotPath,
+    sqlContent,
+    companionFiles: companionFiles.map(({ spec, opts }) => ({
+      kind: opts.kind,
+      entity: opts.entity,
+      slug: spec.collection,
+      path: companionMigrationPath(args.migrationsDir, spec, opts),
+    })),
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
@@ -989,15 +1044,18 @@ function refuseChangesToRecord(tables: readonly string[]): void {
  */
 async function recordSnapshot(
   args: GenerateArgs,
-  run: Omit<MigrationPair, "sqlContent">
+  record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
-    ...run,
-    sqlContent: formatSnapshotRecordFile(args.name, args.dialect, run.now),
-  });
+  const run: MigrationPair = {
+    ...record,
+    sqlContent: formatSnapshotRecordFile(args.name, args.dialect, record.now),
+  };
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, run);
   return {
     sqlPath,
     snapshotPath,
+    sqlContent: run.sqlContent,
+    companionFiles: [],
     operationCount: 0,
     renamesAccepted: 0,
     settingsChanges: [],
@@ -1016,15 +1074,20 @@ interface MigrationPair {
 
 /**
  * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
- * the order every `migrate:create` writes them in.
+ * the order every `migrate:create` writes them in. A dry run writes neither and returns the paths
+ * they would be written at.
  */
 async function writeMigrationPair(
-  args: Pick<GenerateArgs, "migrationsDir" | "name">,
+  args: Pick<GenerateArgs, "migrationsDir" | "name" | "dryRun">,
   pair: MigrationPair
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
-  await mkdir(args.migrationsDir, { recursive: true });
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
+  if (args.dryRun === true) {
+    // Where `writeSnapshot` would put it, by the writer's own rule.
+    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
+  }
+  await mkdir(args.migrationsDir, { recursive: true });
   await writeFile(sqlPath, pair.sqlContent, "utf-8");
   const snapshotPath = await writeSnapshot(
     pair.metaDir,

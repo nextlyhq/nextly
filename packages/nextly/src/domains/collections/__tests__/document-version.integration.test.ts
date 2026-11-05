@@ -835,6 +835,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: NOTES,
         ids: [id],
         data: { title: "c", _revision: 999 },
+        revs: { [id]: "3" },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(4);
@@ -842,7 +843,7 @@ describe.each(getConfiguredTestDialects())(
       await handlerOf(t).bulkUpdateByQuery({
         collectionName: NOTES,
         where: { id: { equals: id } },
-        data: { title: "d", _revision: 999 },
+        data: { title: "d", _revision: 999, _overwrite: true },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(5);
@@ -918,6 +919,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: DOCS,
         ids: [id],
         data: { note: "held in bulk" },
+        revs: { [id]: await readRev(t, DOCS, id, "en") },
         overrideAccess: true,
       })) as unknown as {
         data?: { successes?: Record<string, unknown>[] };
@@ -936,6 +938,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: NOTES,
         ids: [a, b],
         data: { title: "bulk" },
+        revs: { [a]: "1", [b]: "1" },
         overrideAccess: true,
       });
       expect([
@@ -946,7 +949,8 @@ describe.each(getConfiguredTestDialects())(
       await handlerOf(t).bulkUpdateByQuery({
         collectionName: NOTES,
         where: { title: { equals: "bulk" } },
-        data: { title: "query" },
+        // An update by query names no entry to give a version for.
+        data: { title: "query", _overwrite: true },
         overrideAccess: true,
       });
       expect([

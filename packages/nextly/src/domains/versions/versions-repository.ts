@@ -24,7 +24,10 @@ import type {
   VersionsWhere,
   VersionsWhereCondition,
 } from "./db-api";
-import { withoutDocumentVersionKeys } from "./document-revision";
+import {
+  DOCUMENT_VERSION_KEY,
+  withoutDocumentVersionKeys,
+} from "./document-revision";
 import type { RecordedVersionStatus } from "./recorded-status";
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
@@ -1138,7 +1141,12 @@ export class VersionsRepository {
     createdBy?: string | null;
   }): Promise<AutosaveWriteResult> {
     const now = new Date();
-    const serializedSnapshot = this.serializeSnapshot(input.snapshot);
+    // The version the point's edits began from is the editor's own, kept so
+    // a read of the point can say what changed since; see
+    // `serializeVersionSnapshot`.
+    const serializedSnapshot = serializeVersionSnapshot(input.snapshot, {
+      keepStartingVersion: true,
+    });
     const createdBy = input.createdBy ?? null;
     const where = this.autosaveWhere(input.ref, createdBy);
     // Project only the id: the existence check must not transfer the (possibly
@@ -1512,13 +1520,36 @@ export class VersionsRepository {
  * it has none. Exported so a caller that must copy a snapshot before storing
  * it copies exactly what the store would keep, rather than by rules of its own.
  */
-export function serializeVersionSnapshot(snapshot: unknown): string {
+export function serializeVersionSnapshot(
+  snapshot: unknown,
+  options: {
+    /**
+     * Keep the published version (`_rev`) a recovery point's editor sent: the
+     * version its edits began from, which the point's read compares with the
+     * document's current one. Every other version key is still dropped.
+     */
+    keepStartingVersion?: boolean;
+  } = {}
+): string {
   try {
     // A document's version and last changer are the row's, never its
     // content: a snapshot holding them would hand a changer's id to every
-    // history reader and write a stale counter back on restore.
+    // history reader and write a stale counter back on restore. A recovery
+    // point is never restored by the server, and its `_rev` is the version
+    // its editor read, not the row's counter.
+    const kept =
+      options.keepStartingVersion && isRecord(snapshot)
+        ? snapshot[DOCUMENT_VERSION_KEY]
+        : undefined;
     const serialized = JSON.stringify(
-      isRecord(snapshot) ? withoutDocumentVersionKeys(snapshot) : snapshot
+      isRecord(snapshot)
+        ? {
+            ...withoutDocumentVersionKeys(snapshot),
+            ...(typeof kept === "string"
+              ? { [DOCUMENT_VERSION_KEY]: kept }
+              : {}),
+          }
+        : snapshot
     );
     if (typeof serialized !== "string") {
       throw new TypeError("snapshot did not serialize to a JSON string");

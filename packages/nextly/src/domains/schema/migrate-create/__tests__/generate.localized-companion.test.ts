@@ -100,6 +100,35 @@ describe("generateMigration — localized companion emission", () => {
     expect(snapshotFiles).not.toContain(`${companionBase}.snapshot.json`);
   });
 
+  it("a dry run names where each companion file goes, and the real run writes it there", async () => {
+    const docs: MinimalConfigEntity = {
+      slug: "docs",
+      tableName: "dc_docs",
+      localized: true,
+      fields: [{ name: "body", type: "longText", localized: true }],
+    };
+    const args = {
+      name: "create_docs",
+      dialect: "sqlite" as const,
+      migrationsDir,
+      defaultLocale: "en",
+      collections: [docs],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    };
+
+    const dry = await generateMigration({ ...args, dryRun: true });
+    expect(await listSqlFiles(migrationsDir)).toEqual([]);
+    const named = dry!.companionFiles.map(file => file.path);
+    expect(named).toHaveLength(1);
+
+    await generateMigration(args);
+    const companion = await findCompanionFile(migrationsDir, "docs");
+    expect(named).toEqual([resolve(migrationsDir, companion!)]);
+  });
+
   it("ENABLE transition: companion seeds + drops; main migration does NOT drop the localized col", async () => {
     // Seed a previous snapshot where dc_pages is NOT yet localized: it holds
     // the `body` column on the main table.

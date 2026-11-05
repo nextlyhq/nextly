@@ -5769,6 +5769,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition: caseInsensitiveContains(
+              this.dialect,
               sql`${t}.${col}`,
               searchText
             ),
@@ -5777,7 +5778,7 @@ export class CollectionQueryService extends BaseService {
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip
-        return caseInsensitiveContains(column, searchText);
+        return caseInsensitiveContains(this.dialect, column, searchText);
       })
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -5816,6 +5817,7 @@ export class CollectionQueryService extends BaseService {
     return buildDrizzleCondition(
       whereClause,
       schema,
+      this.dialect,
       localizedCtx,
       buildLocalizedWhereExists
     );

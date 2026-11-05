@@ -12,6 +12,8 @@
  * @module domains/media/media-library-query
  */
 
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
   and,
   or,
@@ -231,7 +233,8 @@ export function pendingDelete(media: Pick<MediaQueryColumns, "id">): SQL {
 export function mediaQueryCondition(
   media: MediaQueryColumns,
   unused: UnusedSources | null,
-  filter: MediaQueryFilter
+  filter: MediaQueryFilter,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const conditions: SQL[] = [notPendingDelete(media)];
   if (filter.folderId !== undefined) {
@@ -242,14 +245,15 @@ export function mediaQueryCondition(
     );
   }
   if (filter.search) {
-    // LOWER() on both sides, for a search without regard to case on every
-    // dialect.
-    const pattern = `%${filter.search.toLowerCase()}%`;
+    // The text as typed, without regard to case on every dialect, through the
+    // one rule for it: `dialect` decides how case folds, since SQLite's own
+    // lower() folds ASCII letters only.
+    const text = filter.search;
     const search = or(
-      sql`LOWER(${media.filename}) LIKE ${pattern}`,
-      sql`LOWER(${media.originalFilename}) LIKE ${pattern}`,
-      sql`LOWER(${media.altText}) LIKE ${pattern}`,
-      sql`LOWER(${media.caption}) LIKE ${pattern}`
+      caseInsensitiveContains(dialect, media.filename, text),
+      caseInsensitiveContains(dialect, media.originalFilename, text),
+      caseInsensitiveContains(dialect, media.altText, text),
+      caseInsensitiveContains(dialect, media.caption, text)
     );
     if (search) conditions.push(search);
   }
