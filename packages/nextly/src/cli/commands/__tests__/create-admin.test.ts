@@ -297,6 +297,7 @@ describe("the registered command", () => {
       c => c.name() === CREATE_ADMIN_COMMAND
     );
     expect(command?.options.map(option => option.long)).toEqual([
+      "--dry-run",
       "--email",
       "--name",
     ]);

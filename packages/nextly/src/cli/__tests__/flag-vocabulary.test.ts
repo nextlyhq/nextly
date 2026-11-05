@@ -150,6 +150,7 @@ const WRITES = [
   "telemetry disable",
   "telemetry enable",
   "telemetry reset",
+  "users:create-admin",
   "webhooks:prune",
 ];
 /**
@@ -163,7 +164,6 @@ const WRITES_WITHOUT_DRY_RUN_YET = [
   "plugins uninstall",
   "setup-token",
   "upgrade",
-  "users:create-admin",
 ];
 const PREVIEWS = [
   "media orphans",
