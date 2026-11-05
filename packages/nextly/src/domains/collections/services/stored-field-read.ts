@@ -1339,26 +1339,17 @@ function unknownForm(form: never): never {
 }
 
 /**
- * Whether the write called with `context` carries a conditional write's
- * expectation, so its first read inside its transaction must be
- * {@link lockedFirstRead}.
- */
-export function carriesExpectation(
-  context: Record<string, unknown> | undefined
-): boolean {
-  return context !== undefined && expectations.has(context);
-}
-
-/**
- * A Single's first write's read of its row inside its transaction, for a
- * write carrying a conditional write's expectation: `undefined` where it is
- * not stored yet.
+ * A Single's first write's read of its row inside its transaction, for the
+ * write called with `context`: none where it is not stored yet. A write
+ * without a conditional write's expectation reads it with `plainRead`, the
+ * write path's own read, as it always has.
  *
- * The write reads under locks. On MySQL a transaction's first plain read
- * fixes the snapshot every later plain read answers from, and the expectation
- * is read plainly after the row lock; read before that lock, the row could
- * change under a snapshot the expectation would then trust. A locking read takes its lock at once and
- * fixes no snapshot, so the expectation's snapshot is taken under the lock.
+ * A write carrying an expectation reads under locks. On MySQL a transaction's
+ * first plain read fixes the snapshot every later plain read answers from, and
+ * the expectation is read plainly after the row lock; read before that lock,
+ * the row could change under a snapshot the expectation would then trust. A
+ * locking read takes its lock at once and fixes no snapshot, so the
+ * expectation's snapshot is taken under the lock.
  *
  * The Single's registry row is locked first: it always exists, so the lock is
  * on that one record, and two first writes of one Single are made one after
@@ -1370,14 +1361,16 @@ export function carriesExpectation(
  * then the document's row, is the one every history write and deletion takes
  * (`history-locks`).
  *
- * A write without an expectation keeps its plain read, made by the write
- * path itself. An entry's update takes its row lock as its transaction's
- * first statement, so it reads nothing before the lock.
+ * An entry's update takes its row lock as its transaction's first
+ * statement, so it reads nothing before the lock.
  */
-export async function lockedFirstRead<T>(
+export async function firstWriteRead<T>(
   tx: VersionsDbApi,
-  single: { readonly id: string; readonly tableName: string }
-): Promise<T | undefined> {
+  single: { readonly id: string; readonly tableName: string },
+  context: Record<string, unknown> | undefined,
+  plainRead: () => Promise<T | null>
+): Promise<T | null | undefined> {
+  if (context === undefined || !expectations.has(context)) return plainRead();
   await tx.select("dynamic_singles", {
     columns: ["id"],
     where: { and: [{ column: "id", op: "=", value: single.id }] },
