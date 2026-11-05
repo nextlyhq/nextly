@@ -389,6 +389,58 @@ describe("a save refused because the document changed since", () => {
     ]);
   });
 
+  it("save anyway after a refused publish leaves the form as it is, a hidden link included", async () => {
+    // A status write carries no form values: overwriting it stores the
+    // status alone, as a publish that went through does, and the form keeps
+    // what it holds rather than taking an answer that leaves out the link.
+    const related = {
+      name: "posts",
+      label: "Posts",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        {
+          name: "related",
+          type: "relationship",
+          label: "Related",
+          relationTo: "articles",
+          hasMany: true,
+        },
+      ],
+    } as never;
+    const hidden = { id: "a2", [RESTRICTED_REFERENCE]: true };
+    const withHidden = {
+      ...stored,
+      related: [{ id: "a1", title: "Seen" }, hidden],
+    };
+    update.mockRejectedValueOnce(staleVersion());
+    update.mockResolvedValueOnce(
+      answered({
+        ...withHidden,
+        status: "published",
+        related: [{ id: "a1", title: "Seen" }],
+        _rev: "5",
+      })
+    );
+    const rendered = renderHook(() =>
+      useEntryForm({ collection: related, entry: withHidden, mode: "edit" })
+    );
+    await act(async () => {
+      await rendered.result.current.writeStatus("published");
+    });
+
+    await act(async () => {
+      await rendered.result.current.saveAnyway();
+    });
+
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "published", _overwrite: true })
+    );
+    expect(rendered.result.current.form.getValues("related")).toEqual([
+      { id: "a1", title: "Seen" },
+      hidden,
+    ]);
+  });
+
   it("save anyway writes nothing while someone else holds the document", async () => {
     let held = false;
     update.mockRejectedValueOnce(staleVersion());

@@ -741,8 +741,10 @@ function useConflictChoices(choices: {
       return;
     }
     // The values the refused edits were typed as: a link the editor cannot
-    // see is a placeholder there, which the stored row leaves out.
-    const sent = version.refusedValues() ?? payload;
+    // see is a placeholder there, which the stored row leaves out. A refused
+    // status write carried none, so the form keeps what it holds, as after
+    // a status write that went through.
+    const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
     const adopt = version.answerFor();
@@ -751,7 +753,9 @@ function useConflictChoices(choices: {
       ownSave.current.storedVersion = storedVersionOf(result.item);
       adopt(result.item);
       version.release();
-      form.reset(storedAfterSave(fields, sent, result.item));
+      if (sent !== undefined) {
+        form.reset(storedAfterSave(fields, sent, result.item));
+      }
       onSuccess?.(result.item);
     } catch (error) {
       version.failed(saveFailure(error));

@@ -1181,8 +1181,10 @@ export function SingleForm({
       return;
     }
     // The values the refused edits were typed as: a link the editor cannot
-    // see is a placeholder there, which the stored document leaves out.
-    const sent = version.refusedValues() ?? form.getValues();
+    // see is a placeholder there, which the stored document leaves out. A
+    // refused status write carried none, so the form keeps what it holds, as
+    // after a status write that went through.
+    const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
     const adopt = version.answerFor();
@@ -1194,11 +1196,13 @@ export function SingleForm({
         adopt(stored);
       }
       version.release();
-      form.reset(
-        stored && !holdsPlaceholders(schema.fields, sent)
-          ? singleFormDefaults(schema, stored)
-          : sent
-      );
+      if (sent !== undefined) {
+        form.reset(
+          stored && !holdsPlaceholders(schema.fields, sent)
+            ? singleFormDefaults(schema, stored)
+            : sent
+        );
+      }
     } catch (error) {
       version.failed(
         error instanceof Error ? error.message : "The save did not go through."
