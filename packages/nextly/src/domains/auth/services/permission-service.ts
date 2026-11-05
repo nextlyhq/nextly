@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import { and, asc, count, desc, eq, or, sql } from "drizzle-orm";
 
 import type {
@@ -240,13 +241,13 @@ export class PermissionService extends BaseService {
         ...buildHiddenPermissionConditions(permissions, { includeOrphaned }),
       ];
 
+      // Each text as typed, ignoring case on every dialect, through the one rule for it.
       if (search) {
-        const searchPattern = `%${search}%`;
         const searchCondition = or(
-          sql`LOWER(${permissions.name}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.action}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.resource}) LIKE LOWER(${searchPattern})`,
-          sql`LOWER(${permissions.description}) LIKE LOWER(${searchPattern})`
+          caseInsensitiveContains(this.dialect, permissions.name, search),
+          caseInsensitiveContains(this.dialect, permissions.action, search),
+          caseInsensitiveContains(this.dialect, permissions.resource, search),
+          caseInsensitiveContains(this.dialect, permissions.description, search)
         );
 
         if (searchCondition) {
@@ -255,16 +256,14 @@ export class PermissionService extends BaseService {
       }
 
       if (action) {
-        const actionPattern = `%${action}%`;
         conditions.push(
-          sql`LOWER(${permissions.action}) LIKE LOWER(${actionPattern})`
+          caseInsensitiveContains(this.dialect, permissions.action, action)
         );
       }
 
       if (resource) {
-        const resourcePattern = `%${resource}%`;
         conditions.push(
-          sql`LOWER(${permissions.resource}) LIKE LOWER(${resourcePattern})`
+          caseInsensitiveContains(this.dialect, permissions.resource, resource)
         );
       }
 
