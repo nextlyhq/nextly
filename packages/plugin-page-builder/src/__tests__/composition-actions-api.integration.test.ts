@@ -332,6 +332,7 @@ describe.each(getConfiguredTestDialects())(
             kind: "page",
             nodes: [heading("lead", "Edited")],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -367,6 +368,7 @@ describe.each(getConfiguredTestDialects())(
                   kind: "page",
                   nodes: [heading("lead", "Saved meanwhile")],
                 },
+                _overwrite: true,
               },
               overrideAccess: true,
             });
@@ -465,7 +467,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id: page,
-        data: { noHeaderFooter: true },
+        data: { noHeaderFooter: true, _overwrite: true },
         overrideAccess: true,
       });
       const { cookie } = await holding(t, AUTHOR);

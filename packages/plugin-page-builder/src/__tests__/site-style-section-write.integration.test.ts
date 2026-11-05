@@ -77,13 +77,13 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         SITE_STYLE_SLUG,
         { tokens: TOKENS },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       // The breakpoint manager saves, knowing nothing about the write above.
       await singles.update(
         SITE_STYLE_SLUG,
         { breakpoints: BREAKPOINTS },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const stored = dataOf(
@@ -105,7 +105,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         SITE_STYLE_SLUG,
         { tokens: TOKENS },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const stored = dataOf(
         await singles.get(SITE_STYLE_SLUG, { overrideAccess: true })
@@ -129,12 +129,12 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         SITE_STYLE_SLUG,
         { tokens: TOKENS },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const refused = (await singles.update(
         SITE_STYLE_SLUG,
         { breakpoints: { viewport: [{ id: "", label: "" }] } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as {
         success?: boolean;
         committed?: boolean;
@@ -159,12 +159,12 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         SITE_STYLE_SLUG,
         { tokens: TOKENS },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const refused = (await singles.update(
         SITE_STYLE_SLUG,
         { breakpoints: { viewport: [{ id: "", label: "" }] } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as { success?: boolean; committed?: boolean };
 
       // Asserted here rather than borrowed from the test above. Retention is

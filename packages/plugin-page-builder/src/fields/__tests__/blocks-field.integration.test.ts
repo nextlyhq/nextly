@@ -199,7 +199,7 @@ describeEachDialect("blocks field storage", dialect => {
         userId: "u1",
         overrideAccess: true,
       },
-      { content: emptied }
+      { content: emptied, _overwrite: true }
     );
 
     const read = await handler.getEntry({
@@ -247,7 +247,7 @@ describeEachDialect("blocks field storage", dialect => {
     const written = await singles.update(
       "homepage",
       { title: "Home", content: DOCUMENT },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect((written as { success?: boolean }).success).toBe(true);
 

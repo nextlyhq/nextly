@@ -202,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: LAYOUTS_SLUG,
         id: landing,
-        data: { title: "landing, edited" },
+        data: { title: "landing, edited", _overwrite: true },
         overrideAccess: true,
       });
       await writeLayoutSettings(
