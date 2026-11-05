@@ -36,7 +36,7 @@ import {
   withClassRemoved,
 } from "./class-library";
 import { designReadOnlyReason, type LockView } from "./inspector";
-import { sameStyleValue, type BuilderOp } from "./ops";
+import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
 import {
   renameSharedStyle,
   sharedStyleRows,

@@ -15,7 +15,7 @@
  *   it would not fail the build — it would produce an entry a Server Component
  *   loads and React refuses at runtime.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -74,8 +74,17 @@ describe("the ops module stays server-safe", () => {
 
     expect([...new Set(specifiers)].sort()).toEqual([
       "./composition-actions",
+      "./op-vocabulary",
       "@nextlyhq/blocks-engine",
     ]);
+  });
+
+  it("reaches through the op vocabulary only the engine", () => {
+    const specifiers = [
+      ...importedSpecifiers(read("src/op-vocabulary.ts"), "op-vocabulary.ts"),
+    ];
+
+    expect(specifiers).toEqual(["@nextlyhq/blocks-engine"]);
   });
 
   it("reaches through its actions module only the engine and zod", () => {
@@ -92,5 +101,35 @@ describe("the ops module stays server-safe", () => {
       "@nextlyhq/blocks-engine",
       "zod",
     ]);
+  });
+});
+
+describe("the editor does not load the composition schemas", () => {
+  it("imports the op vocabulary, never the published entry or the actions", () => {
+    // The client build keeps every module the shell reaches, so an editor
+    // module importing `./ops` would carry zod and every action schema into
+    // each editor load. Only the published entry may reach them.
+    const reaching = readdirSync(join(pkgRoot, "src"))
+      .filter(name => /\.(ts|tsx)$/.test(name))
+      .filter(name => !/\.test(-d)?\.(ts|tsx)$/.test(name))
+      .filter(name => name !== "ops.ts")
+      .filter(name =>
+        importedSpecifiers(read(`src/${name}`), name).some(
+          specifier =>
+            specifier === "./ops" || specifier === "./composition-actions"
+        )
+      );
+
+    // The control: the vocabulary itself is imported widely, so the scan
+    // reads real imports rather than finding nothing anywhere.
+    const vocabulary = readdirSync(join(pkgRoot, "src")).filter(
+      name =>
+        /\.(ts|tsx)$/.test(name) &&
+        importedSpecifiers(read(`src/${name}`), name).includes(
+          "./op-vocabulary"
+        )
+    );
+    expect(vocabulary.length).toBeGreaterThan(10);
+    expect(reaching).toEqual([]);
   });
 });

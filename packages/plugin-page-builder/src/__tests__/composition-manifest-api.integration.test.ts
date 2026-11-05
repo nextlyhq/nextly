@@ -507,6 +507,24 @@ describe.each(getConfiguredTestDialects())(
         userId: owner,
         apiKeyId: made.doc.id,
       });
+      // An id past the bound is refused alike, by the route and the service.
+      const overlong = "c".repeat(513);
+      const add = { action: { kind: "add-variant", label: "Night" } };
+      const routed = await call(
+        "POST",
+        { bearer: made.key },
+        ["components", overlong, "definition"],
+        { body: add }
+      );
+      expect(routed.status, JSON.stringify(routed.body)).toBe(400);
+      const served = await call(
+        "POST",
+        { bearer: made.key },
+        ["definition", overlong],
+        { plugin: COMPOSER, body: add }
+      );
+      expect(served.status, JSON.stringify(served.body)).toBe(400);
+
       const variants = (
         (await stored(t, COMPONENTS_SLUG, card)).content as {
           variants: Record<string, { label: string }>;

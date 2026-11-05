@@ -29,7 +29,6 @@
  */
 import type { DocumentLimits, RetiredExposures } from "@nextlyhq/blocks-engine";
 import type { PluginContext, PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { z } from "nextly/zod";
 
 import type {
   DefinitionActionRequest,
@@ -43,7 +42,7 @@ import {
   type CompositionManifest,
   type ManifestRequest,
 } from "./composition-manifest";
-import { parsedWith, type ActionAnswer } from "./composition-route-kit";
+import type { ActionAnswer } from "./composition-route-kit";
 import {
   definitionActionRequestOf,
   runDefinitionAction,
@@ -93,9 +92,6 @@ export interface CompositionService {
   ): Promise<ActionAnswer<DefinitionActionResult>>;
 }
 
-/** A component id as the route's path would carry it. */
-const ComponentId = z.string().min(1).max(512);
-
 /** What the plugin builds the service with: the store and bounds its routes use. */
 export interface CompositionServiceSetup {
   readonly store?: ComponentStore;
@@ -139,7 +135,7 @@ export function compositionService(
     definitionAction: (caller, componentId, request) =>
       runDefinitionAction(
         asRoute(caller),
-        parsedWith(componentId, ComponentId, "componentId"),
+        componentId,
         definitionActionRequestOf(request),
         setup,
         "ask-update"

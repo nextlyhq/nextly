@@ -71,6 +71,9 @@ import {
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
 
+/** A component id, as a path segment or a service argument carries it. */
+const ComponentId = z.string().min(1).max(512);
+
 /**
  * The request around the edit: how to apply it. The edit itself is parsed by
  * the builder's published schema, which also refuses a target naming both a
@@ -138,11 +141,14 @@ const VERSION_KEY = "_rev";
  */
 export async function runDefinitionAction(
   ctx: PluginRouteContext,
-  componentId: string,
+  rawComponentId: string,
   body: DefinitionActionRequest,
   setup: DefinitionActionsSetup,
   admitted: "update-admitted" | "ask-update"
 ): Promise<ActionAnswer<DefinitionActionResult>> {
+  // Read here, where every caller passes, so the route's path and the
+  // service's argument are held to one bound.
+  const componentId = parsedWith(rawComponentId, ComponentId, "id");
   const store = storeOf(ctx, setup);
   // Asked exactly as the route declares it, of the collection rather than of
   // any entry, so the service admits no caller the route would refuse.

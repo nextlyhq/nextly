@@ -34,7 +34,7 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,

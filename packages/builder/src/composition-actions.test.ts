@@ -206,6 +206,25 @@ describe("the definition action schema", () => {
     });
   });
 
+  it("requires exactly one target in its JSON Schema form, as the parse does", () => {
+    const options = definitionActionJsonSchema().oneOf as {
+      properties: { kind: { const: string } };
+      oneOf?: unknown;
+    }[];
+    const exactlyOne = [
+      { required: ["propPath"], not: { required: ["visibility"] } },
+      { required: ["visibility"], not: { required: ["propPath"] } },
+    ];
+    for (const option of options) {
+      const kind = option.properties.kind.const;
+      if (kind === "expose" || kind === "retarget-exposure") {
+        expect(option.oneOf, kind).toEqual(exactlyOne);
+      } else {
+        expect(option.oneOf, kind).toBeUndefined();
+      }
+    }
+  });
+
   it("has a JSON Schema form listing every kind", () => {
     // The manifest carries this form; a schema the converter cannot express
     // would fail there, at a request, rather than here.

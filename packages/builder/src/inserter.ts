@@ -61,7 +61,7 @@ import {
 
 import { EDITOR_WORDS } from "./editor-words";
 import { emptySlotOf } from "./empty-slot";
-import { positionOf, type OpPosition } from "./ops";
+import { positionOf, type OpPosition } from "./op-vocabulary";
 
 /**
  * The category an entry falls under when its block declares none.

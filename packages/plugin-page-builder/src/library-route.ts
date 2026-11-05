@@ -396,6 +396,29 @@ export async function readingAsUser(
   };
 }
 
+/**
+ * The caller as a call to the plugin's collection service takes them: as the
+ * signed-in user, with an API key's own scope, so the key is judged on its
+ * grants rather than its owner's whether or not the request pinned it. The
+ * one place a route builds those options, for its reads and its writes alike.
+ */
+export function asServiceCaller<TUser, TScope>(ctx: {
+  readonly user: TUser | null;
+  readonly authenticatedScope?: TScope | undefined;
+}): {
+  as: "user";
+  user: TUser | undefined;
+  authenticatedScope?: TScope;
+} {
+  return {
+    as: "user",
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+  };
+}
+
 export function directComponentReads(
   ctx: Pick<PluginRouteContext, "caller">,
   locale?: string
@@ -457,15 +480,7 @@ export async function readPatternLibrary(
   // every caller with every row, whatever the collection's permissions say.
   // NO status predicate, deliberately — see the module docblock. And the same
   // deterministic order the component listing asks for, for the same reason.
-  // A key's own scope travels with the read, so the key is judged on its
-  // grants rather than its owner's, whether or not the request pinned it.
-  const asUser = {
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
-  };
+  const asUser = asServiceCaller(ctx);
   return envelope(
     await readTier(
       async at => {

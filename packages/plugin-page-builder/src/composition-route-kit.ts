@@ -27,7 +27,7 @@ import type { CommittedWriteReconciler } from "./class-usage-hook";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
-import type { ComponentStore } from "./library-route";
+import { asServiceCaller, type ComponentStore } from "./library-route";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
 export type CompositionRouteContext = Pick<
@@ -183,11 +183,7 @@ export function asCaller(
 ): CallerWriteOptions {
   return {
     ...(locale === undefined ? {} : { locale }),
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
+    ...asServiceCaller(ctx),
   };
 }
 

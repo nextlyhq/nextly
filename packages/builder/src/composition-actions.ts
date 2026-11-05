@@ -297,14 +297,47 @@ export function pageActionJsonSchema(): Record<string, unknown> {
 }
 
 /**
- * The JSON Schema form of a definition action. The rule that a target names
- * exactly one of `propPath` and `visibility` is a check JSON Schema does not
- * carry here, so each property's description states it.
+ * The JSON Schema form of a definition action. The refinement that a target
+ * names exactly one of `propPath` and `visibility` has no JSON Schema form of
+ * its own, so it is written into each targeted action here: a tool that
+ * validates against this schema refuses what the route refuses.
  *
  * @experimental Settles when the composition API ships.
  */
 export function definitionActionJsonSchema(): Record<string, unknown> {
-  return z.toJSONSchema(definitionActionSchema, { io: "input" });
+  const schema: { oneOf?: Record<string, unknown>[] } = z.toJSONSchema(
+    definitionActionSchema,
+    { io: "input" }
+  );
+  return {
+    ...schema,
+    ...(schema.oneOf === undefined
+      ? {}
+      : { oneOf: schema.oneOf.map(withExactlyOneTarget) }),
+  };
+}
+
+/** The actions whose target is a prop or the visibility switch. */
+const TARGETED_KINDS: ReadonlySet<unknown> = new Set([
+  "expose",
+  "retarget-exposure",
+]);
+
+/** One action's JSON Schema, requiring exactly one target where it takes one. */
+function withExactlyOneTarget(
+  option: Record<string, unknown>
+): Record<string, unknown> {
+  const properties = option.properties as
+    | { kind?: { const?: unknown } }
+    | undefined;
+  if (!TARGETED_KINDS.has(properties?.kind?.const)) return option;
+  return {
+    ...option,
+    oneOf: [
+      { required: ["propPath"], not: { required: ["visibility"] } },
+      { required: ["visibility"], not: { required: ["propPath"] } },
+    ],
+  };
 }
 
 /**
