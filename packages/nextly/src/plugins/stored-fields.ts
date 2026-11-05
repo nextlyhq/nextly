@@ -418,12 +418,12 @@ const ONE_DOCUMENT = z.union([
   z.object({
     collection: z.string().min(1),
     id: z.string().min(1),
-    single: z.undefined(),
+    single: z.undefined().optional(),
   }),
   z.object({
     single: z.string().min(1),
-    collection: z.undefined(),
-    id: z.undefined(),
+    collection: z.undefined().optional(),
+    id: z.undefined().optional(),
   }),
 ]);
 
