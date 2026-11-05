@@ -223,6 +223,70 @@ describe.each(getConfiguredTestDialects())(
       expect(await jobsOf(t)).toHaveLength(1);
     });
 
+    it("a schedule changed to a rarer cron runs at the first of its windows after the change", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      await scheduleWindows(t.adapter, [hourly()]).sweep(
+        new Date("2026-11-05T09:30:00.000Z")
+      );
+      await scheduleWindows(t.adapter, [hourly()]).sweep(
+        new Date("2026-11-05T10:30:00.000Z")
+      );
+      expect(await jobsOf(t)).toHaveLength(1);
+      // Hourly to yearly in November: the yearly window of January 2026
+      // lies before the hourly ones recorded, and is this definition's first
+      // sight; January 2027 is its first job.
+      const yearly = scheduleWindows(t.adapter, [
+        { ...hourly(), cron: parseCron("@yearly") },
+      ]);
+      await yearly.sweep(new Date("2026-11-05T11:30:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(1);
+      await yearly.sweep(new Date("2027-01-01T00:05:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(2);
+    });
+
+    it("a changed schedule whose first window was recorded under the old one runs at its next window", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      await scheduleWindows(t.adapter, [hourly()]).sweep(
+        new Date("2026-11-05T10:30:00.000Z")
+      );
+      // Every two hours: its window at 10:00 is the instant already recorded.
+      const everyTwo = scheduleWindows(t.adapter, [
+        { ...hourly(), cron: parseCron("0 */2 * * *") },
+      ]);
+      await everyTwo.sweep(new Date("2026-11-05T10:45:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(0);
+      await everyTwo.sweep(new Date("2026-11-05T12:05:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(1);
+    });
+
+    it("prunes the windows of a schedule no longer declared", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const removed: CollectedSchedule = {
+        ...hourly(),
+        key: `${PLUGIN}:removed`,
+        slug: "removed",
+      };
+      const before = scheduleWindows(t.adapter, [removed]);
+      await before.sweep(new Date("2026-08-01T10:30:00.000Z"));
+      await before.sweep(new Date("2026-08-01T11:30:00.000Z"));
+      // The installation no longer declares it; its old windows go.
+      await scheduleWindows(t.adapter, [hourly()]).prune(
+        new Date("2026-10-01T00:00:00.000Z"),
+        100
+      );
+      const left = await t.adapter.select<WindowRow>(
+        "nextly_schedule_windows",
+        {
+          where: {
+            and: [
+              { column: "scheduleKey", op: "=", value: `${PLUGIN}:removed` },
+            ],
+          },
+        }
+      );
+      expect(left).toEqual([]);
+    });
+
     it("a runner whose clock is behind claims no window older than one recorded", async () => {
       const t = await boot(dialect, "0 * * * *");
       const windows = scheduleWindows(t.adapter, [hourly()]);

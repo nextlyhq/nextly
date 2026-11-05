@@ -103,6 +103,28 @@ describe("collecting plugin schedules", () => {
       "input that is not an object",
       { slug: "tick", cron: "@daily", job: "acme:tick", input: [1, 2] },
     ],
+    [
+      "input holding a date",
+      {
+        slug: "tick",
+        cron: "@daily",
+        job: "acme:tick",
+        input: { at: new Date() },
+      },
+    ],
+    [
+      "input holding a bigint",
+      { slug: "tick", cron: "@daily", job: "acme:tick", input: { n: 1n } },
+    ],
+    [
+      "input holding a map",
+      {
+        slug: "tick",
+        cron: "@daily",
+        job: "acme:tick",
+        input: { m: new Map() },
+      },
+    ],
   ])("refuses to start on %s, naming the plugin", (_case, schedule) => {
     const error = refusal(plugin([schedule]));
     expect(error.code).toBe("INVALID_INPUT");

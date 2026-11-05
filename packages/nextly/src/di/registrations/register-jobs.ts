@@ -295,19 +295,19 @@ export function registerJobServices(ctx: RegistrationContext): void {
     for (const { definition, plugin } of declaredJobs) {
       registry.register(definition, { plugin });
     }
-    // The plugins' schedules, swept by every jobs pass. A schedule whose
-    // window cannot be recorded is said out loud, and the others still run.
-    if (declaredSchedules.length > 0) {
-      registry.useSchedules(
-        scheduleWindows(adapter, declaredSchedules, {
-          onError: (error, scheduleKey) =>
-            logger.error("A plugin schedule could not be swept", {
-              scheduleKey,
-              error: error instanceof Error ? error.message : String(error),
-            }),
-        })
-      );
-    }
+    // The plugins' schedules, swept by every jobs pass, and pruned even when
+    // none is declared any more, so a removed schedule's windows still go.
+    // A schedule whose window cannot be recorded is said out loud, and the
+    // others still run.
+    registry.useSchedules(
+      scheduleWindows(adapter, declaredSchedules, {
+        onError: (error, scheduleKey) =>
+          logger.error("A plugin schedule could not be swept", {
+            scheduleKey,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      })
+    );
 
     return registry;
   });

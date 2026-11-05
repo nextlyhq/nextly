@@ -17,6 +17,7 @@ import { z } from "zod";
 import { NextlyError } from "../../errors";
 import type { CollectedJob } from "../../plugins/jobs/collect-jobs";
 import type { PluginDefinition } from "../../plugins/plugin-context";
+import { isJsonValue } from "../../shared/lib/json-value";
 import { normalizeJobSlug } from "../jobs/job-registry";
 import { MAX_PORTABLE_KEY_LENGTH } from "../jobs/portable-key";
 
@@ -159,6 +160,11 @@ function collectOne(
   ownJobs: ReadonlySet<string>
 ): CollectedSchedule {
   const { slug, cron, job, tz, input } = readShape(plugin, entry);
+  // Stored as JSON with each job: anything a JSON round trip would change or
+  // refuse would reach the handler reshaped, or fail every window's enqueue.
+  if (input !== undefined && !isJsonValue(input)) {
+    throw refuse(plugin, slug, "its input is not plain JSON");
+  }
   return {
     key: keyOf(plugin, slug),
     plugin,

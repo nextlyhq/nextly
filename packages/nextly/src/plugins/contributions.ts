@@ -7,6 +7,7 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
+import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
@@ -107,7 +108,7 @@ export interface PluginSchedule {
    * Given to the job with each run, beside `window`: the ISO time the window
    * opened, which this cannot replace.
    */
-  input?: Record<string, unknown>;
+  input?: { [key: string]: JobJsonValue };
 }
 
 /**
