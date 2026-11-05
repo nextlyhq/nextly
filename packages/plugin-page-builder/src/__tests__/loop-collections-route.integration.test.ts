@@ -141,6 +141,9 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The Public role, granted each collection's read where its rule
+        // answers true, as boot grants it: the fields offered are its.
+        seedPublic: true,
         collections: [articles, notes],
         plugins: [pageBuilder()],
       });
