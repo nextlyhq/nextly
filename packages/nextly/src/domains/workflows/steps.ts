@@ -109,6 +109,8 @@ import {
   type ReviewState,
   type ReviewStateChange,
 } from "./review-state-repository";
+// Shared with the request for changes' notice, which keeps the comment the step accepted.
+import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
 import {
   prepareNoticeTelling,
@@ -219,9 +221,6 @@ const WORKFLOW_STEP_ERROR_CODES = {
   nothingToReview: "WORKFLOW_NOTHING_TO_REVIEW",
   singlesNotSupported: "WORKFLOW_SINGLES_NOT_SUPPORTED",
 } as const;
-
-/** The longest comment a step keeps: the record of content events' note limit. */
-const MAX_STEP_COMMENT_LENGTH = 4000;
 
 /** @experimental */
 export interface TakeStepResult {
@@ -1372,8 +1371,29 @@ function accountableNotices(
     const userId = before.get(entry.part)?.enteredBy;
     if (!userId) return [];
     const notice = movedNotice(c, entry, recorded);
-    return [{ ...notice, trigger, userId, step: c.step.label }];
+    return [
+      {
+        ...notice,
+        trigger,
+        userId,
+        step: c.step.label,
+        ...commentFor(c, trigger),
+      },
+    ];
   });
+}
+
+/**
+ * The step's comment, for the notice of a request for changes alone: what the writer is to change.
+ * The step requires it of that kind, so it is always there to keep.
+ */
+function commentFor(
+  c: StepContext,
+  trigger: NamedNotice["trigger"]
+): { comment?: string } {
+  return trigger === "changesRequested" && c.comment !== null
+    ? { comment: c.comment }
+    : {};
 }
 
 /**

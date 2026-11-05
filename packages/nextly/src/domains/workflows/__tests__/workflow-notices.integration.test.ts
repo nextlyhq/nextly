@@ -298,26 +298,52 @@ describe.each(getConfiguredTestDialects())(
           }),
         }),
       ]);
+      // Only a request for changes keeps the step's comment.
+      expect(notices[0]?.data).not.toHaveProperty("comment");
       expect(await emailJobNotices()).toEqual([notices[0]?.id]);
     });
 
-    it("tells the person accountable for the stage when changes are requested, with its email", async () => {
+    it("tells the person accountable for the stage when changes are requested, with the comment in the notice and its email", async () => {
       await boot(dialect);
       await person(app(), "alice", [["update", "posts"]]);
       const bob = await person(app(), "bob", [["sign-off", "posts"]]);
       const post = await postInLegal();
+      // Markup in the comment, so the email shows it escaped in HTML and as written in text.
+      const comment = "Fix <b>the</b> intro & the outro";
 
-      await take("posts", post, ["en"], "bounce", bob, "Fix the intro");
+      await take("posts", post, ["en"], "bounce", bob, comment);
 
       const notices = await workflowNotices();
       expect(notices).toEqual([
         expect.objectContaining({
           userId: "alice",
           kind: "workflows.changes-requested",
-          data: expect.objectContaining({ step: "Bounce", actor: "bob" }),
+          data: expect.objectContaining({
+            step: "Bounce",
+            actor: "bob",
+            comment,
+          }),
         }),
       ]);
       expect(await emailJobNotices()).toEqual([notices[0]?.id]);
+
+      // The notice as alice's list renders it: the move, then the comment.
+      const service = container.get<NoticesService>("noticesService");
+      const [shown] = (await service.find({ userId: "alice" })).rows;
+      expect(shown?.body).toMatch(/^bob asked for changes to .*\n\nComment: /);
+      expect(shown?.body).toContain(comment);
+
+      await runJobsPass(
+        app().adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        { retentionMs: null }
+      );
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.text).toContain(`Comment: ${comment}`);
+      expect(sent[0]?.html).toContain(
+        "<p>Comment: Fix &lt;b&gt;the&lt;/b&gt; intro &amp; the outro</p>"
+      );
+      expect(sent[0]?.html).not.toContain("<b>the</b>");
     });
 
     it("tells no one of work assigned to a role, or of a stage no one is accountable for", async () => {

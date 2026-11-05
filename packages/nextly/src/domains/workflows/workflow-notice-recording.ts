@@ -78,6 +78,8 @@ export interface NamedNotice {
    * absent, it is read on the transaction.
    */
   snapshot?: unknown;
+  /** The step's comment, kept by a request for changes alone. */
+  comment?: string;
 }
 
 /** How one collection is named: its singular label, its title field, and whether it translates. */
@@ -274,6 +276,7 @@ async function dataOf(
     localized: naming.localized,
     step: notice.step,
     actor: telling.actor,
+    ...(notice.comment === undefined ? {} : { comment: notice.comment }),
   };
 }
 

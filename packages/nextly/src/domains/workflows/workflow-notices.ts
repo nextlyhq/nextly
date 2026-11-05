@@ -32,6 +32,7 @@ import {
   type NoticeEmail,
   type NoticeEmailDeps,
   type NoticeEmailJobInput,
+  type NoticeEmailMessage,
 } from "../notices/notice-email";
 import {
   defineNoticeKind,
@@ -41,6 +42,7 @@ import {
 } from "../notices/notice-kinds";
 
 import type { ReviewDocument } from "./review-state-repository";
+import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 
 /** What every workflow notice keeps of its document and the move, so it reads after a deletion. */
 const workflowNoticeData = z.object({
@@ -56,7 +58,24 @@ const workflowNoticeData = z.object({
   step: z.string().nullable(),
   /** Who acted, by name, or null where no name is known. */
   actor: z.string().nullable(),
+  /**
+   * The comment the step asked for changes with, as the step accepted it: kept by a request for
+   * changes alone, so the writer reads in their notice what to change.
+   */
+  comment: z.string().min(1).max(MAX_STEP_COMMENT_LENGTH).optional(),
 });
+
+/** A request for changes' snapshot: always with the step's comment, which that step requires. */
+const changesRequestedData = workflowNoticeData.refine(
+  data => data.comment !== undefined,
+  { message: "A request for changes keeps the step's comment." }
+);
+
+/** An assignment's or an approval's snapshot: never with a comment. */
+const withoutCommentData = workflowNoticeData.refine(
+  data => data.comment === undefined,
+  { message: "Only a request for changes keeps a comment." }
+);
 
 /** @experimental */
 export type WorkflowNoticeData = z.infer<typeof workflowNoticeData>;
@@ -142,6 +161,14 @@ function bodyOf(
     : sentence;
 }
 
+/**
+ * A notice's body: what happened, then the step's comment where the notice keeps one, as a
+ * paragraph of its own.
+ */
+function withComment(body: string, comment: string | undefined): string {
+  return comment === undefined ? body : `${body}\n\nComment: ${comment}`;
+}
+
 /** Who acted, as a sentence names them. */
 const who = (data: WorkflowNoticeData): string => data.actor ?? "Someone";
 
@@ -152,15 +179,19 @@ const withStep = (data: WorkflowNoticeData, word: string): string =>
 /** One workflow notice kind, every one sharing the snapshot, the link and the subject. */
 function workflowNoticeKind(
   key: string,
+  data: z.ZodType<WorkflowNoticeData>,
   render: (data: WorkflowNoticeData) => { title: string; sentence: string }
 ): NoticeKind<WorkflowNoticeData> {
   return defineNoticeKind<WorkflowNoticeData>({
     key,
     subjectType: DOCUMENT_SUBJECT,
-    data: workflowNoticeData,
-    render: (data, context): NoticeText => {
-      const text = render(data);
-      return { title: text.title, body: bodyOf(text.sentence, context) };
+    data,
+    render: (snapshot, context): NoticeText => {
+      const text = render(snapshot);
+      return {
+        title: text.title,
+        body: withComment(bodyOf(text.sentence, context), snapshot.comment),
+      };
     },
     link: documentNoticeLinks,
   });
@@ -169,6 +200,7 @@ function workflowNoticeKind(
 /** @experimental */
 export const WORKFLOW_ASSIGNED_NOTICE = workflowNoticeKind(
   "workflows.assigned",
+  withoutCommentData,
   data => ({
     title: `“${data.title}” was assigned to you`,
     sentence: `${who(data)} assigned you ${documentPhrase(data)}${withStep(data, "for")}.`,
@@ -178,6 +210,7 @@ export const WORKFLOW_ASSIGNED_NOTICE = workflowNoticeKind(
 /** @experimental */
 export const WORKFLOW_APPROVED_NOTICE = workflowNoticeKind(
   "workflows.approved",
+  withoutCommentData,
   data => ({
     title: `“${data.title}” was approved`,
     sentence: `${who(data)} approved ${documentPhrase(data)}${withStep(data, "with")}.`,
@@ -187,6 +220,7 @@ export const WORKFLOW_APPROVED_NOTICE = workflowNoticeKind(
 /** @experimental */
 export const WORKFLOW_CHANGES_REQUESTED_NOTICE = workflowNoticeKind(
   "workflows.changes-requested",
+  changesRequestedData,
   data => ({
     title: `Changes were requested on “${data.title}”`,
     sentence: `${who(data)} asked for changes to ${documentPhrase(data)}${withStep(data, "with")}.`,
@@ -217,13 +251,26 @@ const WORKFLOW_NOTICE_EMAIL: NoticeEmail = {
     );
     const parsed = kind?.data.safeParse(notice.data);
     if (kind === undefined || !parsed?.success) return null;
-    return noticeEmailMessage({
-      text: kind.render(parsed.data, { subjectGone: subject.subjectGone }),
-      url: subject.url,
-      linkLabel: "Open the document",
-    });
+    return emailOf(
+      kind.render(parsed.data, { subjectGone: subject.subjectGone }),
+      subject.url
+    );
   },
 };
+
+/**
+ * A workflow notice's email from its text: each paragraph of the body its own paragraph, so a
+ * request for changes' comment reads apart from what happened, escaped in HTML as all text is.
+ */
+function emailOf(text: NoticeText, url: string | null): NoticeEmailMessage {
+  const [body, ...after] = text.body?.split("\n\n") ?? [];
+  return noticeEmailMessage({
+    text: { title: text.title, ...(body === undefined ? {} : { body }) },
+    after,
+    url,
+    linkLabel: "Open the document",
+  });
+}
 
 /**
  * The job that sends a workflow notice's email: the shared notice email job, under the workflows'
