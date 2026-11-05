@@ -10,6 +10,7 @@
  * @module shared-style-library
  */
 import {
+  isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
   namedClassName,
   tokenLabelIssue,
@@ -165,6 +166,15 @@ export function sharedStyleRows(
     inCode: suppliedIds.has(entry.id),
     styles: entry.styles,
   }));
+}
+
+/**
+ * The library without its looks: the shared styles an author applies to any
+ * block, as the Shared styles tab and the picker list them. A look is bound
+ * to one block type and is picked from that block's own tiles.
+ */
+export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
+  return library.filter(entry => !isLook(entry));
 }
 
 /** A style's name: its label, or its slug for a style made before labels. */

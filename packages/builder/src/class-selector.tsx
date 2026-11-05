@@ -29,6 +29,7 @@ import {
 import {
   searchSharedStyles,
   sharedStyleRows,
+  sharedStylesOnly,
   sharedStyleSearchText,
 } from "./shared-style-library";
 
@@ -120,7 +121,12 @@ export function ClassSelector({
     readonly issue: SelectorFailure;
   } | null>(null);
   const listId = React.useId();
-  const matches = useStyleSearch(library, query);
+  // The shared styles any block may wear; a look is picked from its tiles.
+  const offered = React.useMemo(
+    () => (library === undefined ? undefined : sharedStylesOnly(library)),
+    [library]
+  );
+  const matches = useStyleSearch(offered, query);
 
   // Cleared, not merely hidden, once it stops describing the node: React's
   // adjust-state-during-render, which converges once the state is null.
@@ -140,7 +146,11 @@ export function ClassSelector({
     );
   }
 
-  const { options, hidden } = selectorOptions(library, nodeClassIds, matches);
+  const { options, hidden } = selectorOptions(
+    offered ?? library,
+    nodeClassIds,
+    matches
+  );
   const unapplied = unappliedNodeClassCount(nodeClassIds);
   const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps
