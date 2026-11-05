@@ -402,6 +402,11 @@ export interface UseEntryFormReturn {
   holdForVersionChange: VersionConflictState["holdForChange"];
   /** Let go of a hold on the version, as a save that went through does. */
   releaseVersionHold: VersionConflictState["release"];
+  /**
+   * The author keeps editing after a load of the current version that has
+   * not read it yet: that version no longer replaces the edits when it does.
+   */
+  stopAwaitingCurrentVersion: () => void;
 }
 
 // ============================================================================
@@ -617,6 +622,8 @@ function useConflictHold(
   holdsRead: (read: EntryData, next: EntryIdentity) => boolean;
   /** The author chose the current version before the read that brings it. */
   awaitCurrent: () => void;
+  /** The author keeps editing after all: no read is awaited to replace the form. */
+  stopAwaiting: () => void;
   /** The form was reset from `read`, as far as `decision` says. */
   resetBy: (
     read: EntryData,
@@ -659,6 +666,9 @@ function useConflictHold(
   const awaitCurrent = useCallback(() => {
     awaitingCurrent.current = true;
   }, []);
+  const stopAwaiting = useCallback(() => {
+    awaitingCurrent.current = false;
+  }, []);
   // A read replaces the copy: its version is what the copy starts from. An
   // echo of this author's own save keeps the version that save answered.
   const resetBy = useCallback(
@@ -667,7 +677,7 @@ function useConflictHold(
     },
     [adoptRead]
   );
-  return { holdsRead, awaitCurrent, resetBy };
+  return { holdsRead, awaitCurrent, stopAwaiting, resetBy };
 }
 
 /** Whether `next` is another document than the one a conflict holds the form for. */
@@ -1317,5 +1327,6 @@ export function useEntryForm({
     adoptRecoveredVersion: version.adoptRecovered,
     holdForVersionChange: version.holdForChange,
     releaseVersionHold: version.release,
+    stopAwaitingCurrentVersion: hold.stopAwaiting,
   };
 }

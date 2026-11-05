@@ -71,6 +71,7 @@ import {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
+import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
 import {
   partRouting,
   routeDeclarations,
@@ -2702,7 +2703,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: serializeRules(rules),
+    css: withOverlayReset(rules, gated),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -2712,4 +2713,29 @@ export function compilePageCss(
     // the shape it did before this field existed.
     ...(Object.keys(gated).length === 0 ? {} : { gated }),
   };
+}
+
+/**
+ * The page's rules, preceded by the overlay's reset when a rule reads it: so a
+ * section's overlay stops at its own image rather than reaching nested ones.
+ */
+function withOverlayReset(
+  rules: readonly CssRule[],
+  gated: Readonly<Record<string, string>>
+): string {
+  const css = serializeRules(rules);
+  // Any of the overlay's properties read: the image's layer, or a longhand's
+  // entry lined up with it.
+  const reading = `var(${OVERLAY_PREFIX}`;
+  // A gated node's rules are kept apart, and appended for a reader who sees
+  // it: the reset stays in the sheet, so the page put back together is the
+  // one an ungated compile writes.
+  const reads =
+    rules.some(rule =>
+      rule.declarations.some(declaration => declaration.value.includes(reading))
+    ) || Object.values(gated).some(fragment => fragment.includes(reading));
+  if (!reads) return css;
+  // Joined only to what is there: a sheet whose every rule is gated is the
+  // reset alone, so the page put back together has no blank line in it.
+  return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
 }

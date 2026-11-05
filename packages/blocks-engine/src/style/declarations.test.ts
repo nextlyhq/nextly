@@ -7,8 +7,31 @@ import {
 } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
 import type { UnionShape, UrlLeaf } from "./catalog-types";
-import { compileStyleValues, urlText } from "./declarations";
+import {
+  compileStyleValues,
+  paintsBackgroundImage,
+  urlText,
+} from "./declarations";
+import { overlaid } from "./overlay";
 import { styleUnionVariant } from "./validate-style-value";
+
+/** A CSS list's items, split at its commas outside any parentheses. */
+function topLevelItems(list: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < list.length; index++) {
+    const char = list[index];
+    if (char === "(") depth++;
+    else if (char === ")") depth--;
+    else if (char === "," && depth === 0) {
+      items.push(list.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  items.push(list.slice(start).trim());
+  return items;
+}
 
 /** The union a catalog property declares, for the arm-choice tests. */
 function unionShapeOf(property: string): UnionShape {
@@ -69,7 +92,8 @@ describe("a url is written as a quoted CSS string", () => {
       { background: { url: "/a.png" } },
       "/styles"
     );
-    expect(declarations[0]?.value).toBe('url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(declarations[0]?.value).toBe(overlaid('url("/a.png")'));
   });
 });
 
@@ -203,5 +227,155 @@ describe("the emitter walks the catalog, not the stored map", () => {
     const noisy = compileStyleValues({ ...junk, ...real }, "/p");
 
     expect(noisy.declarations).toEqual(clean.declarations);
+  });
+});
+
+describe("a background's overlay", () => {
+  const written = (values: Record<string, unknown>) =>
+    Object.fromEntries(
+      compileStyleValues(values, "/s").declarations.map(each => [
+        each.property,
+        each.value,
+      ])
+    );
+
+  it("is its own two properties, each traced on its own", () => {
+    expect(
+      written({ background: { overlay: "#0a0e16", overlayStrength: 55 } })
+    ).toMatchObject({
+      "--nx-pb-overlay": "#0a0e16",
+      "--nx-pb-overlay-strength": "55",
+    });
+  });
+
+  it("is laid over an image, under the content, wherever each was set", () => {
+    // The image carries the overlay's layer whether or not an overlay is set
+    // beside it: set at another device, it still reaches this image.
+    const image = written({ background: { url: "/hills.jpg" } })[
+      "background-image"
+    ];
+    expect(image?.startsWith("var(--nx-pb-overlay-layer,) ")).toBe(true);
+    expect(image).toBe('var(--nx-pb-overlay-layer,) url("/hills.jpg")');
+  });
+
+  it("is laid over a gradient too", () => {
+    const gradient = written({
+      backgroundGradient: "linear-gradient(red, blue)",
+    })["background-image"];
+    expect(gradient?.startsWith("var(--nx-pb-overlay-layer,) ")).toBe(true);
+    expect(gradient).toBe(
+      "var(--nx-pb-overlay-layer,) linear-gradient(red, blue)"
+    );
+  });
+
+  it("leaves a keyword alone: none clears the image, overlay and all", () => {
+    expect(written({ background: { url: "none" } })["background-image"]).toBe(
+      "none"
+    );
+    expect(written({ backgroundGradient: "inherit" })["background-image"]).toBe(
+      "inherit"
+    );
+  });
+});
+
+describe("a scaled token reference, written", () => {
+  it("is the token's own property times the factor, under the site's prefix", () => {
+    const { declarations } = compileStyleValues(
+      { rowGap: { $token: "space.4", times: 0.75 } },
+      "/s",
+      "--brand-"
+    );
+    expect(declarations[0]?.value).toBe("calc(var(--brand-space-4) * 0.75)");
+  });
+
+  it("is the token alone when it is not scaled", () => {
+    const { declarations } = compileStyleValues(
+      { rowGap: { $token: "space.4" } },
+      "/s",
+      "--brand-"
+    );
+    expect(declarations[0]?.value).toBe("var(--brand-space-4)");
+  });
+});
+
+describe("a background without an overlay keeps its layers", () => {
+  const values = (background: Record<string, unknown>) =>
+    Object.fromEntries(
+      compileStyleValues({ background }, "/s").declarations.map(each => [
+        each.property,
+        each.value,
+      ])
+    );
+
+  it("paints its image alone, so a list of sizes still lines up with it", () => {
+    // `cover, contain` was the image's `cover`; a layer in front of it would
+    // have taken `cover` and left the image `contain`.
+    const written = values({ url: "/a.png", size: "cover, contain" });
+    expect(written["background-image"]).toBe(
+      'var(--nx-pb-overlay-layer,) url("/a.png")'
+    );
+    // The size reads the overlay's entry in front of it, empty with no overlay.
+    expect(written["background-size"]).toBe(
+      "var(--nx-pb-overlay-size,) cover, contain"
+    );
+    expect(written["--nx-pb-overlay-size"]).toBeUndefined();
+  });
+
+  it("keeps a list of sizes, places and repeats lined up with its image when an overlay is laid in front", () => {
+    // As a browser reads the declarations: each overlay property substituted,
+    // then every list split at its top-level commas.
+    const written = values({
+      url: "/a.png",
+      size: "cover, contain",
+      position: "center, 10px 20px",
+      repeat: "no-repeat",
+      attachment: "fixed",
+      overlay: "#000",
+    });
+    const list = (property: string): string[] =>
+      topLevelItems(
+        (written[property] ?? "").replace(
+          /var\((--nx-pb-overlay[\w-]*),\)/g,
+          (_whole, name: string) => written[name] ?? ""
+        )
+      );
+    const images = list("background-image");
+    const at = images.indexOf('url("/a.png")');
+    expect(at).toBe(1);
+    expect(list("background-size")[at]).toBe("cover");
+    expect(list("background-position")[at]).toBe("center");
+    expect(list("background-repeat")[at]).toBe("no-repeat");
+    expect(list("background-attachment")[at]).toBe("fixed");
+    // The overlay's own layer fills the box, however the image is placed.
+    expect(list("background-size")[0]).toBe("auto");
+    expect(list("background-position")[0]).toBe("0% 0%");
+    expect(list("background-repeat")[0]).toBe("repeat");
+    expect(list("background-attachment")[0]).toBe("scroll");
+  });
+
+  it("leaves a CSS-wide keyword whole, which takes no layer in front of it", () => {
+    expect(values({ size: "inherit" })["background-size"]).toBe("inherit");
+  });
+
+  it("has its overlay's layer written by the overlay alone, with its comma", () => {
+    const layer = values({ overlay: "#000" })["--nx-pb-overlay-layer"];
+    expect(layer).toMatch(
+      /^linear-gradient\(color-mix\(in srgb, var\(--nx-pb-overlay, transparent\) /
+    );
+    expect(layer?.endsWith("),")).toBe(true);
+  });
+});
+
+describe("whether a stored background paints an image", () => {
+  it("answers as the compiler lays the overlay: a value or a token, never a clearing keyword", () => {
+    expect(paintsBackgroundImage("url", "/a.png")).toBe(true);
+    expect(paintsBackgroundImage("url", { $token: "image.hero" })).toBe(true);
+    expect(paintsBackgroundImage("url", "none")).toBe(false);
+    expect(paintsBackgroundImage("url", "inherit")).toBe(false);
+    expect(
+      paintsBackgroundImage("gradient", "linear-gradient(red, blue)")
+    ).toBe(true);
+    expect(paintsBackgroundImage("gradient", "none")).toBe(false);
+    expect(paintsBackgroundImage("gradient", undefined)).toBe(false);
   });
 });

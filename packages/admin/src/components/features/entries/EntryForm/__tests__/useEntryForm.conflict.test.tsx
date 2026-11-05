@@ -311,6 +311,26 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("keeps the edits when the author keeps editing before the current version a load awaits arrives", async () => {
+    // 🔴 Loading the current version waits for its read; when that read
+    // fails and the author keeps editing, the version arriving later must not
+    // replace the edits they chose to keep.
+    const rendered = render();
+    act(() => {
+      rendered.result.current.holdForVersionChange(ANA_CHANGED as never);
+      rendered.result.current.form.setValue("title", "Mine", {
+        shouldDirty: true,
+      });
+    });
+    await act(async () => {
+      await rendered.result.current.loadCurrentVersion(false);
+    });
+    act(() => rendered.result.current.stopAwaitingCurrentVersion());
+
+    act(() => rendered.rerender({ entry: anas }));
+    expect(rendered.result.current.form.getValues("title")).toBe("Mine");
+  });
+
   it("does not pin a refusal that arrives once the form shows another entry", async () => {
     // The refusal is about the first entry: pinned on the second, Save anyway
     // would write the first's values over the second.

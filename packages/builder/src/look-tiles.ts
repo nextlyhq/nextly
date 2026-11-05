@@ -16,12 +16,14 @@ import {
   isPlainRecord,
   isTokenRef,
   resolveSiteTokens,
+  scaledTokenText,
   tokenIdentity,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
   type StyleValue,
   type TokenMode,
+  type TokenRef,
 } from "@nextlyhq/blocks-engine";
 
 import { classDeclarations, usableSiteClasses } from "./class-library";
@@ -151,9 +153,12 @@ export function lookChoice(
   return { kind: "apply", classes: next };
 }
 
-/** A token reference's value in one mode, or the reference left as it is. */
+/**
+ * A token reference's value in one mode, at the reference's factor as the
+ * page compiles it, or the reference left as it is.
+ */
 function tokenValue(
-  ref: { readonly $token: string },
+  ref: TokenRef,
   tokens: SiteTokenSet | undefined,
   mode: TokenMode
 ): StyleValue {
@@ -161,7 +166,13 @@ function tokenValue(
   // old display name resolves nothing there, so it resolves nothing here.
   const token = tokens?.tokens.find(each => tokenIdentity(each) === ref.$token);
   const value = token?.values[mode] ?? token?.values.light;
-  return value === undefined ? ref : value;
+  if (value === undefined) return ref;
+  // A number at its factor is the number the page's `calc()` computes; text
+  // takes the page's own spelling of the scale.
+  if (typeof value === "number") {
+    return typeof ref.times === "number" ? value * ref.times : value;
+  }
+  return typeof value === "string" ? scaledTokenText(value, ref.times) : value;
 }
 
 /** A value with every token it names resolved for one mode. */
