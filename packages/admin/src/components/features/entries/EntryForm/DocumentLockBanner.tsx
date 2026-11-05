@@ -150,7 +150,11 @@ export function DocumentLockBanner({
               size="sm"
               // The answer that acts is outlined; the ones that leave the
               // form as it is are quiet.
-              variant={choice === "load-current" ? "outline" : "ghost"}
+              variant={
+                choice === "load-current" || choice === "try-again"
+                  ? "outline"
+                  : "ghost"
+              }
               onClick={() => onChoose(choice)}
             >
               {label}

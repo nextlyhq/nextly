@@ -38,7 +38,11 @@ export type DocumentAccessRequest =
  * version (the edits kept as a recovery point), keep editing, or put away a
  * sentence that asks nothing.
  */
-export type HeldChangeChoice = "load-current" | "keep-editing" | "dismiss";
+export type HeldChangeChoice =
+  | "load-current"
+  | "keep-editing"
+  | "dismiss"
+  | "try-again";
 
 /** One answer to someone else's change, and what its button says. */
 export interface HeldChangeOption {

@@ -50,6 +50,7 @@ import { peopleById } from "../domains/versions/author-hydration";
 import type { DecodedVersion } from "../domains/versions/stale-version";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, respondMutation } from "./response-shapes";
@@ -250,12 +251,25 @@ async function withChange<T extends { status: string }>(
   authenticated: Awaited<ReturnType<typeof readCaller>>
 ): Promise<T> {
   if (held === undefined || outcome.status !== holds) return outcome;
-  const changed = await changeSinceHeldVersion(ref, held, {
-    user: authenticated.user,
-    trusted: false,
-    authenticatedScope: authenticated.authenticatedScope,
-  });
-  return changed === undefined ? outcome : { ...outcome, changed };
+  try {
+    const changed = await changeSinceHeldVersion(ref, held, {
+      user: authenticated.user,
+      trusted: false,
+      authenticatedScope: authenticated.authenticatedScope,
+    });
+    return changed === undefined ? outcome : { ...outcome, changed };
+  } catch (error) {
+    // 🔴 The claim or renewal has already committed: answered without the
+    // change rather than as an error, so its token still reaches the editor,
+    // which can renew and release it. An answer it never saw would leave a
+    // lease it cannot see renewing, held against its colleagues.
+    getNextlyLogger().warn({
+      op: "document-lock-change-read-failed",
+      message: "Could not tell a holder what changed; answered without it.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return outcome;
+  }
 }
 
 /**

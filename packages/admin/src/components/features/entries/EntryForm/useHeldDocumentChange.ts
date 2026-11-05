@@ -53,6 +53,12 @@ export interface HeldDocumentChangeOptions {
   loadCurrent: () => Promise<void>;
   /** Read the document again, which brings the current version to the form. */
   reload: () => Promise<unknown>;
+  /**
+   * The form's copy is now the version the change named: what its next save
+   * sends. A read that lands the same `updatedAt` (a pending change moved the
+   * version, not the row) would otherwise leave the copy on the old one.
+   */
+  adopt: (version: string) => void;
 }
 
 export interface HeldDocumentChange {
@@ -62,6 +68,11 @@ export interface HeldDocumentChange {
   holding: boolean;
   /** The editor's answer to the change. */
   choose: (choice: HeldChangeChoice) => void;
+  /**
+   * A change over unsaved edits waits for the editor's answer: until then the
+   * editor stays in this language, whose edits the answer is about.
+   */
+  awaitingAnswer: boolean;
 }
 
 /**
@@ -84,6 +95,7 @@ const LOAD_CURRENT = {
 } as const;
 const KEEP_EDITING = { choice: "keep-editing", label: "Keep editing" } as const;
 const DISMISS = { choice: "dismiss", label: "Dismiss" } as const;
+const TRY_AGAIN = { choice: "try-again", label: "Try again" } as const;
 
 /** A notice of the change, in the lock's strip. */
 function changeNotice(
@@ -101,30 +113,108 @@ export function useHeldDocumentChange({
   hold,
   loadCurrent,
   reload,
+  adopt,
 }: HeldDocumentChangeOptions): HeldDocumentChange {
   const [notice, setNotice] = useState<DocumentLockNotice | null>(null);
   const [holding, setHolding] = useState(false);
   // The form's pieces as they are now, read when a change or a choice
   // arrives, so a new callback from the form does not answer a change again.
-  const pieces = useRef({ dirty, hold, loadCurrent, reload });
-  pieces.current = { dirty, hold, loadCurrent, reload };
+  const pieces = useRef({ dirty, hold, loadCurrent, reload, adopt });
+  pieces.current = { dirty, hold, loadCurrent, reload, adopt };
+  // The change being answered: what the strip says of it, and its version.
+  const answering = useRef<{ said: string; change: DocumentLockChange } | null>(
+    null
+  );
+
+  // 🔴 Withheld before anything is kept. A field that holds its own work,
+  // the page builder's store, hands it to the form as it unmounts, so the
+  // recovery point is taken once the form has been withheld and rendered
+  // without it, not in the turn that asked.
+  const withheldNow = useRef(false);
+  const whenWithheld = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    withheldNow.current = holding;
+    if (holding) {
+      whenWithheld.current?.();
+      whenWithheld.current = null;
+    }
+  }, [holding]);
+  const withhold = useCallback(
+    (): Promise<void> =>
+      withheldNow.current
+        ? Promise.resolve()
+        : new Promise<void>(resolve => {
+            whenWithheld.current = resolve;
+            setHolding(true);
+          }),
+    []
+  );
+
+  /** Read the current version into the form, which then carries its version. */
+  const reloadCurrent = useCallback(async (): Promise<void> => {
+    await pieces.current.reload();
+    const told = answering.current?.change.currentVersion;
+    if (told) pieces.current.adopt(told);
+  }, []);
 
   /**
    * Keep the edits and load the current version, withholding the form until
-   * it has. A failure to keep them leaves the conflict dialog saying so, with
-   * the edits still on screen and nothing replaced.
+   * it has. A failure leaves the edits on screen and nothing replaced, and
+   * answers false for the strip to say so.
    */
   const keepAndLoad = useCallback(async (): Promise<boolean> => {
-    setHolding(true);
+    await withhold();
     try {
       await pieces.current.loadCurrent();
-      await pieces.current.reload();
+      await reloadCurrent();
       return true;
     } catch {
       return false;
     } finally {
       setHolding(false);
     }
+  }, [withhold, reloadCurrent]);
+
+  /** Nothing unsaved: the current version replaces the copy, said once it has. */
+  const refreshClean = useCallback(
+    async (said: string, changed: DocumentLockChange): Promise<void> => {
+      setHolding(true);
+      try {
+        await reloadCurrent();
+        setNotice(
+          changeNotice(
+            "updated",
+            `${said}, so it now shows the latest version.`,
+            [DISMISS]
+          )
+        );
+      } catch {
+        // Still the older copy: held, so a save from it is refused rather
+        // than written over the change, and offered again.
+        pieces.current.hold(changed);
+        setNotice(
+          changeNotice(
+            "changed",
+            `${said}. This copy could not be updated to the latest version.`,
+            [TRY_AGAIN]
+          )
+        );
+      } finally {
+        setHolding(false);
+      }
+    },
+    [reloadCurrent]
+  );
+
+  /** What the strip says when the edits could not be kept, and the copy stays. */
+  const notKept = useCallback((said: string) => {
+    setNotice(
+      changeNotice(
+        "changed",
+        `${said}. Your unsaved edits are still here: they could not be kept as a recovery point, so the latest version was not loaded.`,
+        [LOAD_CURRENT, KEEP_EDITING]
+      )
+    );
   }, []);
 
   useEffect(() => {
@@ -133,20 +223,9 @@ export function useHeldDocumentChange({
     settleChange();
     const { change: changed, whileAway } = change;
     const said = changedSentence(changed);
+    answering.current = { said, change: changed };
     if (!pieces.current.dirty()) {
-      // Nothing unsaved: the current version replaces the copy at once.
-      setNotice(
-        changeNotice(
-          "updated",
-          `${said}, so it now shows the latest version.`,
-          [DISMISS]
-        )
-      );
-      setHolding(true);
-      void pieces.current
-        .reload()
-        .catch(() => undefined)
-        .finally(() => setHolding(false));
+      void refreshClean(said, changed);
       return;
     }
     pieces.current.hold(changed);
@@ -160,19 +239,30 @@ export function useHeldDocumentChange({
       return;
     }
     // Taken back: the edits could not be saved while away, and the form
-    // unlocks only over the current version.
-    setNotice(
-      changeNotice(
-        "changed",
-        `${said} while you were away. It now shows the latest version, and your unsaved edits are kept as a recovery point.`,
-        [DISMISS]
-      )
-    );
-    void keepAndLoad();
-  }, [change, settleChange, keepAndLoad]);
+    // unlocks only over the current version. Said once it has.
+    setNotice(null);
+    void keepAndLoad().then(loaded => {
+      if (!loaded) {
+        notKept(said);
+        return;
+      }
+      setNotice(
+        changeNotice(
+          "changed",
+          `${said} while you were away. It now shows the latest version, and your unsaved edits are kept as a recovery point.`,
+          [DISMISS]
+        )
+      );
+    });
+  }, [change, settleChange, keepAndLoad, refreshClean, notKept]);
 
   const choose = useCallback(
     (choice: HeldChangeChoice) => {
+      const current = answering.current;
+      if (choice === "try-again" && current) {
+        void refreshClean(current.said, current.change);
+        return;
+      }
       if (choice !== "load-current") {
         // Keep editing leaves the form held on the change, so no read
         // replaces the edits; a save from them is refused and says it again.
@@ -181,12 +271,17 @@ export function useHeldDocumentChange({
       }
       void keepAndLoad().then(loaded => {
         if (loaded) setNotice(null);
+        else if (current) notKept(current.said);
       });
     },
-    [keepAndLoad]
+    [keepAndLoad, refreshClean, notKept]
   );
 
-  return { notice, holding, choose };
+  // Waiting on the editor: a change told over edits, offered to load.
+  const awaitingAnswer =
+    notice?.choices?.some(option => option.choice === "load-current") ?? false;
+
+  return { notice, holding, choose, awaitingAnswer };
 }
 
 /**
@@ -199,8 +294,15 @@ export function useHeldDocumentChange({
 export function withHeldChange<T extends DocumentLockAffordances>(
   lock: T,
   held: HeldDocumentChange
-): T & { readonly answerChange: (choice: HeldChangeChoice) => void } {
-  const answered = { ...lock, answerChange: held.choose };
+): T & {
+  readonly answerChange: (choice: HeldChangeChoice) => void;
+  readonly changeAwaitingAnswer: boolean;
+} {
+  const answered = {
+    ...lock,
+    answerChange: held.choose,
+    changeAwaitingAnswer: held.awaitingAnswer,
+  };
   if (lock.readOnly) return answered;
   return {
     ...answered,
@@ -224,6 +326,8 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     loadCurrent: () => Promise<void>;
     /** The reads that feed the form; absent, nothing is read again. */
     latest: DocumentLatest | undefined;
+    /** The form's copy is now this version. */
+    adopt: (version: string) => void;
   }
 ): ReturnType<typeof withHeldChange<T>> {
   const held = useHeldDocumentChange({
@@ -233,6 +337,7 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     hold: editor.hold,
     loadCurrent: editor.loadCurrent,
     reload: () => editor.latest?.reload() ?? Promise.resolve(),
+    adopt: editor.adopt,
   });
   return withHeldChange(lock, held);
 }

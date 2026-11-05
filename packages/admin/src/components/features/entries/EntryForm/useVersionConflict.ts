@@ -34,8 +34,11 @@ export interface VersionConflict {
 
 interface Pinned {
   stale: StaleVersion;
-  /** The refused write, without its version. */
-  payload: Record<string, unknown>;
+  /**
+   * The refused write, without its version; null for a hold on a change the
+   * lock told of, where no write was refused and there is nothing to replay.
+   */
+  payload: Record<string, unknown> | null;
   /** The version the refused edits began from. */
   startedFrom: string | undefined;
 }
@@ -147,7 +150,9 @@ function pinThenReject(
 
 function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
   const held = tracked.pin;
-  if (!held) return null;
+  // Nothing to save over with: a hold on a told change refused no write, and
+  // an empty overwrite would save none of the edits on screen.
+  if (!held?.payload) return null;
   // The version the edits began from, so history names whose changes the
   // overwrite replaced.
   return withStartingVersion(
@@ -158,7 +163,9 @@ function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
 
 function fail(tracked: Tracked, message: string): void {
   const held = tracked.pin;
-  if (held) tracked.setConflict({ stale: held.stale, failure: message });
+  // A hold on a told change has no dialog to say it in, nor a refused write
+  // to save anyway: its notice says it, where the change was told.
+  if (held?.payload) tracked.setConflict({ stale: held.stale, failure: message });
 }
 
 async function keepEdits(
@@ -180,7 +187,7 @@ async function keepEdits(
 function holdForChange(tracked: Tracked, stale: StaleVersion): void {
   if (tracked.pin !== null) return;
   // No refused write to replay: a save made later sends its own.
-  tracked.pin = { stale, payload: {}, startedFrom: tracked.startedFrom };
+  tracked.pin = { stale, payload: null, startedFrom: tracked.startedFrom };
 }
 
 function release(tracked: Tracked): void {

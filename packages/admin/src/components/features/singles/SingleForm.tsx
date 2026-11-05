@@ -910,6 +910,7 @@ export function SingleForm({
       hold: version.holdForChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
+      adopt: version.adoptRecovered,
     }
   );
 
@@ -1015,8 +1016,12 @@ export function SingleForm({
     versionWritesHeld: lock.actionsDisabled || updatesHeld,
     writesHeld,
   });
-  // Every switch to another language goes through here, held with the rest.
-  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
+  // Every switch to another language goes through here, held with the rest,
+  // and while a told change waits for an answer about this language's edits.
+  const switchLocale = heldLocaleChange(
+    onLocaleChange,
+    recovering || lock.changeAwaitingAnswer
+  );
 
   // A write of the status alone, as a reader's publish or unpublish sends it:
   // it names no field, so the server judges it by that permission alone, and

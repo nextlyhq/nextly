@@ -57,6 +57,7 @@ function setup(
     hold: vi.fn(() => void calls.push("hold")),
     loadCurrent: vi.fn(async () => void calls.push("loadCurrent")),
     reload: vi.fn(async () => void calls.push("reload")),
+    adopt: vi.fn((version: string) => void calls.push(`adopt ${version}`)),
     ...overrides,
   };
   const hook = renderHook(
@@ -115,7 +116,7 @@ describe("someone else's change to a document this editor holds", () => {
     await waitFor(() => expect(result.current.notice).not.toBeNull());
 
     await act(async () => result.current.choose("load-current"));
-    expect(calls).toEqual(["hold", "loadCurrent", "reload"]);
+    expect(calls).toEqual(["hold", "loadCurrent", "reload", "adopt 2"]);
     expect(options.loadCurrent).toHaveBeenCalledTimes(1);
     expect(result.current.notice).toBeNull();
     expect(result.current.holding).toBe(false);
@@ -143,19 +144,113 @@ describe("someone else's change to a document this editor holds", () => {
     tell(notice({}, true));
 
     await waitFor(() => expect(calls).toEqual(["hold", "loadCurrent"]));
-    // Withheld while the edits are kept and the current version loads.
+    // Withheld while the edits are kept and the current version loads, and
+    // nothing said yet that has not happened.
     expect(result.current.holding).toBe(true);
-    expect(result.current.notice?.message).toMatch(
-      /^Ana changed this document at .+ while you were away\. It now shows the latest version, and your unsaved edits are kept as a recovery point\.$/
-    );
+    expect(result.current.notice).toBeNull();
 
     await act(async () => kept.resolve());
     await waitFor(() => expect(result.current.holding).toBe(false));
-    expect(calls).toEqual(["hold", "loadCurrent", "reload"]);
+    expect(calls).toEqual(["hold", "loadCurrent", "reload", "adopt 2"]);
+    expect(result.current.notice?.message).toMatch(
+      /^Ana changed this document at .+ while you were away\. It now shows the latest version, and your unsaved edits are kept as a recovery point\.$/
+    );
     // The sentence stays to say what happened; nothing is asked.
     expect(result.current.notice?.choices).toEqual([
       { choice: "dismiss", label: "Dismiss" },
     ]);
+  });
+
+  it("withholds the form, and lets it render withheld, before keeping the edits", async () => {
+    // 🔴 A field holding its own work, the page builder's store, hands it to
+    // the form as it unmounts: kept in the same turn, the recovery point
+    // would miss it.
+    let heldWhenKept: boolean | undefined;
+    const rendered = setup(true, {
+      loadCurrent: vi.fn(async () => {
+        heldWhenKept = rendered.result.current.holding;
+      }),
+    });
+    rendered.tell(notice());
+    await waitFor(() => expect(rendered.result.current.notice).not.toBeNull());
+
+    await act(async () => rendered.result.current.choose("load-current"));
+    expect(heldWhenKept).toBe(true);
+  });
+
+  it("says a clean copy shows the latest version only once it does, and offers to try again when it cannot", async () => {
+    let fails = true;
+    const { result, options, calls, tell } = setup(false, {
+      reload: vi.fn(async () => {
+        calls.push("reload");
+        if (fails) throw new Error("offline");
+      }),
+    });
+    tell(notice());
+
+    await waitFor(() =>
+      expect(result.current.notice?.message).toMatch(
+        /could not be updated to the latest version\.$/
+      )
+    );
+    // Still the older copy: held, so a save from it is refused, not written
+    // over the change, and the told version is not adopted.
+    expect(options.hold).toHaveBeenCalledWith(notice().change);
+    expect(options.adopt).not.toHaveBeenCalled();
+    expect(result.current.notice?.choices).toEqual([
+      { choice: "try-again", label: "Try again" },
+    ]);
+    expect(result.current.holding).toBe(false);
+
+    fails = false;
+    await act(async () => result.current.choose("try-again"));
+    await waitFor(() =>
+      expect(result.current.notice?.message).toMatch(
+        /so it now shows the latest version\.$/
+      )
+    );
+    expect(options.adopt).toHaveBeenCalledWith("2");
+  });
+
+  it("takes the told version as the copy's once the latest version has loaded", async () => {
+    // A read can land the same `updatedAt` when a pending change moved the
+    // version and not the row: the copy is still the version the change named.
+    const { calls, tell } = setup(false);
+    tell(notice());
+    await waitFor(() => expect(calls).toEqual(["reload", "adopt 2"]));
+  });
+
+  it("says the edits could not be kept, replaces nothing, and offers it again", async () => {
+    const { result, options, tell } = setup(true, {
+      loadCurrent: vi.fn(async () => {
+        throw new Error("recovery point refused");
+      }),
+    });
+    tell(notice());
+    await waitFor(() => expect(result.current.notice).not.toBeNull());
+
+    await act(async () => result.current.choose("load-current"));
+    expect(options.reload).not.toHaveBeenCalled();
+    expect(result.current.notice).toMatchObject({
+      message: expect.stringMatching(
+        /could not be kept as a recovery point, so the latest version was not loaded\.$/
+      ),
+      choices: [
+        { choice: "load-current", label: "Load current version" },
+        { choice: "keep-editing", label: "Keep editing" },
+      ],
+    });
+    expect(result.current.holding).toBe(false);
+  });
+
+  it("waits for an answer while a change over unsaved edits is offered, and not once answered", async () => {
+    const { result, tell } = setup(true);
+    expect(result.current.awaitingAnswer).toBe(false);
+    tell(notice());
+    await waitFor(() => expect(result.current.awaitingAnswer).toBe(true));
+
+    act(() => result.current.choose("keep-editing"));
+    expect(result.current.awaitingAnswer).toBe(false);
   });
 
   it("names nobody, and no time, when the change names neither", async () => {
@@ -195,6 +290,7 @@ describe("the lock's affordances with someone else's change", () => {
     },
     holding: false,
     choose: () => {},
+    awaitingAnswer: true,
   };
 
   it("says the change where the lock says nothing", () => {

@@ -20,7 +20,7 @@
  */
 
 import type { JSX, ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   autosaveEnabledFor,
@@ -446,10 +446,16 @@ export function EntryForm({
   // holds for it too. Only the fields' own `disabled` follows the save alone;
   // the recovery holds them read-only through the lock, so a field keeps focus.
   const isSubmitting = savePending || recovering;
+  // Whether a change told over unsaved edits waits for the editor's answer,
+  // as the lock below last said: the edits it is about are this language's.
+  const [changeAwaiting, setChangeAwaiting] = useState(false);
   // Every switch to another language goes through here, held while a
   // refused publish's recovery runs, so its Save and take stay on the
-  // language they are for.
-  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
+  // language they are for, and while a told change waits for an answer.
+  const switchLocale = heldLocaleChange(
+    onLocaleChange,
+    recovering || changeAwaiting
+  );
 
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
@@ -766,8 +772,12 @@ export function EntryForm({
       hold: holdForVersionChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
+      adopt: adoptRecoveredVersion,
     }
   );
+  useEffect(() => {
+    setChangeAwaiting(lock.changeAwaitingAnswer);
+  }, [lock.changeAwaitingAnswer]);
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
