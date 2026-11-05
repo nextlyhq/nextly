@@ -17,6 +17,11 @@ import type { UseFormReturn } from "react-hook-form";
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
+  DOCUMENT_VERSION_KEY,
+  versionOf,
+  type StaleVersion,
+} from "@admin/lib/document-version";
+import {
   versionApi,
   type AutosaveDetail,
   type VersionScope,
@@ -144,7 +149,18 @@ function holdsStored(
   locale: string | null
 ): boolean {
   if ((point.locale ?? null) !== locale) return false;
-  return canonicalJson(point.snapshot) === canonicalJson(stored);
+  return canonicalJson(pointValues(point.snapshot)) === canonicalJson(stored);
+}
+
+/**
+ * A point's values: its snapshot without the version its edits began from,
+ * which says where they came from rather than what they are.
+ */
+function pointValues(snapshot: unknown): unknown {
+  if (typeof snapshot !== "object" || snapshot === null) return snapshot;
+  const { [DOCUMENT_VERSION_KEY]: _startedFrom, ...values } =
+    snapshot as Record<string, unknown>;
+  return values;
 }
 
 /**
@@ -224,6 +240,12 @@ export interface UseAutosaveRecoveryOptions {
    * which is why the offer is read only once.
    */
   savedCount?: number;
+  /**
+   * Told, when an offer is taken, the version the point's edits began from,
+   * or undefined for a point saved before versions: a save of the restored
+   * edits is judged by it.
+   */
+  onRestored?: (startedFrom: string | undefined) => void;
 }
 
 export interface AutosaveRecoveryOffer {
@@ -237,6 +259,15 @@ export interface AutosaveRecoveryOffer {
    * those changes, and the offer says so.
    */
   olderVersion: boolean;
+  /**
+   * The version the point's edits began from, which a save of them is judged
+   * by once restored; undefined for a point saved before versions.
+   */
+  startedFrom?: string;
+  /** What changed since that version, as a refused save says it. */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version. */
+  startingVersionUnknown: boolean;
 }
 
 export interface UseAutosaveRecoveryResult {
@@ -279,6 +310,11 @@ export interface UseAutosaveRecoveryResult {
    * confirmed, and calls `take` itself.
    */
   restore: (apply?: () => void) => void;
+  /**
+   * Read the author's point again and offer it, once edits were just kept as
+   * one: an editor that loads the current version over its refused edits.
+   */
+  recheck: () => void;
   /** Write the offered values into the form now, unasked: see `restore`. */
   take: () => void;
 }
@@ -324,6 +360,7 @@ function useRestoreOffer({
   form,
   queryKey,
   setDismissed,
+  onRestored,
 }: {
   offer: AutosaveRecoveryOffer | null;
   /** The stored point the offer was drawn from. */
@@ -332,6 +369,7 @@ function useRestoreOffer({
   form: UseFormReturn<Record<string, unknown>>;
   queryKey: readonly unknown[];
   setDismissed: (dismissed: boolean) => void;
+  onRestored?: (startedFrom: string | undefined) => void;
 }): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
   const queryClient = useQueryClient();
   const take = useCallback(() => {
@@ -341,11 +379,14 @@ function useRestoreOffer({
      * values are not what the server holds, and treating them as the new
      * baseline would let the reader navigate away believing they were stored.
      */
-    form.reset(offer.snapshot as Record<string, unknown>, {
+    // Without the version it began from, which is not a value of the form:
+    // the editor judges the next save by it instead.
+    form.reset(pointValues(offer.snapshot) as Record<string, unknown>, {
       keepDefaultValues: true,
     });
+    onRestored?.(offer.startedFrom);
     setDismissed(true);
-  }, [offer, form, setDismissed]);
+  }, [offer, form, setDismissed, onRestored]);
 
   // Written since, or gone: the offer is drawn again from this answer.
   const redraw = useCallback(
@@ -373,6 +414,7 @@ export function useAutosaveRecovery({
   form,
   locale = null,
   savedCount = 0,
+  onRestored,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
   // Recovery points are each author's own, so a "Not now" is too: another
   // account signed in to this tab is offered its own point.
@@ -460,6 +502,11 @@ export function useAutosaveRecovery({
       // a write that did not store it, such as publishing every language,
       // and it is the only copy of that work.
       olderVersion: data.superseded !== undefined,
+      ...(versionOf(data.snapshot) === undefined
+        ? {}
+        : { startedFrom: versionOf(data.snapshot) }),
+      ...(data.changedSince ? { changedSince: data.changedSince } : {}),
+      startingVersionUnknown: data.startingVersionUnknown === true,
     };
   }, [dismissed, data, stored, locale, isPutOff]);
 
@@ -471,7 +518,16 @@ export function useAutosaveRecovery({
     queryKey,
     // Taken, not put off: the form holds the work now, so nothing is offered.
     setDismissed,
+    onRestored,
   });
 
-  return { offer, isResolved, dismiss, restore, take };
+  // Read again, offered again: once edits were just kept as a point, the
+  // offer to restore them shows at once rather than on the next open.
+  const queryClient = useQueryClient();
+  const recheck = useCallback(() => {
+    setDismissed(false);
+    void queryClient.invalidateQueries({ queryKey });
+  }, [queryClient, queryKey]);
+
+  return { offer, isResolved, dismiss, restore, take, recheck };
 }

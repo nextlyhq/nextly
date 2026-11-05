@@ -1413,6 +1413,8 @@ export function SingleForm({
     enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
+    // Each point records the version its edits began from.
+    version: version.startedFrom,
   });
   const recovery = offerHeldWhileRecovering(
     useAutosaveRecovery({
@@ -1424,6 +1426,8 @@ export function SingleForm({
       // taken for the document.
       locale: locale ?? null,
       savedCount,
+      // A save of restored edits is judged by the version they began from.
+      onRestored: version.adoptRecovered,
     }),
     recovering
   );
@@ -1818,7 +1822,11 @@ export function SingleForm({
                 )
               : null
           }
-          onLoadCurrent={loadCurrentVersion}
+          onLoadCurrent={async () => {
+            await loadCurrentVersion();
+            // The edits were just kept as a recovery point: offer it now.
+            recovery.recheck();
+          }}
           onSaveAnyway={saveAnyway}
         />
       </UnsavedWorkProvider>

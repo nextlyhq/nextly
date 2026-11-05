@@ -54,6 +54,11 @@ export interface VersionConflictState {
   /** A write the server answered with `item` stored the copy. */
   adoptAnswered: (item: unknown) => void;
   /**
+   * Edits restored from a recovery point now hold the form: the version they
+   * began from, or the one on screen for a point saved before versions.
+   */
+  adoptRecovered: (startedFrom: string | undefined) => void;
+  /**
    * Pin the form when `error` refuses `payload` because the document changed
    * since; answers whether it did.
    */
@@ -102,6 +107,10 @@ export function useVersionConflict(): VersionConflictState {
     // A write that answers with no version (an older server) leaves the copy
     // where it was rather than unversioned.
     startedFrom.current = versionOf(item) ?? startedFrom.current;
+  }, []);
+
+  const adoptRecovered = useCallback((recovered: string | undefined) => {
+    if (recovered !== undefined) startedFrom.current = recovered;
   }, []);
 
   const refused = useCallback(
@@ -178,6 +187,7 @@ export function useVersionConflict(): VersionConflictState {
       withVersion,
       adoptRead,
       adoptAnswered,
+      adoptRecovered,
       refused,
       overwrite,
       keepEdits,
@@ -186,6 +196,7 @@ export function useVersionConflict(): VersionConflictState {
       release,
     }),
     [
+      adoptRecovered,
       conflict,
       pinned,
       currentStart,

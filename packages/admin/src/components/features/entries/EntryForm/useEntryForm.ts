@@ -383,6 +383,8 @@ export interface UseEntryFormReturn {
   loadCurrentVersion: () => Promise<void>;
   /** The version the copy on screen started from, sent with every write. */
   versionStartedFrom: () => string | undefined;
+  /** Edits restored from a recovery point began from this version. */
+  adoptRecoveredVersion: (startedFrom: string | undefined) => void;
 }
 
 // ============================================================================
@@ -1131,5 +1133,6 @@ export function useEntryForm({
     saveAnyway,
     loadCurrentVersion,
     versionStartedFrom: version.startedFrom,
+    adoptRecoveredVersion: version.adoptRecovered,
   };
 }

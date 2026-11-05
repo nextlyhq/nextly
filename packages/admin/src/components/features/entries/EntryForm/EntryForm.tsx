@@ -413,6 +413,7 @@ export function EntryForm({
     saveAnyway,
     loadCurrentVersion,
     versionStartedFrom,
+    adoptRecoveredVersion,
   } = useEntryForm({
     collection,
     entry,
@@ -873,6 +874,8 @@ export function EntryForm({
       // taken for the document.
       locale: locale ?? null,
       savedCount,
+      // A save of restored edits is judged by the version they began from.
+      onRestored: adoptRecoveredVersion,
     }),
     recovering
   );
@@ -903,6 +906,8 @@ export function EntryForm({
     enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
+    // Each point records the version its edits began from.
+    version: versionStartedFrom,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -1088,7 +1093,11 @@ export function EntryForm({
             )
           : null
       }
-      onLoadCurrent={loadCurrentVersion}
+      onLoadCurrent={async () => {
+        await loadCurrentVersion();
+        // The edits were just kept as a recovery point: offer it now.
+        recovery.recheck();
+      }}
       onSaveAnyway={saveAnyway}
     />
   );

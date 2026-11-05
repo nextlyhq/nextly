@@ -30,7 +30,10 @@ import type {
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
-import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
+import {
+  DOCUMENT_VERSION_KEY,
+  type StaleVersion,
+} from "@admin/lib/document-version";
 
 // The diff wire types live in core (the engine produces them); re-exported here
 // so admin components import them from the same place as the other version types.
@@ -220,6 +223,13 @@ export interface AutosaveDetail {
    * the document is as it was when the point began.
    */
   superseded?: "by-you" | "by-another" | "unknown";
+  /**
+   * What changed in the document since the version the point's edits began
+   * from, as a refused save says it; absent while nothing it covers did.
+   */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version, before versions. */
+  startingVersionUnknown?: boolean;
 }
 
 /** What a restore reports back. */
