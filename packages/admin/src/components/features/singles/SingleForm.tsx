@@ -892,12 +892,6 @@ export function SingleForm({
     // the latest copy: one that cannot would say it shows what it does not.
     version: latest ? version.startedFrom : undefined,
   });
-  // Whether the Single keeps recovery points, set below where it is known.
-  const keepsRecoveryPointsNow = useRef(false);
-  // Load the current version with the edits kept as a recovery point, then
-  // offer it: one way, for a refused save's dialog and for someone else's
-  // change alike. What it calls is made below, so it is filled in there.
-  const keepEditsAndLoad = useRef<() => Promise<void>>(async () => {});
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -908,12 +902,8 @@ export function SingleForm({
     ),
     {
       surface: lockSurface,
-      // The page builder's own store included, which the form does not hold.
-      dirty: () => hasUnsavedWorkNow.current,
       hold: version.holdForChange,
-      loadCurrent: () => keepEditsAndLoad.current(),
       latest,
-      keepsEdits: () => keepsRecoveryPointsNow.current,
       release: version.release,
     }
   );
@@ -1268,7 +1258,7 @@ export function SingleForm({
   // Whether the conflict's edits can be kept: a Single with autosave on.
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(schema);
-  keepsRecoveryPointsNow.current = keepsRecoveryPoints;
+  lock.now.keepsEdits = keepsRecoveryPoints;
   // With `keepEdits` false, for a Single that keeps no recovery points, the
   // edits are discarded, as the conflict said they would be.
   const loadCurrentVersion = useCallback(
@@ -1325,6 +1315,8 @@ export function SingleForm({
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
   hasUnsavedWorkNow.current = hasUnsavedWork;
+  // The page builder's own store included, which the form does not hold.
+  lock.now.hasUnsavedWork = hasUnsavedWork;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -1541,7 +1533,7 @@ export function SingleForm({
   // document keeps them and offering it then; elsewhere the edits are
   // discarded, as the conflict said they would be. One way, for a refused
   // save's dialog and for someone else's change alike.
-  keepEditsAndLoad.current = async () => {
+  lock.now.keepEditsAndLoad = async () => {
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
@@ -1934,7 +1926,7 @@ export function SingleForm({
                 )
               : null
           }
-          onLoadCurrent={() => keepEditsAndLoad.current()}
+          onLoadCurrent={() => lock.now.keepEditsAndLoad()}
           onSaveAnyway={saveAnyway}
         />
       </UnsavedWorkProvider>

@@ -350,30 +350,53 @@ export function withHeldChange<T extends DocumentLockAffordances>(
  * tells the change, and the form holds its edits and loads the current
  * version.
  */
+/**
+ * What the editor knows only once it has rendered further down than its lock:
+ * set there, each render, and read when a change or a choice arrives.
+ */
+export interface HeldChangeEditorNow {
+  /** Whether anything unsaved is on screen, a field's own store included. */
+  hasUnsavedWork: boolean;
+  /** Whether the document keeps recovery points. */
+  keepsEdits: boolean;
+  /**
+   * Load the current version, keeping the edits as a recovery point where
+   * the document keeps them: one way, for a refused save's dialog and for
+   * someone else's change alike.
+   */
+  keepEditsAndLoad: () => Promise<void>;
+}
+
 export function useLockWithHeldChange<T extends DocumentLockAffordances>(
   lock: T,
   editor: {
     surface: Pick<DocumentLockSurface, "change" | "settleChange">;
-    dirty: () => boolean;
     hold: (change: DocumentLockChange) => void;
-    loadCurrent: () => Promise<void>;
     /** The reads that feed the form; absent, nothing is read again. */
     latest: DocumentLatest | undefined;
-    /** Whether the document keeps recovery points. */
-    keepsEdits: () => boolean;
     /** Let go of a hold nothing unsaved needs any more. */
     release: () => void;
   }
-): ReturnType<typeof withHeldChange<T>> {
+): ReturnType<typeof withHeldChange<T>> & {
+  /** Set by the editor where it knows each, and read by the held change. */
+  readonly now: HeldChangeEditorNow;
+} {
+  // One object for the editor's life, so what it sets below its lock is what
+  // the held change reads, whichever render set it.
+  const now = useRef<HeldChangeEditorNow>({
+    hasUnsavedWork: false,
+    keepsEdits: false,
+    keepEditsAndLoad: async () => {},
+  });
   const held = useHeldDocumentChange({
     change: editor.surface.change,
     settleChange: editor.surface.settleChange,
-    dirty: editor.dirty,
+    dirty: () => now.current.hasUnsavedWork,
     hold: editor.hold,
-    loadCurrent: editor.loadCurrent,
+    loadCurrent: () => now.current.keepEditsAndLoad(),
     reload: () => editor.latest?.reload() ?? Promise.resolve(),
-    keepsEdits: editor.keepsEdits,
+    keepsEdits: () => now.current.keepsEdits,
     release: editor.release,
   });
-  return withHeldChange(lock, held);
+  return { ...withHeldChange(lock, held), now: now.current };
 }

@@ -771,16 +771,6 @@ export function EntryForm({
     // latest copy: one that cannot would say it shows what it does not.
     version: latest ? versionStartedFrom : undefined,
   });
-  // Whether anything unsaved is on screen, the page builder's own store
-  // included, which the form's values do not hold. Set below, where it is
-  // known, and read when someone else's change is told.
-  const hasUnsavedWorkNow = useRef(false);
-  // Whether the entry keeps recovery points, set below where it is known.
-  const keepsRecoveryPointsNow = useRef(false);
-  // Load the current version with the edits kept as a recovery point, then
-  // offer it: one way, for a refused save's dialog and for someone else's
-  // change alike. The offer is made below, so this is filled in there.
-  const keepEditsAndLoad = useRef<() => Promise<void>>(async () => {});
   // A gained entry's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -791,11 +781,8 @@ export function EntryForm({
     ),
     {
       surface: lockSurface,
-      dirty: () => hasUnsavedWorkNow.current,
       hold: holdForVersionChange,
-      loadCurrent: () => keepEditsAndLoad.current(),
       latest,
-      keepsEdits: () => keepsRecoveryPointsNow.current,
       release: releaseVersionHold,
     }
   );
@@ -945,7 +932,9 @@ export function EntryForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
-  hasUnsavedWorkNow.current = hasUnsavedWork;
+  // The page builder's own store included, which the form's values do not
+  // hold: what someone else's change is judged against.
+  lock.now.hasUnsavedWork = hasUnsavedWork;
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
@@ -1138,12 +1127,12 @@ export function EntryForm({
   const staleHistory = versionConflict?.stale.historyVersion;
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(collection);
-  keepsRecoveryPointsNow.current = keepsRecoveryPoints;
+  lock.now.keepsEdits = keepsRecoveryPoints;
   // Load the current version, keeping the edits as a recovery point where the
   // document keeps them and offering it then; elsewhere the edits are
   // discarded, as the conflict said they would be. One way, for a refused
   // save's dialog and for someone else's change alike.
-  keepEditsAndLoad.current = async () => {
+  lock.now.keepEditsAndLoad = async () => {
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
@@ -1160,7 +1149,7 @@ export function EntryForm({
             )
           : null
       }
-      onLoadCurrent={() => keepEditsAndLoad.current()}
+      onLoadCurrent={() => lock.now.keepEditsAndLoad()}
       onSaveAnyway={saveAnyway}
     />
   );
