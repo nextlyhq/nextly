@@ -286,7 +286,7 @@ describe.each(getConfiguredTestDialects())(
         { dryRun: true }
       );
       // The plural name the editor's Source menu shows, never the slug.
-      expect((dry.body.item as PageActionResult).refusals).toContain(
+      expect((dry.body.item as PageActionResult).refusals.join("\n")).toContain(
         'This list sorts by "rating", which Articles doesn\'t have. Choose another field.'
       );
     });

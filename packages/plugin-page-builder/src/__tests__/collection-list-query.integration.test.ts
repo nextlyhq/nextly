@@ -266,7 +266,7 @@ describe.each(getConfiguredTestDialects())(
         },
       })) as ReactElement;
       const host = renderToStaticMarkup(element);
-      const note = /data-nx-list-diagnostic="[^"]+">([^<]*)</.exec(host);
+      const note = /data-nx-list-diagnostic="[^"]+"><span>([^<]*)</.exec(host);
       // The markup escapes quotes; the note is compared as an author reads it.
       const text = note?.[1]
         ?.replaceAll("&quot;", '"')
