@@ -15,13 +15,15 @@
  * Asked from the action runner's before-action hook, so every way of
  * publishing asks it, from the top bar, the menu or a plugin's `run`. A check
  * that cannot be made publishes as before: the server still says afterwards
- * what went live without its parts.
+ * what went live without its parts. An edit made while the server answers is
+ * asked about too, before the publish goes ahead.
  *
  * @module admin/publish-offer
  */
 import {
   useBeforeDocumentAction,
   writePluginRoute,
+  type StoreReadiness,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   AlertDialog,
@@ -86,6 +88,23 @@ export interface PublishOfferInput {
 const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
 
 /**
+ * How many times one publish asks, the draft having changed while it was
+ * asked about. A draft still changing after this many is refused rather than
+ * published unasked.
+ */
+const MAX_ASKS = 3;
+
+/** The readiness request for the draft as it is now. */
+function readinessRequest(input: PublishOfferInput): PublishReadinessRequest {
+  return {
+    documents: input.documents(),
+    layout: input.layout,
+    // Sent only when it applies, so a request names what it asks about.
+    ...(input.siteDefault === true ? { siteDefault: true } : {}),
+  };
+}
+
+/**
  * Ask before a publish, and return the dialog that asks.
  *
  * The returned element renders nothing until a publish needs the question;
@@ -101,16 +120,12 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     latest.current = input;
   });
 
-  useBeforeDocumentAction(async (action, store) => {
-    if (!PUBLISHING_ACTIONS.has(action)) return;
-    const { documents, layout, siteDefault, subject, enabled } = latest.current;
-    if (enabled === false) return;
-    const readiness = await askReadiness({
-      documents: documents(),
-      layout,
-      // Sent only when it applies, so a request names what it asks about.
-      ...(siteDefault === true ? { siteDefault } : {}),
-    });
+  /** Put the question, when the answer calls for one, and do as told. */
+  const settle = async (
+    readiness: PublishReadinessResponse | null,
+    store: StoreReadiness,
+    subject: PublishSubject
+  ): Promise<void> => {
     if (
       readiness === null ||
       (readiness.dependencies.length === 0 && readiness.missing === 0)
@@ -130,6 +145,30 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     if (!(await store.writesSettled())) return;
     const result = await publishChosen(choice.dependencies);
     reportLeftUnpublished(result, readiness, subject);
+  };
+
+  useBeforeDocumentAction(async (action, store) => {
+    if (!PUBLISHING_ACTIONS.has(action)) return;
+    const { subject, enabled } = latest.current;
+    if (enabled === false) return;
+    // The form stays editable while the server answers, and the store writes
+    // the draft as it is when the handlers are done: an edit made meanwhile
+    // was not asked about, so the draft is asked about again until the answer
+    // is about the one stored.
+    for (let asked = 0; asked < MAX_ASKS; asked++) {
+      const request = readinessRequest(latest.current);
+      const askedAbout = JSON.stringify(request);
+      await settle(await askReadiness(request), store, subject);
+      // The writes the store waits for next are waited for here, so nothing
+      // is awaited between the draft compared below and the one stored.
+      if (!(await store.writesSettled())) return;
+      if (JSON.stringify(readinessRequest(latest.current)) === askedAbout) {
+        return;
+      }
+    }
+    throw new Error(
+      `This ${subject} kept changing while it was checked, so it wasn't published. Publish again once you've finished editing.`
+    );
   });
 
   return (
