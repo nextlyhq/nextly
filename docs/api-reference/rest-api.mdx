@@ -733,10 +733,10 @@ there; these are the parameters that choose them.
 
 | Parameter              | Values                                                   | What it does                                                                                                                                                                                         |
 | ---------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `locale`               | A configured language code; `all` on a read; `*` on a write | The language a read returns or a write stores. Missing or unknown, the default language. `all` answers a read with every language's value for each translated field; `*` writes every language. |
+| `locale`               | A configured language code; `all` on a read; `*` on a write | The language a read returns or a write stores. Missing, the default language. A read naming an unknown code reads the default; a write naming one is refused with a `400`, rather than storing into the default. `all` answers a read with every language's value for each translated field. `*` moves a publication status across every language: its body must be a `status` patch alone, and any field value is refused with a `400`. To write values, name their language. |
 | `fallback-locale`      | A language code, or `none`                                | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `none` turns fallback off, so an untranslated field reads empty.    |
 | `translation-status`   | `1`                                                      | Adds `_translations` to each document: for every configured language, whether it has content of its own (`translated`) and, with a draft/published lifecycle, its `status`.                      |
-| `where[_translated]`   | `[locale]=<code>` and `[state]=<state>`                  | Lists only the documents in that state in that language: `missing`, `translated`, `draft`, `published` or `stale`. A reserved key, not a field filter.                                           |
+| `where[_translated]`   | `[locale]=<code>` and `[state]=<state>`                  | Lists only the documents in that state in that language: `missing`, `translated`, `draft`, `published` or `stale`. `draft` and `published` need Draft/Published enabled; without it they filter nothing and every matching document comes back. A reserved key, not a field filter.                                           |
 
 ```
 ?locale=es&fallback-locale=none
@@ -745,9 +745,16 @@ there; these are the parameters that choose them.
 ?where[_translated][locale]=es&where[_translated][state]=missing
 ```
 
-`GET /admin/api/translations` is the same question across every localized collection: one
+`GET /admin/api/translations` is the same question across the localized collections: one
 language's outstanding work, `?locale=es&state=missing&limit=50`, with `state` taking the values
 above. Each collection's read rules decide which of its documents come back.
+
+The answer can be incomplete, and says so in `meta`. It asks at most 20 collections
+(`MAX_WORKLIST_COLLECTIONS`); the slugs it skipped, and any whose read failed, are listed in
+`meta.notConsulted`. Collections that cannot answer a translation question until their
+schema is migrated are listed in `meta.unanswerable`. Each field is present only when it
+has entries. The endpoint takes no `page`, and `meta.hasNext` is always `false`, so read
+these two fields, not `hasNext`, to know whether the answer is whole.
 
 ## Pagination
 

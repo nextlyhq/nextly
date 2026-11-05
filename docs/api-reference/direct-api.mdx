@@ -792,7 +792,9 @@ const posts = await nextly.find({
 ## Languages
 
 On a localized collection or Single (see [Localization](/docs/localization)), a read or a
-write names its language with `locale`, and a read chooses its fallback with `fallbackLocale`:
+write names its language with `locale`, and a read chooses its fallback with `fallbackLocale`.
+An `update` by `where` is the exception: it does not pass `locale` on, so it writes the
+default language whatever `locale` says. To write another language, update by `id`.
 
 ```ts
 // Spanish, falling back as the site configures it.
@@ -806,7 +808,8 @@ const post = await nextly.findByID({
   fallbackLocale: false,
 });
 
-// Every language's value for each translated field, in one answer.
+// Every language's value for each translated field, in one answer: each such field
+// holds an object keyed by language code, e.g. all.title.es.
 const all = await nextly.findByID({ collection: "posts", id, locale: "all" });
 
 // A write stores into the language it names.
@@ -815,7 +818,7 @@ await nextly.update({ collection: "posts", id, locale: "es", data: { title: "Hol
 
 | Option           | Type              | What it does                                                                                                                                                              |
 | ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field.               |
+| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field, as an object keyed by language code. Generated types do not model that yet and still declare the field's own type, so treat such a result as untyped.               |
 | `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.               |
 
 Language filters and the per-language status overview are REST parameters; see
