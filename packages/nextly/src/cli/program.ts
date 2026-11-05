@@ -99,6 +99,18 @@ export interface ProgramOptions {
 }
 
 /**
+ * Whether `command` is `nextly telemetry` or one of its subcommands. A hook
+ * installed on the program is handed the program itself as its first
+ * argument, so the command that runs is the second, `actionCommand`.
+ */
+function isTelemetryCommand(command: Command): boolean {
+  for (let at: Command | null = command; at !== null; at = at.parent) {
+    if (at.name() === "telemetry") return true;
+  }
+  return false;
+}
+
+/**
  * Create the main CLI program with all commands registered. Every command is
  * declared without loading its work, so building the program is cheap.
  *
@@ -167,7 +179,7 @@ ${pc.bold("Documentation:")}
   let commandStartedAt: number | null = null;
   let currentCommand = "";
 
-  program.hook("preAction", async thisCommand => {
+  program.hook("preAction", async (thisCommand, actionCommand) => {
     // First, before anything a command loads: only an action reaches this
     // hook, so `--help`, `--version` and an unknown command never run it.
     await options.beforeAction?.(thisCommand);
@@ -185,7 +197,9 @@ ${pc.bold("Documentation:")}
         : line => process.stderr.write(`${line}\n`)
     );
     currentCommand = thisCommand.name();
-    if (currentCommand === "telemetry") return; // sub-command handles its own init
+    // A telemetry command handles its own init, and its dry run must open no
+    // consent store at all.
+    if (isTelemetryCommand(actionCommand)) return;
     commandStartedAt = Date.now();
     // Loaded here, with the command, so declaring the program loads none of it.
     const telemetry = await import("@nextlyhq/telemetry");
@@ -197,8 +211,8 @@ ${pc.bold("Documentation:")}
     });
   });
 
-  program.hook("postAction", async thisCommand => {
-    if (thisCommand.name() === "telemetry") return;
+  program.hook("postAction", async (_thisCommand, actionCommand) => {
+    if (isTelemetryCommand(actionCommand)) return;
     if (commandStartedAt === null) return;
     const telemetry = await import("@nextlyhq/telemetry");
     telemetry.capture("command_completed", {

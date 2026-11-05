@@ -70,6 +70,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { layoutExists, relationId } from "../default-layout/store";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import { statusOf } from "../unpublish-write";
 
 import {
@@ -275,6 +276,9 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
   );
 }
 
+/** How many times a clear is tried while saves of the page keep landing. */
+const CLEAR_ATTEMPTS = 3;
+
 /**
  * Clear `layoutId` from the page `pageId`, where it can be cleared without
  * publishing anything: the working draft of a published page, or the row of an
@@ -286,6 +290,11 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
  * their own access deciding, and a page they may not edit is refused with
  * their write's own error. The read of where the page stands is the system's
  * either way: it decides only whether there is anything to clear.
+ *
+ * Sent with the version of the read it was decided on, so a save of the page
+ * in between refuses it rather than being undone. The page is then read
+ * again and judged afresh: cleared if it still names the Layout, left alone
+ * if the save changed that.
  */
 export async function clearPageReference(
   nextly: PageReads,
@@ -293,6 +302,28 @@ export async function clearPageReference(
   pageId: string,
   layoutId: string,
   writeAs?: PersonReads
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await clearOnce(nextly, pages, pageId, layoutId, writeAs);
+    } catch (error) {
+      if (
+        attempt >= CLEAR_ATTEMPTS ||
+        !NextlyError.isCode(error, "STALE_VERSION")
+      ) {
+        throw error;
+      }
+    }
+  }
+}
+
+/** One read of the page, and the clear it decides, as {@link clearPageReference}. */
+async function clearOnce(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  writeAs: PersonReads | undefined
 ): Promise<boolean> {
   const current = await currentPage(nextly, pages, pageId);
   if (current === null || relationId(current.layout) !== layoutId) {
@@ -307,7 +338,7 @@ export async function clearPageReference(
       nextly.update({
         collection: pages,
         id: pageId,
-        data: { layout: null },
+        data: withVersionFrom({ layout: null }, documentVersionOf(current)),
         context: { [LAYOUT_CLEAR_CONTEXT_KEY]: layoutId },
         ...(writeAs ?? { overrideAccess: true }),
       }),

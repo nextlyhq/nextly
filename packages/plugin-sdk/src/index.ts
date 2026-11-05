@@ -260,6 +260,7 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   ScheduledTask,
+  PluginWebhookEventType,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
@@ -702,6 +703,21 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * Admin places: the named places on admin pages a plugin adds to, and the
+ * places a plugin declares on its own pages (`contributes.admin.places`).
+ * A plugin types its own places by augmenting `AdminPlaces` from this module.
+ * @experimental No first-party plugin declares or adds to a place yet (see
+ *   STABILITY.md).
+ */
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+  type PluginAdminPlaceDeclaration,
 } from "nextly";
 
 /**

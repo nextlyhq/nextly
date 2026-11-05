@@ -471,10 +471,11 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     );
     const id = (created.data as { id: string }).id;
 
+    // The key's grant is under test, not versions.
     const denied = await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
       userId: "key-owner",
       routeAuthorized: true,
       authenticatedScope: {
@@ -489,7 +490,7 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     const allowed = await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
       userId: "key-owner",
       routeAuthorized: true,
       authenticatedScope: {
