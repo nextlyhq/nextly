@@ -22,6 +22,7 @@ import {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
+  fallbackBreakpoint,
   registrySlotSource,
   type SlotSource,
 } from "@nextlyhq/builder";
@@ -40,6 +41,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -387,7 +389,9 @@ type CanvasViewport = {
 /** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
-}: Pick<CanvasRender, "canvasRender">): CanvasViewport {
+  siteStylePending,
+}: Pick<CanvasRender, "canvasRender"> &
+  Pick<SiteStyleInputs, "siteStylePending">): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -415,10 +419,34 @@ function useCanvasViewport({
   }, []);
 
   /*
+   * The device to move to when the site removes the one being edited: the
+   * next wider breakpoint that remains, else the base. Sent to the shell as a
+   * choice, so it stores and shows that device as the author's own.
+   *
+   * Compared against the last set the stored style ANSWERED with. While the
+   * read is pending the set in hand is the host's config defaults, and a
+   * breakpoint missing from the stored set was never removed in this session:
+   * a device restored on load that the site no longer has goes to the base,
+   * through `editingBreakpointOf` below.
+   */
+  const previousBreakpoints = useRef<BreakpointSet | undefined>(undefined);
+  useEffect(() => {
+    const before = previousBreakpoints.current;
+    previousBreakpoints.current = siteStylePending ? undefined : breakpoints;
+    if (siteStylePending || before === undefined || before === breakpoints)
+      return;
+    // Only a device that WAS being edited and is gone now moves.
+    if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
+    if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
+    chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
+  }, [breakpoints, siteStylePending, chosenDevice, chooseDevice]);
+
+  /*
    * Which breakpoint an edit lands in: the device the author chose, and
    * nothing else — never the room the editor has, which narrows as panels
    * open. A device the site no longer defines resolves to the base
-   * breakpoint, so an edit is never stored under a breakpoint nothing draws.
+   * breakpoint until the move above arrives, so an edit is never stored under
+   * a breakpoint nothing draws.
    */
   const editedBreakpoint = editingBreakpointOf(breakpoints, chosenDevice);
   /*
@@ -778,7 +806,7 @@ export function useCanvasInputs(
   style: SiteStyleInputs
 ): CanvasInputs {
   const render = useCanvasRender({ ...mount, ...style });
-  const viewport = useCanvasViewport(render);
+  const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
   const wiring = useCanvasWiring(mount);
   const readings = useStyleReadings({
