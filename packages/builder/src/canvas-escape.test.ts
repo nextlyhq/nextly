@@ -84,6 +84,28 @@ describe("isTextEntry", () => {
     expect(isTextEntry(editable.querySelector("#deep"))).toBe(true);
   });
 
+  it("reads contenteditable's values as the browser does: any case, and an unknown one inherits", () => {
+    // Recognised values are ASCII case-insensitive.
+    for (const value of ["TRUE", "True", "PlainText-Only"]) {
+      expect(
+        isTextEntry(mount(`<div contenteditable="${value}"></div>`)),
+        value
+      ).toBe(true);
+    }
+    // An unrecognised value is the inherit state: inside editable text it is
+    // editable, and on its own it is not.
+    const inherited = mount(
+      '<div contenteditable="true"><span contenteditable="yes"><b id="in">x</b></span></div>'
+    );
+    expect(isTextEntry(inherited.querySelector("#in"))).toBe(true);
+    expect(isTextEntry(mount('<div contenteditable="yes"></div>'))).toBe(false);
+    // `FALSE` is still false, and stops the walk outwards.
+    const island = mount(
+      '<div contenteditable="true"><span contenteditable="FALSE"><button>Go</button></span></div>'
+    );
+    expect(isTextEntry(island.querySelector("button"))).toBe(false);
+  });
+
   it("does not count an explicitly NON-editable region", () => {
     expect(isTextEntry(mount('<div contenteditable="false"></div>'))).toBe(
       false

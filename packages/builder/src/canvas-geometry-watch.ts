@@ -38,7 +38,7 @@
  */
 
 import { isTextEntry } from "./canvas-escape";
-import { isElement } from "./dom-kind";
+import { isElement, isFormField } from "./dom-kind";
 import {
   overlaySpaceOf,
   screenScrollers,
@@ -229,12 +229,20 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     // leaving and no focus changing.
     "pointerup",
     "pointercancel",
-    // A form field's value changes with no DOM mutation, and can change what
-    // `:valid`, `:invalid` or `:placeholder-shown` styles.
-    "input",
-    "change",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
+  /*
+   * A form field's value changes with no DOM mutation, and can change what
+   * `:valid`, `:invalid` or `:placeholder-shown` styles. Only a field's own
+   * events: typing into editable text mutates the DOM as well, which the
+   * mutation watch already measures, and hearing its `input` too would
+   * measure every character twice.
+   */
+  const valueChanged = (event: Event): void => {
+    if (isFormField(event.target)) restated();
+  };
+  root.addEventListener("input", valueChanged);
+  root.addEventListener("change", valueChanged);
   /*
    * The keyboard is heard for what it can change, not for every key: an
    * author typing would otherwise re-measure every overlay once a frame. A
@@ -294,6 +302,8 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     root.removeEventListener("animationend", settled);
     root.removeEventListener("animationcancel", settled);
     for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    root.removeEventListener("input", valueChanged);
+    root.removeEventListener("change", valueChanged);
     root.removeEventListener("keydown", keyDown);
     root.removeEventListener("keyup", keyUp);
     root.removeEventListener("pointerdown", pointerDown);

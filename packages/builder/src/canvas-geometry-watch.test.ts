@@ -184,6 +184,9 @@ describe("a block an authored state rule moves", () => {
     const typed = words.firstChild;
     if (!(typed instanceof Text)) throw new Error("no text node");
     typed.appendData("s");
+    // A browser follows the edit with an input event at the editing host,
+    // which must not add a second measurement to the mutation's.
+    words.dispatchEvent(new Event("input", { bubbles: true }));
     words.dispatchEvent(
       new KeyboardEvent("keyup", { key: "s", bubbles: true })
     );
