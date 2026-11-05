@@ -49,7 +49,9 @@ import type { PluginRouteIdentity } from "../routes/route-types";
 import {
   readStoredFields,
   updateIfUnchanged,
+  type PluginConditionalUpdate,
   type PluginStoredDocument,
+  type PluginStoredFieldsRequest,
 } from "../stored-fields";
 import {
   createTestNextly,
@@ -303,6 +305,17 @@ describe.each(getConfiguredTestDialects())(
             slug: "site",
             fields: [{ name: "body", type: "doc" }],
           } as never,
+          // Never stored before the test that writes each: a first write
+          // inserts the row, with the field's default, in its own transaction.
+          ...["firstwrite", "firstrace"].map(
+            slug =>
+              ({
+                slug,
+                fields: [
+                  { name: "body", type: "doc", defaultValue: { v: "default" } },
+                ],
+              }) as never
+          ),
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
@@ -696,6 +709,60 @@ describe.each(getConfiguredTestDialects())(
         expect(after).toEqual({
           kind: "found",
           values: { body: { kind: "value", value: { v: "plugin" } } },
+        });
+      });
+    });
+
+    describe("a Single never stored", () => {
+      /** The Single's body as the stored read returns it, read as the owner. */
+      const bodyOf = (single: string) =>
+        readStoredFields(owner, {
+          single,
+          fields: ["body"],
+          form: "published",
+        });
+
+      it("lands a first conditional write expecting absent, though the write inserts the field's default first", async () => {
+        expect(await bodyOf("firstwrite")).toEqual({ kind: "absent" });
+
+        await updateIfUnchanged(owner, {
+          single: "firstwrite",
+          data: { body: { v: "plugin" } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash({ kind: "absent" }),
+          },
+        });
+        expect(await bodyOf("firstwrite")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "plugin" } } },
+        });
+      });
+
+      it("refuses one expecting absent once another first write has committed since the read", async () => {
+        expect(await bodyOf("firstrace")).toEqual({ kind: "absent" });
+        await t.nextly.updateSingle({
+          slug: "firstrace",
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(owner, {
+            single: "firstrace",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({ kind: "absent" }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await bodyOf("firstrace")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "author" } } },
         });
       });
     });
@@ -1295,6 +1362,59 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual({
           kind: "value",
           value: { v: 0 },
+        });
+      });
+    });
+
+    describe("the form named", () => {
+      it("refuses a stored read or a conditional write naming no form or one it does not know, and shows or writes nothing", async () => {
+        const id = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const entry = { collection: "staged", id };
+        // Never published: a reader who may not update is not shown it.
+        expect(
+          await readStoredFields(reader, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({ kind: "absent" });
+        const hash = await storedValueHash({
+          kind: "value",
+          value: { v: "unreleased" },
+        });
+
+        // Plain JavaScript, or an object passed on unchecked, can name any
+        // form, or none.
+        for (const form of [{ form: "anything" }, {}]) {
+          const read = await rejectionOf(
+            readStoredFields(reader, {
+              ...entry,
+              fields: ["body"],
+              ...form,
+            } as unknown as PluginStoredFieldsRequest)
+          );
+          expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+          expect((read as Error).message).toMatch(/^A stored read names/);
+
+          // Refused by the write's own boundary, not only by the read it makes.
+          const write = await rejectionOf(
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "plugin" } },
+              expect: { field: "body", hash, ...form },
+            } as unknown as PluginConditionalUpdate)
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+          expect((write as Error).message).toMatch(
+            /^A conditional write names/
+          );
+        }
+        expect(await stored(entry, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "unreleased" },
         });
       });
     });

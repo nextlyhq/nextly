@@ -72,6 +72,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { VersionsRepository } from "../../versions/versions-repository";
 
 import { collectionFields, collectionTableName } from "./collection-utils";
+import { showsUnpublished } from "./stored-form";
 
 /** What one stored-field read is pointed at. */
 export type StoredFieldTarget = PluginStoredValueTarget;
@@ -299,13 +300,13 @@ export async function readStoredFieldsOn(
   if (row === undefined) return notStored(fields);
   const id = String(row.id);
   const draft =
-    target.form === "draft" || options.askDraft === true
+    showsUnpublished(target.form) || options.askDraft === true
       ? await pendingWorkingDraft(connection, entity, id, locale)
       : undefined;
   // The working draft a `draft` read shows, and the one language row every
   // field kept per language that it does not carry is read from, in one query
   // however many such fields are asked for.
-  const shownDraft = target.form === "draft" ? draft : undefined;
+  const shownDraft = showsUnpublished(target.form) ? draft : undefined;
   const language = await languageRow(
     connection,
     {
@@ -1119,6 +1120,16 @@ export interface ExpectedDocument {
   readonly id?: string;
 }
 
+/** The document a write path is writing, as it holds the row lock. */
+export interface WrittenDocument extends ExpectedDocument {
+  /**
+   * Whether this very transaction inserted the document's row, as a Single's
+   * first write inserts its defaults. The document was absent until then, and
+   * what the row holds is the write's own, so it is judged as absent.
+   */
+  readonly createdHere?: boolean;
+}
+
 /** One conditional write's expectation, and whether its write path judged it. */
 export interface PinnedExpectation {
   readonly document: ExpectedDocument;
@@ -1157,7 +1168,7 @@ export function expectStoredValue(
  */
 export async function holdStoredExpectation(
   context: Record<string, unknown> | undefined,
-  document: ExpectedDocument,
+  document: WrittenDocument,
   on: {
     readonly tx: VersionsDbApi & { getDrizzle(): unknown };
     readonly localization: { readonly defaultLocale: string } | undefined;
@@ -1174,7 +1185,8 @@ export async function holdStoredExpectation(
       executor: on.tx.getDrizzle(),
       defaultLocale: on.localization?.defaultLocale ?? null,
     },
-    on.locale
+    on.locale,
+    document.createdHere === true
   );
   if (refused.refusal !== undefined) throw refused.refusal;
 }
@@ -1210,14 +1222,20 @@ function sameDocument(
 async function storedExpectationRefusal(
   pin: PinnedExpectation,
   connection: StoredFieldConnection,
-  locale: string | undefined
+  locale: string | undefined,
+  createdHere: boolean
 ): Promise<NextlyError | undefined> {
-  const read = await readStoredFieldsOn(
-    connection,
-    EVERY_FIELD,
-    expectedRead(pin, locale),
-    { askDraft: pin.expect.noPendingDraft === true }
-  );
+  // A row this transaction inserted is judged as the document stood before
+  // it: not stored, as a read made then answered. Read back, its generated
+  // defaults would never match the absence the writer read.
+  const read = createdHere
+    ? notStored([pin.expect.field])
+    : await readStoredFieldsOn(
+        connection,
+        EVERY_FIELD,
+        expectedRead(pin, locale),
+        { askDraft: pin.expect.noPendingDraft === true }
+      );
   const cause = await stalenessOf(pin.expect, read);
   if (cause === undefined) {
     pin.checked = true;

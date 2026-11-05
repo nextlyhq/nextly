@@ -44,6 +44,10 @@ import {
   type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
+import {
+  STORED_FORMS,
+  showsUnpublished,
+} from "../domains/collections/services/stored-form";
 import { appLocalization } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { getFieldType } from "../domains/schema/field-types/field-type-registry";
@@ -183,16 +187,17 @@ export async function readStoredFields(
   identity: PluginRouteIdentity,
   request: PluginStoredFieldsRequest
 ): Promise<PluginStoredFields> {
-  if (request.fields.length === 0) {
-    throw NextlyError.invalidInput({
-      message: "A stored read names at least one field.",
-    });
-  }
-  const document = documentOf(request);
+  const named = parsedRequest(STORED_READ, request, READ_REFUSAL);
+  const document = documentOf(named);
   // The language is resolved once, as the gate's own reads resolve it, and
   // that one code is what the gate is told and what the read queries.
-  const language = oneLanguage(request.locale);
-  const asked = inLanguage(request, language.locale);
+  const language = oneLanguage(named.locale);
+  const asked: PluginStoredFieldsRequest = {
+    ...targetOf(document),
+    fields: named.fields,
+    form: named.form,
+    ...(language.locale === undefined ? {} : { locale: language.locale }),
+  };
   await assertMayRead(identity, document, asked, language.rule);
 
   const read = await storedSnapshot(document, asked);
@@ -221,15 +226,6 @@ function oneLanguage(requested: string | undefined): {
   }
   const rule = registeredReadLanguagesFor(requested, false);
   return { rule, locale: rule.locale };
-}
-
-/** `request` in the resolved language, or in none where the site keeps none. */
-function inLanguage(
-  request: PluginStoredFieldsRequest,
-  locale: string | undefined
-): PluginStoredFieldsRequest {
-  const { locale: _named, ...rest } = request;
-  return locale === undefined ? rest : { ...rest, locale };
 }
 
 /**
@@ -263,7 +259,7 @@ async function storedSnapshot(
         { db: tx, executor: tx.getDrizzle(), defaultLocale },
         PLUGIN_JSON_FIELDS,
         target,
-        { askState: request.form === "published" }
+        { askState: !showsUnpublished(request.form) }
       ),
     { isolationLevel: "repeatable read", readOnly: true }
   );
@@ -284,7 +280,7 @@ async function liveFormShown(
   request: PluginStoredFieldsRequest,
   liveState: string | null | undefined
 ): Promise<boolean> {
-  if (request.form !== "published" || liveState === undefined) return true;
+  if (showsUnpublished(request.form) || liveState === undefined) return true;
   const shown = resolveStatusFilter({
     collectionHasStatus: true,
     overrideAccess: false,
@@ -318,13 +314,15 @@ export async function updateIfUnchanged(
   identity: PluginRouteIdentity,
   update: PluginConditionalUpdate
 ): Promise<void> {
-  const language = oneLanguage(update.locale);
-  if (update.expect.field.includes(".")) {
+  const named = parsedRequest(CONDITIONAL_UPDATE, update, WRITE_REFUSAL);
+  const expected = expectationOf(named.expect);
+  const language = oneLanguage(named.locale);
+  if (expected.field.includes(".")) {
     throw NextlyError.invalidInput({
-      message: `A conditional write expects a top-level field, and "${update.expect.field}" is inside a group: an update writes the group's whole value, so an expectation on one field of it would not guard the rest.`,
+      message: `A conditional write expects a top-level field, and "${expected.field}" is inside a group: an update writes the group's whole value, so an expectation on one field of it would not guard the rest.`,
     });
   }
-  const document = documentOf(update);
+  const document = documentOf(named);
   // The resolved code, for the read and the update alike, so the update is
   // judged in the very language its expectation was read in.
   const inLocale =
@@ -332,8 +330,8 @@ export async function updateIfUnchanged(
   // The read half first: a precondition, so before anything is written.
   await readStoredFields(identity, {
     ...targetOf(document),
-    fields: [update.expect.field],
-    form: update.expect.form,
+    fields: [expected.field],
+    form: expected.form,
     ...inLocale,
   });
 
@@ -341,7 +339,7 @@ export async function updateIfUnchanged(
   // context object no other call is handed, which the write path receives
   // as its own and its hooks only as a copy.
   const context: Record<string, unknown> = {};
-  const pin = { document, expect: update.expect, checked: false };
+  const pin = { document, expect: expected, checked: false };
   expectStoredValue(context, pin);
   const as = {
     user: identity.user,
@@ -355,7 +353,7 @@ export async function updateIfUnchanged(
   if (document.kind === "single") {
     await nextly.updateSingle({
       slug: document.slug,
-      data: update.data,
+      data: named.data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -364,7 +362,7 @@ export async function updateIfUnchanged(
     await nextly.update({
       collection: document.slug,
       id: document.id,
-      data: update.data,
+      data: named.data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -383,48 +381,111 @@ export async function updateIfUnchanged(
   }
 }
 
-/** The document a request names, as the write path matches it. */
-function documentOf(target: PluginStoredDocument):
+/**
+ * `input` as `schema` parses it, or refused with `INVALID_INPUT` naming what a
+ * request of its kind holds. A plugin's call is outside input as far as its
+ * types go: plain JavaScript, or an object passed on unchecked, can carry any
+ * shape, and a value no branch below expects must be refused here, before any
+ * gate is asked or anything is read, rather than read as one it resembles.
+ */
+function parsedRequest<T>(
+  schema: z.ZodType<T>,
+  input: unknown,
+  refusal: string
+): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw NextlyError.invalidInput({ message: refusal });
+  return parsed.data;
+}
+
+const READ_REFUSAL =
+  "A stored read names one document (a collection and an entry id, or a Single, and not both), at least one field, and the form `published` or `draft`.";
+
+const WRITE_REFUSAL =
+  "A conditional write names one document (a collection and an entry id, or a Single, and not both), the data to write, and what it expects: a field, the form `published` or `draft` it was read in, and its hash.";
+
+/** The document a parsed request names, as the write path matches it. */
+function documentOf(named: {
+  readonly single?: string | undefined;
+  readonly collection?: string | undefined;
+  readonly id?: string | undefined;
+}):
   | { readonly kind: "single"; readonly slug: string }
   | {
       readonly kind: "collection";
       readonly slug: string;
       readonly id: string;
     } {
-  const named = ONE_DOCUMENT.safeParse(target);
-  if (!named.success) {
-    throw NextlyError.invalidInput({
-      message:
-        "Name one document: a collection and an entry id, or a Single, and not both.",
-    });
-  }
-  return "single" in named.data && typeof named.data.single === "string"
-    ? { kind: "single", slug: named.data.single }
-    : {
-        kind: "collection",
-        slug: named.data.collection ?? "",
-        id: named.data.id ?? "",
-      };
+  return named.single !== undefined
+    ? { kind: "single", slug: named.single }
+    : { kind: "collection", slug: named.collection ?? "", id: named.id ?? "" };
+}
+
+/** A parsed expectation, with only the keys it was given. */
+function expectationOf(
+  expect: z.infer<typeof EXPECTATION>
+): PluginWriteExpectation {
+  return {
+    field: expect.field,
+    form: expect.form,
+    hash: expect.hash,
+    ...(expect.noPendingDraft === undefined
+      ? {}
+      : { noPendingDraft: expect.noPendingDraft }),
+  };
 }
 
 /**
- * The one document a request may name, parsed at the boundary: an entry, by
- * its collection and id with no Single beside them, or a Single with neither.
- * A plugin's call is outside input as far as its types go: plain JavaScript,
- * or an object passed on unchecked, can name both, and choosing either would
- * read or write a document the caller did not mean.
+ * The one document a request may name: an entry, by its collection and id
+ * with no Single beside them, or a Single with neither. Choosing either of a
+ * request naming both would read or write a document the caller did not mean.
  */
-const ONE_DOCUMENT = z.union([
-  z.object({
-    collection: z.string().min(1),
-    id: z.string().min(1),
-    single: z.undefined().optional(),
-  }),
-  z.object({
-    single: z.string().min(1),
-    collection: z.undefined().optional(),
-    id: z.undefined().optional(),
-  }),
+const AN_ENTRY = {
+  collection: z.string().min(1),
+  id: z.string().min(1),
+  single: z.undefined().optional(),
+};
+const A_SINGLE = {
+  single: z.string().min(1),
+  collection: z.undefined().optional(),
+  id: z.undefined().optional(),
+};
+
+/** A form, one of the forms every branch on a form names. */
+const STORED_FORM = z.enum(STORED_FORMS);
+
+/** The rest of a stored read: its fields, form and language. */
+const READ_PARTS = {
+  fields: z.array(z.string().min(1)).min(1),
+  form: STORED_FORM,
+  locale: z.string().optional(),
+};
+
+/** A whole stored read, parsed as one before anything is asked or read. */
+const STORED_READ = z.union([
+  z.object({ ...AN_ENTRY, ...READ_PARTS }),
+  z.object({ ...A_SINGLE, ...READ_PARTS }),
+]);
+
+/** What a conditional write expects, in the form it was read in. */
+const EXPECTATION = z.object({
+  field: z.string().min(1),
+  form: STORED_FORM,
+  hash: z.string().min(1),
+  noPendingDraft: z.boolean().optional(),
+});
+
+/** The rest of a conditional write: its data, language and expectation. */
+const UPDATE_PARTS = {
+  data: z.record(z.string(), z.unknown()),
+  locale: z.string().optional(),
+  expect: EXPECTATION,
+};
+
+/** A whole conditional write, parsed as one before anything is asked or read. */
+const CONDITIONAL_UPDATE = z.union([
+  z.object({ ...AN_ENTRY, ...UPDATE_PARTS }),
+  z.object({ ...A_SINGLE, ...UPDATE_PARTS }),
 ]);
 
 /** A document as a request names it, and nothing else of the request. */
@@ -465,7 +526,7 @@ async function assertMayRead(
       },
     });
   if (!read.allowed) throw refuse("stored-read-not-readable");
-  if (request.form !== "draft") return;
+  if (!showsUnpublished(request.form)) return;
   if (!(await mayEdit(identity, document, request.locale))) {
     throw refuse("stored-draft-not-editable");
   }
