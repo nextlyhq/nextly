@@ -113,15 +113,22 @@ export interface PluginSchedule {
 }
 
 /**
- * @experimental The earlier, reserved scheduled-task declaration. **Not
- * executed**: declare a {@link PluginSchedule} instead.
+ * @experimental The earlier scheduled-task declaration.
+ *
+ * @deprecated Declare a {@link PluginSchedule} instead. One in this shape is
+ * mapped to it, with a deprecation notice: `name` is the slug, a cron string
+ * is the cron, an interval in milliseconds of whole minutes dividing an hour
+ * or whole hours dividing a day is the cron that fires on it, and `handler`
+ * runs as a job of its own, given the plugin's context. One that cannot be
+ * mapped (another interval, a cron that does not parse, no handler) is not
+ * run, and a notice says why; it never stops the installation starting.
  */
 export interface ScheduledTask {
   /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
   name: string;
-  /** Cron expression or interval in milliseconds (reserved; not yet honored). */
+  /** Cron expression or interval in milliseconds. */
   schedule: string | number;
-  /** Task handler (reserved — the runtime does not invoke it yet). */
+  /** Task handler, run once per window with the plugin's context. */
   handler?: (ctx: PluginContext) => Promise<void> | void;
   description?: string;
 }
@@ -839,7 +846,8 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * window of a cron expression ({@link PluginSchedule}). A schedule that
    * cannot run (an invalid cron or time zone, a job the plugin does not
    * declare) stops the installation from starting, naming the plugin. An
-   * entry in the earlier {@link ScheduledTask} shape is not run.
+   * entry in the earlier {@link ScheduledTask} shape is mapped to this one
+   * with a deprecation notice, or, when it cannot be, not run, with a notice.
    */
   schedules?: Array<PluginSchedule | ScheduledTask>;
   /** @experimental Custom email providers, registered into the provider registry. */
