@@ -927,8 +927,13 @@ export function SingleForm({
         startedFrom: version.startedFrom(),
         readIn: inLocale =>
           singleApi.getDocument(schema.slug, { locale: inLocale }),
+        readShown: () =>
+          singleApi.getDocument(schema.slug, {
+            locale,
+            draft: schema.draftsEnabled === true,
+          }),
       }),
-    [locale, shownDefaultLocale, version, schema.slug]
+    [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
   const viewedVersionHost = useViewedVersion(
     allFields,
@@ -1008,6 +1013,7 @@ export function SingleForm({
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
       try {
+        const adopt = version.answerFor();
         const stored = await onSubmit(version.withVersion({ status })).catch(
           (error: unknown) => {
             version.refused(error, { status });
@@ -1017,7 +1023,7 @@ export function SingleForm({
         setSavedCount(n => n + 1);
         if (stored) {
           ownSave.current.storedKey = singleResetKey(stored, locale);
-          version.adoptAnswered(stored);
+          adopt(stored);
         }
         return { ok: true, item: { id: document.id } };
       } catch (error) {
@@ -1096,6 +1102,7 @@ export function SingleForm({
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
             const payload = withoutPlaceholders(schema.fields, data);
+            const adopt = version.answerFor();
             const stored = await onSubmit(
               version.withVersion(payload),
               refusedForm
@@ -1109,7 +1116,7 @@ export function SingleForm({
               .finally(() => {
                 ownSave.current.inFlight = false;
               });
-            if (stored) version.adoptAnswered(stored);
+            if (stored) adopt(stored);
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -1167,12 +1174,13 @@ export function SingleForm({
     if (!payload || submissionLatch.current) return;
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
+    const adopt = version.answerFor();
     try {
       const stored = await onSubmit(payload, refusedForm);
       setSavedCount(n => n + 1);
       if (stored) {
         ownSave.current.storedKey = singleResetKey(stored, locale);
-        version.adoptAnswered(stored);
+        adopt(stored);
       }
       version.release();
       form.reset(
@@ -1354,6 +1362,13 @@ export function SingleForm({
   // source read.
   const publishAllSingleLanguages = usePublishAllSingleLocales({
     slug: schema.slug,
+    // The copy on screen, read as the editor reads it, so a publish of every
+    // language is refused when that language changed since it opened.
+    shown: () => ({
+      version: version.startedFrom(),
+      locale,
+      draft: schema.draftsEnabled === true,
+    }),
   });
   // Publishing every language waits for the Single's recordings in flight.
   const afterRecordings = useAfterRecordings(

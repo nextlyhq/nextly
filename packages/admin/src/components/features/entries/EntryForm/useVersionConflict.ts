@@ -51,8 +51,13 @@ export interface VersionConflictState {
   withVersion: <T extends Record<string, unknown>>(payload: T) => T;
   /** The copy was replaced by `doc`, as read. */
   adoptRead: (doc: unknown) => void;
-  /** A write the server answered with `item` stored the copy. */
-  adoptAnswered: (item: unknown) => void;
+  /**
+   * Called as a write starts: what to do with the item its answer stores. The
+   * answer moves the copy's version only while the copy the write was made
+   * from is still the one on screen; a read that replaced it since, of
+   * another entry or language, holds that document's own version.
+   */
+  answerFor: () => (item: unknown) => void;
   /**
    * Edits restored from a recovery point now hold the form: the version they
    * began from, or the one on screen for a point saved before versions.
@@ -101,6 +106,8 @@ function withStartingVersion<T extends Record<string, unknown>>(
 /** What a form's version holds across renders: its copy's, and a refused save. */
 interface Tracked {
   startedFrom: string | undefined;
+  /** Counts the copies the form has held, each read or restore a new one. */
+  copy: number;
   pin: Pinned | null;
   setConflict: (conflict: VersionConflict | null) => void;
 }
@@ -112,7 +119,21 @@ function adoptAnswered(tracked: Tracked, item: unknown): void {
 }
 
 function adoptRecovered(tracked: Tracked, recovered: string | undefined): void {
-  if (recovered !== undefined) tracked.startedFrom = recovered;
+  if (recovered === undefined) return;
+  tracked.startedFrom = recovered;
+  tracked.copy += 1;
+}
+
+function adoptRead(tracked: Tracked, doc: unknown): void {
+  tracked.startedFrom = versionOf(doc);
+  tracked.copy += 1;
+}
+
+function answerFor(tracked: Tracked): (item: unknown) => void {
+  const copy = tracked.copy;
+  return item => {
+    if (tracked.copy === copy) adoptAnswered(tracked, item);
+  };
 }
 
 function pinRefusal(
@@ -181,10 +202,8 @@ function actionsOver(tracked: Tracked): Omit<VersionConflictState, "conflict"> {
     startedFrom: () => tracked.startedFrom,
     withVersion: <T extends Record<string, unknown>>(payload: T): T =>
       withStartingVersion(payload, tracked.startedFrom),
-    adoptRead: (doc: unknown) => {
-      tracked.startedFrom = versionOf(doc);
-    },
-    adoptAnswered: (item: unknown) => adoptAnswered(tracked, item),
+    adoptRead: (doc: unknown) => adoptRead(tracked, doc),
+    answerFor: () => answerFor(tracked),
     adoptRecovered: (recovered: string | undefined) =>
       adoptRecovered(tracked, recovered),
     refused: (error: unknown, payload: Record<string, unknown>) =>
@@ -205,7 +224,7 @@ export function useVersionConflict(): VersionConflictState {
   // Made once, so every action is stable for the form's life and a form's
   // effects can depend on them.
   const [actions] = useState(() =>
-    actionsOver({ startedFrom: undefined, pin: null, setConflict })
+    actionsOver({ startedFrom: undefined, copy: 0, pin: null, setConflict })
   );
   // One object while the conflict is unchanged, so a form's effects can
   // depend on it without running again on every render.
