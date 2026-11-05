@@ -12,6 +12,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { planChangedAfterConsent } from "../../domains/schema/migrate/plan-changed-after-consent";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
@@ -111,13 +112,29 @@ function promotionSnippet(code: string, at: Date): string {
  * Carry out `plan`: append the snippet to the configuration (or print it where there is none),
  * then remove the registry row. The deletion's own refusal, such as a record defined in code, is
  * asked first, so a refused promote leaves the configuration as it was.
+ *
+ * The configuration file is looked up again here, under the lock, because the one found before the
+ * prompt may have been moved or deleted while it was open: appending at that path would create a
+ * file holding only the snippet, which the loader then prefers over the moved configuration. A
+ * file that is no longer where it was confirmed stops the run with nothing written.
  */
 async function applyPromotion(
   plan: PromotionPlan,
   registry: CollectionRegistryService,
-  logger: Logger
+  logger: Logger,
+  cwd: string
 ): Promise<void> {
   await registry.assertDeletable(plan.slug);
+
+  const configPath = findConfigFile(cwd);
+  if (configPath !== plan.configPath) {
+    throw planChangedAfterConsent({
+      command: "nextly db:sync --promote",
+      message: `The configuration file changed after you confirmed (${plan.configPath ?? "none found"} is now ${configPath ?? "missing"}); nothing was changed; run the command again`,
+      agreed: [plan.configPath ?? "no configuration file: the snippet printed"],
+      current: [configPath ?? "no configuration file"],
+    });
+  }
 
   if (!plan.configPath) {
     logger.warn(
@@ -175,7 +192,7 @@ export async function promoteCollection(
           current,
         });
       }
-      await applyPromotion(plan, registry, logger);
+      await applyPromotion(plan, registry, logger, args.cwd);
     }
   );
 
