@@ -1411,5 +1411,31 @@ describe.each(getConfiguredTestDialects())(
       expect(swept).toMatchObject({ success: false, statusCode: 400 });
       expect(livesBeforeChangeCalls).toBe(before);
     });
+
+    it("refuses with 400, before any hook, a batch item whose version comes from another language's read", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      // A read of Spanish alone: its version names no English counter.
+      const spanish = revOf(
+        await update(t, DOCS, id, { title: "hola" }, { locale: "es" })
+      );
+      expect(spanish).not.toMatch(/en:/);
+      const before = docsBeforeChangeCalls;
+      // A batch writes the default language, English.
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [{ id, data: { title: "mine", _rev: spanish } }],
+        { overrideAccess: true } as never
+      );
+      expect(
+        batch.errors.map(e => e.code),
+        JSON.stringify(batch)
+      ).toEqual(["VALIDATION_ERROR"]);
+      expect(docsBeforeChangeCalls).toBe(before);
+    });
   }
 );
