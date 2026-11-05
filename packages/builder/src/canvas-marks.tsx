@@ -96,7 +96,10 @@ interface Mark {
    * it to the left of the ring's right edge.
    */
   readonly tagEdge: "right" | "left";
-  /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
+  /**
+   * Drawn with no halo band: cut to the part a clipping ancestor leaves
+   * visible, or around a block its own `clip-path` shapes.
+   */
   readonly clipped: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
@@ -316,6 +319,21 @@ function outlineOf(
     if (visible === "hidden") return null;
     return {
       rect: space.place(visible),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
+      clipped: true,
+    };
+  }
+  /*
+   * A block its OWN `clip-path` shapes — a circle cut from a square box —
+   * draws nothing of the box outside that shape. A halo band hugging the box
+   * would frame corners that show the page behind, so the ring is drawn
+   * square around the box with no band, as for a block an ancestor clips.
+   */
+  const shape = style?.clipPath;
+  if (shape !== undefined && shape !== "" && shape !== "none") {
+    return {
+      rect: space.place(own),
       radius: borderRadiusOf(SQUARE_CORNERS),
       radii: SQUARE_CORNERS,
       clipped: true,
