@@ -58,7 +58,7 @@ import {
   STYLE_STATES,
   compileStyleValues,
   isPlainRecord,
-  namedClassName,
+  classNameOf,
   usableNamedClasses,
   type Declaration,
   type NamedClass,
@@ -158,7 +158,8 @@ export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
   return usableSiteClasses(library).map(entry => ({
     id: entry.id,
     slug: entry.slug,
-    className: namedClassName(entry.slug),
+    // A look's class under its own prefix, as the compiler writes it.
+    className: classNameOf(entry),
   }));
 }
 
@@ -412,9 +413,7 @@ export function filterClassRows(
  * so a node holding more is a node whose tail styles nothing. `styleSubjectFor`
  * bounds its own read the same way; this is the same bound, not a second one.
  */
-export function readableNodeClassIds(
-  nodeClassIds: readonly string[]
-): string[] {
+function readableNodeClassIds(nodeClassIds: readonly string[]): string[] {
   return nodeClassIds.slice(0, MAX_CLASSES_PER_NODE);
 }
 

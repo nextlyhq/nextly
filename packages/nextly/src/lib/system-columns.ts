@@ -701,6 +701,18 @@ export function immutableSystemColumnNamesAnyEntity(): string[] {
 export const DOCUMENT_VERSION_KEY = "_rev";
 
 /**
+ * The key an update names to save over whatever was saved since the version
+ * it read. Read at the write path's boundary (`versionCheckFor`) and never
+ * stored: it says how to write, not what.
+ *
+ * Declared here, beside the version it overrides, so every list of keys a
+ * write never stores can name it without reaching into the versions domain.
+ *
+ * @experimental
+ */
+export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
+
+/**
  * The columns a step of `nextly migrate` adds to existing tables, which no snapshot comparison
  * reports (see `addedByMigrateStep`).
  */

@@ -15,7 +15,10 @@
  */
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { RichText } from "@nextlyhq/blocks-react";
 
 import type { EditorState } from "./editor-state";
 import { useCanvasReading } from "./use-canvas-reading";
@@ -26,10 +29,14 @@ afterEach(cleanup);
 const DOCUMENT = {} as EditorState["document"];
 
 function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
-  const { tag, orientation } = useCanvasReading(root, "n1", {
-    document: DOCUMENT,
-    state,
-  });
+  const { tag, orientation, picture, picturePosition } = useCanvasReading(
+    root,
+    "n1",
+    {
+      document: DOCUMENT,
+      state,
+    }
+  );
   return (
     <>
       <span data-testid="tag">{tag ?? "unknown"}</span>
@@ -38,6 +45,8 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
           ? "unknown"
           : `${orientation.writingMode}/${orientation.direction}`}
       </span>
+      <span data-testid="picture">{picture ?? "none"}</span>
+      <span data-testid="position">{picturePosition ?? "none"}</span>
       <span data-testid="layout">
         {orientation === undefined
           ? "unknown"
@@ -46,6 +55,124 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
     </>
   );
 }
+
+describe("reading the picture a node draws", () => {
+  it("reads the picture the node is, or the one inside it, and none for others", () => {
+    // What a focal point is aimed over: the picture the canvas really draws,
+    // whether the node is the image itself or a link or figure around it.
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<img data-nx-node="n1" src="/team.png" alt="">';
+    const view = render(<Reader root={canvas} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/team.png");
+
+    const linked = document.createElement("div");
+    linked.innerHTML =
+      '<a data-nx-node="n1" href="/about"><img src="/team.png" alt=""></a>';
+    view.rerender(<Reader root={linked} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/team.png");
+
+    const text = document.createElement("div");
+    text.innerHTML = '<p data-nx-node="n1">Words</p>';
+    view.rerender(<Reader root={text} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A block holding another block's image draws no picture of its own.
+    const card = document.createElement("div");
+    card.innerHTML =
+      '<div data-nx-node="n1"><img data-nx-node="n2" src="/child.png" alt=""></div>';
+    view.rerender(<Reader root={card} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // Its own picture is found past a child block's image that comes first.
+    const both = document.createElement("div");
+    both.innerHTML =
+      '<figure data-nx-node="n1"><div data-nx-node="n2"><img src="/child.png" alt=""></div><img src="/own.png" alt=""></figure>';
+    view.rerender(<Reader root={both} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+  });
+});
+
+describe("which pictures are a block's own to style", () => {
+  it("counts only a root that hands its media styles to the picture", () => {
+    // A rich-text passage with an inline picture is not an image block: its
+    // root takes the Style values, and no fit or focal point reaches the
+    // picture inside it.
+    const passage = document.createElement("div");
+    passage.innerHTML =
+      '<div data-nx-node="n1"><p>Words <img src="/inline.png" alt=""></p></div>';
+    const view = render(<Reader root={passage} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    const captioned = document.createElement("div");
+    captioned.innerHTML =
+      '<figure data-nx-node="n1"><img src="/own.png" alt="" style="object-position: 100% 0%"><figcaption>A caption</figcaption></figure>';
+    view.rerender(<Reader root={captioned} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+    // And where the canvas places it, resolved there.
+    expect(screen.getByTestId("position").textContent).toBe("100% 0%");
+  });
+
+  it("counts a custom block's own wrapper when the picture is all it draws", () => {
+    // A third-party block may draw its picture inside a div or a span of its
+    // own and hand the root's media styles on to it: its Fit and Focal point
+    // work, so the picture is the block's own.
+    const wrapped = document.createElement("div");
+    wrapped.innerHTML =
+      '<div data-nx-node="n1"><span><img src="/custom.png" alt="" style="object-position: 0% 100%"></span></div>';
+    const view = render(<Reader root={wrapped} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/custom.png");
+    expect(screen.getByTestId("position").textContent).toBe("0% 100%");
+
+    // Text of its own beside the picture makes it a passage again.
+    const passage = document.createElement("div");
+    passage.innerHTML =
+      '<span data-nx-node="n1">Words <img src="/inline.png" alt=""></span>';
+    view.rerender(<Reader root={passage} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+    expect(screen.getByTestId("position").textContent).toBe("none");
+
+    // So do two pictures: which one would a single focal point be aimed at?
+    const pair = document.createElement("div");
+    pair.innerHTML =
+      '<div data-nx-node="n1"><img src="/a.png" alt=""><img src="/b.png" alt=""></div>';
+    view.rerender(<Reader root={pair} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A passage holding nothing but a picture is still a passage: drawn by
+    // the rich-text renderer itself, whose figure the root's styles never
+    // reach, so its picture is not the block's own.
+    const lone = document.createElement("div");
+    lone.innerHTML = `<div data-nx-node="n1">${renderToStaticMarkup(
+      <RichText
+        value={
+          {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "image",
+                  version: 1,
+                  src: "https://cdn.example.com/a.jpg",
+                  altText: "A",
+                },
+              ],
+            },
+          } as never
+        }
+      />
+    )}</div>`;
+    expect(lone.querySelector("img")).not.toBeNull();
+    view.rerender(<Reader root={lone} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A child block's words are its own, not text beside this block's picture.
+    const card = document.createElement("div");
+    card.innerHTML =
+      '<div data-nx-node="n1"><img src="/own.png" alt=""><p data-nx-node="n2">Child words</p></div>';
+    view.rerender(<Reader root={card} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+  });
+});
 
 describe("reading the tag from a canvas", () => {
   it("answers once a canvas that mounted LATE appears", () => {

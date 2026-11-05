@@ -72,6 +72,7 @@ import {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FocalFrame } from "./focal-frame";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -761,6 +762,8 @@ function SelectionInspector({
             editor={editor}
             styleNode={styleNode}
             renderedTag={canvas.tag}
+            renderedPicture={canvas.picture}
+            renderedPicturePosition={canvas.picturePosition}
             sideOrientation={canvas.orientation}
             styleState={styleState}
             breakpoint={breakpoint}
@@ -934,6 +937,8 @@ function StyleTab({
   editor,
   styleNode,
   renderedTag,
+  renderedPicture,
+  renderedPicturePosition,
   sideOrientation,
   styleState,
   policy,
@@ -967,6 +972,8 @@ function StyleTab({
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
+  renderedPicture: string | undefined;
+  renderedPicturePosition: string | undefined;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
@@ -1003,24 +1010,29 @@ function StyleTab({
           breakpoints
         )}
       />
-      <StyleInspectorPanel
-        editor={editor}
-        // The block card above says why a held block can't be changed.
-        showReadOnlyReason={false}
-        renderedTag={renderedTag}
-        sideOrientation={sideOrientation}
-        policy={policy}
-        state={state}
-        breakpoint={breakpoint}
-        cascade={cascade}
-        breakpoints={breakpoints}
-        previewContainer={previewContainer}
-        liveBreakpoints={liveBreakpoints}
-        onJumpToBreakpoint={onJumpToBreakpoint}
-        tokens={tokens}
-        target={target}
-        fonts={fonts}
-      />
+      {/* The picture the canvas draws, for the focal point aimed over it. */}
+      <FocalFrame.Provider
+        value={{ picture: renderedPicture, position: renderedPicturePosition }}
+      >
+        <StyleInspectorPanel
+          editor={editor}
+          // The block card above says why a held block can't be changed.
+          showReadOnlyReason={false}
+          renderedTag={renderedTag}
+          sideOrientation={sideOrientation}
+          policy={policy}
+          state={state}
+          breakpoint={breakpoint}
+          cascade={cascade}
+          breakpoints={breakpoints}
+          previewContainer={previewContainer}
+          liveBreakpoints={liveBreakpoints}
+          onJumpToBreakpoint={onJumpToBreakpoint}
+          tokens={tokens}
+          target={target}
+          fonts={fonts}
+        />
+      </FocalFrame.Provider>
     </>
   );
 }

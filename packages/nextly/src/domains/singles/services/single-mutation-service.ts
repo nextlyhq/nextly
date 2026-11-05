@@ -106,7 +106,7 @@ import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
-import { entryWriteContext } from "../../collections/services/stored-field-read";
+import * as storedFieldRead from "../../collections/services/stored-field-read";
 import {
   recordSaveEvent,
   recordTransitionEvents,
@@ -1943,7 +1943,7 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: entryWriteContext({
+        write: storedFieldRead.entryWriteContext({
           kind: "single",
           slug,
           ...(args.writeLocale === undefined
@@ -2240,13 +2240,42 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      // Probe the companion `_locales` table's existence on the POOLED adapter
+      // BEFORE the write transaction opens. Two reasons it must be here and not
+      // inside the transaction: with a single-connection pool the transaction
+      // holds the only connection, so a pooled probe inside it would deadlock;
+      // and probing on the transaction connection would abort the whole
+      // transaction on Postgres when the not-yet-migrated table is absent. The
+      // in-transaction companion reads are skipped when this is false.
+      const companionReadiness =
+        companion && writeLocale !== undefined
+          ? await resolveCompanionReadiness(this.adapter, {
+              companionTableName: companion.companionTableName,
+              mainTableName: singleMeta.tableName,
+              localizedColumns: companion.localizedFields.map(f => f.column),
+            })
+          : undefined;
+      const companionPhysicallyExists = companionReadiness === "ready";
       // A translated save is judged on its own language too, so the version
       // must name it; one from a read of another language is refused here,
       // before anything is written.
-      const judgedLocale = judgedLanguage(givenOf(versionCheck), writeLocale);
+      // Judged on its language only where the translation table is ready, as
+      // a read names a language only then: a version a read gave before the
+      // table existed names none, and the save it is sent with writes the
+      // main row alone.
+      // A save in another language than the default, with no table to go to,
+      // is judged on that language all the same, and so refused here, before
+      // any hook runs, as a version from another language's read.
+      const judgedLocale = judgedLanguage(
+        givenOf(versionCheck),
+        companionPhysicallyExists ||
+          writeLocale !== this.localization?.defaultLocale
+          ? writeLocale
+          : undefined
+      );
       // A sweep of every language is judged on each, so its version must
       // name each; one that does not is refused before any hook runs.
-      if (sweepAllLocales && companion) {
+      if (sweepAllLocales && companion && companionPhysicallyExists) {
         assertVersionNamesEvery(
           givenOf(versionCheck),
           this.localization?.locales.map(l => l.code) ?? []
@@ -2255,7 +2284,9 @@ export class SingleMutationService extends BaseService {
       // Every language a refusal's current version names: the one the save
       // is judged on, or for a sweep of every language, each of them.
       const judgedLanguages =
-        companion && (judgedLocale !== undefined || sweepAllLocales)
+        companion &&
+        companionPhysicallyExists &&
+        (judgedLocale !== undefined || sweepAllLocales)
           ? {
               table: companion.companionTableName,
               locales: sweepAllLocales
@@ -2811,22 +2842,6 @@ export class SingleMutationService extends BaseService {
       // from the callback (not assigned to an outer variable), so the value read
       // below is only ever the committed result. A localized single writes
       // `mainPayload` (translatable columns moved to the companion).
-      // Probe the companion `_locales` table's existence on the POOLED adapter
-      // BEFORE the write transaction opens. Two reasons it must be here and not
-      // inside the transaction: with a single-connection pool the transaction
-      // holds the only connection, so a pooled probe inside it would deadlock;
-      // and probing on the transaction connection would abort the whole
-      // transaction on Postgres when the not-yet-migrated table is absent. The
-      // in-transaction companion reads are skipped when this is false.
-      const companionReadiness =
-        companion && writeLocale !== undefined
-          ? await resolveCompanionReadiness(this.adapter, {
-              companionTableName: companion.companionTableName,
-              mainTableName: singleMeta.tableName,
-              localizedColumns: companion.localizedFields.map(f => f.column),
-            })
-          : undefined;
-      const companionPhysicallyExists = companionReadiness === "ready";
 
       // A write to every language that publishes is asked about each language
       // it puts live ({@link askPublishInEachLanguage}): before any hook ran
@@ -2932,14 +2947,14 @@ export class SingleMutationService extends BaseService {
             const attemptComponentFields: Record<string, unknown> = {
               ...componentFieldData,
             };
-            // True only when THIS transaction inserted the row AND seeded the
-            // default-locale companion with the localized defaults. The version
-            // snapshot overlay below is gated on it, not on `autoCreated`: two
-            // first writes can race so that this request enters with
-            // `autoCreated === true` but then adopts a row another writer already
-            // inserted (the `committed` branch), in which case it did NOT seed —
-            // the companion may already hold that writer's real translations, and
-            // overlaying schema defaults would let a restore overwrite them.
+            // Whether THIS transaction inserted the row, and whether it also
+            // seeded the default-locale companion with the localized defaults.
+            // Not `autoCreated`: two first writes can race so that this request
+            // adopts a row another writer inserted (the `committed` branch). It
+            // seeded nothing then, the companion may hold that writer's real
+            // translations a snapshot overlay of defaults would let a restore
+            // overwrite, and that row is what a conditional write is judged by.
+            let insertedHere = false;
             let didSeedCompanionDefaults = false;
             // First-write auto-create, committed atomically with the update. A
             // failed update/component/companion/version write rolls the insert
@@ -2974,9 +2989,9 @@ export class SingleMutationService extends BaseService {
                   (existingDoc as { status?: string }).status,
                   seedCompanionExists
                 );
-                // The seed persists defaults only when the companion physically
-                // exists; track that this transaction actually seeded so the
-                // snapshot overlay records defaults that were really written.
+                // The seed persists defaults only where the companion exists,
+                // and the snapshot overlay records only defaults truly written.
+                insertedHere = true;
                 didSeedCompanionDefaults = seedCompanionExists;
                 // The Single's first history event: this write created its
                 // document.
@@ -3149,6 +3164,14 @@ export class SingleMutationService extends BaseService {
                 languages: judgedLanguages,
               },
               staleWrite
+            );
+            // A conditional write is judged here, under the lock, against the
+            // value as committed now (a row it inserted, as absent); a refused
+            // one writes nothing. Thrown as is, and unwrapped below.
+            await storedFieldRead.holdStoredExpectation(
+              options.context,
+              { kind: "single", slug, createdHere: insertedHere },
+              { tx, localization: this.localization, locale: options.locale }
             );
             // The save's language row as it stood before this save wrote it,
             // for an overwrite's history; set where the row is written below.
@@ -4092,7 +4115,7 @@ export class SingleMutationService extends BaseService {
               // reads the same language's stored values and sees the save's
               // status as the Single's own fields do.
               write: {
-                ...entryWriteContext({
+                ...storedFieldRead.entryWriteContext({
                   kind: "single",
                   slug,
                   ...(writeLocale === undefined ? {} : { locale: writeLocale }),
