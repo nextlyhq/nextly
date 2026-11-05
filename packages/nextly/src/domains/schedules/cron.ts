@@ -9,8 +9,8 @@
  * window is a minute.
  *
  * Read as Vixie cron reads them: when both day fields are restricted, a day
- * matching either one fires. A day field written from `*` (`*`, `*\/2`)
- * counts as unrestricted.
+ * matching either one fires. When either is written from `*` (`*`, `*\/2`), a
+ * day must match both, so a stepped `*` still names its days.
  *
  * Times are read in the schedule's time zone, UTC by default, from the
  * runtime's own zone data (`Intl`). A local time that a daylight-saving change
@@ -234,9 +234,7 @@ function fieldsOf(at: WallClock) {
 function firesOnDay(cron: CronExpression, at: Date): boolean {
   const byDate = cron.daysOfMonth.has(at.getUTCDate());
   const byWeekday = cron.daysOfWeek.has(at.getUTCDay());
-  if (cron.anyDayOfMonth && cron.anyDayOfWeek) return true;
-  if (cron.anyDayOfMonth) return byWeekday;
-  if (cron.anyDayOfWeek) return byDate;
+  if (cron.anyDayOfMonth || cron.anyDayOfWeek) return byDate && byWeekday;
   return byDate || byWeekday;
 }
 
@@ -380,6 +378,8 @@ export function nextFireAfter(
   after: Date,
   timeZone = "UTC"
 ): Date | null {
+  // A moment that is not one has no fire after it, in any zone.
+  if (Number.isNaN(after.getTime())) return null;
   const limit = after.getTime() + SEARCH_LIMIT;
   let from = wallClockOf(after.getTime(), timeZone);
   for (;;) {
@@ -403,6 +403,7 @@ export function latestFireAtOrBefore(
   at: Date,
   timeZone = "UTC"
 ): Date | null {
+  if (Number.isNaN(at.getTime())) return null;
   const limit = at.getTime() - SEARCH_LIMIT;
   let from = wallClockOf(at.getTime(), timeZone);
   let latest: number | undefined;
