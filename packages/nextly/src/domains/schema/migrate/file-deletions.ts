@@ -42,12 +42,12 @@ import type { LiveColumns } from "../ownership/drop-guard";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { queryLiveColumnTypes } from "../pipeline/live-column-types";
 import {
+  readHiddenCode,
   readPgDescendants,
   readReferencingKeys,
-  readTriggered,
   readUserFunctions,
+  type HiddenCode,
   type RelationRef,
-  type TriggerEvent,
 } from "../pipeline/live-table-facts";
 
 import type { Deletion } from "./data-loss-consent";
@@ -75,11 +75,11 @@ export interface DeletionFacts {
    */
   nulledBy(table: string): readonly NulledColumn[] | undefined;
   /**
-   * Whether `event` on `table` fires a trigger (or, on PostgreSQL, a rule) that runs code the
-   * statement does not show: a removal of rows fires DELETE (or TRUNCATE) triggers, a write INSERT
-   * or UPDATE ones. Undefined when unreadable.
+   * Whether `table` carries code a change to it runs, which the statement does not show and which
+   * may delete other data (`HiddenCode`): `rows` for a row removed, written or blanked, `rewrite`
+   * for PostgreSQL's conversion of a column. Undefined when unreadable.
    */
-  triggered(table: string, event: TriggerEvent): boolean | undefined;
+  hiddenCode(table: string, on: keyof HiddenCode): boolean | undefined;
   /**
    * PostgreSQL: every table inheriting from `table` or partitioning it, transitively, which a
    * DELETE or TRUNCATE without ONLY also empties. Empty elsewhere; undefined when unreadable.
@@ -123,7 +123,7 @@ interface FactSource {
   cascadeFrom(table: string): readonly string[] | undefined;
   truncateCascadeFrom(table: string): readonly string[] | undefined;
   nulledBy(table: string): readonly NulledColumn[] | undefined;
-  triggered(table: string, event: TriggerEvent): boolean | undefined;
+  hiddenCode(table: string, on: keyof HiddenCode): boolean | undefined;
   descendantsOf(table: string): readonly string[] | undefined;
   liveTable(table: string): boolean | undefined;
   /** Whether a SELECT calling `name` may run code that deletes. */
@@ -162,8 +162,6 @@ type Step =
       onDelete: KeyAction;
     }
   | { kind: "create-function"; name: string }
-  /** A trigger the list creates, on `table` (undefined when its table cannot be read). */
-  | { kind: "create-trigger"; table: string | undefined }
   /** `child` made a descendant of `parent` (ATTACH PARTITION, INHERIT): a later removal from `parent` reaches it. */
   | { kind: "inherit"; parent: string; child: string }
   /** Rows written to `table`, firing the triggers of each event. */
@@ -398,6 +396,7 @@ function readData(
   const dialectForm = readDialectForm(cursor, tokens, dialect);
   if (dialectForm !== null) return dialectForm;
   if (first === "INSERT" || first === "UPDATE") return readWrite(tokens);
+  if (UNPLACED_ROW_FORMS.has(first)) return readUnplacedRows(tokens, first);
   return null;
 }
 
@@ -476,7 +475,8 @@ function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   // MySQL may name the definer first: `CREATE DEFINER = user FUNCTION …`.
   if (cursor.isWord("DEFINER")) return readDefinedCode(tokens);
   if (cursor.accept("FUNCTION")) return readCreateFunction(cursor);
-  if (tokens.slice(1, 6).includes("TRIGGER")) return readCreateTrigger(tokens);
+  // A trigger runs later, on rows: the walk counts it as code the run defines.
+  if (tokens.slice(1, 6).includes("TRIGGER")) return [];
   if (replacing) return readCreateOrReplace(cursor, tokens);
   if (cursor.accept("TEMPORARY") || cursor.accept("TEMP")) {
     return readCreateTemporary(cursor);
@@ -529,31 +529,32 @@ function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
   ];
 }
 
-/**
- * A trigger the run defines, on the table after its `ON`: a later statement
- * on that table fires it, though no catalog read before the run shows it.
- */
-function readCreateTrigger(tokens: readonly Token[]): Step[] {
-  const on = tokens.indexOf("ON");
-  const table =
-    on === -1 ? undefined : new StatementCursor(tokens.slice(on + 1)).name();
-  return [{ kind: "create-trigger", table }];
-}
-
-/** MySQL's `CREATE DEFINER = … FUNCTION | TRIGGER …`: the function or trigger it creates; nothing for any other. */
+/** MySQL's `CREATE DEFINER = … FUNCTION …`: the function it creates; nothing for any other. */
 function readDefinedCode(tokens: readonly Token[]): Step[] {
-  const kind = tokens.findIndex(
-    token => token === "FUNCTION" || token === "TRIGGER"
-  );
+  const kind = tokens.indexOf("FUNCTION");
   if (kind === -1) return [];
-  if (tokens[kind] === "TRIGGER") return readCreateTrigger(tokens);
   return readCreateFunction(new StatementCursor(tokens.slice(kind + 1)));
 }
 
-/** A function the run defines, which a later SELECT may call. */
+/**
+ * A function the run defines, by the last part of its name (the one a later
+ * unqualified call writes), which `migrate:check` counts among the functions
+ * a call may reach (`functionsDefinedBy`).
+ */
 function readCreateFunction(cursor: StatementCursor): Step[] {
-  const name = cursor.name();
-  return name === undefined ? [] : [{ kind: "create-function", name }];
+  const tokens = cursor.rest();
+  const open = tokens.indexOf("(");
+  const last = open > 0 ? tokens[open - 1] : undefined;
+  const written = typeof last === "string" ? last : last?.name;
+  // A qualified name (`public.purge`) is called by its last part.
+  const name = written?.split(".").pop()?.toLowerCase();
+  // One whose name cannot be read may be any function a later call names.
+  return [
+    {
+      kind: "create-function",
+      name: name === undefined || name === "" ? "*" : name,
+    },
+  ];
 }
 
 /** First letters of a function's name, as the tokenizer upper-cases it. */
@@ -786,6 +787,29 @@ function readMerge(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   return steps;
 }
 
+/** First words of a statement that may change rows in a form the reader does not place. */
+const UNPLACED_ROW_FORMS = new Set(["WITH", "COPY", "LOAD"]);
+
+/** Words that, inside a WITH, make it change rows rather than read them. */
+const ROW_CHANGE_WORDS = ["INSERT", "UPDATE", "DELETE", "MERGE"];
+
+/**
+ * A row change the reader does not place (`UNPLACED_ROW_FORMS`): a WITH that
+ * writes, a `COPY … FROM` and MySQL's `LOAD DATA` (or PostgreSQL's `LOAD`
+ * of a library) stand for what they may delete, which only blanket consent
+ * covers; a WITH that only reads and a `COPY … TO` change nothing.
+ */
+function readUnplacedRows(tokens: readonly Token[], first: string): Step[] {
+  if (first === "LOAD") return [unread(tokens)];
+  if (first === "WITH") {
+    return ROW_CHANGE_WORDS.some(word => tokens.includes(word))
+      ? [unread(tokens)]
+      : [];
+  }
+  // COPY (query) TO writes a file; COPY t FROM fills t.
+  return tokens[1] !== "(" && tokens.includes("FROM") ? [unread(tokens)] : [];
+}
+
 /** Upper-cased words of a MySQL INSERT or UPDATE that may stand before its table. */
 const WRITE_MODIFIERS = ["LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "IGNORE"];
 
@@ -804,7 +828,17 @@ function readWrite(tokens: readonly Token[]): Step[] {
   const only = !insert && cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return [unread(tokens)];
+  // A MySQL UPDATE of several tables (a join, a list) writes each of them.
+  if (!insert && !reachesSet(cursor)) return [unread(tokens)];
   return [{ kind: "writes", table, events: writeEvents(insert, tokens), only }];
+}
+
+/** Whether an UPDATE's table, past an optional alias, is followed by its SET: the one table it writes. */
+function reachesSet(cursor: StatementCursor): boolean {
+  cursor.accept("AS");
+  if (cursor.isWord("SET")) return true;
+  cursor.name();
+  return cursor.isWord("SET");
 }
 
 /** The events a write fires: an UPDATE its own, an INSERT its own and, as an upsert, UPDATE too. */
@@ -1421,10 +1455,8 @@ class FileWalk {
   private readonly shadowed = new Map<string, string | null | undefined>();
   /** Per table, the tables the list made its descendants. */
   private readonly attached = new Map<string, Set<string>>();
-  /** The functions the list defines. */
+  /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
   private readonly functions = new Set<string>();
-  /** The tables the list puts a trigger on, `*` for one it cannot name. */
-  private readonly runTriggers = new Set<string>();
   /** The foreign keys with an ON DELETE action the list added, in order. */
   private readonly addedKeys: {
     parent: string;
@@ -1544,12 +1576,6 @@ class FileWalk {
       case "create-function":
         this.functions.add(step.name);
         return;
-      case "create-trigger":
-        // A trigger on a table the run cannot name may be on any of them.
-        this.runTriggers.add(
-          step.table === undefined ? "*" : this.identity(step.table)
-        );
-        return;
       case "calls":
         this.call(step);
         return;
@@ -1604,11 +1630,31 @@ class FileWalk {
 
   private changeColumn(name: string, column: string): void {
     const table = this.origin(name);
-    if (table === null || this.made(table, column)) return;
+    if (table === null) return;
+    if (!this.made(table, column)) {
+      this.emit({
+        kind: "column",
+        table,
+        column: this.columnOrigin(table, column),
+      });
+    }
+    this.rewrite(table);
+  }
+
+  /**
+   * PostgreSQL's conversion of a column rewrites its live table and re-checks
+   * every row against the table's CHECK constraints: one calling a function
+   * runs it, which only blanket consent covers (`HiddenCode.rewrite`).
+   */
+  private rewrite(table: string): void {
+    const runs = this.facts.hiddenCode(table, "rewrite");
+    if (runs === false) return;
     this.emit({
-      kind: "column",
-      table,
-      column: this.columnOrigin(table, column),
+      kind: "unnamed",
+      description:
+        runs === true
+          ? `converting a column of ${table} re-checks its CHECK constraints, which call a function and may delete other data`
+          : `converting a column of ${table} re-checks CHECK constraints that could not be read`,
     });
   }
 
@@ -1686,11 +1732,13 @@ class FileWalk {
     }
   }
 
-  /** A SELECT calling a function the run defined, or one that may delete. */
+  /** A statement calling a function the list defined, or one that may delete. */
   private call(step: Extract<Step, { kind: "calls" }>): void {
-    const deleting = step.names.some(
-      name => this.functions.has(name) || this.facts.mayDeleteThrough(name)
-    );
+    const deleting =
+      this.functions.has("*") ||
+      step.names.some(
+        name => this.functions.has(name) || this.facts.mayDeleteThrough(name)
+      );
     if (deleting) this.emit(unnamedOf(step));
   }
 
@@ -1712,7 +1760,8 @@ class FileWalk {
       const start = [this.identity(step.table), ...removed.slice(1)];
       removed.push(...this.reach(start, table !== null, step.reach));
     }
-    if (step.removal !== "partition") this.triggers(removed, step.removal);
+    // A MySQL partition truncated fires none of its table's triggers.
+    if (step.removal !== "partition") this.hidden(removed, "rows removed from");
   }
 
   /**
@@ -1780,52 +1829,38 @@ class FileWalk {
   }
 
   /**
-   * A trigger a removal fires runs code the statement does not show: each
-   * live table whose rows go, and that has one, stands for a deletion only
-   * blanket consent covers, as does one whose triggers could not be read.
+   * Code a live table carries runs when a row change reaches it (`HiddenCode`):
+   * each such table stands for a deletion only blanket consent covers, as does
+   * one whose code could not be read. `change` says how its rows are reached.
    */
-  private triggers(tables: readonly string[], event: TriggerEvent): void {
-    const writes = event === "insert" || event === "update";
-    const rows = writes ? "rows written to" : "rows removed from";
-    // "a DELETE trigger", "an INSERT trigger".
-    const name = `${writes ? "an" : "a"} ${event.toUpperCase()}`;
+  private hidden(tables: readonly string[], change: string): void {
     for (const table of new Set(tables)) {
-      const fires = this.fires(table, event);
-      if (fires === false) continue;
+      const runs = this.facts.hiddenCode(table, "rows");
+      if (runs === false) continue;
       this.emit({
         kind: "unnamed",
         description:
-          fires === true
-            ? `${rows} ${table} fire ${name} trigger, which may delete other data`
-            : `${rows} ${table} may fire ${name} trigger, which could not be read`,
+          runs === true
+            ? `${change} ${table} run code the table carries (a trigger, a rule, or a default or check calling a function), which may delete other data`
+            : `${change} ${table} may run code the table carries, which could not be read`,
       });
     }
   }
 
-  /** Whether `event` on `table` fires a trigger: one the list created on it, or one the database has. */
-  private fires(table: string, event: TriggerEvent): boolean | undefined {
-    if (this.runTriggers.has(table) || this.runTriggers.has("*")) return true;
-    return this.facts.triggered(table, event);
-  }
-
-  /** Rows written to a live table fire its INSERT or UPDATE triggers; a table the list made holds only the run's rows, unless the list put a trigger on it. */
+  /**
+   * Rows written to a live table run the code it carries; a table the list
+   * made holds only the run's rows, and code the list defines makes the write
+   * unread before it gets here (`placed`).
+   */
   private write(step: Extract<Step, { kind: "writes" }>): void {
     const table = this.origin(step.table);
-    const name = table ?? this.identity(step.table);
-    if (
-      table === null &&
-      !this.runTriggers.has(name) &&
-      !this.runTriggers.has("*")
-    )
-      return;
+    if (table === null) return;
     // Without ONLY, PostgreSQL writes through a parent reach its descendants
     // (an UPDATE their rows, an INSERT into a partitioned table its
-    // partitions), whose own triggers fire.
+    // partitions), whose own code runs.
     const written =
-      table === null || step.only === true
-        ? [name]
-        : [name, ...this.writtenDescendants(table)];
-    for (const event of step.events) this.triggers(written, event);
+      step.only === true ? [table] : [table, ...this.writtenDescendants(table)];
+    this.hidden(written, "rows written to");
   }
 
   /** The descendants a write through `table` may reach; none when unreadable, which only blanket consent covers. */
@@ -1863,6 +1898,11 @@ class FileWalk {
     for (const { table: on, column } of nulled) {
       this.emit({ kind: "column", table: on, column });
     }
+    // Blanking a key updates the child's rows, which runs the code it carries.
+    this.hidden(
+      nulled.map(({ table: on }) => on),
+      "rows changed in"
+    );
     return reached;
   }
 
@@ -1894,6 +1934,7 @@ class FileWalk {
       if (!this.made(table, column))
         this.emit({ kind: "column", table, column });
     }
+    this.hidden([table], "rows changed in");
   }
 
   /**
@@ -2075,7 +2116,7 @@ function walk(
   const byDrop = new Map(rebuilds.map(rebuild => [rebuild.dropAt, rebuild]));
   // The twin's creation, its copies and its rename back are the rebuild's
   // own, judged with it at its drop.
-  let pathMoved = false;
+  const state: WalkState = { pathMoved: false, codeDefined: false };
   const owned = new Set(
     rebuilds.flatMap(rebuild => [
       rebuild.createAt,
@@ -2092,13 +2133,13 @@ function walk(
       for (const step of placed(
         readStatement(statement, dialect),
         tokens,
-        pathMoved
+        state
       )) {
         file.apply(fingerprinted(step, statement));
       }
       const call = readCalls(tokens);
       if (call !== undefined) file.apply(fingerprinted(call, statement));
-      pathMoved ||= movesPath(tokens);
+      advance(state, tokens);
     }
   });
   return file.found;
@@ -2158,19 +2199,72 @@ const PLACING = new Set<Step["kind"]>([
 function placed(
   steps: Step[],
   tokens: readonly Token[],
-  pathMoved: boolean
+  state: WalkState
 ): Step[] {
-  if (!pathMoved || !steps.some(step => PLACING.has(step.kind))) return steps;
+  const why = unplacedBecause(steps, state);
+  if (why === undefined) return steps;
   return [
     {
       kind: "unread",
-      description: `${labelOf(tokens)} (search path changed, not read, may delete data)`,
+      description: `${labelOf(tokens)} (${why}, not read, may delete data)`,
     },
   ];
 }
 
-/** Functions every database has that change no table's rows. */
-const EXEMPT_FUNCTIONS = new Set(["setval", "nextval", "currval"]);
+/** Why a statement's steps cannot be placed: the path moved before it, or the list defined code before a row change. */
+function unplacedBecause(
+  steps: readonly Step[],
+  state: WalkState
+): string | undefined {
+  if (state.pathMoved && steps.some(step => PLACING.has(step.kind))) {
+    return "search path changed";
+  }
+  if (state.codeDefined && steps.some(step => ROW_CHANGES.has(step.kind))) {
+    return "the run defined code before it";
+  }
+  return undefined;
+}
+
+/** The kinds of step that change rows, which code the list defines may reach. */
+const ROW_CHANGES = new Set<Step["kind"]>(["rows", "writes"]);
+
+/** What the walk carries from one statement to the next. */
+interface WalkState {
+  /** The search path moved (`movesPath`): names may point elsewhere. */
+  pathMoved: boolean;
+  /** The list defined code (`definesRunCode`): any later row change may run it. */
+  codeDefined: boolean;
+}
+
+/** `state` once `tokens` ran. */
+function advance(state: WalkState, tokens: readonly Token[]): void {
+  state.pathMoved ||= movesPath(tokens);
+  state.codeDefined ||= definesRunCode(tokens);
+}
+
+/**
+ * What a CREATE defines that runs later, on rows or calls, unseen by any
+ * catalog read before the run: a function, procedure, trigger (an event
+ * trigger too), rule, aggregate, operator, cast, or MySQL's event.
+ */
+const RUN_CODE_FORMS = new Set([
+  "FUNCTION",
+  "PROCEDURE",
+  "TRIGGER",
+  "RULE",
+  "AGGREGATE",
+  "OPERATOR",
+  "CAST",
+  "EVENT",
+]);
+
+/** Whether a statement defines code the run may later reach (`RUN_CODE_FORMS`), qualified or not, after `OR REPLACE` or a MySQL definer. */
+function definesRunCode(tokens: readonly Token[]): boolean {
+  if (tokens[0] !== "CREATE") return false;
+  return tokens
+    .slice(1, 10)
+    .some(token => typeof token === "string" && RUN_CODE_FORMS.has(token));
+}
 
 /**
  * Whether a SELECT calling `name` may run code that deletes: a function the
@@ -2181,8 +2275,9 @@ function mayDeleteThrough(
   name: string,
   userFunctions: ReadonlySet<string> | undefined
 ): boolean {
-  if (EXEMPT_FUNCTIONS.has(name) || name.startsWith("pg_catalog."))
-    return false;
+  // Only a call the catalog proves to be the system's is harmless: a name
+  // alone (setval, nextval) proves nothing, since a user function may have it.
+  if (name.startsWith("pg_catalog.")) return false;
   if (userFunctions === undefined || name.includes(".")) return true;
   return userFunctions.has(name);
 }
@@ -2193,7 +2288,7 @@ function factSource(facts: DeletionFacts): FactSource {
     cascadeFrom: table => facts.cascadeFrom(table),
     truncateCascadeFrom: table => facts.truncateCascadeFrom(table),
     nulledBy: table => facts.nulledBy(table),
-    triggered: (table, event) => facts.triggered(table, event),
+    hiddenCode: (table, on) => facts.hiddenCode(table, on),
     descendantsOf: table => facts.descendantsOf(table),
     liveTable: table => facts.liveTable(table),
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
@@ -2337,17 +2432,12 @@ interface Questions {
   cascade: Set<string>;
   truncate: Set<string>;
   rebuilt: Set<string>;
-  /** `table` and removal, joined by a NUL. */
-  triggers: Set<string>;
+  /** Tables a row change reaches, asked what code they carry. */
+  hidden: Set<string>;
   descendants: Set<string>;
   /** Tables the list creates, asked whether they exist already. */
   live: Set<string>;
   calls: boolean;
-}
-
-/** Whether `event` names one of the events a trigger fires on. */
-function isTriggerEvent(event: string): event is TriggerEvent {
-  return ["insert", "update", "delete", "truncate"].includes(event);
 }
 
 /** Whether a walk asked nothing new. */
@@ -2358,7 +2448,7 @@ function answered(asked: Questions): boolean {
       asked.cascade,
       asked.truncate,
       asked.rebuilt,
-      asked.triggers,
+      asked.hidden,
       asked.descendants,
       asked.live,
     ].every(set => set.size === 0)
@@ -2384,7 +2474,7 @@ function lookup<T>(
 class FactReading {
   private readonly cascades = new Map<string, Reached | undefined>();
   private readonly truncates = new Map<string, readonly string[] | undefined>();
-  private readonly triggered = new Map<string, boolean | undefined>();
+  private readonly hidden = new Map<string, HiddenCode | undefined>();
   private readonly liveTables = new Map<string, boolean | undefined>();
   /** Set once the tables could not be read: whether one exists is then unknown. */
   private spellFailed = false;
@@ -2417,7 +2507,7 @@ class FactReading {
       cascade: new Set(),
       truncate: new Set(),
       rebuilt: new Set(),
-      triggers: new Set(),
+      hidden: new Set(),
       descendants: new Set(),
       live: new Set(),
       calls: false,
@@ -2443,10 +2533,9 @@ class FactReading {
         const known = lookup(this.truncates, table, asked.truncate);
         return known === undefined ? [] : known.value;
       },
-      triggered: (table, event) => {
-        const key = `${table}\u0000${event}`;
-        const known = lookup(this.triggered, key, asked.triggers);
-        return known === undefined ? false : known.value;
+      hiddenCode: (table, on) => {
+        const known = lookup(this.hidden, table, asked.hidden);
+        return known === undefined ? false : known.value?.[on];
       },
       descendantsOf: table => {
         const known = lookup(this.descendants, table, asked.descendants);
@@ -2475,14 +2564,13 @@ class FactReading {
 
   /** Reads what `asked` asks, read-only; a fact that cannot be read is recorded as undefined. */
   async answer(asked: Questions): Promise<void> {
-    const triggers = [...asked.triggers].map(key => key.split("\u0000"));
     await this.spell([
       ...asked.cascade,
       ...asked.truncate,
       ...asked.rebuilt,
       ...asked.descendants,
       ...asked.live,
-      ...triggers.map(([table]) => table),
+      ...asked.hidden,
     ]);
     for (const table of asked.live) {
       this.liveTables.set(
@@ -2494,11 +2582,8 @@ class FactReading {
       this.cascades.set(table, await this.readCascade(table));
     for (const table of asked.truncate)
       this.truncates.set(table, await this.readTruncate(table));
-    for (const [table, removal] of triggers) {
-      this.triggered.set(
-        `${table}\u0000${removal}`,
-        await this.readTriggered(table, removal)
-      );
+    for (const table of asked.hidden) {
+      this.hidden.set(table, await this.readHidden(table));
     }
     for (const table of asked.descendants) {
       this.descendants.set(table, await this.readDescendants(table));
@@ -2561,13 +2646,10 @@ class FactReading {
       ?.rows;
   }
 
-  private async readTriggered(
-    table: string,
-    event: string
-  ): Promise<boolean | undefined> {
+  private async readHidden(table: string): Promise<HiddenCode | undefined> {
     const live = this.live(table);
-    if (live === undefined || !isTriggerEvent(event)) return undefined;
-    return settle(() => readTriggered(this.db, this.dialect, [live], event));
+    if (live === undefined) return undefined;
+    return settle(() => readHiddenCode(this.db, this.dialect, live));
   }
 
   private async readDescendants(
@@ -2625,8 +2707,7 @@ class FactReading {
       cascadeFrom: table => this.cascades.get(table.toLowerCase())?.rows,
       nulledBy: table => this.cascades.get(table.toLowerCase())?.nulled,
       truncateCascadeFrom: table => this.truncates.get(table.toLowerCase()),
-      triggered: (table, event) =>
-        this.triggered.get(`${table.toLowerCase()}\u0000${event}`),
+      hiddenCode: (table, on) => this.hidden.get(table.toLowerCase())?.[on],
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
       liveTable: table => this.liveTables.get(table.toLowerCase()),
       ...(userFunctions === undefined ? {} : { userFunctions }),

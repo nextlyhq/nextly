@@ -127,8 +127,9 @@ export async function tableHasRows(
  * The functions the database defines outside its system catalogs, lower-cased:
  * the ones a statement calling them may run code through that the statement
  * does not show. PostgreSQL's from every schema but `pg_catalog` and
- * `information_schema`, MySQL's stored functions in the current database;
- * SQLite defines none in SQL.
+ * `information_schema`, an installed extension's members (`uuid_generate_v4`,
+ * pgcrypto's) counting as system ones (`PG_USER_FUNCTIONS`); MySQL's stored
+ * functions in the current database; SQLite defines none in SQL.
  */
 export async function readUserFunctions(
   db: unknown,
@@ -139,9 +140,7 @@ export async function readUserFunctions(
     const result = (await (db as PgMysqlExecute).execute(
       sql`SELECT DISTINCT p.proname AS name
           FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-            AND n.nspname NOT LIKE 'pg\\_%'`
+          WHERE p.oid IN (${PG_USER_FUNCTIONS})`
     )) as { rows: { name: string }[] };
     for (const row of result.rows) names.add(row.name.toLowerCase());
     return names;
@@ -441,97 +440,109 @@ export async function readReferencingKeys(
   return [...keys.values()];
 }
 
-/** PostgreSQL's `tgtype` bits for a trigger fired by a DELETE and by a TRUNCATE. */
-/** The `pg_trigger.tgtype` bit of each event a trigger fires on. */
-const PG_TRIGGER_BITS = {
-  insert: 4,
-  delete: 8,
-  update: 16,
-  truncate: 32,
-} as const;
-
-/** The `pg_rewrite.ev_type` of the rule each event is rewritten by; TRUNCATE has none. */
-const PG_RULE_EVENTS = { update: "2", insert: "3", delete: "4" } as const;
-
-/** An event a statement fires triggers on. */
-export type TriggerEvent = keyof typeof PG_TRIGGER_BITS;
-
-/** Quoted names, strings and comments in a SQLite trigger's text, which name no event. */
-const SQLITE_NOT_CODE =
-  /"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|'(?:[^']|'')*'|--[^\n]*|\/\*[\s\S]*?\*\//g;
-
 /**
- * Whether a SQLite trigger's `CREATE TRIGGER` text fires on `event`: its first event word, read
- * past quoted names, strings and comments, is that event. One whose event cannot be found counts as
- * one that fires, since a trigger nobody could read cannot be ruled out.
+ * The PostgreSQL functions outside the system catalogs, as `pg_proc` oids: every function but
+ * those in `pg_catalog` and `information_schema`, and an installed extension's members
+ * (`pg_depend` deptype 'e'), which are the database's own as much as a built-in is.
  */
-function sqliteTriggerFiresOn(text: string, event: TriggerEvent): boolean {
-  const found = /\b(DELETE|INSERT|UPDATE)\b/i.exec(
-    text.replace(SQLITE_NOT_CODE, " ")
-  );
-  return found === null || found[1].toUpperCase() === event.toUpperCase();
+const PG_USER_FUNCTIONS = sql`
+  SELECT p.oid FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND n.nspname NOT LIKE 'pg\\_%'
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_depend e
+      WHERE e.classid = 'pg_proc'::regclass AND e.objid = p.oid AND e.deptype = 'e'
+    )`;
+
+/** Code a table carries that a change reaching it runs (`readHiddenCode`). */
+export interface HiddenCode {
+  /**
+   * Run by a row removed, written or blanked: any trigger (whatever its event, enabled or not), a
+   * PostgreSQL rule, or a default, generated column, CHECK, policy or domain CHECK calling a
+   * function outside the system catalogs and installed extensions.
+   */
+  rows: boolean;
+  /** Run by PostgreSQL's conversion of a column, which re-checks every row: such a CHECK or domain CHECK. */
+  rewrite: boolean;
 }
 
 /**
- * Whether `event` on any of `tables` fires a trigger, which runs code the statement does not show
- * and so may delete or rewrite other data: a `delete` (DELETE, REPLACE, a cascade) fires DELETE
- * triggers, an `insert` or `update` (INSERT, UPDATE, an upsert) INSERT or UPDATE ones, and a
- * `truncate` PostgreSQL's TRUNCATE triggers and nothing on MySQL. PostgreSQL also counts a rule on
- * the event, which rewrites the statement into statements the file does not show, and reads each table through its ref (`RelationRef.table`),
- * throwing when one does not resolve; MySQL reads the current database's triggers, SQLite every
- * trigger in `sqlite_master` on one of the tables.
+ * What code `table` carries that a change to it runs, which no statement shows and which may
+ * delete other data. PostgreSQL reads it through the table's ref (`RelationRef.table`), throwing
+ * when the ref does not resolve: the triggers, the rules, and the expressions depending on a user
+ * function (`PG_USER_FUNCTIONS`) or an operator one implements, through `pg_depend`. MySQL and
+ * SQLite read only triggers: neither lets a default or a CHECK call a stored function.
  */
-export async function readTriggered(
+export async function readHiddenCode(
   db: unknown,
   dialect: SupportedDialect,
-  tables: readonly string[],
-  event: TriggerEvent
-): Promise<boolean> {
-  if (tables.length === 0) return false;
-  if (dialect === "postgresql") {
-    for (const table of tables) await requirePgRelation(db, table);
-    const relations = sql.join(
-      tables.map(table => sql`to_regclass(${table})`),
-      sql`, `
-    );
-    const ruleEvent = event === "truncate" ? undefined : PG_RULE_EVENTS[event];
-    const rule =
-      ruleEvent === undefined
-        ? sql``
-        : sql`OR EXISTS (SELECT 1 FROM pg_rewrite r
-                         WHERE r.ev_class IN (${relations}) AND r.ev_type = ${ruleEvent})`;
-    return probeReturnsRow(
-      db,
-      dialect,
-      sql`SELECT 1 WHERE EXISTS (
-            SELECT 1 FROM pg_trigger t
-            WHERE t.tgrelid IN (${relations}) AND NOT t.tgisinternal
-              AND (t.tgtype::integer & ${PG_TRIGGER_BITS[event]}::integer) <> 0
-          ) ${rule}`
-    );
-  }
-  // Neither has a trigger a TRUNCATE fires: MySQL's TRUNCATE fires none, SQLite has no TRUNCATE.
-  if (event === "truncate") return false;
-  const names = sql.join(
-    tables.map(table => sql`${table.toLowerCase()}`),
-    sql`, `
-  );
-  if (dialect === "mysql") {
-    return probeReturnsRow(
-      db,
-      dialect,
-      sql`SELECT 1 FROM information_schema.TRIGGERS
-          WHERE EVENT_OBJECT_SCHEMA = DATABASE()
-            AND lower(EVENT_OBJECT_TABLE) IN (${names})
-            AND EVENT_MANIPULATION = ${event.toUpperCase()}
-          LIMIT 1`
-    );
-  }
-  const rows = (await (db as SqliteAll).all(
-    sql`SELECT sql FROM sqlite_master
-        WHERE type = 'trigger' AND lower(tbl_name) IN (${names})`
-  )) as { sql: string | null }[];
-  return rows.some(row => sqliteTriggerFiresOn(row.sql ?? "", event));
+  table: string
+): Promise<HiddenCode> {
+  if (dialect === "postgresql") return readPgHiddenCode(db, table);
+  const lower = table.toLowerCase();
+  const probe =
+    dialect === "mysql"
+      ? sql`SELECT 1 FROM information_schema.TRIGGERS
+            WHERE EVENT_OBJECT_SCHEMA = DATABASE()
+              AND lower(EVENT_OBJECT_TABLE) = ${lower}
+            LIMIT 1`
+      : sql`SELECT 1 FROM sqlite_master
+            WHERE type = 'trigger' AND lower(tbl_name) = ${lower}`;
+  return { rows: await probeReturnsRow(db, dialect, probe), rewrite: false };
+}
+
+/** `readHiddenCode` on PostgreSQL. */
+async function readPgHiddenCode(
+  db: unknown,
+  table: string
+): Promise<HiddenCode> {
+  await requirePgRelation(db, table);
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`WITH rel AS (SELECT to_regclass(${table}) AS id),
+      user_fn AS (${PG_USER_FUNCTIONS}),
+      user_ref AS (
+        SELECT 'pg_proc'::regclass AS classid, oid AS objid FROM user_fn
+        UNION ALL
+        SELECT 'pg_operator'::regclass, o.oid
+        FROM pg_operator o JOIN user_fn f ON f.oid = o.oprcode
+      ),
+      checks AS (
+        SELECT 'pg_constraint'::regclass AS classid, c.oid AS objid
+        FROM pg_constraint c JOIN rel ON c.conrelid = rel.id
+        WHERE c.contype = 'c'
+        UNION ALL
+        SELECT 'pg_constraint'::regclass, c.oid
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.atttypid = c.contypid
+        JOIN rel ON a.attrelid = rel.id
+        WHERE c.contype = 'c' AND a.attnum > 0 AND NOT a.attisdropped
+      ),
+      exprs AS (
+        SELECT classid, objid FROM checks
+        UNION ALL
+        SELECT 'pg_attrdef'::regclass, d.oid
+        FROM pg_attrdef d JOIN rel ON d.adrelid = rel.id
+        UNION ALL
+        SELECT 'pg_policy'::regclass, p.oid
+        FROM pg_policy p JOIN rel ON p.polrelid = rel.id
+      ),
+      calls AS (
+        SELECT x.classid, x.objid FROM pg_depend d
+        JOIN user_ref u ON u.classid = d.refclassid AND u.objid = d.refobjid
+        JOIN exprs x ON x.classid = d.classid AND x.objid = d.objid
+      )
+      SELECT
+        (EXISTS (SELECT 1 FROM pg_trigger t JOIN rel ON t.tgrelid = rel.id
+                 WHERE NOT t.tgisinternal)
+         OR EXISTS (SELECT 1 FROM pg_rewrite r JOIN rel ON r.ev_class = rel.id
+                    WHERE r.rulename <> '_RETURN')
+         OR EXISTS (SELECT 1 FROM calls)) AS on_rows,
+        EXISTS (SELECT 1 FROM calls c JOIN checks k
+                ON k.classid = c.classid AND k.objid = c.objid) AS on_rewrite`
+  )) as { rows: { on_rows: boolean; on_rewrite: boolean }[] };
+  const row = result.rows[0];
+  return { rows: row?.on_rows !== false, rewrite: row?.on_rewrite !== false };
 }
 
 /**

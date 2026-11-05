@@ -74,6 +74,15 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     await world.dispose();
   }, 60_000);
 
+  /** Whether PostgreSQL has `name` installed already, so a test that needs it leaves it as it found it. */
+  async function extensionInstalled(name: string): Promise<boolean> {
+    const rows = await adapter.executeQuery(
+      "SELECT 1 FROM pg_extension WHERE extname = $1",
+      [name]
+    );
+    return rows.length > 0;
+  }
+
   it.runIf(dialect !== "sqlite")(
     "follows ON DELETE CASCADE keys to a grandchild, never through a key without it, and answers nothing for a table not there yet",
     async () => {
@@ -194,7 +203,7 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     120_000
   );
 
-  it("reads whether removing rows from a table fires a DELETE trigger", async () => {
+  it("reads a trigger on a table as code a row change runs, never one a DDL deletion runs", async () => {
     const triggered = `${P}_tr`;
     const plain = `${P}_plain`;
     await adapter.executeQuery(
@@ -220,9 +229,98 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
       `DELETE FROM ${triggered}`,
       `DELETE FROM ${plain}`,
     ]);
-    expect(facts.triggered(triggered, "delete")).toBe(true);
-    expect(facts.triggered(plain, "delete")).toBe(false);
+    expect(facts.hiddenCode(triggered, "rows")).toBe(true);
+    expect(facts.hiddenCode(plain, "rows")).toBe(false);
+    // An updated_at-style trigger asks blanket consent for a removal of the
+    // table's rows, and none for dropping one of its columns.
+    const dropColumn = [`ALTER TABLE ${triggered} DROP COLUMN ${P}_gone`];
+    const remove = [`DELETE FROM ${triggered}`];
+    if (dialect !== "sqlite") {
+      await adapter.executeQuery(
+        `ALTER TABLE ${triggered} ADD COLUMN ${P}_gone integer`
+      );
+      const ddlFacts = await readDeletionFacts(
+        adapter.getDrizzle(),
+        dialect,
+        dropColumn
+      );
+      expect(fileDeletions(dropColumn, dialect, ddlFacts)).toEqual([
+        { kind: "column", table: triggered, column: `${P}_gone` },
+      ]);
+    }
+    const rowFacts = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      remove
+    );
+    expect(fileDeletions(remove, dialect, rowFacts)).toContainEqual({
+      kind: "unnamed",
+      description: `rows removed from ${triggered} run code the table carries (a trigger, a rule, or a default or check calling a function), which may delete other data`,
+    });
   }, 120_000);
+
+  it.runIf(dialect === "postgresql")(
+    "reads a default or CHECK calling a user function as hidden code, and an extension's function as none",
+    async () => {
+      const stamped = `${P}_stamped`;
+      const keyed = `${P}_keyed`;
+      const checked = `${P}_checked`;
+      const fn = `${P}_next`;
+      await adapter.executeQuery(
+        `CREATE FUNCTION ${fn}() RETURNS integer AS 'SELECT 1' LANGUAGE sql`
+      );
+      const hadExtension = await extensionInstalled("uuid-ossp");
+      if (!hadExtension) {
+        await adapter.executeQuery('CREATE EXTENSION "uuid-ossp"');
+      }
+      try {
+        for (const statement of [
+          `CREATE TABLE ${stamped} (id integer DEFAULT ${fn}())`,
+          `CREATE TABLE ${keyed} (id uuid DEFAULT uuid_generate_v4())`,
+          `CREATE TABLE ${checked} (id integer, body text CHECK (${fn}() > 0))`,
+        ]) {
+          await adapter.executeQuery(statement);
+        }
+        const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+          `INSERT INTO ${stamped} DEFAULT VALUES`,
+          `INSERT INTO ${keyed} DEFAULT VALUES`,
+          `ALTER TABLE ${checked} ALTER COLUMN body TYPE varchar(20)`,
+        ]);
+        expect(facts.hiddenCode(stamped, "rows")).toBe(true);
+        expect(facts.hiddenCode(stamped, "rewrite")).toBe(false);
+        expect(facts.hiddenCode(keyed, "rows")).toBe(false);
+        expect(facts.hiddenCode(checked, "rewrite")).toBe(true);
+        // A CHECK calling a function asks blanket consent for a conversion,
+        // and names a dropped column.
+        const convert = [
+          `ALTER TABLE ${checked} ALTER COLUMN body TYPE varchar(20)`,
+        ];
+        expect(fileDeletions(convert, dialect, facts)).toContainEqual({
+          kind: "unnamed",
+          description: `converting a column of ${checked} re-checks its CHECK constraints, which call a function and may delete other data`,
+        });
+        const drop = [`ALTER TABLE ${checked} DROP COLUMN id`];
+        expect(
+          fileDeletions(
+            drop,
+            dialect,
+            await readDeletionFacts(adapter.getDrizzle(), dialect, drop)
+          )
+        ).toEqual([{ kind: "column", table: checked, column: "id" }]);
+        // An extension's function is the database's own, never a user's.
+        const calls = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+          "SELECT uuid_generate_v4()",
+        ]);
+        expect(calls.userFunctions?.has("uuid_generate_v4")).toBe(false);
+      } finally {
+        if (!hadExtension) {
+          await adapter.executeQuery(`DROP TABLE IF EXISTS ${keyed}`);
+          await adapter.executeQuery('DROP EXTENSION IF EXISTS "uuid-ossp"');
+        }
+      }
+    },
+    120_000
+  );
 
   it.runIf(dialect === "postgresql")(
     "reads the inheritance children and partitions a DELETE without ONLY also empties",
@@ -268,7 +366,7 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
       ]);
       // Which of the two the lower-cased name means cannot be told.
       expect(facts.cascadeFrom(twin)).toBeUndefined();
-      expect(facts.triggered(twin, "delete")).toBeUndefined();
+      expect(facts.hiddenCode(twin, "rows")).toBeUndefined();
     },
     120_000
   );
@@ -313,11 +411,11 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
       kind: "unnamed",
       description: `rows removed from tables ${missing}'s foreign keys cascade to, which could not be read`,
     };
-    // A table the database lacks has no triggers or descendants to read
+    // A table the database lacks has no code or descendants to read
     // either, and each fails closed as its keys do.
     const missingTriggers = {
       kind: "unnamed",
-      description: `rows removed from ${missing} may fire a DELETE trigger, which could not be read`,
+      description: `rows removed from ${missing} may run code the table carries, which could not be read`,
     };
     const missingDescendants = {
       kind: "unnamed",

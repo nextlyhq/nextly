@@ -692,9 +692,9 @@ function offlineFacts(
     cascadeFrom: () => [],
     truncateCascadeFrom: () => [],
     nulledBy: () => [],
-    // No trigger or inheritance tree is known without a database; the run
-    // judges the ones a removal reaches.
-    triggered: () => false,
+    // No code a table carries, nor inheritance tree, is known without a
+    // database; the run judges what a change reaches.
+    hiddenCode: () => false,
     descendantsOf: () => [],
     // The tables the schema before the section holds, from its snapshot.
     liveTable: table =>

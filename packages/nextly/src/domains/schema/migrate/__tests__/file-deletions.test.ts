@@ -37,13 +37,15 @@ interface Facts {
   functions?: readonly string[] | "unreadable";
   /** Judge a rebuild of an unseen table as `migrate:check` does. */
   deferred?: boolean;
-  /** Per table, the removals a trigger on it fires on; none when left out. Undefined: unreadable. */
+  /** Per table, the events its triggers fire on, any of which is code it carries; none when left out. Undefined: unreadable. */
   triggers?: Record<
     string,
     readonly ("delete" | "truncate" | "insert" | "update")[] | undefined
   >;
   /** Per table, its inheritance descendants and partitions; none when left out. Undefined: unreadable. */
   descendants?: Record<string, readonly string[] | undefined>;
+  /** Per table, whether a CHECK on it calls a non-system function, which a column conversion runs; none when left out. */
+  rewrite?: Record<string, boolean | undefined>;
   /** The tables the database has before the run, beyond those `columns` names; "unreadable" for none known. */
   live?: readonly string[] | "unreadable";
 }
@@ -61,11 +63,19 @@ function fake(facts: Facts = {}): DeletionFacts {
     truncateCascadeFrom: answer(facts.truncate),
     nulledBy: table =>
       nulled !== undefined && table in nulled ? nulled[table] : [],
-    // A table left out has no trigger; one mapped to undefined is unreadable.
-    triggered: (table, event) =>
-      triggers !== undefined && table in triggers
-        ? triggers[table]?.includes(event)
-        : false,
+    // A table left out carries no code; one mapped to undefined is unreadable.
+    hiddenCode: (table, on) => {
+      if (on === "rewrite") {
+        return facts.rewrite !== undefined && table in facts.rewrite
+          ? facts.rewrite[table]
+          : false;
+      }
+      return triggers !== undefined && table in triggers
+        ? triggers[table] === undefined
+          ? undefined
+          : triggers[table].length > 0
+        : false;
+    },
     descendantsOf: answer(facts.descendants),
     liveTable: table =>
       facts.live === "unreadable"
@@ -330,57 +340,69 @@ describe("rows removed", () => {
   });
 });
 
-describe("triggers a removal of rows fires", () => {
-  const fires = (table: string, event: string): Deletion =>
-    unnamed(
-      `rows removed from ${table} fire a ${event} trigger, which may delete other data`
-    );
+/** The deletion a row change stands for when its table carries code (a trigger, a rule, a default or check calling a function). */
+const carries = (change: string, table: string): Deletion =>
+  unnamed(
+    `${change} ${table} run code the table carries (a trigger, a rule, or a default or check calling a function), which may delete other data`
+  );
+/** As `carries`, when what the table carries could not be read. */
+const mayCarry = (change: string, table: string): Deletion =>
+  unnamed(
+    `${change} ${table} may run code the table carries, which could not be read`
+  );
+/** A statement after the run defined code, which only blanket consent covers. */
+const afterCode = (label: string, statement: string): Deletion =>
+  unreadAs(
+    `${label} (the run defined code before it, not read, may delete data)`,
+    statement
+  );
 
-  it("stands for a DELETE trigger with a deletion only blanket consent covers, on a DELETE, a REPLACE and an INSERT OR REPLACE", () => {
-    const triggers = { posts: ["delete"] as const };
+describe("code a table carries, when a row change reaches it", () => {
+  const removed = (table: string) => carries("rows removed from", table);
+  const written = (table: string) => carries("rows written to", table);
+
+  it("stands for any trigger on a table whose rows a DELETE, a REPLACE, an INSERT OR REPLACE or a TRUNCATE removes", () => {
+    const triggers = { posts: ["update"] as const };
     expect(
       read("postgresql", ["DELETE FROM posts WHERE id = 1"], { triggers })
-    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
+    ).toEqual([rows("posts"), removed("posts")]);
     expect(
       read("mysql", ["REPLACE INTO posts (id) VALUES (1)"], { triggers })
-    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
+    ).toEqual([rows("posts"), removed("posts"), written("posts")]);
     expect(
       read("sqlite", ["INSERT OR REPLACE INTO posts (id) VALUES (1)"], {
         triggers,
       })
-    ).toEqual([rows("posts"), fires("posts", "DELETE")]);
-    // A trigger on another table, or one a TRUNCATE does not fire, asks nothing.
-    expect(
-      read("postgresql", ["DELETE FROM pages", "TRUNCATE posts"], { triggers })
-    ).toEqual([rows("pages"), rows("posts")]);
-  });
-
-  it("stands for a TRUNCATE trigger on PostgreSQL, with or without CASCADE", () => {
-    const triggers = { posts: ["truncate"] as const };
-    expect(read("postgresql", ["TRUNCATE posts"], { triggers })).toEqual([
-      rows("posts"),
-      fires("posts", "TRUNCATE"),
-    ]);
+    ).toEqual([rows("posts"), removed("posts"), written("posts")]);
     expect(
       read("postgresql", ["TRUNCATE posts CASCADE"], { triggers })
-    ).toEqual([rows("posts"), fires("posts", "TRUNCATE")]);
+    ).toEqual([rows("posts"), removed("posts")]);
+    // A table carrying nothing asks nothing beyond its rows.
+    expect(read("postgresql", ["DELETE FROM pages"], { triggers })).toEqual([
+      rows("pages"),
+    ]);
   });
 
-  it("stands for an INSERT or UPDATE trigger a write fires, an upsert firing an UPDATE one too", () => {
-    const written = (table: string, event: string): Deletion =>
-      unnamed(
-        `rows written to ${table} fire an ${event} trigger, which may delete other data`
-      );
+  it("names a DDL deletion on a table with an updated_at trigger, and asks blanket consent for a removal of its rows", () => {
+    const triggers = { posts: ["update"] as const };
+    expect(
+      read("postgresql", ["ALTER TABLE posts DROP COLUMN body"], { triggers })
+    ).toEqual([column("posts", "body")]);
+    expect(read("postgresql", ["DROP TABLE posts"], { triggers })).toEqual([
+      table("posts"),
+    ]);
+    expect(read("postgresql", ["DELETE FROM posts"], { triggers })).toEqual([
+      rows("posts"),
+      removed("posts"),
+    ]);
+  });
+
+  it("stands for code on a table a write reaches, an upsert's included, and none on a table the list made", () => {
     expect(
       read("postgresql", ["INSERT INTO audit (id) VALUES (1)"], {
-        triggers: { audit: ["insert"] },
+        triggers: { audit: ["delete"] },
       })
-    ).toEqual([written("audit", "INSERT")]);
-    expect(
-      read("postgresql", ["UPDATE posts SET title = 'x'"], {
-        triggers: { posts: ["update"] },
-      })
-    ).toEqual([written("posts", "UPDATE")]);
+    ).toEqual([written("audit")]);
     expect(
       read(
         "postgresql",
@@ -389,8 +411,7 @@ describe("triggers a removal of rows fires", () => {
         ],
         { triggers: { posts: ["update"] } }
       )
-    ).toEqual([written("posts", "UPDATE")]);
-    // A table with no trigger, or one the list made, asks nothing.
+    ).toEqual([written("posts")]);
     expect(
       read("mysql", [
         "INSERT INTO plain (id) VALUES (1)",
@@ -400,36 +421,125 @@ describe("triggers a removal of rows fires", () => {
     ).toEqual([]);
   });
 
-  it("stands for a trigger the list itself creates, on a write after it, and fails closed when a write's triggers could not be read", () => {
+  it("stands for code on a child whose key a removal blanks through ON DELETE SET NULL", () => {
     expect(
-      read("postgresql", [
-        "CREATE TRIGGER audit_trg AFTER INSERT ON audit FOR EACH ROW EXECUTE FUNCTION keep()",
-        "INSERT INTO audit (id) VALUES (1)",
-      ])
+      read("postgresql", ["DELETE FROM authors"], {
+        nulled: { authors: [{ table: "bylines", column: "author_id" }] },
+        triggers: { bylines: ["update"] },
+      })
     ).toEqual([
-      unnamed(
-        "rows written to audit fire an INSERT trigger, which may delete other data"
-      ),
+      rows("authors"),
+      column("bylines", "author_id"),
+      carries("rows changed in", "bylines"),
     ]);
+  });
+
+  it("fails closed when what a table carries could not be read", () => {
+    expect(
+      read("mysql", ["DELETE FROM posts"], { triggers: { posts: undefined } })
+    ).toEqual([rows("posts"), mayCarry("rows removed from", "posts")]);
     expect(
       read("mysql", ["INSERT INTO audit (id) VALUES (1)"], {
         triggers: { audit: undefined },
       })
+    ).toEqual([mayCarry("rows written to", "audit")]);
+  });
+
+  it("asks blanket consent for a PostgreSQL column conversion on a table whose CHECK calls a function, and names its DROP COLUMN", () => {
+    const facts = { rewrite: { posts: true } };
+    expect(
+      read(
+        "postgresql",
+        ["ALTER TABLE posts ALTER COLUMN body TYPE varchar(20)"],
+        facts
+      )
     ).toEqual([
+      column("posts", "body"),
       unnamed(
-        "rows written to audit may fire an INSERT trigger, which could not be read"
+        "converting a column of posts re-checks its CHECK constraints, which call a function and may delete other data"
+      ),
+    ]);
+    expect(
+      read("postgresql", ["ALTER TABLE posts DROP COLUMN body"], facts)
+    ).toEqual([column("posts", "body")]);
+  });
+});
+
+describe("code the run itself defines", () => {
+  it("stands for every row change after the run defines code, a rule, a qualified function or a trigger on its own table", () => {
+    const update = "UPDATE posts SET title = 'x'";
+    expect(
+      read("postgresql", [
+        "CREATE RULE purge AS ON UPDATE TO posts DO ALSO DELETE FROM audit",
+        update,
+      ])
+    ).toEqual([afterCode("UPDATE POSTS SET TITLE =", update)]);
+    const remove = "DELETE FROM scratch";
+    expect(
+      read("postgresql", [
+        "CREATE TABLE scratch (id integer)",
+        "CREATE TRIGGER purge AFTER DELETE ON scratch FOR EACH ROW EXECUTE FUNCTION purge()",
+        remove,
+      ])
+    ).toEqual([afterCode("DELETE FROM SCRATCH", remove)]);
+    const call = "SELECT purge_old_posts()";
+    expect(
+      read("postgresql", [
+        "CREATE FUNCTION public.purge_old_posts() RETURNS void AS $$ DELETE FROM posts $$ LANGUAGE sql",
+        call,
+      ])
+    ).toEqual([
+      unreadAs(
+        "SELECT PURGE_OLD_POSTS (calls a function, may delete data)",
+        call
       ),
     ]);
   });
 
-  it("fails closed when the triggers could not be read", () => {
+  it("still names a DDL deletion after the run defines code", () => {
     expect(
-      read("mysql", ["DELETE FROM posts"], { triggers: { posts: undefined } })
-    ).toEqual([
-      rows("posts"),
-      unnamed(
-        "rows removed from posts may fire a DELETE trigger, which could not be read"
+      read("postgresql", [
+        "CREATE FUNCTION tidy() RETURNS integer AS 'SELECT 1' LANGUAGE sql",
+        "DROP TABLE posts",
+      ])
+    ).toEqual([table("posts")]);
+  });
+});
+
+describe("a row change in a form the reader does not place", () => {
+  it("stands for WITH … UPDATE, COPY … FROM, LOAD DATA and a multi-table UPDATE as statements it cannot read", () => {
+    const withUpdate =
+      "WITH stale AS (SELECT id FROM posts) UPDATE posts SET title = 'x' WHERE id IN (SELECT id FROM stale)";
+    const copy = "COPY posts FROM STDIN";
+    const load = "LOAD DATA INFILE '/tmp/posts.csv' INTO TABLE posts";
+    const joined =
+      "UPDATE posts p JOIN drafts d ON p.id = d.id SET p.title = d.title";
+    expect(read("postgresql", [withUpdate, copy])).toEqual([
+      unreadAs("WITH STALE AS (not read, may delete data)", withUpdate),
+      unreadAs("COPY POSTS FROM STDIN (not read, may delete data)", copy),
+    ]);
+    expect(read("mysql", [load, joined])).toEqual([
+      unreadAs("LOAD DATA INFILE (not read, may delete data)", load),
+      unreadAs(
+        "UPDATE POSTS P JOIN DRAFTS D ON P.ID = D.ID SET P.TITLE = D… (not read, may delete data)",
+        joined
       ),
+    ]);
+    // A read stays a read.
+    expect(
+      read("postgresql", [
+        "WITH recent AS (SELECT id FROM posts) SELECT count(*) FROM recent",
+        "COPY posts TO STDOUT",
+      ])
+    ).toEqual([]);
+  });
+});
+
+describe("a function named like a system one", () => {
+  it("stands for a call to a user function called setval, as any other user function", () => {
+    const call = "SELECT setval(1)";
+    expect(read("mysql", [call], { functions: ["setval"] })).toEqual([
+      unreadAs("SELECT SETVAL (calls a function, may delete data)", call),
     ]);
   });
 });
@@ -739,9 +849,8 @@ describe("what the run cannot be sure it created, or where a name points", () =>
       read("postgresql", [merge], { triggers: { posts: ["update"] } })
     ).toEqual([
       rows("posts"),
-      unnamed(
-        "rows written to posts fire an UPDATE trigger, which may delete other data"
-      ),
+      carries("rows removed from", "posts"),
+      carries("rows written to", "posts"),
     ]);
   });
 
@@ -755,16 +864,13 @@ describe("what the run cannot be sure it created, or where a name points", () =>
     ).toEqual([
       unreadAs("SELECT PURGE_OLD (calls a function, may delete data)", call),
     ]);
+    const insert = "INSERT INTO audit (id) VALUES (1)";
     expect(
       read("mysql", [
         "CREATE DEFINER = 'root'@'%' TRIGGER audit_trg AFTER INSERT ON audit FOR EACH ROW SET @x = 1",
-        "INSERT INTO audit (id) VALUES (1)",
+        insert,
       ])
-    ).toEqual([
-      unnamed(
-        "rows written to audit fire an INSERT trigger, which may delete other data"
-      ),
-    ]);
+    ).toEqual([afterCode("INSERT INTO AUDIT", insert)]);
   });
 
   it("gives a name back to its live table once MySQL's DROP TEMPORARY TABLE drops the run's temporary table", () => {
@@ -812,9 +918,7 @@ describe("what the run cannot be sure it created, or where a name points", () =>
       triggers: { events_2024: ["update" as const] },
     };
     expect(read("postgresql", [update], facts)).toEqual([
-      unnamed(
-        "rows written to events_2024 fire an UPDATE trigger, which may delete other data"
-      ),
+      carries("rows written to", "events_2024"),
     ]);
     expect(
       read("postgresql", ["UPDATE ONLY events SET seen = true"], facts)

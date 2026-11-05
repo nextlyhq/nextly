@@ -186,12 +186,12 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Live facts answering that nothing references, triggers or inherits from anything. */
+/** Live facts answering that nothing references, carries code or inherits from anything. */
 const quietFacts = async () => ({
   cascadeFrom: () => [],
   truncateCascadeFrom: () => [],
   nulledBy: () => [],
-  triggered: () => false,
+  hiddenCode: () => false,
   descendantsOf: () => [],
   liveTable: () => undefined,
   liveColumns: new Map(),
