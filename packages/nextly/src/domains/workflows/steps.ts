@@ -780,306 +780,299 @@ export async function takeWorkflowStep(
       : null;
   ensureWorkflowContentEventKinds();
 
-  const outcome = await adapter.transaction(
-    async (tx): Promise<StepOutcome> => {
-      // 0. The document's own row, locked before anything is read. Every save takes this lock before
-      // it writes, so a save in flight is waited for, and the version read below is the one it
-      // committed rather than the one it is replacing.
-      await readDocumentRevision(tx, {
-        dialect,
-        table: table.table,
-        id: input.document.entryId,
-        forUpdate: true,
-      });
+  const outcome = await adapter.transaction<StepOutcome>(async tx => {
+    // 0. The document's own row, locked before anything is read. Every save takes this lock before
+    // it writes, so a save in flight is waited for, and the version read below is the one it
+    // committed rather than the one it is replacing.
+    await readDocumentRevision(tx, {
+      dialect,
+      table: table.table,
+      id: input.document.entryId,
+      forUpdate: true,
+    });
 
-      // 1. Each part's stage, read on the transaction; a part with no state is in the first stage.
-      const parts: Array<{
-        part: string | null;
-        state: ReviewState | null;
-        stage: string;
-      }> = [];
-      for (const part of namedParts(input.parts, table.localized)) {
-        const state = await readReviewState(tx, partOf(input.document, part));
-        parts.push({ part, state, stage: state?.stage ?? workflow.firstStage });
-      }
-      const movable = parts.filter(entry => step.from.includes(entry.stage));
-      const left: LeftPart[] = parts
-        .filter(entry => !step.from.includes(entry.stage))
-        .map(entry => ({
-          part: entry.part,
-          stage: entry.stage,
-          reason: "not-from-stage" as const,
-        }));
-      if (input.parts !== "all" && left.length > 0) {
-        // A part the caller saw at another revision was judged from a stage it has since left, so
-        // what is wrong is the caller's view, not the step.
-        const moved = parts.filter(entry => {
-          const seen = seenRevision(input.seen, entry.part);
-          return (
-            !step.from.includes(entry.stage) &&
-            seen !== undefined &&
-            seen !== (entry.state?.revision ?? 0)
-          );
-        });
-        if (moved.length > 0)
-          throw staleRefusal(moved.map(entry => entry.part));
-        throw notFromStageRefusal(left);
-      }
-      if (movable.length === 0) throw notFromStageRefusal(left);
-
-      // 2. The step's permission.
-      if (!permitted) {
-        throw NextlyError.forbidden({
-          publicData: {
-            reason: "no-permission",
-            permission: permissionSlug(action, slug),
-          },
-          logContext: { refusal: "workflow-step-permission", step: step.name },
-        });
-      }
-
-      // 3. Approvals and requests for changes come only from a signed-in person.
-      if (stepNeedsPerson(step) && input.caller.kind !== "user") {
-        throw NextlyError.personOnly({
-          doing: "approve or request changes",
-          logContext: { refusal: "workflow-person-only", step: step.name },
-        });
-      }
-
-      // 4. The person accountable for a part's stage may not take a step that refuses it.
-      if (
-        !allowsSelfApproval(step) &&
-        caller.accountable !== null &&
-        movable.some(entry => entry.state?.enteredBy === caller.accountable)
-      ) {
-        throw NextlyError.forbidden({
-          publicData: { reason: "self-approval" },
-          logContext: { refusal: "workflow-self-approval", step: step.name },
-        });
-      }
-
-      // 5. The comment.
-      checkComment(step, comment);
-
-      // 6. Each part's newest recorded version: what a reviewer is shown of it, and what a step
-      // into a stage that allows publishing approves. A part with none has nothing to approve.
-      const recorded = new Map<string | null, VersionRow | undefined>();
-      for (const entry of movable) {
-        recorded.set(
-          entry.part,
-          await shownVersionOn(tx, input.document, entry.part)
+    // 1. Each part's stage, read on the transaction; a part with no state is in the first stage.
+    const parts: Array<{
+      part: string | null;
+      state: ReviewState | null;
+      stage: string;
+    }> = [];
+    for (const part of namedParts(input.parts, table.localized)) {
+      const state = await readReviewState(tx, partOf(input.document, part));
+      parts.push({ part, state, stage: state?.stage ?? workflow.firstStage });
+    }
+    const movable = parts.filter(entry => step.from.includes(entry.stage));
+    const left: LeftPart[] = parts
+      .filter(entry => !step.from.includes(entry.stage))
+      .map(entry => ({
+        part: entry.part,
+        stage: entry.stage,
+        reason: "not-from-stage" as const,
+      }));
+    if (input.parts !== "all" && left.length > 0) {
+      // A part the caller saw at another revision was judged from a stage it has since left, so
+      // what is wrong is the caller's view, not the step.
+      const moved = parts.filter(entry => {
+        const seen = seenRevision(input.seen, entry.part);
+        return (
+          !step.from.includes(entry.stage) &&
+          seen !== undefined &&
+          seen !== (entry.state?.revision ?? 0)
         );
-      }
-      const unrecorded = movable.filter(entry => !recorded.get(entry.part));
-      if (approves && unrecorded.length > 0) {
-        throw NextlyError.validation({
-          errors: unrecorded.map(entry => ({
-            path: "parts",
-            code: WORKFLOW_STEP_ERROR_CODES.nothingToApprove,
-            message: `${entry.part === null ? "The shared part" : `"${entry.part}"`} has no saved version to approve.`,
-          })),
-        });
-      }
+      });
+      if (moved.length > 0) throw staleRefusal(moved.map(entry => entry.part));
+      throw notFromStageRefusal(left);
+    }
+    if (movable.length === 0) throw notFromStageRefusal(left);
 
-      // 6b. An approval covers what changed since the part was last approved, or else published: a
-      // changed field the reviewer cannot read is one they cannot approve. Nothing is written
-      // before this, so answering the refusal out of the transaction keeps nothing.
-      if (reviewer !== null) {
-        const hiddenFields = new Set<string>();
-        const judged: Array<{ shown: unknown; changed: string[] }> = [];
-        for (const entry of movable) {
-          const shown = recorded.get(entry.part);
-          if (!shown) continue;
-          const baseline = await reviewBaselineOn(
+    // 2. The step's permission.
+    if (!permitted) {
+      throw NextlyError.forbidden({
+        publicData: {
+          reason: "no-permission",
+          permission: permissionSlug(action, slug),
+        },
+        logContext: { refusal: "workflow-step-permission", step: step.name },
+      });
+    }
+
+    // 3. Approvals and requests for changes come only from a signed-in person.
+    if (stepNeedsPerson(step) && input.caller.kind !== "user") {
+      throw NextlyError.personOnly({
+        doing: "approve or request changes",
+        logContext: { refusal: "workflow-person-only", step: step.name },
+      });
+    }
+
+    // 4. The person accountable for a part's stage may not take a step that refuses it.
+    if (
+      !allowsSelfApproval(step) &&
+      caller.accountable !== null &&
+      movable.some(entry => entry.state?.enteredBy === caller.accountable)
+    ) {
+      throw NextlyError.forbidden({
+        publicData: { reason: "self-approval" },
+        logContext: { refusal: "workflow-self-approval", step: step.name },
+      });
+    }
+
+    // 5. The comment.
+    checkComment(step, comment);
+
+    // 6. Each part's newest recorded version: what a reviewer is shown of it, and what a step
+    // into a stage that allows publishing approves. A part with none has nothing to approve.
+    const recorded = new Map<string | null, VersionRow | undefined>();
+    for (const entry of movable) {
+      recorded.set(
+        entry.part,
+        await shownVersionOn(tx, input.document, entry.part)
+      );
+    }
+    const unrecorded = movable.filter(entry => !recorded.get(entry.part));
+    if (approves && unrecorded.length > 0) {
+      throw NextlyError.validation({
+        errors: unrecorded.map(entry => ({
+          path: "parts",
+          code: WORKFLOW_STEP_ERROR_CODES.nothingToApprove,
+          message: `${entry.part === null ? "The shared part" : `"${entry.part}"`} has no saved version to approve.`,
+        })),
+      });
+    }
+
+    // 6b. An approval covers what changed since the part was last approved, or else published: a
+    // changed field the reviewer cannot read is one they cannot approve. Nothing is written
+    // before this, so answering the refusal out of the transaction keeps nothing.
+    if (reviewer !== null) {
+      const hiddenFields = new Set<string>();
+      const judged: Array<{ shown: unknown; changed: string[] }> = [];
+      for (const entry of movable) {
+        const shown = recorded.get(entry.part);
+        if (!shown) continue;
+        const baseline = await reviewBaselineOn(
+          tx,
+          input.document,
+          entry.part,
+          entry.state
+        );
+        const changed = changedFields(
+          input.document,
+          shown.snapshot,
+          baseline?.snapshot,
+          workflow.onEdit.exemptFields
+        );
+        judged.push({ shown: shown.snapshot, changed });
+        for (const name of await hiddenFrom(
+          input.document,
+          shown.snapshot,
+          changed,
+          reviewer,
+          reviewer.grants
+        )) {
+          hiddenFields.add(name);
+        }
+      }
+      if (hiddenFields.size > 0) {
+        return {
+          hidden: {
+            fields: [...hiddenFields].sort(),
+            parts: judged,
+            // Whoever the step refuses as accountable may not approve instead either.
+            excluded: [
+              reviewer.id,
+              ...(allowsSelfApproval(step)
+                ? []
+                : movable.flatMap(entry =>
+                    entry.state?.enteredBy ? [entry.state.enteredBy] : []
+                  )),
+            ],
+          },
+        };
+      }
+    }
+
+    // 7. The move, over what each part was seen at: its content version and its review-state
+    // revision. Every part is tried, so a refusal names all that moved; any refusal rolls back
+    // the parts already written.
+    const now = new Date();
+    const stale: (string | null)[] = [];
+    const moved: MovedPart[] = [];
+    for (const entry of movable) {
+      const seen = input.seen.find(candidate => candidate.part === entry.part);
+      const version = await partVersionOn(
+        tx,
+        dialect,
+        table,
+        input.document.entryId,
+        entry.part
+      );
+      // The content changed since the caller was shown it, or the caller never saw this part.
+      if (
+        seen === undefined ||
+        version === undefined ||
+        version !== seen.version
+      ) {
+        stale.push(entry.part);
+        continue;
+      }
+      const shown = recorded.get(entry.part);
+      const change: ReviewStateChange = {
+        stage: step.to,
+        enteredAt: now,
+        definitionHash,
+        // A move by trusted code keeps the accountable person the part had.
+        ...(caller.accountable !== null
+          ? { enteredBy: caller.accountable }
+          : {}),
+        // Leaving a stage that allows publishing withdraws the approval it held.
+        ...(allowsPublish(workflow, entry.stage) ? { approval: null } : {}),
+        // Entering one approves the version shown, by a person (approvals come from no one else).
+        ...(approves && shown?.versionNo != null && caller.accountable !== null
+          ? {
+              approval: {
+                versionNo: shown.versionNo,
+                // Without the fields an edit may change while an approval stands, so a save
+                // compared with it leaves out the same ones.
+                digest: approvalDigest(
+                  shown.snapshot,
+                  "collection",
+                  workflow.onEdit.exemptFields
+                ),
+                by: caller.accountable,
+                at: now,
+              },
+            }
+          : {}),
+        ...(defaults.reviewer ? { assignee: defaults.reviewer } : {}),
+      };
+      const revision = await writeOverSeen(
+        tx,
+        dialect,
+        partOf(input.document, entry.part),
+        entry.state,
+        seen.revision,
+        { stage: step.to, enteredAt: now, definitionHash },
+        change
+      );
+      if (revision === null) {
+        stale.push(entry.part);
+        continue;
+      }
+      moved.push({
+        part: entry.part,
+        from: entry.stage,
+        to: step.to,
+        revision,
+      });
+      // The versions this move asks retention to keep: the one approved, which stays pinned
+      // after a withdrawal until a new approval or a publish moves it, and the one the part
+      // entered review at, until it enters again or a publish closes the cycle.
+      if (typeof shown?.versionNo === "number") {
+        if (approves && caller.accountable !== null) {
+          await pinPart(
             tx,
             input.document,
-            entry.part,
-            entry.state
+            approvedSlot(entry.part),
+            shown.versionNo
           );
-          const changed = changedFields(
-            input.document,
-            shown.snapshot,
-            baseline?.snapshot,
-            workflow.onEdit.exemptFields
-          );
-          judged.push({ shown: shown.snapshot, changed });
-          for (const name of await hiddenFrom(
-            input.document,
-            shown.snapshot,
-            changed,
-            reviewer,
-            reviewer.grants
-          )) {
-            hiddenFields.add(name);
-          }
         }
-        if (hiddenFields.size > 0) {
-          return {
-            hidden: {
-              fields: [...hiddenFields].sort(),
-              parts: judged,
-              // Whoever the step refuses as accountable may not approve instead either.
-              excluded: [
-                reviewer.id,
-                ...(allowsSelfApproval(step)
-                  ? []
-                  : movable.flatMap(entry =>
-                      entry.state?.enteredBy ? [entry.state.enteredBy] : []
-                    )),
-              ],
-            },
-          };
+        if (entersReview(workflow, entry.stage, step.to)) {
+          await pinPart(
+            tx,
+            input.document,
+            enteredReviewSlot(entry.part),
+            shown.versionNo
+          );
         }
       }
+    }
+    if (stale.length > 0) throw staleRefusal(stale);
 
-      // 7. The move, over what each part was seen at: its content version and its review-state
-      // revision. Every part is tried, so a refusal names all that moved; any refusal rolls back
-      // the parts already written.
-      const now = new Date();
-      const stale: (string | null)[] = [];
-      const moved: MovedPart[] = [];
-      for (const entry of movable) {
-        const seen = input.seen.find(
-          candidate => candidate.part === entry.part
-        );
-        const version = await partVersionOn(
-          tx,
-          dialect,
-          table,
-          input.document.entryId,
-          entry.part
-        );
-        // The content changed since the caller was shown it, or the caller never saw this part.
-        if (
-          seen === undefined ||
-          version === undefined ||
-          version !== seen.version
-        ) {
-          stale.push(entry.part);
-          continue;
-        }
-        const shown = recorded.get(entry.part);
-        const change: ReviewStateChange = {
-          stage: step.to,
-          enteredAt: now,
-          definitionHash,
-          // A move by trusted code keeps the accountable person the part had.
-          ...(caller.accountable !== null
-            ? { enteredBy: caller.accountable }
-            : {}),
-          // Leaving a stage that allows publishing withdraws the approval it held.
-          ...(allowsPublish(workflow, entry.stage) ? { approval: null } : {}),
-          // Entering one approves the version shown, by a person (approvals come from no one else).
-          ...(approves &&
-          shown?.versionNo != null &&
-          caller.accountable !== null
+    // 8. One event per stage the parts left, on the same transaction, naming the newest version
+    // of the parts it moved.
+    const skipped = defaults.skippedReviewer;
+    for (const from of [...new Set(moved.map(entry => entry.from))]) {
+      const group = moved.filter(entry => entry.from === from);
+      const versionNos = group.flatMap(entry => {
+        const no = recorded.get(entry.part)?.versionNo;
+        return typeof no === "number" ? [no] : [];
+      });
+      await recordContentEvent(tx, {
+        subject: {
+          kind: input.document.scopeKind,
+          slug,
+          id: input.document.entryId,
+        },
+        parts: {
+          locales: group.flatMap(entry =>
+            entry.part === null ? [] : [entry.part]
+          ),
+          shared: group.some(entry => entry.part === null),
+        },
+        kind: workflowEventKind(step.kind),
+        actor: caller.event,
+        fromState: from,
+        toState: step.to,
+        note: comment !== null && comment.trim() !== "" ? comment : null,
+        versionNo: versionNos.length > 0 ? Math.max(...versionNos) : null,
+        payload: {
+          step: step.name,
+          ...(caller.ownerId !== null ? { ownerId: caller.ownerId } : {}),
+          ...(skipped
             ? {
-                approval: {
-                  versionNo: shown.versionNo,
-                  // Without the fields an edit may change while an approval stands, so a save
-                  // compared with it leaves out the same ones.
-                  digest: approvalDigest(
-                    shown.snapshot,
-                    "collection",
-                    workflow.onEdit.exemptFields
-                  ),
-                  by: caller.accountable,
-                  at: now,
+                skippedReviewer: {
+                  kind: skipped.assignee.kind,
+                  id: skipped.assignee.id,
+                  reason: skipped.reason,
                 },
               }
             : {}),
-          ...(defaults.reviewer ? { assignee: defaults.reviewer } : {}),
-        };
-        const revision = await writeOverSeen(
-          tx,
-          dialect,
-          partOf(input.document, entry.part),
-          entry.state,
-          seen.revision,
-          { stage: step.to, enteredAt: now, definitionHash },
-          change
-        );
-        if (revision === null) {
-          stale.push(entry.part);
-          continue;
-        }
-        moved.push({
-          part: entry.part,
-          from: entry.stage,
-          to: step.to,
-          revision,
-        });
-        // The versions this move asks retention to keep: the one approved, which stays pinned
-        // after a withdrawal until a new approval or a publish moves it, and the one the part
-        // entered review at, until it enters again or a publish closes the cycle.
-        if (typeof shown?.versionNo === "number") {
-          if (approves && caller.accountable !== null) {
-            await pinPart(
-              tx,
-              input.document,
-              approvedSlot(entry.part),
-              shown.versionNo
-            );
-          }
-          if (entersReview(workflow, entry.stage, step.to)) {
-            await pinPart(
-              tx,
-              input.document,
-              enteredReviewSlot(entry.part),
-              shown.versionNo
-            );
-          }
-        }
-      }
-      if (stale.length > 0) throw staleRefusal(stale);
-
-      // 8. One event per stage the parts left, on the same transaction, naming the newest version
-      // of the parts it moved.
-      const skipped = defaults.skippedReviewer;
-      for (const from of [...new Set(moved.map(entry => entry.from))]) {
-        const group = moved.filter(entry => entry.from === from);
-        const versionNos = group.flatMap(entry => {
-          const no = recorded.get(entry.part)?.versionNo;
-          return typeof no === "number" ? [no] : [];
-        });
-        await recordContentEvent(tx, {
-          subject: {
-            kind: input.document.scopeKind,
-            slug,
-            id: input.document.entryId,
-          },
-          parts: {
-            locales: group.flatMap(entry =>
-              entry.part === null ? [] : [entry.part]
-            ),
-            shared: group.some(entry => entry.part === null),
-          },
-          kind: workflowEventKind(step.kind),
-          actor: caller.event,
-          fromState: from,
-          toState: step.to,
-          note: comment !== null && comment.trim() !== "" ? comment : null,
-          versionNo: versionNos.length > 0 ? Math.max(...versionNos) : null,
-          payload: {
-            step: step.name,
-            ...(caller.ownerId !== null ? { ownerId: caller.ownerId } : {}),
-            ...(skipped
-              ? {
-                  skippedReviewer: {
-                    kind: skipped.assignee.kind,
-                    id: skipped.assignee.id,
-                    reason: skipped.reason,
-                  },
-                }
-              : {}),
-          },
-          definitionHash,
-        });
-      }
-
-      return { taken: { step: step.name, moved, left, ...defaults } };
+        },
+        definitionHash,
+      });
     }
-  );
+
+    return { taken: { step: step.name, moved, left, ...defaults } };
+  });
   if ("taken" in outcome) return outcome.taken;
 
   // Who could approve instead, read on the pool now the transaction has ended.
