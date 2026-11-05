@@ -400,6 +400,8 @@ export interface UseEntryFormReturn {
    * keeps them as it does after a refused save.
    */
   holdForVersionChange: VersionConflictState["holdForChange"];
+  /** Let go of a hold on the version, as a save that went through does. */
+  releaseVersionHold: VersionConflictState["release"];
 }
 
 // ============================================================================
@@ -1292,5 +1294,6 @@ export function useEntryForm({
     versionStartedFrom: version.startedFrom,
     adoptRecoveredVersion: version.adoptRecovered,
     holdForVersionChange: version.holdForChange,
+    releaseVersionHold: version.release,
   };
 }

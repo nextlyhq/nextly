@@ -58,6 +58,8 @@ function setup(
     loadCurrent: vi.fn(async () => void calls.push("loadCurrent")),
     reload: vi.fn(async () => void calls.push("reload")),
     adopt: vi.fn((version: string) => void calls.push(`adopt ${version}`)),
+    keepsEdits: () => true,
+    release: vi.fn(() => void calls.push("release")),
     ...overrides,
   };
   const hook = renderHook(
@@ -220,7 +222,9 @@ describe("someone else's change to a document this editor holds", () => {
     // version and not the row: the copy is still the version the change named.
     const { calls, tell } = setup(false);
     tell(notice());
-    await waitFor(() => expect(calls).toEqual(["reload", "adopt 2"]));
+    await waitFor(() =>
+      expect(calls).toEqual(["release", "reload", "adopt 2"])
+    );
   });
 
   it("says the edits could not be kept, replaces nothing, and offers it again", async () => {
@@ -254,6 +258,36 @@ describe("someone else's change to a document this editor holds", () => {
 
     act(() => result.current.choose("keep-editing"));
     expect(result.current.awaitingAnswer).toBe(false);
+  });
+
+  it("on taking back a document that keeps no recovery points, loads nothing over the edits until the editor chooses", async () => {
+    // 🔴 There loading the current version discards the edits, so it is never
+    // done for the editor, and the strip says what it would cost.
+    const { result, options, tell } = setup(true, { keepsEdits: () => false });
+    tell(notice({}, true));
+
+    await waitFor(() =>
+      expect(result.current.notice?.message).toMatch(
+        /^Ana changed this document at .+ while you were away\. Your unsaved edits are still here\. Loading the current version discards them\.$/
+      )
+    );
+    expect(options.hold).toHaveBeenCalledWith(notice().change);
+    expect(options.loadCurrent).not.toHaveBeenCalled();
+    expect(options.reload).not.toHaveBeenCalled();
+    expect(result.current.holding).toBe(false);
+    expect(result.current.notice?.choices).toEqual([
+      { choice: "load-current", label: "Load current version" },
+      { choice: "keep-editing", label: "Keep editing" },
+    ]);
+  });
+
+  it("lets go of a hold its edits no longer need before loading a clean copy", async () => {
+    // Kept editing, then undone: a hold left in place would turn the reload
+    // away while the strip said the latest version was shown.
+    const { calls, tell } = setup(false);
+    tell(notice());
+    await waitFor(() => expect(calls[0]).toBe("release"));
+    expect(calls.indexOf("release")).toBeLessThan(calls.indexOf("reload"));
   });
 
   it("names nobody, and no time, when the change names neither", async () => {

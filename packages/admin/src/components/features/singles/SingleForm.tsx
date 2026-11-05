@@ -888,9 +888,12 @@ export function SingleForm({
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
     // Every claim and beat names the copy's version, so the holder is told
-    // when someone else changes the Single.
-    version: version.startedFrom,
+    // when someone else changes the Single. Only where the editor can load
+    // the latest copy: one that cannot would say it shows what it does not.
+    version: latest ? version.startedFrom : undefined,
   });
+  // Whether the Single keeps recovery points, set below where it is known.
+  const keepsRecoveryPointsNow = useRef(false);
   // Load the current version with the edits kept as a recovery point, then
   // offer it: one way, for a refused save's dialog and for someone else's
   // change alike. What it calls is made below, so it is filled in there.
@@ -911,6 +914,8 @@ export function SingleForm({
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
       adopt: version.adoptRecovered,
+      keepsEdits: () => keepsRecoveryPointsNow.current,
+      release: version.release,
     }
   );
 
@@ -1246,6 +1251,7 @@ export function SingleForm({
   // Whether the conflict's edits can be kept: a Single with autosave on.
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(schema);
+  keepsRecoveryPointsNow.current = keepsRecoveryPoints;
   // With `keepEdits` false, for a Single that keeps no recovery points, the
   // edits are discarded, as the conflict said they would be.
   const loadCurrentVersion = useCallback(

@@ -416,6 +416,7 @@ export function EntryForm({
     versionStartedFrom,
     adoptRecoveredVersion,
     holdForVersionChange,
+    releaseVersionHold,
   } = useEntryForm({
     collection,
     entry,
@@ -774,6 +775,8 @@ export function EntryForm({
   // included, which the form's values do not hold. Set below, where it is
   // known, and read when someone else's change is told.
   const hasUnsavedWorkNow = useRef(false);
+  // Whether the entry keeps recovery points, set below where it is known.
+  const keepsRecoveryPointsNow = useRef(false);
   // Load the current version with the edits kept as a recovery point, then
   // offer it: one way, for a refused save's dialog and for someone else's
   // change alike. The offer is made below, so this is filled in there.
@@ -793,6 +796,8 @@ export function EntryForm({
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
       adopt: adoptRecoveredVersion,
+      keepsEdits: () => keepsRecoveryPointsNow.current,
+      release: releaseVersionHold,
     }
   );
   useEffect(() => {
@@ -1134,6 +1139,7 @@ export function EntryForm({
   const staleHistory = versionConflict?.stale.historyVersion;
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(collection);
+  keepsRecoveryPointsNow.current = keepsRecoveryPoints;
   // Load the current version, keeping the edits as a recovery point where the
   // document keeps them and offering it then; elsewhere the edits are
   // discarded, as the conflict said they would be. One way, for a refused
