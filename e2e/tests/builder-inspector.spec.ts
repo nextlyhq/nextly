@@ -524,7 +524,7 @@ test.describe("the inspector", () => {
       .toBe(true);
   });
 
-  test("lands a click on the header it is aimed at while the section above it opens", async ({
+  test("keeps the header below an opening section uncovered, and opens it when pressed", async ({
     page,
   }) => {
     await sectionStyleTab(page);
@@ -551,7 +551,7 @@ test.describe("the inspector", () => {
     // moves throughout the motion, and two round trips — its box, then the
     // element at that point — let it move between them, which under a loaded
     // machine sent the probe to where the header had been.
-    const { hit, x, y } = await page.evaluate(() => {
+    const hit = await page.evaluate(() => {
       const header = document.querySelector(
         '.nx-style-inspector [data-section="size"] .nx-style-inspector__section-trigger'
       );
@@ -559,19 +559,21 @@ test.describe("the inspector", () => {
       const box = header.getBoundingClientRect();
       const px = box.x + 20;
       const py = box.y + box.height / 2;
-      return {
-        x: px,
-        y: py,
-        hit:
-          document
-            .elementFromPoint(px, py)
-            ?.closest(".nx-style-inspector__section-trigger")
-            ?.closest("[data-section]")
-            ?.getAttribute("data-section") ?? null,
-      };
+      return (
+        document
+          .elementFromPoint(px, py)
+          ?.closest(".nx-style-inspector__section-trigger")
+          ?.closest("[data-section]")
+          ?.getAttribute("data-section") ?? null
+      );
     });
     expect(hit).toBe("size");
-    await page.mouse.click(x, y);
+    // Then pressed where it comes to rest. A pointer sent to the point just
+    // measured arrives a round trip later, while the header is still moving,
+    // and lands where the header was; the locator's press waits for it to
+    // hold still. What the motion must not do, cover the header, is the
+    // hit-test above.
+    await sectionHeader(page, "size").click();
     await expect
       .poll(async () => (await openSections(page)).includes("size"))
       .toBe(true);
