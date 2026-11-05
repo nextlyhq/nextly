@@ -20,7 +20,7 @@ import {
   type RemotePattern,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import type { PageStyleCascade } from "@nextlyhq/blocks-react";
+import type { PageBindings, PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
@@ -254,6 +254,12 @@ type CanvasRender = {
   classSummaryContext: StyleCompileContext;
 };
 
+/**
+ * The canvas's binding sources: none read for the page, one object for the
+ * editor's life so the pass is not a new input on every render.
+ */
+const CANVAS_BINDINGS: PageBindings = Object.freeze({});
+
 /** The render context the canvas is compiled under, and what is read off it. */
 function useCanvasRender({
   clientConfig,
@@ -347,6 +353,11 @@ function useCanvasRender({
         definitions: componentLibrary.definitions,
       }),
       context: canvasContext,
+      // The binding pass, with no source read for the page: a list item's
+      // bindings fill from the entry the canvas drew it with, as on the
+      // published page, and a binding to a source the canvas did not read
+      // keeps the block's own value (or its fallback), as it always drew.
+      bindings: CANVAS_BINDINGS,
     }),
     [
       canvasSiteStyle,
