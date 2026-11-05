@@ -688,13 +688,18 @@ interface CountNow {
 /** What a count says when what is left cannot be counted at all. */
 const SHARED_STYLE_CANNOT_COUNT_MORE = "The pages left can't be counted.";
 
+/** What a count found to say, and whether no further count can help. */
+interface CountFound {
+  readonly said: string;
+  readonly again: boolean;
+  readonly final?: true;
+}
+
 /** What the row says after a count: nothing once every page is counted. */
 function countFound(answer: {
   readonly whole: boolean;
   readonly counting: boolean;
-}):
-  | { readonly said: string; readonly again: boolean; readonly final?: true }
-  | undefined {
+}): CountFound | undefined {
   if (answer.whole) return undefined;
   return answer.counting
     ? { said: SHARED_STYLE_STILL_TO_COUNT, again: true }
@@ -715,13 +720,32 @@ const SHARED_STYLE_STILL_TO_COUNT = "Some pages are still to count.";
 function useCountNow(
   access: SharedStylesAccess | undefined,
   mayCount: boolean,
-  recountNow: () => void
+  recountNow: () => void,
+  /** The reads so far, and whether the latest say the site is counting. */
+  reads: {
+    readonly answered: number;
+    readonly counting: "yes" | "unknown" | "no";
+  }
 ): CountNow | undefined {
   const [busy, setBusy] = React.useState(false);
   const [found, setFound] = React.useState<
-    | { readonly said: string; readonly again: boolean; readonly final?: true }
+    | (CountFound & {
+        /** How many reads had answered when it was said. */
+        readonly at: number;
+      })
     | undefined
   >(undefined);
+  // A final word gives way to a later read that says the site is counting
+  // again: something new to count has turned up since the count.
+  const stale =
+    found?.final === true &&
+    reads.answered > found.at &&
+    reads.counting === "yes";
+  React.useEffect(() => {
+    if (stale) setFound(undefined);
+  }, [stale]);
+  const answeredNow = React.useRef(reads.answered);
+  answeredNow.current = reads.answered;
   const count = access?.count;
   const run = React.useCallback(() => {
     if (count === undefined || busy) return;
@@ -731,20 +755,34 @@ function useCountNow(
       .then(answer => {
         setBusy(false);
         if (answer.kind === "refused") {
-          setFound({ said: answer.reason, again: false });
+          setFound({
+            said: answer.reason,
+            again: false,
+            at: answeredNow.current,
+          });
           return;
         }
         recountNow();
         // Another count is offered only when the answer says one would get
         // further: pages left that cannot be counted are not "still to
         // count", whatever the panel last read.
-        setFound(countFound(answer));
+        const said = countFound(answer);
+        // Stamped with the reads answered so far. The read the count sets
+        // off is not counted as answered, since it can tell this answer
+        // nothing newer than itself, so the first other read moves past it.
+        setFound(
+          said === undefined ? undefined : { ...said, at: answeredNow.current }
+        );
       })
       // A host that throws rather than answering a refusal: said all the
       // same, so the button is not left saying it is counting.
       .catch(() => {
         setBusy(false);
-        setFound({ said: SHARED_STYLE_COUNT_FAILED, again: false });
+        setFound({
+          said: SHARED_STYLE_COUNT_FAILED,
+          again: false,
+          at: answeredNow.current,
+        });
       });
   }, [count, busy, recountNow]);
   if (count === undefined || !mayCount) return undefined;
@@ -1035,6 +1073,8 @@ interface UsageReads {
   readonly mayLock: boolean;
   readonly mayCount: boolean;
   readonly failed: boolean;
+  /** How many reads have answered, so a later one can be told from an earlier. */
+  readonly answered: number;
 }
 
 /**
@@ -1085,6 +1125,7 @@ function useUsage(
     mayLock: false,
     mayCount: false,
     failed: false,
+    answered: 0,
   });
   const known = React.useRef(state.styles);
   known.current = state.styles;
@@ -1093,6 +1134,8 @@ function useUsage(
   const counting = countingOf(state.readings, ids);
   const [recount, setRecount] = React.useState(0);
   const recounted = React.useRef(recount);
+  // The recount a count set off, so its read is told from every other.
+  const countRead = React.useRef<number | undefined>(undefined);
   // The recount the budget runs from: renewed whenever styles not read
   // before are read, so a style made after the budget was spent is still
   // asked about again, not only once, and whenever the counts change, so a
@@ -1136,7 +1179,12 @@ function useUsage(
     );
     if (unread.length === 0) return;
     if (!again) budgetFrom.current = recount;
-    return readInto(access, unread, setState);
+    return readInto(
+      access,
+      unread,
+      setState,
+      again && recount === countRead.current
+    );
   }, [access, key, recount]);
   // Styles asked about again on their own, after a write the server refused.
   const [asked, reread] = React.useState<readonly string[]>([]);
@@ -1150,10 +1198,14 @@ function useUsage(
   latest.current = recount;
   const recountNow = React.useCallback(() => {
     const next = latest.current + 1;
+    countRead.current = next;
     budgetFrom.current = next;
     setRecount(next);
   }, []);
-  const counter = useCountNow(access, state.mayCount, recountNow);
+  const counter = useCountNow(access, state.mayCount, recountNow, {
+    answered: state.answered,
+    counting,
+  });
   return {
     styles: state.styles,
     whole,
@@ -1167,7 +1219,11 @@ function useUsage(
 }
 
 /** One read's answer folded into what the reads kept. */
-function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
+function mergedReads(
+  current: UsageReads,
+  read: SharedStylesUsage,
+  ownCount = false
+): UsageReads {
   return {
     styles: new Map([...current.styles, ...read.styles]),
     readings: new Map([
@@ -1180,6 +1236,10 @@ function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
     // Absent from a host written before it existed: no.
     mayCount: read.mayCount === true,
     failed: false,
+    // Not a later word for a count when it is the count's own read: a final
+    // word is stamped with the reads answered before it, and only another
+    // read may move past it, whether or not the count's own ever answers.
+    answered: ownCount ? current.answered : current.answered + 1,
   };
 }
 
@@ -1190,11 +1250,13 @@ function mergedReads(current: UsageReads, read: SharedStylesUsage): UsageReads {
 function readInto(
   access: SharedStylesAccess,
   ids: readonly string[],
-  setState: React.Dispatch<React.SetStateAction<UsageReads>>
+  setState: React.Dispatch<React.SetStateAction<UsageReads>>,
+  /** The read a count sets off, which tells the count nothing newer. */
+  ownCount = false
 ): () => void {
   const controller = new AbortController();
   readUsage(access, ids, controller.signal, read =>
-    setState(current => mergedReads(current, read))
+    setState(current => mergedReads(current, read, ownCount))
   ).catch(() => {
     if (!controller.signal.aborted) {
       setState(current => ({ ...current, failed: true }));

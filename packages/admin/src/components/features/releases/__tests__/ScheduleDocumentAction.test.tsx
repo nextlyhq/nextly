@@ -1,10 +1,10 @@
 /**
- * When "Schedule publish…" is offered, when it is held and why, and when it
+ * When "Schedule…" is offered, when it is held and why, and when it
  * is absent: authority over releases and this document decide whether it can
  * be used, and only the document's having a lifecycle decides whether it
  * exists at all.
  *
- * @module components/features/releases/__tests__/SchedulePublishAction.test
+ * @module components/features/releases/__tests__/ScheduleDocumentAction.test
  */
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +12,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import {
-  useSchedulePublishAction,
-  type SchedulePublishProps,
-} from "../SchedulePublishAction";
+  useScheduleDocumentAction,
+  type ScheduleDocumentProps,
+} from "../ScheduleDocumentAction";
 
 const { canFor } = vi.hoisted(() => ({
   canFor: vi.fn((_slug: string) => true),
@@ -24,7 +24,7 @@ vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
 
-const PROPS: SchedulePublishProps = {
+const PROPS: ScheduleDocumentProps = {
   scopeKind: "collection",
   scopeSlug: "posts",
   entryId: "e1",
@@ -38,8 +38,8 @@ const PROPS: SchedulePublishProps = {
 const EDITED = { values: { headline: "Edited headline" } };
 
 /** What a page would receive, read out of a render, and the dialog mounted. */
-function Probe(over: Partial<SchedulePublishProps>) {
-  const schedule = useSchedulePublishAction({ ...PROPS, ...over });
+function Probe(over: Partial<ScheduleDocumentProps>) {
+  const schedule = useScheduleDocumentAction({ ...PROPS, ...over });
   const contributed = schedule.contributed;
   return (
     <div>
@@ -71,7 +71,7 @@ function Probe(over: Partial<SchedulePublishProps>) {
 }
 
 const text = (id: string) => screen.getByTestId(id).textContent;
-const show = (over: Partial<SchedulePublishProps> = {}) =>
+const show = (over: Partial<ScheduleDocumentProps> = {}) =>
   render(<Probe {...over} />);
 
 /** Every grant held, except the ones named. */
@@ -85,12 +85,17 @@ beforeEach(() => {
 });
 
 describe("the action is offered", () => {
-  it("on the Publish split's arrow, as Schedule publish…", () => {
+  it("on the Publish split's arrow, as Schedule…", () => {
     show();
     expect(text("present")).toBe("present");
-    expect(text("action")).toBe(
-      "schedule-publish/publish-menu/Schedule publish…"
-    );
+    expect(text("action")).toBe("schedule-publish/publish-menu/Schedule…");
+  });
+
+  it("to a person who may create releases but not schedule them, whose dialog holds only On its own", () => {
+    withoutGrants("publish-content-releases");
+    show();
+    expect(text("present")).toBe("present");
+    expect(text("reason")).toBe("none");
   });
 
   it("usable, with no reason, by a person who may schedule and publish", () => {
@@ -100,48 +105,43 @@ describe("the action is offered", () => {
 });
 
 describe("the action is held, with the reason", () => {
-  it("from a person who may not create releases", () => {
-    withoutGrants("create-content-releases");
+  it("from a person who may neither publish nor unpublish this document", () => {
+    withoutGrants("publish-posts", "unpublish-posts");
     show();
-    expect(text("present")).toBe("present");
     expect(text("reason")).toBe(
-      "You do not have permission to schedule releases."
+      "You do not have permission to publish or unpublish this document."
     );
   });
 
-  it("from a person who may create releases but not schedule them", () => {
-    withoutGrants("publish-content-releases");
-    show();
-    expect(text("reason")).toBe(
-      "You do not have permission to schedule releases."
-    );
-  });
-
-  it("from a person who may not publish this document", () => {
+  it("not from a person who may only take this document down, which a schedule can do", () => {
     withoutGrants("publish-posts");
     show();
-    expect(text("reason")).toBe(
-      "You do not have permission to publish this document."
-    );
+    expect(text("reason")).toBe("none");
   });
 
   it("on a translation, where a release would publish every language", () => {
     show({ onDefaultLocale: false });
     expect(text("reason")).toBe(
-      "Schedule publishing from the document's default locale."
+      "Schedule from the document's default language."
     );
   });
 
-  it("naming release permission first, which switching language would not fix", () => {
-    withoutGrants("create-content-releases");
+  it("naming the document's permission first, which switching language would not fix", () => {
+    withoutGrants("publish-posts", "unpublish-posts");
     show({ onDefaultLocale: false });
     expect(text("reason")).toBe(
-      "You do not have permission to schedule releases."
+      "You do not have permission to publish or unpublish this document."
     );
   });
 });
 
 describe("the action is absent", () => {
+  it("for a person who may not create releases, since every way makes or joins one", () => {
+    withoutGrants("create-content-releases");
+    show();
+    expect(text("present")).toBe("absent");
+  });
+
   it("for a document type with no publish lifecycle", () => {
     show({ lifecycleEnabled: false });
     expect(text("present")).toBe("absent");
@@ -159,7 +159,7 @@ describe("the dialog", () => {
     expect(text("dialog")).toBe("no-dialog");
     await userEvent.click(screen.getByRole("button", { name: "open" }));
     expect(
-      await screen.findByRole("dialog", { name: "Schedule publish" })
+      await screen.findByRole("dialog", { name: /^Schedule “/ })
     ).toBeTruthy();
   });
 });
@@ -227,7 +227,7 @@ describe("the release's name", () => {
     await userEvent.click(screen.getByRole("button", { name: "open" }));
 
     const dialog = await screen.findByRole("dialog", {
-      name: "Schedule publish",
+      name: /^Schedule “/,
     });
     expect(dialog.textContent).toContain("Edited headline");
     expect(dialog.textContent).not.toContain("Spring launch");

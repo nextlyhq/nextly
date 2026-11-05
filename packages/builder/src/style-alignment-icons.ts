@@ -294,10 +294,10 @@ const FIXED_GROUPS: Readonly<
     more: ["none", "scale-down"],
     help: {
       cover: "Fills the box; edges may be cut.",
-      contain: "Shows the whole image inside the box.",
-      fill: "Stretches the image to the box's shape.",
-      none: "Shows the image at its own size, cut to the box.",
-      "scale-down": "Shows the whole image, never larger than it is.",
+      contain: "Shows all of it inside the box.",
+      fill: "Stretches it to the box's shape.",
+      none: "Shows it at its own size, cut to the box.",
+      "scale-down": "Shows all of it, never larger than it is.",
     },
   },
 };

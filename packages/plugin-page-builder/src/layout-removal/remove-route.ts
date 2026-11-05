@@ -31,6 +31,8 @@ import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
+import type { ActionBy } from "../component-actions-contract";
+import { actionByOf } from "../composition-route-kit";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
 import { readingAsUser } from "../library-route";
 
@@ -83,14 +85,14 @@ async function readBody(req: Request): Promise<z.infer<typeof RemoveBody>> {
 }
 
 /**
- * The caller's user id. No permission is asked here: a delete or unpublish
+ * Who the caller is. No permission is asked here: a delete or unpublish
  * right can be a rule over the row, which a question with no row in it would
  * answer "no" for a writer it admits. The write itself, made as the caller,
  * is the one decision; the route's own gate admits only those who may read
  * Layouts.
  */
-function requireSignedIn(ctx: PluginRouteContext): string {
-  if (ctx.user !== null) return ctx.user.id;
+function requireSignedIn(ctx: PluginRouteContext): ActionBy {
+  if (ctx.user !== null) return actionByOf(ctx.user, ctx.caller ?? {});
   throw NextlyError.forbidden({
     logContext: { reason: "layout-removal-needs-a-person" },
   });
@@ -108,13 +110,13 @@ async function handle(
       PAGE_BUILDER_SETTINGS_SLUG,
     pages: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
   };
-  const userId = requireSignedIn(ctx);
+  const by = requireSignedIn(ctx);
   const body = await readBody(req);
   const deps = {
     nextly: await getCachedNextly(),
     store: layoutRemovalStore(ctx.db, ctx.dialect),
     slugs,
-    person: { userId, as: await readingAsUser(ctx) },
+    person: { userId: by.userId, as: await readingAsUser(ctx) },
     warn: (message: string, meta?: Record<string, unknown>) =>
       ctx.logger.warn(message, meta),
     now: () => new Date(),
@@ -135,7 +137,12 @@ async function handle(
           action: body.action,
           dryRun: body.dryRun === true,
         });
-  return respondMutation<RemoveResult>(answer.message, answer.item);
+  // The answer says who acted, a person or an API key, as every composition
+  // route's answer does.
+  return respondMutation<RemoveResult & { by: ActionBy }>(answer.message, {
+    ...answer.item,
+    by,
+  });
 }
 
 /** The route declaration. */
