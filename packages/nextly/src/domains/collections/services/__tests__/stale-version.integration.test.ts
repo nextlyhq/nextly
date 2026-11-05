@@ -1437,5 +1437,46 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["VALIDATION_ERROR"]);
       expect(docsBeforeChangeCalls).toBe(before);
     });
+
+    it("refuses a first translation when someone else's save created that language since the version given", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      // A read of Spanish before any Spanish row exists: its counter is 0.
+      const before = String(
+        (
+          (await t.nextly.findByID({
+            collection: DOCS as never,
+            id,
+            locale: "es",
+            overrideAccess: true,
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      expect(before).toMatch(/\.es:0$/);
+      const theirs = await update(
+        t,
+        DOCS,
+        id,
+        { title: "hola" },
+        { locale: "es" }
+      );
+      expect(theirs.success, JSON.stringify(theirs)).toBe(true);
+      // The claim of a row that is now there finds it out of date.
+      const mine = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mía", _rev: before },
+        { locale: "es" }
+      );
+      expect(mine).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(await languageCounters(t, [id])).toMatchObject({
+        [`${id}.es`]: 1,
+      });
+    });
   }
 );
