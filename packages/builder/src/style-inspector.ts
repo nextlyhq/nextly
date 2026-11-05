@@ -190,6 +190,12 @@ export interface StyleInspection {
    * as the content tab says when a block declares no props.
    */
   readonly sections: readonly StyleSection[];
+  /**
+   * The `object-fit` keyword in force here, lowercased, or `undefined` when
+   * nothing sets one: what decides whether the focal point shows, and what it
+   * says it does.
+   */
+  readonly objectFit?: string | undefined;
 }
 
 /**
@@ -252,14 +258,16 @@ export function inspectStyle(
     if (stored !== undefined) allowed.add(entry.property);
   }
 
+  const at = {
+    state,
+    breakpoint,
+    breakpoints: options?.breakpoints,
+    cascade: options?.cascade,
+  };
   const tiers: TierContext = {
-    display: displayOf(styles, {
-      state,
-      breakpoint,
-      breakpoints: options?.breakpoints,
-      cascade: options?.cascade,
-    }),
+    display: cascadedKeyword(styles, at, "display", "display"),
     media: options?.media === true,
+    objectFit: cascadedKeyword(styles, at, "object-fit", "objectFit"),
     state,
   };
   const inspected = [...allowed].map(property => {
@@ -288,15 +296,22 @@ export function inspectStyle(
     }
   }
 
-  return { nodeId: node.id, state, breakpoint, sections };
+  return {
+    nodeId: node.id,
+    state,
+    breakpoint,
+    sections,
+    ...(tiers.objectFit === undefined ? {} : { objectFit: tiers.objectFit }),
+  };
 }
 
 /**
- * The display that applies to the block at this address.
+ * The keyword a property takes at this address, lowercased: the display that
+ * decides the flex and grid tiers, the fit that decides the focal point's.
  *
  * Asked of the compiled cascade when there is one, through the same ranking
  * the provenance dots use: a class or the block's defaults can make a block a
- * flex container without the node storing `display` at all. The live tiers are
+ * flex container, or give an image its fit, without the node storing it. The live tiers are
  * the ones that apply at the edited tier, and the live state is the edited one
  * (base always matches as well).
  *
@@ -305,21 +320,23 @@ export function inspectStyle(
  * same way. A state rule outranks a breakpoint rule (its pseudo-class is more
  * specific), so the whole state comes first.
  */
-function displayOf(
+function cascadedKeyword(
   styles: Parameters<typeof readStyleValue>[0],
   at: {
     state: StyleState;
     breakpoint: BreakpointId;
     breakpoints: BreakpointSet | undefined;
     cascade: StyleInspectionOptions["cascade"];
-  }
+  },
+  cssProperty: string,
+  property: string
 ): string | undefined {
   const tiers = tiersFrom(at.breakpoint, at.breakpoints);
   if (at.cascade !== undefined) {
     const shown = styleProvenance({
       trace: at.cascade.trace,
       subject: at.cascade.subject,
-      cssProperty: "display",
+      cssProperty,
       state: at.state,
       breakpoint: at.breakpoint,
       liveBreakpoints: tiers,
@@ -336,7 +353,7 @@ function displayOf(
       const value = readStyleValue(styles, {
         state: atState,
         breakpoint: atBreakpoint,
-        property: "display",
+        property,
         path: [],
       });
       if (typeof value === "string") return value.trim().toLowerCase();
@@ -382,6 +399,8 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   alignItems: "Align",
   textTransform: "Letter case",
   objectFit: "Fit",
+  // Which part of the picture stays in view: what an author is choosing.
+  objectPosition: "Focal point",
 };
 
 /**

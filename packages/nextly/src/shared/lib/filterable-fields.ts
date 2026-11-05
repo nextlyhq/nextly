@@ -91,7 +91,7 @@ function carriesReadRule(fn: FieldFunctions | undefined): boolean {
  * and a guard keyed on the raw spelling refuses one and waves the other
  * through. Judging both closes the alias without needing the schema here.
  */
-function spellings(name: string): string[] {
+export function spellings(name: string): string[] {
   // BOTH directions. Converting only to camel closed the snake-spelled probe
   // against a camel-declared field and left its mirror open: a field declared
   // `secret_answer` is missed by `groupBy=secretAnswer`, because the camel form

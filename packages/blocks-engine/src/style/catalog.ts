@@ -542,6 +542,13 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary: "How replaced content fills its box.",
   },
   {
+    property: "objectPosition",
+    group: "dimensions",
+    shape: cssValue("object-position"),
+    summary:
+      "Which part of replaced content stays in view when it is cropped, or where it sits in its box.",
+  },
+  {
     property: "overflow",
     group: "dimensions",
     shape: keyword(
