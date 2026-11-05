@@ -11,7 +11,6 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { LAYOUT } from "./categories";
-import { sectionLooks } from "./looks";
 import { libraryDefinition } from "./classic-spacing";
 import {
   CONTAINER_CHILD_GAP,
@@ -21,6 +20,7 @@ import {
 } from "./container";
 import type { ContainerProps } from "./container";
 import { htmlTagProp } from "./html-tags";
+import { sectionLooks } from "./looks";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The

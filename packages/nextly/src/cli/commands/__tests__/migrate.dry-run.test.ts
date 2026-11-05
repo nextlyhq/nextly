@@ -76,7 +76,10 @@ describe("migrate --dry-run", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function preview(step?: number): Promise<void> {
+  function preview(
+    step?: number,
+    declared: Parameters<typeof previewMigrate>[0]["plugins"] = plugins
+  ): Promise<void> {
     const record = (message: string) => {
       lines.push(message);
     };
@@ -87,7 +90,7 @@ describe("migrate --dry-run", () => {
       db: testDb.db,
       dialect: "sqlite",
       migrationsDir: dir,
-      plugins,
+      plugins: declared,
       step,
       logger: {
         info: record,
@@ -141,6 +144,71 @@ describe("migrate --dry-run", () => {
       // The file's UP section, as `migrate:down --dry-run` prints a rollback's SQL.
       "    UP, as written in the file:\nSELECT 1;",
     ]);
+  });
+
+  describe("a column made required", () => {
+    // SQLite makes a column NOT NULL by rebuilding its table, as `migrate:create` writes it.
+    const rebuildRequired = [
+      "CREATE TABLE __new_notes (id TEXT PRIMARY KEY, label TEXT NOT NULL);",
+      "INSERT INTO __new_notes (id, label) SELECT id, label FROM notes;",
+      "DROP TABLE notes;",
+      "ALTER TABLE __new_notes RENAME TO notes;",
+    ].join("\n");
+    const verdicts = () => lines.filter(line => line.startsWith("    ✖"));
+
+    beforeEach(() => {
+      testDb.sqlite.exec(
+        "CREATE TABLE notes (id TEXT PRIMARY KEY, label TEXT); INSERT INTO notes VALUES ('n1', NULL)"
+      );
+    });
+
+    it("is counted for the first pending migration, against the database as it is", async () => {
+      rmSync(join(dir, "20260101_000000_000_init.sql"));
+      writeFileSync(
+        join(dir, "20260102_000000_000_require.sql"),
+        `-- UP\n${rebuildRequired}`
+      );
+      await preview(undefined, []);
+      expect(verdicts()).toEqual([
+        "    ✖ a real run would refuse it: Table 'notes': column 'label' cannot become required while 1 row holds no value in it. Give that row a value first, or keep the column nullable.",
+      ]);
+    });
+
+    // The database a later migration meets is the one the migrations before it leave, which a
+    // preview runs none of: a fill in an earlier file would read as a refusal of this one.
+    it("is not counted for a later one, which says it is counted when the run reaches it", async () => {
+      writeFileSync(
+        join(dir, "20260102_000000_000_fill.sql"),
+        "-- UP\nUPDATE notes SET label = 'filled' WHERE label IS NULL;"
+      );
+      writeFileSync(
+        join(dir, "20260103_000000_000_require.sql"),
+        `-- UP\n${rebuildRequired}`
+      );
+      await preview(undefined, []);
+      expect(verdicts()).toEqual([]);
+      const at = lines.indexOf("  • 20260103_000000_000_require.sql");
+      expect(lines.slice(at + 2)).toEqual([
+        "    • its required columns are counted when the run reaches it, after the migrations before it",
+      ]);
+      // Nothing ran: the row is still null.
+      expect(testDb.sqlite.prepare("SELECT label FROM notes").get()).toEqual({
+        label: null,
+      });
+    });
+
+    it("is not counted for an app file the plugins' pending modules run before", async () => {
+      rmSync(join(dir, "20260101_000000_000_init.sql"));
+      writeFileSync(
+        join(dir, "20260102_000000_000_require.sql"),
+        `-- UP\n${rebuildRequired}`
+      );
+      await preview();
+      expect(verdicts()).toEqual([]);
+      expect(lines).toContain(
+        "    • its required columns are counted when the run reaches it, after the migrations before it"
+      );
+    });
   });
 
   it("reads an absent ledger as nothing applied, and creates none", async () => {

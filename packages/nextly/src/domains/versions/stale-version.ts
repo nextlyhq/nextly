@@ -24,6 +24,7 @@ import type {
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
@@ -182,13 +183,123 @@ export function versionCheckFor(
  *
  * @throws NextlyError.validation when `data` carries `_rev`.
  */
-export function refuseVersionInSharedData(
+function refuseVersionInSharedData(
   data: Readonly<Record<string, unknown>>
 ): void {
   if (data[DOCUMENT_VERSION_KEY] === undefined) return;
   throw unjudgeable(
     `${DOCUMENT_VERSION_KEY} names one document's version, so an update of several documents with the same values can't carry it. Update each document with its own version.`
   );
+}
+
+/**
+ * Where an update by ids that writes the same values to every id gives each
+ * document's own version: `{ "<id>": "<_rev>" }`, beside `ids` and `data`.
+ *
+ * @experimental
+ */
+const DOCUMENT_REVS_KEY = "revs";
+
+/**
+ * How an update that writes the same values to many documents is judged:
+ * each id on its own version (`per-document`), over whatever each holds
+ * (`overwrite`), or neither (`required`), which an update of many documents
+ * cannot be judged by, since it carries no one document's version.
+ *
+ * @experimental
+ */
+export type SameValuesRequirement =
+  | { kind: "per-document"; revs: Readonly<Record<string, string>> }
+  | { kind: "overwrite" }
+  | { kind: "required"; byIds: boolean };
+
+const RevsByIdSchema = z.record(z.string(), z.string());
+
+/**
+ * Decide how an update that writes `data` to many documents is judged, before
+ * any of them is read: by its ids (`target.ids`), with a version for each in
+ * `target.revs`, or by a query (`target.ids` undefined), which names no ids to
+ * give versions for. One answer for every door, so REST, the Direct API and
+ * the services cannot judge one request two ways.
+ *
+ * @throws NextlyError.validation for a version in the shared data, an
+ *   `_overwrite` that is not true or false, versions on an update by query,
+ *   versions that are not text keyed by id, a version for an id the update
+ *   does not name, one that is not a version, or versions given beside
+ *   `_overwrite: true`.
+ * @throws NextlyError.versionRequired when versions are given for some ids
+ *   only: the rest would be written over whatever they hold, unjudged.
+ *
+ * @experimental
+ */
+export function sameValuesVersionRequirement(
+  data: Readonly<Record<string, unknown>>,
+  target: { ids: readonly string[] | undefined; revs?: unknown }
+): SameValuesRequirement {
+  refuseVersionInSharedData(data);
+  const overwrite = overwriteOf(data);
+  if (target.revs === undefined) {
+    return overwrite
+      ? { kind: "overwrite" }
+      : { kind: "required", byIds: target.ids !== undefined };
+  }
+  if (target.ids === undefined) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} gives versions by id, and an update by query names no ids. Update by ids to give each document's version.`
+    );
+  }
+  const parsed = RevsByIdSchema.safeParse(target.revs);
+  if (!parsed.success) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} must map each id to the version a read of it returned.`
+    );
+  }
+  if (overwrite) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} and ${DOCUMENT_OVERWRITE_KEY} say two different things: give each document's version, or overwrite them all.`
+    );
+  }
+  const named = new Set(target.ids);
+  for (const [id, rev] of Object.entries(parsed.data)) {
+    if (!named.has(id)) {
+      throw unrevisable(
+        `${DOCUMENT_REVS_KEY} gives a version for a document this update does not name.`
+      );
+    }
+    // Refused here, before any document is read, rather than as each one's
+    // own refusal once the others are written.
+    decodeDocumentVersion(rev);
+  }
+  // Own keys only: an id named like a prototype member is not a version.
+  if (target.ids.some(id => !Object.hasOwn(parsed.data, id))) {
+    throw versionRequiredFor("ids");
+  }
+  return { kind: "per-document", revs: parsed.data };
+}
+
+/** The refusal of `revs` that cannot be judged: a client's mistake. */
+function unrevisable(message: string): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: DOCUMENT_REVS_KEY, code: "INVALID_VALUE", message }],
+  });
+}
+
+/**
+ * The refusal of an update of many documents with the same values that gives
+ * neither a version for each nor the overwrite choice, naming the keys that
+ * say either.
+ *
+ * @experimental
+ */
+export function versionRequiredFor(bulk: "ids" | "query"): NextlyError {
+  return NextlyError.versionRequired({
+    bulk,
+    keys: {
+      version: DOCUMENT_VERSION_KEY,
+      overwrite: DOCUMENT_OVERWRITE_KEY,
+      revs: DOCUMENT_REVS_KEY,
+    },
+  });
 }
 
 /** The document a release run's mark is for. */
@@ -573,10 +684,12 @@ async function staleVersionRefusal(args: {
 }
 
 /**
- * Whether the caller of a refused update may read the document: the same
- * decision a read of it gets (`assertVersionDocumentReadable`, draft and
- * published visibility, row rules and read hooks included). A trusted server
- * caller may; a caller with no account may not be told who changed it.
+ * Whether the caller of a refused update may be told who changed the document
+ * and when: whether their own read of it returns it in each language the
+ * refusal reports (`readsAsItsCaller`, the read rule and its filter, draft and
+ * published visibility and read hooks included). A trusted server caller may. An anonymous visitor
+ * never is, even one the Public role lets read the document: who changed it is
+ * part of its history, which visitors are never shown.
  *
  * @experimental
  */
@@ -593,30 +706,77 @@ async function callerMayReadDocument(args: {
 }): Promise<boolean> {
   if (args.trusted) return true;
   if (!args.user) return false;
-  // Loaded when a refusal is built, not with the write path: the gate reads
-  // the version and access services, which an ordinary save never needs.
-  const { assertVersionDocumentReadable } = await import(
-    "../../api/versions-access"
-  );
-  try {
-    await assertVersionDocumentReadable(
-      args.scopeKind,
-      args.slug,
-      args.entryId,
-      args.user,
-      args.authenticatedScope,
-      args.hookInputs ?? {},
-      args.locales ?? []
-    );
-    return true;
-  } catch (error) {
-    // The gate answers "not found" for a document the caller may not read.
-    if (NextlyError.is(error) && error.code === "NOT_FOUND") return false;
-    throw error;
+  // In each language the refusal reports, or the default one.
+  const locales: readonly (string | undefined)[] =
+    args.locales && args.locales.length > 0 ? args.locales : [undefined];
+  for (const locale of locales) {
+    if (!(await readsAsItsCaller({ ...args, user: args.user, locale }))) {
+      return false;
+    }
   }
+  return true;
 }
 
-/** Where a save found out of date is answered from: its table, and the language that moved. */
+/**
+ * Whether the caller's own read of the document, in `locale`, would return
+ * it: the whole read decision, the collection's or Single's read rule and its
+ * filter included. Not a route's: an update request carries no read verdict,
+ * so a read asked as one a route already authorized would allow every
+ * signed-in caller without asking the rule. Anything but a read that returns
+ * this document counts as "may not read", so who changed it is never told on
+ * a failure.
+ */
+async function readsAsItsCaller(args: {
+  scopeKind: "collection" | "single";
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  hookInputs?: { request?: Request; context?: Record<string, unknown> };
+  locale: string | undefined;
+}): Promise<boolean> {
+  // Loaded when a refusal is built, not with the write path: the reads go
+  // through the services an ordinary save never needs.
+  if (args.scopeKind === "single") {
+    const { singleDocumentReadable } = await import(
+      "../singles/services/single-document-access"
+    );
+    try {
+      return await singleDocumentReadable(args.slug, {
+        user: args.user,
+        routeAuthorized: false,
+        ...(args.authenticatedScope === undefined
+          ? {}
+          : { actor: args.authenticatedScope }),
+        ...(args.locale === undefined ? {} : { locale: args.locale }),
+        ...args.hookInputs,
+      });
+    } catch {
+      return false;
+    }
+  }
+  const { getService } = await import("../../di");
+  const result = (await getService("collectionsHandler").getEntry({
+    collectionName: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    authenticatedScope: args.authenticatedScope,
+    // Drafts too: the refusal is about the document as it is stored.
+    status: "all",
+    ...args.hookInputs,
+    ...(args.locale === undefined ? {} : { locale: args.locale }),
+  } as never)) as { success: boolean; resolvedEntryId?: unknown };
+  // The read must be of this document: a hook may rewrite the id a read
+  // resolves, and another document's rules would not decide this one.
+  return result.success && result.resolvedEntryId === args.entryId;
+}
+
+/**
+ * Where a save found out of date is answered from: its table, and the
+ * language that moved, or every language for a write over all of them.
+ */
 export interface StaleWrite {
   table: string;
   /**
@@ -830,6 +990,34 @@ export async function refuseIfLanguageMoved(
     languages: { table: row.languagesTable, locales: [row.written] },
   };
   throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
+}
+
+/**
+ * The languages a judgement reads beside the document's own row
+ * (`judgeMainRow`): a translation table and the languages judged on it, or
+ * none where the document keeps no translations or none is judged.
+ */
+export function languagesJudged(
+  table: string | null,
+  locales: readonly string[] | undefined
+): StaleWrite["languages"] {
+  return table !== null && locales && locales.length > 0
+    ? { table, locales }
+    : undefined;
+}
+
+/**
+ * The judged languages' rows as the judgement read them, before the write:
+ * what an overwrite of all of them saved over.
+ */
+export function judgedLanguageStates(
+  state: DocumentRevisionState | undefined,
+  locales: readonly string[] | undefined
+): PartState[] | undefined {
+  if (!state || !locales) return undefined;
+  return locales.flatMap(locale =>
+    state.languages[locale] ? [state.languages[locale]] : []
+  );
 }
 
 /**
