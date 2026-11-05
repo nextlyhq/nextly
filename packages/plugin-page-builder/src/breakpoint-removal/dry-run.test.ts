@@ -173,7 +173,8 @@ describe("a breakpoint removal counted across the site", () => {
   it("names readable documents past ones the caller may not read", async () => {
     // The unreadable ones come first; they must not use up the places.
     const stored: Stored[] = [
-      ...Array.from({ length: NAMED_AT_MOST + 2 }, (_, i) => ({
+      // More than any fixed number a list could hold back to try.
+      ...Array.from({ length: 60 }, (_, i) => ({
         host: entry("components", `c${i}`),
         published: page(styled("a")),
       })),
@@ -185,7 +186,7 @@ describe("a breakpoint removal counted across the site", () => {
     );
     expect(run.removed[0]?.documents).toEqual({
       named: ["pages/home"],
-      unnamed: NAMED_AT_MOST + 2,
+      unnamed: 60,
     });
   });
 
