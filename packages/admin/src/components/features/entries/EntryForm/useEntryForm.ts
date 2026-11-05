@@ -385,9 +385,11 @@ export interface UseEntryFormReturn {
   saveAnyway: () => Promise<void>;
   /**
    * Keep the refused edits as a recovery point, then show the current
-   * version. Rejects, replacing nothing, when the edits cannot be kept.
+   * version. Rejects, replacing nothing, when the edits cannot be kept. With
+   * `keepEdits` false, for an entry that keeps no recovery points, the edits
+   * are discarded, as the conflict said they would be.
    */
-  loadCurrentVersion: () => Promise<void>;
+  loadCurrentVersion: (keepEdits: boolean) => Promise<void>;
   /** The version the copy on screen started from, sent with every write. */
   versionStartedFrom: () => string | undefined;
   /** Edits restored from a recovery point began from this version. */
@@ -460,6 +462,8 @@ interface EntryIdentity {
   version: string | null;
   /** The language and read it was loaded for, and a working draft's overlay. */
   place: string;
+  /** The entry and language, which a refused save's conflict is about. */
+  scope: string;
 }
 
 function entryIdentity(
@@ -475,6 +479,7 @@ function entryIdentity(
       readDraft ?? null,
       entry._isWorkingDraft === true,
     ]),
+    scope: JSON.stringify([entry.id, locale ?? null]),
   };
 }
 
@@ -623,6 +628,15 @@ function useConflictHold(
   const awaitingCurrent = useRef(false);
   const holdsRead = useCallback(
     (read: EntryData, next: EntryIdentity) => {
+      if (movedElsewhere(resetKey.current, next, pinned, awaitingCurrent)) {
+        // A read of another entry or language: the conflict was about the
+        // refused one, and holding this read would leave the form showing
+        // and saving that document's values. It goes, and the read resets
+        // the form as any other document's does.
+        awaitingCurrent.current = false;
+        release();
+        return false;
+      }
       if (awaitingCurrent.current) {
         // The read the author asked for: newer than the version the refused
         // edits began from, which are kept as a recovery point.
@@ -652,6 +666,17 @@ function useConflictHold(
     [adoptRead]
   );
   return { holdsRead, awaitCurrent, resetBy };
+}
+
+/** Whether `next` is another document than the one a conflict holds the form for. */
+function movedElsewhere(
+  last: EntryIdentity | undefined,
+  next: EntryIdentity,
+  pinned: () => boolean,
+  awaitingCurrent: RefObject<boolean>
+): boolean {
+  if (!pinned() && !awaitingCurrent.current) return false;
+  return last !== undefined && last.scope !== next.scope;
 }
 
 /**
@@ -739,33 +764,55 @@ function useConflictChoices(choices: {
     onSuccess,
   ]);
 
-  const loadCurrentVersion = useCallback(async (): Promise<void> => {
-    if (!version.pinned()) return;
-    try {
-      await version.keepEdits(
-        autosaveScopeFor("collection", collection, entry?.id),
-        form.getValues(),
-        locale
-      );
-    } catch (error) {
-      version.failed(
-        "Your edits could not be kept, so nothing was replaced. Try again."
-      );
-      throw error;
-    }
-    const current = latest.current;
-    if (!current.entry || versionOf(current.entry) === version.refusedFrom()) {
-      // The read that brings the current version is still on its way.
-      hold.awaitCurrent();
-      return;
-    }
-    resetKey.current = entryIdentity(current.entry, locale, readDraft);
-    version.release();
-    version.adoptRead(current.entry);
-    form.reset(current.defaultValues);
-  }, [version, hold, collection, entry?.id, form, locale, readDraft, resetKey]);
+  const loadCurrentVersion = useCallback(
+    async (keepEdits: boolean): Promise<void> => {
+      if (!version.pinned()) return;
+      if (keepEdits) {
+        await keepRefusedEdits(
+          version,
+          autosaveScopeFor("collection", collection, entry?.id),
+          form.getValues(),
+          locale
+        );
+      }
+      const current = latest.current;
+      if (
+        !current.entry ||
+        versionOf(current.entry) === version.refusedFrom()
+      ) {
+        // The read that brings the current version is still on its way.
+        hold.awaitCurrent();
+        return;
+      }
+      resetKey.current = entryIdentity(current.entry, locale, readDraft);
+      version.release();
+      version.adoptRead(current.entry);
+      form.reset(current.defaultValues);
+    },
+    [version, hold, collection, entry?.id, form, locale, readDraft, resetKey]
+  );
 
   return { updateMutation, saveAnyway, loadCurrentVersion };
+}
+
+/**
+ * Keep the refused edits as a recovery point that remembers the version they
+ * began from. Rejects, with the conflict saying why, when it cannot be written.
+ */
+async function keepRefusedEdits(
+  version: VersionConflictState,
+  scope: Parameters<VersionConflictState["keepEdits"]>[0],
+  values: Record<string, unknown>,
+  locale: string | undefined
+): Promise<void> {
+  try {
+    await version.keepEdits(scope, values, locale);
+  } catch (error) {
+    version.failed(
+      "Your edits could not be kept, so nothing was replaced. Try again."
+    );
+    throw error;
+  }
 }
 
 /** The version a stored row's `updatedAt` names, for recognising its echo. */

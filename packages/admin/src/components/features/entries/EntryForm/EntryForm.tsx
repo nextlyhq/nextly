@@ -751,7 +751,7 @@ export function EntryForm({
   // Load the current version with the edits kept as a recovery point, then
   // offer it: one way, for a refused save's dialog and for someone else's
   // change alike. The offer is made below, so this is filled in there.
-  const keepEditsAndLoad = useRef<() => Promise<void>>(loadCurrentVersion);
+  const keepEditsAndLoad = useRef<() => Promise<void>>(async () => {});
   // A gained entry's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -902,11 +902,6 @@ export function EntryForm({
     }),
     recovering
   );
-  // The edits were just kept as a recovery point: offer it now.
-  keepEditsAndLoad.current = async () => {
-    await loadCurrentVersion();
-    recovery.recheck();
-  };
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -1107,12 +1102,20 @@ export function EntryForm({
   // and the author's choices, over the edits it keeps. The comparison is of
   // the change that made the save stale, where the entry keeps history.
   const staleHistory = versionConflict?.stale.historyVersion;
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
+  // Load the current version, keeping the edits as a recovery point where the
+  // document keeps them and offering it then; elsewhere the edits are
+  // discarded, as the conflict said they would be. One way, for a refused
+  // save's dialog and for someone else's change alike.
+  keepEditsAndLoad.current = async () => {
+    await loadCurrentVersion(keepsRecoveryPoints);
+    if (keepsRecoveryPoints) recovery.recheck();
+  };
   const conflictDialog = (
     <VersionConflictDialog
       conflict={versionConflict}
-      keepsRecoveryPoints={
-        autosaveScope !== null && autosaveEnabledFor(collection)
-      }
+      keepsRecoveryPoints={keepsRecoveryPoints}
       compareHref={
         staleHistory && autosaveScope
           ? versionsHref(

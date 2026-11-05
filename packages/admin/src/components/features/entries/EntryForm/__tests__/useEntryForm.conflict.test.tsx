@@ -261,7 +261,7 @@ describe("a save refused because the document changed since", () => {
     const rendered = await refusedAfterAnasSave();
 
     await act(async () => {
-      await rendered.result.current.loadCurrentVersion();
+      await rendered.result.current.loadCurrentVersion(true);
     });
 
     // The edits, recoverable, remembering the version they began from.
@@ -281,12 +281,50 @@ describe("a save refused because the document changed since", () => {
     );
   });
 
+  it("load current on an entry that keeps no recovery points writes none, and shows the current version", async () => {
+    const rendered = await refusedAfterAnasSave();
+
+    await act(async () => {
+      await rendered.result.current.loadCurrentVersion(false);
+    });
+
+    // Discarded, as the conflict said they would be: the server would refuse
+    // a recovery point here, and the form would stay pinned.
+    expect(saveAutosave).not.toHaveBeenCalled();
+    expect(rendered.result.current.versionConflict).toBeNull();
+    expect(rendered.result.current.form.getValues("title")).toBe("Ana's title");
+  });
+
+  it("a read of another entry releases the conflict and shows that entry", async () => {
+    const rendered = await refusedAfterAnasSave();
+    const other = {
+      id: "e2",
+      title: "Another post",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "9",
+    };
+
+    act(() => rendered.rerender({ entry: other }));
+
+    expect(rendered.result.current.versionConflict).toBeNull();
+    expect(rendered.result.current.form.getValues("title")).toBe(
+      "Another post"
+    );
+    // And its saves start from that entry's version, not the refused one's.
+    update.mockResolvedValueOnce(answered({ ...other, _rev: "10" }));
+    await typeAndSave(rendered, "Mine on the other");
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _rev: "9" })
+    );
+  });
+
   it("load current replaces nothing when the edits could not be kept", async () => {
     saveAutosave.mockRejectedValueOnce(new Error("The server is unavailable."));
     const rendered = await refusedAfterAnasSave();
 
     await act(async () => {
-      await rendered.result.current.loadCurrentVersion().catch(() => {});
+      await rendered.result.current.loadCurrentVersion(true).catch(() => {});
     });
 
     expect(rendered.result.current.form.getValues("title")).toBe("Mine");

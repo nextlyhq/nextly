@@ -761,7 +761,17 @@ export function SingleForm({
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
     const place = JSON.stringify([document.id, locale ?? null]);
-    if (awaitingCurrent.current) {
+    if (
+      (awaitingCurrent.current || versionPinned()) &&
+      lastResetPlaceRef.current !== null &&
+      lastResetPlaceRef.current !== place
+    ) {
+      // A read of another language: the conflict was about the refused one,
+      // and holding this read would leave the form showing and saving that
+      // language's values. It goes, and the read resets the form below.
+      awaitingCurrent.current = false;
+      releaseConflict();
+    } else if (awaitingCurrent.current) {
       // The read the author asked for: newer than the version the refused
       // edits began from, which are kept as a recovery point.
       if (versionOf(document) === refusedFrom()) return;
@@ -772,8 +782,7 @@ export function SingleForm({
       adoptRead(document);
       form.reset(defaultValuesRef.current);
       return;
-    }
-    if (versionPinned()) {
+    } else if (versionPinned()) {
       // A refused save holds the form: the newer version that follows the
       // refusal must not reset the edits before the author chooses. Noted,
       // so it is not taken for a newer one once they have.
@@ -1217,28 +1226,45 @@ export function SingleForm({
   // that remembers the version they began from; only then does the form take
   // the current version. When the point cannot be written, nothing is
   // replaced and the conflict stays open.
-  const loadCurrentVersion = useCallback(async (): Promise<void> => {
-    if (!version.pinned()) return;
-    try {
-      await version.keepEdits(autosaveScope, form.getValues(), locale ?? null);
-    } catch (error) {
-      version.failed(
-        "Your edits could not be kept, so nothing was replaced. Try again."
-      );
-      throw error;
-    }
-    const current = latestDocument.current;
-    if (current && versionOf(current) !== version.refusedFrom()) {
-      lastResetKeyRef.current = singleResetKey(current, locale);
-      lastResetPlaceRef.current = JSON.stringify([current.id, locale ?? null]);
-      version.release();
-      version.adoptRead(current);
-      form.reset(defaultValuesRef.current);
-      return;
-    }
-    // The read that brings the current version is still on its way.
-    awaitingCurrent.current = true;
-  }, [version, autosaveScope, form, locale]);
+  // Whether the conflict's edits can be kept: a Single with autosave on.
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(schema);
+  // With `keepEdits` false, for a Single that keeps no recovery points, the
+  // edits are discarded, as the conflict said they would be.
+  const loadCurrentVersion = useCallback(
+    async (keepEdits: boolean): Promise<void> => {
+      if (!version.pinned()) return;
+      if (keepEdits) {
+        try {
+          await version.keepEdits(
+            autosaveScope,
+            form.getValues(),
+            locale ?? null
+          );
+        } catch (error) {
+          version.failed(
+            "Your edits could not be kept, so nothing was replaced. Try again."
+          );
+          throw error;
+        }
+      }
+      const current = latestDocument.current;
+      if (current && versionOf(current) !== version.refusedFrom()) {
+        lastResetKeyRef.current = singleResetKey(current, locale);
+        lastResetPlaceRef.current = JSON.stringify([
+          current.id,
+          locale ?? null,
+        ]);
+        version.release();
+        version.adoptRead(current);
+        form.reset(defaultValuesRef.current);
+        return;
+      }
+      // The read that brings the current version is still on its way.
+      awaitingCurrent.current = true;
+    },
+    [version, autosaveScope, form, locale]
+  );
 
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -1464,10 +1490,13 @@ export function SingleForm({
     }),
     recovering
   );
-  // The edits were just kept as a recovery point: offer it now.
+  // Load the current version, keeping the edits as a recovery point where the
+  // document keeps them and offering it then; elsewhere the edits are
+  // discarded, as the conflict said they would be. One way, for a refused
+  // save's dialog and for someone else's change alike.
   keepEditsAndLoad.current = async () => {
-    await loadCurrentVersion();
-    recovery.recheck();
+    await loadCurrentVersion(keepsRecoveryPoints);
+    if (keepsRecoveryPoints) recovery.recheck();
   };
 
   /*
@@ -1845,9 +1874,7 @@ export function SingleForm({
             and when, and the author's choices, over the edits it keeps. */}
         <VersionConflictDialog
           conflict={version.conflict}
-          keepsRecoveryPoints={
-            autosaveScope !== null && autosaveEnabledFor(schema)
-          }
+          keepsRecoveryPoints={keepsRecoveryPoints}
           compareHref={
             version.conflict?.stale.historyVersion && autosaveScope
               ? versionsHref(

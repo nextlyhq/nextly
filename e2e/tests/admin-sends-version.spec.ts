@@ -161,7 +161,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     await expect(row).toBeVisible({ timeout: 30_000 });
     await row.getByRole("checkbox", { name: "Select row" }).click();
     sent = nextWrite(page, r => r.url().includes(`${POSTS}/bulk-update`));
-    await page.getByRole("button", { name: "Publish selected" }).click();
+    await page
+      .getByRole("button", { name: "Publish selected", exact: true })
+      .click();
     await sent;
 
     // Six writes, every one carrying a version.
