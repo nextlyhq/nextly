@@ -417,6 +417,7 @@ export function EntryForm({
     adoptRecoveredVersion,
     holdForVersionChange,
     releaseVersionHold,
+    stopAwaitingCurrentVersion,
   } = useEntryForm({
     collection,
     entry,
@@ -1136,6 +1137,7 @@ export function EntryForm({
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
+  lock.now.stopLoadingCurrent = stopAwaitingCurrentVersion;
   const conflictDialog = (
     <VersionConflictDialog
       conflict={versionConflict}
