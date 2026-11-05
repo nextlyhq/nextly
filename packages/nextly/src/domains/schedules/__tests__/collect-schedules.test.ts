@@ -361,6 +361,29 @@ describe("collecting plugin schedules", () => {
     expect(notices[4]).toContain("slug");
   });
 
+  it("an earlier-shape schedule whose job the plugin already declares is not run, and the start goes on", () => {
+    const taken = defineJob({
+      slug: "@acme/plugin:schedule:acme.taken",
+      handler: async () => {},
+    });
+    const earlierTask = {
+      name: "acme.taken",
+      schedule: "@daily",
+      handler: () => {},
+    };
+    const p = plugin([earlierTask], {
+      contributes: {
+        jobs: [tick, taken],
+        schedules: [earlierTask],
+      },
+    });
+    const { schedules, jobs, notices } = earlier(p);
+    expect(schedules).toEqual([]);
+    expect(jobs).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("declared already");
+  });
+
   it("an earlier-shape schedule whose slug another of the plugin's schedules has is not run, and the start goes on", () => {
     const p = plugin([
       { slug: "acme.twice", cron: "@daily", job: "acme:tick" },
