@@ -61,34 +61,17 @@ export interface VersionConflictState {
   /** The copy was replaced by `doc`, as read. */
   adoptRead: (doc: unknown) => void;
   /**
-   * Called as a write starts: what to do with the item its answer stores. The
-   * answer moves the copy's version only while the copy the write was made
-   * from is still the one on screen; a read that replaced it since, of
-   * another entry or language, holds that document's own version.
+   * Called as a write starts: what its outcomes do. Each applies only while
+   * the copy the write was made from is still the one on screen; a read that
+   * replaced it since, of another entry or language, holds that document's
+   * own version, and a refusal of the earlier write is not about it.
    */
-  answerFor: () => (item: unknown) => void;
+  writeFor: () => VersionWrite;
   /**
    * Edits restored from a recovery point now hold the form: the version they
    * began from, or the one on screen for a point saved before versions.
    */
   adoptRecovered: (startedFrom: string | undefined) => void;
-  /**
-   * Pin the form when `error` refuses `payload` because the document changed
-   * since; answers whether it did.
-   */
-  refused: (
-    error: unknown,
-    payload: Record<string, unknown>,
-    shown?: Record<string, unknown>
-  ) => boolean;
-  /**
-   * A rejection handler for a write of `payload`: pins the form, as
-   * `refused` does, then rejects with the same error.
-   */
-  refusedThen: (
-    payload: Record<string, unknown>,
-    shown?: Record<string, unknown>
-  ) => (error: unknown) => never;
   /** The form values the refused write was made from, while pinned. */
   refusedValues: () => Record<string, unknown> | undefined;
   /**
@@ -129,6 +112,30 @@ function withStartingVersion<T extends Record<string, unknown>>(
     : { ...payload, [DOCUMENT_VERSION_KEY]: version };
 }
 
+/** One write's outcomes, bound to the copy it was made from; see `writeFor`. */
+export interface VersionWrite {
+  /** The write's answer stored `item`: its version is the copy's now. */
+  answered: (item: unknown) => void;
+  /**
+   * Pin the form when `error` refuses `payload` because the document changed
+   * since; answers whether it did. `shown` is the form values the write was
+   * made from, where the form keeps values the write does not carry as is.
+   */
+  refused: (
+    error: unknown,
+    payload: Record<string, unknown>,
+    shown?: Record<string, unknown>
+  ) => boolean;
+  /**
+   * A rejection handler for a write of `payload`: pins the form, as
+   * `refused` does, then rejects with the same error.
+   */
+  refusedThen: (
+    payload: Record<string, unknown>,
+    shown?: Record<string, unknown>
+  ) => (error: unknown) => never;
+}
+
 /** What a form's version holds across renders: its copy's, and a refused save. */
 interface Tracked {
   startedFrom: string | undefined;
@@ -155,10 +162,23 @@ function adoptRead(tracked: Tracked, doc: unknown): void {
   tracked.copy += 1;
 }
 
-function answerFor(tracked: Tracked): (item: unknown) => void {
+function writeFor(tracked: Tracked): VersionWrite {
   const copy = tracked.copy;
-  return item => {
-    if (tracked.copy === copy) adoptAnswered(tracked, item);
+  const shownStill = () => tracked.copy === copy;
+  const refused = (
+    error: unknown,
+    payload: Record<string, unknown>,
+    shown?: Record<string, unknown>
+  ) => shownStill() && pinRefusal(tracked, error, payload, shown);
+  return {
+    answered: item => {
+      if (shownStill()) adoptAnswered(tracked, item);
+    },
+    refused,
+    refusedThen: (payload, shown) => (error: unknown) => {
+      refused(error, payload, shown);
+      throw error;
+    },
   };
 }
 
@@ -179,16 +199,6 @@ function pinRefusal(
   };
   tracked.setConflict({ stale });
   return true;
-}
-
-function pinThenReject(
-  tracked: Tracked,
-  payload: Record<string, unknown>,
-  shown: Record<string, unknown> | undefined,
-  error: unknown
-): never {
-  pinRefusal(tracked, error, payload, shown);
-  throw error;
 }
 
 function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
@@ -246,13 +256,9 @@ function actionsOver(tracked: Tracked): Omit<VersionConflictState, "conflict"> {
     withVersion: <T extends Record<string, unknown>>(payload: T): T =>
       withStartingVersion(payload, tracked.startedFrom),
     adoptRead: (doc: unknown) => adoptRead(tracked, doc),
-    answerFor: () => answerFor(tracked),
+    writeFor: () => writeFor(tracked),
     adoptRecovered: (recovered: string | undefined) =>
       adoptRecovered(tracked, recovered),
-    refused: (error, payload, shown) =>
-      pinRefusal(tracked, error, payload, shown),
-    refusedThen: (payload, shown) => (error: unknown) =>
-      pinThenReject(tracked, payload, shown, error),
     refusedValues: () => tracked.pin?.shown,
     holdForChange: (stale: StaleVersion) => holdForChange(tracked, stale),
     overwrite: () => overwriteOf(tracked),

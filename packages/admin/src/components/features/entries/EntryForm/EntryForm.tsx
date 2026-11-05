@@ -795,7 +795,6 @@ export function EntryForm({
       hold: holdForVersionChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
-      adopt: adoptRecoveredVersion,
       keepsEdits: () => keepsRecoveryPointsNow.current,
       release: releaseVersionHold,
     }

@@ -251,6 +251,48 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("does not pin a refusal that arrives once the form shows another entry", async () => {
+    // The refusal is about the first entry: pinned on the second, Save anyway
+    // would write the first's values over the second.
+    let refuseFirst: (reason: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuseFirst = reject;
+        })
+    );
+    const rendered = render({ ...stored, _rev: "5" });
+    act(() => {
+      rendered.result.current.form.setValue("title", "First's edit", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    const second = {
+      id: "e2",
+      title: "Second",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "5",
+    };
+    act(() => rendered.rerender({ entry: second }));
+    await act(async () => {
+      refuseFirst(staleVersion());
+      await saving.catch(() => {});
+    });
+
+    expect(rendered.result.current.versionConflict).toBeNull();
+    await act(async () => {
+      await rendered.result.current.saveAnyway();
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it("moves to a newer version a read brings while nothing is pinned", async () => {
     const rendered = render();
     act(() => rendered.rerender({ entry: anas }));

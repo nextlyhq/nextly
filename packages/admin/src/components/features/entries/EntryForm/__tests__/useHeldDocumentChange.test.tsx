@@ -57,7 +57,6 @@ function setup(
     hold: vi.fn(() => void calls.push("hold")),
     loadCurrent: vi.fn(async () => void calls.push("loadCurrent")),
     reload: vi.fn(async () => void calls.push("reload")),
-    adopt: vi.fn((version: string) => void calls.push(`adopt ${version}`)),
     keepsEdits: () => true,
     release: vi.fn(() => void calls.push("release")),
     ...overrides,
@@ -121,7 +120,7 @@ describe("someone else's change to a document this editor holds", () => {
     await waitFor(() => expect(result.current.notice).not.toBeNull());
 
     await act(async () => result.current.choose("load-current"));
-    expect(calls).toEqual(["hold", "loadCurrent", "reload", "adopt 2"]);
+    expect(calls).toEqual(["hold", "loadCurrent", "reload"]);
     expect(options.loadCurrent).toHaveBeenCalledTimes(1);
     expect(result.current.notice).toBeNull();
     expect(result.current.holding).toBe(false);
@@ -156,7 +155,7 @@ describe("someone else's change to a document this editor holds", () => {
 
     await act(async () => kept.resolve());
     await waitFor(() => expect(result.current.holding).toBe(false));
-    expect(calls).toEqual(["hold", "loadCurrent", "reload", "adopt 2"]);
+    expect(calls).toEqual(["hold", "loadCurrent", "reload"]);
     expect(result.current.notice?.message).toMatch(
       /^Ana changed this document at .+ while you were away\. It now shows the latest version, and your unsaved edits are kept as a recovery point\.$/
     );
@@ -199,9 +198,8 @@ describe("someone else's change to a document this editor holds", () => {
       )
     );
     // Still the older copy: held, so a save from it is refused, not written
-    // over the change, and the told version is not adopted.
+    // over the change.
     expect(options.hold).toHaveBeenCalledWith(notice().change);
-    expect(options.adopt).not.toHaveBeenCalled();
     expect(result.current.notice?.choices).toEqual([
       { choice: "try-again", label: "Try again" },
     ]);
@@ -211,7 +209,7 @@ describe("someone else's change to a document this editor holds", () => {
     calls.length = 0;
     await act(async () => result.current.choose("try-again"));
     // The failed try's hold is let go before the read, or the form would turn
-    // the read away while the told version was taken as the copy's.
+    // the read away.
     await waitFor(() => expect(calls).toContain("reload"));
     expect(calls.indexOf("release")).toBeGreaterThan(-1);
     expect(calls.indexOf("release")).toBeLessThan(calls.indexOf("reload"));
@@ -220,17 +218,16 @@ describe("someone else's change to a document this editor holds", () => {
         /so it now shows the latest version\.$/
       )
     );
-    expect(options.adopt).toHaveBeenCalledWith("2");
   });
 
-  it("takes the told version as the copy's once the latest version has loaded", async () => {
-    // A read can land the same `updatedAt` when a pending change moved the
-    // version and not the row: the copy is still the version the change named.
-    const { calls, tell } = setup(false);
+  it("leaves the copy's version to the read it applies, never to the change told", async () => {
+    // 🔴 The read answers a render before its values reach the form. Marked
+    // current over the older values, the copy would let a save in that moment
+    // write them over the change, accepted; left on its version, it is refused.
+    const { calls, options, tell } = setup(false);
     tell(notice());
-    await waitFor(() =>
-      expect(calls).toEqual(["release", "reload", "adopt 2"])
-    );
+    await waitFor(() => expect(calls).toEqual(["release", "reload"]));
+    expect(options).not.toHaveProperty("adopt");
   });
 
   it("says the edits could not be kept, replaces nothing, and offers it again", async () => {

@@ -913,7 +913,6 @@ export function SingleForm({
       hold: version.holdForChange,
       loadCurrent: () => keepEditsAndLoad.current(),
       latest,
-      adopt: version.adoptRecovered,
       keepsEdits: () => keepsRecoveryPointsNow.current,
       release: version.release,
     }
@@ -1057,15 +1056,15 @@ export function SingleForm({
     async (status: "published" | "draft"): Promise<SubmitOutcome> => {
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
+      const write = version.writeFor();
       try {
-        const adopt = version.answerFor();
         const stored = await onSubmit(version.withVersion({ status })).catch(
           (error: unknown) => {
-            version.refused(error, { status });
+            write.refused(error, { status });
             throw error;
           }
         );
-        adoptSaved(stored, adopt);
+        adoptSaved(stored, item => write.answered(item));
         return { ok: true, item: { id: document.id } };
       } catch (error) {
         return submitFailed(error);
@@ -1143,7 +1142,7 @@ export function SingleForm({
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
             const payload = withoutPlaceholders(schema.fields, data);
-            const adopt = version.answerFor();
+            const write = version.writeFor();
             const stored = await onSubmit(
               version.withVersion(payload),
               refusedForm
@@ -1151,13 +1150,13 @@ export function SingleForm({
               .catch((error: unknown) => {
                 // A save made from an older version holds the edits on
                 // screen and opens the conflict; the failure is still told.
-                version.refused(error, payload, data);
+                write.refused(error, payload, data);
                 throw error;
               })
               .finally(() => {
                 ownSave.current.inFlight = false;
               });
-            if (stored) adopt(stored);
+            if (stored) write.answered(stored);
             // Saved, so the copy is the current version: nothing a change
             // told before still holds it.
             version.release();
@@ -1231,10 +1230,10 @@ export function SingleForm({
     const sent = version.refusedValues();
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
-    const adopt = version.answerFor();
+    const write = version.writeFor();
     try {
       const stored = await onSubmit(payload, refusedForm);
-      adoptSaved(stored, adopt);
+      adoptSaved(stored, item => write.answered(item));
       if (sent !== undefined) {
         form.reset(
           stored && !holdsPlaceholders(schema.fields, sent)

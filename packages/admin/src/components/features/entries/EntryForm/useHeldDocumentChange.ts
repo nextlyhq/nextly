@@ -61,12 +61,6 @@ export interface HeldDocumentChangeOptions {
   keepsEdits: () => boolean;
   /** Let go of a hold the form no longer needs: nothing unsaved is left to keep. */
   release: () => void;
-  /**
-   * The form's copy is now the version the change named: what its next save
-   * sends. A read that lands the same `updatedAt` (a pending change moved the
-   * version, not the row) would otherwise leave the copy on the old one.
-   */
-  adopt: (version: string) => void;
 }
 
 export interface HeldDocumentChange {
@@ -121,7 +115,6 @@ export function useHeldDocumentChange({
   hold,
   loadCurrent,
   reload,
-  adopt,
   keepsEdits,
   release,
 }: HeldDocumentChangeOptions): HeldDocumentChange {
@@ -134,7 +127,6 @@ export function useHeldDocumentChange({
     hold,
     loadCurrent,
     reload,
-    adopt,
     keepsEdits,
     release,
   });
@@ -143,7 +135,6 @@ export function useHeldDocumentChange({
     hold,
     loadCurrent,
     reload,
-    adopt,
     keepsEdits,
     release,
   };
@@ -176,11 +167,15 @@ export function useHeldDocumentChange({
     []
   );
 
-  /** Read the current version into the form, which then carries its version. */
+  /**
+   * Read the current version into the form. 🔴 Its version is taken from that
+   * read as the form applies it, never from the change told: the read answers
+   * a render before its values reach the form, and a copy marked current over
+   * the older values would let a save in that moment write them, accepted, over
+   * the change. Left on its version, such a save is refused instead.
+   */
   const reloadCurrent = useCallback(async (): Promise<void> => {
     await pieces.current.reload();
-    const told = answering.current?.change.currentVersion;
-    if (told) pieces.current.adopt(told);
   }, []);
 
   /**
@@ -364,8 +359,6 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     loadCurrent: () => Promise<void>;
     /** The reads that feed the form; absent, nothing is read again. */
     latest: DocumentLatest | undefined;
-    /** The form's copy is now this version. */
-    adopt: (version: string) => void;
     /** Whether the document keeps recovery points. */
     keepsEdits: () => boolean;
     /** Let go of a hold nothing unsaved needs any more. */
@@ -379,7 +372,6 @@ export function useLockWithHeldChange<T extends DocumentLockAffordances>(
     hold: editor.hold,
     loadCurrent: editor.loadCurrent,
     reload: () => editor.latest?.reload() ?? Promise.resolve(),
-    adopt: editor.adopt,
     keepsEdits: editor.keepsEdits,
     release: editor.release,
   });

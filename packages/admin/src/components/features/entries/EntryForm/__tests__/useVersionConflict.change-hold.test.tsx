@@ -37,7 +37,7 @@ describe("a form held on someone else's change", () => {
   it("still offers a refused save's own write, and says its failure in the dialog", () => {
     const { result } = renderHook(() => useVersionConflict());
     act(() => {
-      result.current.refused(refusal, { title: "Mine", _rev: "3" });
+      result.current.writeFor().refused(refusal, { title: "Mine", _rev: "3" });
     });
 
     expect(result.current.overwrite()).toMatchObject({
