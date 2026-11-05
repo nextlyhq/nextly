@@ -289,6 +289,41 @@ describe("generateMigration — localized companion emission", () => {
       expect(t.localized).toBeUndefined();
     });
 
+    // The companion a disable drops belonged to a translated entity, so on a Draft/Published one
+    // it held each language's `_status`; rolling the disable back must lay it out again.
+    it("rolls a Draft/Published disable back to a companion with its per-language status", async () => {
+      await generateMigration({
+        name: "create_pages_localized",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [{ ...localizedPages, status: true }],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-07-08T12:00:00.000Z"),
+      });
+      await generateMigration({
+        name: "disable_pages_localization",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [{ ...plainPages, status: true }],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+      const disableFile = (await listSqlFiles(migrationsDir)).find(f =>
+        f.includes("disable_localization_pages")
+      );
+      expect(disableFile).toBeDefined();
+      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
+      const down = sql.slice(sql.indexOf("-- DOWN"));
+      expect(down).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
+      expect(down).toContain(`"_status"`);
+    });
+
     it("emits a disable companion: restore default → archive others → drop", async () => {
       await seedLocalized();
 

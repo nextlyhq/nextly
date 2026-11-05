@@ -9,9 +9,14 @@ import {
   orderedMigrations,
 } from "../domains/schema/migrate/plugin/plugin-migration";
 import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
+import {
+  collectPluginWebhookEventTypes,
+  publishWebhookEventTypes,
+} from "../domains/webhooks/event-type-registry";
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -160,11 +165,23 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // every emit — the per-plugin bus lets a plugin speak neither for core nor
   // for another plugin. Refused here, the mistake is named at boot.
   assertPluginEventNames(plugins);
+  // Webhook event types, checked and published as hook points are: a type
+  // outside the plugin's namespace, one of core's or one declared twice would
+  // otherwise be offered to subscribers as an event nothing may send. The
+  // published list is the one every subscription and the admin's form read.
+  publishWebhookEventTypes(collectPluginWebhookEventTypes(plugins));
   // A settings permission with no settings behind it guards nothing, and
   // reads as though the plugin's credentials were kept to a narrower role.
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
+  collectAdminPlaces(plugins);
 }
 
 /**

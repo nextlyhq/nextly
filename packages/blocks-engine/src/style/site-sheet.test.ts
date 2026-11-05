@@ -35,12 +35,15 @@ const WIDTH_TOKEN = {
 } as never;
 
 const sheet = (over: Record<string, unknown> = {}) =>
-  compileSiteSheet({
-    breakpoints: FIXTURE_BREAKPOINTS,
-    classes: [card],
-    blockBases: { "core/box": styles({ color: "green" }) },
-    ...over,
-  });
+  compileSiteSheet(
+    {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      classes: [card],
+      blockBases: { "core/box": styles({ color: "green" }) },
+      ...over,
+    },
+    {}
+  );
 
 describe("what the shared sheet carries", () => {
   it("emits every block type's default, not only the ones a page uses", () => {
@@ -317,11 +320,14 @@ describe("the bytes agree with what a page would have inlined", () => {
   it("emits the class tier exactly as the page compiler does", () => {
     // The guarantee that lets a site share these tiers instead of every page repeating them. It
     // holds because the same emitter produces both, and this is what would catch a second one.
-    const shared = compileSiteSheet({
-      breakpoints: FIXTURE_BREAKPOINTS,
-      classes: [card],
-      blockBases: {},
-    });
+    const shared = compileSiteSheet(
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        classes: [card],
+        blockBases: {},
+      },
+      {}
+    );
     const asAPageWouldEmitIt = compilePageCss(
       {
         formatVersion: 1,
@@ -375,7 +381,7 @@ describe("the name the sheet is addressed by", () => {
   });
 
   it("names an empty sheet without failing", () => {
-    const empty = compileSiteSheet({ breakpoints: FIXTURE_BREAKPOINTS });
+    const empty = compileSiteSheet({ breakpoints: FIXTURE_BREAKPOINTS }, {});
 
     expect(empty.css).toBe("");
     expect(empty.contentHash.length).toBeGreaterThan(0);
@@ -410,24 +416,27 @@ describe("what the sheet declines to write", () => {
     // The two halves read the prefix from different places. Set one and not the other and the
     // sheet declares `--site-color-primary` while the page asks for `var(--brand-color-primary)`:
     // nothing errors, the reference resolves to nothing, and the colour silently does not apply.
-    const { css } = compileSiteSheet({
-      breakpoints: FIXTURE_BREAKPOINTS,
-      tokenPrefix: "--brand-",
-      tokens: {
-        tokens: [
-          {
-            name: "color.primary",
-            kind: "color" as const,
-            values: { light: "#123456" },
-          },
-        ],
+    const { css } = compileSiteSheet(
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        tokenPrefix: "--brand-",
+        tokens: {
+          tokens: [
+            {
+              name: "color.primary",
+              kind: "color" as const,
+              values: { light: "#123456" },
+            },
+          ],
+        },
+        blockBases: {
+          "core/box": {
+            base: { base: { color: { $token: "color.primary" } } },
+          } as unknown as NodeStyles,
+        },
       },
-      blockBases: {
-        "core/box": {
-          base: { base: { color: { $token: "color.primary" } } },
-        } as unknown as NodeStyles,
-      },
-    });
+      {}
+    );
 
     expect(css).toContain("--brand-color-primary:#123456");
     expect(css).toContain("var(--brand-color-primary)");
@@ -435,24 +444,27 @@ describe("what the sheet declines to write", () => {
   });
 
   it("takes the prefix from the token set when no override is given", () => {
-    const { css } = compileSiteSheet({
-      breakpoints: FIXTURE_BREAKPOINTS,
-      tokens: {
-        prefix: "--brand-",
-        tokens: [
-          {
-            name: "color.primary",
-            kind: "color" as const,
-            values: { light: "#123456" },
-          },
-        ],
+    const { css } = compileSiteSheet(
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        tokens: {
+          prefix: "--brand-",
+          tokens: [
+            {
+              name: "color.primary",
+              kind: "color" as const,
+              values: { light: "#123456" },
+            },
+          ],
+        },
+        blockBases: {
+          "core/box": {
+            base: { base: { color: { $token: "color.primary" } } },
+          } as unknown as NodeStyles,
+        },
       },
-      blockBases: {
-        "core/box": {
-          base: { base: { color: { $token: "color.primary" } } },
-        } as unknown as NodeStyles,
-      },
-    });
+      {}
+    );
 
     expect(css).toContain("--brand-color-primary:#123456");
     expect(css).toContain("var(--brand-color-primary)");

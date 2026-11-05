@@ -2473,6 +2473,42 @@ function parseReleaseRoutes(
 }
 
 /**
+ * A reserved path under `/webhooks`: an operation's name, not an endpoint id.
+ * Endpoint ids are generated UUIDs and cannot collide with one.
+ */
+function parseReservedWebhookPath(
+  path: "event-types" | "drain",
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // GET /api/webhooks/event-types → the event types an endpoint may subscribe
+  // to.
+  if (path === "event-types") {
+    if (httpMethod !== "GET") return null;
+    return {
+      service: "webhooks",
+      operation: "list",
+      method: "listWebhookEventTypes",
+      routeParams,
+    };
+  }
+  // GET or POST /api/webhooks/drain → run one drain pass. GET is accepted
+  // because Vercel Cron triggers with a GET; the drain is idempotent, and the
+  // route is authorized regardless of method.
+  if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+  // A drain is not a CRUD OperationType, but the dispatch guard rejects a
+  // route with no operation before the direct-dispatch webhooks branch runs;
+  // a truthy value is required. The webhook handler dispatches on `method` and
+  // does its own authorization, so this value is otherwise unused.
+  return {
+    service: "webhooks",
+    operation: "single",
+    method: "drainWebhooks",
+    routeParams,
+  };
+}
+
+/**
  * GET /api/jobs → list the most recently touched jobs.
  * GET or POST /api/jobs/run → run one background job pass.
  *
@@ -2632,24 +2668,10 @@ function parseWebhookRoutes(
     };
   }
 
-  // GET or POST /api/webhooks/drain → run one drain pass. "drain" is a reserved
-  // operation path, not an endpoint id: endpoint ids are generated UUIDs and
-  // cannot collide with it. GET is accepted because Vercel Cron triggers with a
-  // GET; the drain is idempotent, and the route is authorized regardless of
-  // method. Matched before the generic `GET /webhooks/:id` branch so `drain` is
-  // never treated as an endpoint id.
-  if (id === "drain" && !subresource) {
-    if (httpMethod !== "POST" && httpMethod !== "GET") return null;
-    // A drain is not a CRUD OperationType, but the dispatch guard rejects a
-    // route with no operation before the direct-dispatch webhooks branch runs;
-    // a truthy value is required. The webhook handler dispatches on `method` and
-    // does its own authorization, so this value is otherwise unused.
-    return {
-      service: "webhooks",
-      operation: "single",
-      method: "drainWebhooks",
-      routeParams,
-    };
+  // The reserved paths under `/webhooks`, matched before `GET /webhooks/:id`
+  // so neither is read as an endpoint id.
+  if (!subresource && (id === "event-types" || id === "drain")) {
+    return parseReservedWebhookPath(id, httpMethod, routeParams);
   }
 
   if (id && subresource === "secret") {

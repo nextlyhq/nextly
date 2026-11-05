@@ -18,7 +18,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /** The device a row's eye acts on: the site's breakpoints and the one edited. */
 export interface EyeDevice {
