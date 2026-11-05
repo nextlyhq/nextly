@@ -30,3 +30,5 @@
 ---
 
 Publishing now waits for the publish question to be about the draft being stored. An edit made while the question was being asked, such as choosing another Layout on the form, is asked about too, so a page no longer goes live with unpublished parts nobody was told about. A draft that keeps changing while it is checked is not published, and the author is asked to publish again once they've finished editing.
+
+A before-action handler can now give the store a check to make immediately before it writes, after every other handler and tracked write (`store.checkBeforeWrite`, experimental). A check that finds the work changed runs every handler again, so a question answered about the work is answered about the work as stored.

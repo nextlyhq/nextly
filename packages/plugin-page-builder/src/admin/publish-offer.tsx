@@ -121,8 +121,7 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
 
   /**
    * Put the question, when the answer calls for one: the author's choice, or
-   * null when there was nothing to ask. The question stays open after a
-   * choice, until the handler is done with it.
+   * null when there was nothing to ask.
    */
   const ask = async (
     readiness: PublishReadinessResponse | null
@@ -136,8 +135,8 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     const choice = await new Promise<PublishChoice>(answer => {
       setQuestion({ readiness, answer });
     });
+    setQuestion(null);
     if (choice.kind === "cancel") {
-      setQuestion(null);
       throw new DOMException("Publishing was cancelled.", "AbortError");
     }
     return choice;
@@ -148,36 +147,33 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     const { subject, enabled } = latest.current;
     if (enabled === false) return;
     // The form stays editable while the server answers, and the store writes
-    // the draft as it is when the handlers are done: an edit made meanwhile
-    // was not asked about, so the draft is asked about again until the answer
-    // is about the one stored.
+    // the draft as it is when it writes: an edit made meanwhile was not asked
+    // about, so the draft is asked about again until the answer is about the
+    // one stored.
     for (let asked = 0; asked < MAX_ASKS; asked++) {
       const request = readinessRequest(latest.current);
       const askedAbout = JSON.stringify(request);
+      const unchanged = () =>
+        JSON.stringify(readinessRequest(latest.current)) === askedAbout;
       const readiness = await askReadiness(request);
+      // An answer about a draft since edited is not put to the author.
+      if (!unchanged()) continue;
       const choice = await ask(readiness);
-      try {
-        // The writes the store waits for next are waited for here, so nothing
-        // is awaited between the draft compared below and the one stored.
-        // Nothing goes live for a store a failed write will refuse: the page
-        // would stay as it was while its parts went live without it.
-        if (!(await store.writesSettled())) return;
-        // Compared before any part is published, so a draft asked about again,
-        // or refused, has put nothing live without its page.
-        if (JSON.stringify(readinessRequest(latest.current)) !== askedAbout) {
-          continue;
-        }
-        if (choice?.kind === "with" && readiness !== null) {
-          const result = await publishChosen(choice.dependencies);
-          reportLeftUnpublished(result, readiness, subject);
-        }
-        return;
-      } finally {
-        // Closed only now: while it is open the form behind it can't be
-        // edited, so the draft compared above is the one the parts go live
-        // with.
-        setQuestion(null);
+      // Nothing goes live for a store a failed write will refuse: the page
+      // would stay as it was while its parts went live without it.
+      if (!(await store.writesSettled())) return;
+      // Compared before any part is published, so a draft asked about again,
+      // or refused, has put nothing live without its page.
+      if (!unchanged()) continue;
+      if (choice?.kind === "with" && readiness !== null) {
+        const result = await publishChosen(choice.dependencies);
+        reportLeftUnpublished(result, readiness, subject);
       }
+      // Made again just before the write, after the handlers that run after
+      // this one and the writes the store waits for: a change in that time
+      // runs this again, about the draft as it is.
+      store.checkBeforeWrite(unchanged);
+      return;
     }
     throw new Error(
       `This ${subject} kept changing while it was checked, so it wasn't published. Publish again once you've finished editing.`
