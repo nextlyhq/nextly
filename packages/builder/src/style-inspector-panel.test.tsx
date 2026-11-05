@@ -777,6 +777,42 @@ describe("the shared style target", () => {
       );
     });
 
+    const filled = {
+      ...outline,
+      id: "look:acme/box:filled",
+      slug: "box-filled",
+      label: "Filled",
+      orderIndex: 1,
+    };
+
+    it("names the look the canvas applies when the block lists two", () => {
+      // Written in library order, Filled is the one drawn, so the bar's line
+      // and its action are about Filled, whatever order the block lists them.
+      mountTarget({
+        classes: [filled.id, outline.id],
+        library: [card, outline, filled],
+      });
+      expect(
+        within(bar()).getByRole("button", {
+          name: "Edit Filled for every box that uses it",
+        })
+      ).toBeDefined();
+    });
+
+    it("takes a look the library hides off when another is chosen", () => {
+      // A site's own style holds Outline's name, so Outline is not offered;
+      // the block still lists it, and choosing Filled must leave it behind.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Filled/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: { classes: [filled.id] } },
+      ]);
+    });
+
     it("keeps Apply on offer while the block wears only a look", () => {
       mountTarget({ classes: [outline.id], library: [card, outline] });
       expect(

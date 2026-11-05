@@ -1,4 +1,5 @@
 import {
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   type NamedClass,
   type NodeStyles,
@@ -99,6 +100,16 @@ describe("wearing a look", () => {
     const looks = [outline, secondary];
     expect(wornLook([card.id, outline.id], looks)).toBe(outline.id);
     expect(wornLook([card.id], looks)).toBe(null);
+  });
+
+  it("ignores a look listed past the classes the engine reads", () => {
+    // Past the per-node cap a reference is never applied, so the block wears
+    // its own look, and choosing a tile is not taken as already done.
+    const filler = Array.from(
+      { length: MAX_CLASSES_PER_NODE },
+      (_, index) => `c-${index}`
+    );
+    expect(wornLook([...filler, outline.id], [outline, secondary])).toBeNull();
   });
 
   it("is the look that wins, when a block lists more than one", () => {

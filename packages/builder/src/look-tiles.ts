@@ -11,6 +11,7 @@
  */
 
 import {
+  MAX_CLASSES_PER_NODE,
   isLook,
   isPlainRecord,
   isTokenRef,
@@ -50,6 +51,20 @@ export function looksOfType(
 }
 
 /**
+ * Every look bound to this block type, offered or not: what choosing a tile
+ * takes off, so a look a site's style hides now cannot return beside the
+ * chosen one when that style goes.
+ */
+export function boundLooksOf(
+  library: readonly NamedClass[],
+  blockType: string
+): NamedClass[] {
+  return library.filter(
+    entry => isLook(entry) && entry.blockType === blockType
+  );
+}
+
+/**
  * The tiles for a block: its own look first, named as its definition names
  * it, then its type's looks. No tiles when the type has no looks: a row of
  * one tile would offer a choice that isn't there.
@@ -80,7 +95,9 @@ export function wornLook(
   classes: readonly string[] | undefined,
   looks: readonly NamedClass[]
 ): string | null {
-  const listed = new Set(classes ?? []);
+  // Only the references the engine reads: past the per-node cap, a look is
+  // listed but never applied.
+  const listed = new Set((classes ?? []).slice(0, MAX_CLASSES_PER_NODE));
   const worn = looks.filter(look => listed.has(look.id));
   return worn.at(-1)?.id ?? null;
 }

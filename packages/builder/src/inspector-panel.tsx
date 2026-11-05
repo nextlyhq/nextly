@@ -97,6 +97,7 @@ import {
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
+import { useCanvasTokenModeAt } from "./prefers-dark";
 import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
@@ -983,6 +984,9 @@ function StyleTab({
     shared.classLibrary,
     shared.sharedStyles
   );
+  // The mode the selected block is drawn in, read once for the look tiles and
+  // the controls below, so the canvas is watched by one subscription.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
   return (
     <>
       {/*
@@ -994,6 +998,7 @@ function StyleTab({
       <StyleTargetBar
         editor={editor}
         tokens={tokens}
+        tokenMode={tokenMode}
         target={target}
         onChoose={choose}
         held={held}
@@ -1017,6 +1022,7 @@ function StyleTab({
       >
         <StyleInspectorPanel
           editor={editor}
+          tokenMode={tokenMode}
           // The block card above says why a held block can't be changed.
           showReadOnlyReason={false}
           renderedTag={renderedTag}

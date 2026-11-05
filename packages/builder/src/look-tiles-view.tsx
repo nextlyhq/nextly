@@ -11,12 +11,14 @@ import {
   getBlock,
   type NamedClass,
   type SiteTokenSet,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Check } from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import {
+  boundLooksOf,
   lookTiles,
   lookTileStyle,
   looksOfType,
@@ -24,7 +26,6 @@ import {
   wornLook,
   type LookTile,
 } from "./look-tiles";
-import { useCanvasTokenModeAt } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 
 export interface LookTilesProps {
@@ -33,6 +34,8 @@ export interface LookTilesProps {
   /** Why the block's design is held, when it is: the tiles are held too. */
   readonly held: string | undefined;
   readonly tokens: SiteTokenSet | undefined;
+  /** The mode the selected block is drawn in, which each tile draws in. */
+  readonly mode: TokenMode;
   /** Says why a chosen look was not applied, through the shell's notices. */
   readonly onRefused: (reason: string) => void;
 }
@@ -78,12 +81,12 @@ export function LookTiles({
   library,
   held,
   tokens,
+  mode,
   onRefused,
 }: LookTilesProps): React.JSX.Element | null {
   const nodeId = editor.selectedId;
   const node =
     nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
-  const mode = useCanvasTokenModeAt(nodeId);
   const labelId = React.useId();
   const tiles =
     node === undefined || library === undefined
@@ -94,13 +97,17 @@ export function LookTiles({
   }
   const looks = looksOfType(library, node.type);
   const worn = wornLook(node.classes, looks);
+  // Every look of the type comes off when another is chosen, those the
+  // library no longer offers included, so none is left to return later.
+  const removable = boundLooksOf(library, node.type);
   const base = getBlock(node.type)?.baseStyles;
   const choose = (tile: LookTile): void => {
     if (held !== undefined || tile.id === worn) return;
     // A page at its limits takes nothing, and the radio stays where it was:
     // said, so the click does not read as ignored.
     if (
-      editor.applyAll([lookOp(node.id, node.classes, looks, tile.id)]) === null
+      editor.applyAll([lookOp(node.id, node.classes, removable, tile.id)]) ===
+      null
     ) {
       onRefused(
         `${tile.name} could not be applied to this block: the page could not take the change.`

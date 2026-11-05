@@ -24,6 +24,7 @@ import type {
   NodeStyles,
   SiteTokenSet,
   StyleState,
+  TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { findNode, getBlock } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
@@ -35,7 +36,7 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
-import { lookLineWords } from "./look-tiles";
+import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./ops";
 import {
@@ -299,6 +300,8 @@ export interface StyleTargetBarProps {
   readonly library: readonly NamedClass[] | undefined;
   /** The site's tokens, for drawing the look tiles as the canvas shows them. */
   readonly tokens?: SiteTokenSet;
+  /** The mode the selected block is drawn in, which the tiles draw in. */
+  readonly tokenMode: TokenMode;
   readonly libraryAbsence?: "pending" | "failed";
   readonly host: SharedStylesHost | undefined;
   /** The shared block verbs, for "Save as shared style…". */
@@ -403,6 +406,7 @@ export function StyleTargetBar({
   state,
   stateControl,
   tokens,
+  tokenMode,
 }: StyleTargetBarProps): React.JSX.Element {
   const nodeId = editor.selectedId;
   // The bar has no line of its own for a refusal, so it speaks through the
@@ -421,6 +425,7 @@ export function StyleTargetBar({
         library={library}
         held={held}
         tokens={tokens}
+        mode={tokenMode}
         onRefused={report}
       />
       <EditingBar
@@ -433,7 +438,7 @@ export function StyleTargetBar({
         }))}
         onTargetChange={host === undefined ? undefined : onChoose}
         {...chipActions(editor, nodeId, worn, report, breakpoints)}
-        {...wornLookLine(editor, nodeId, worn)}
+        {...wornLookLine(editor, nodeId, worn, library)}
         chipActionsHeld={held}
         // The shared chips too: choosing one would edit the held design.
         targetHeld={held}
@@ -462,12 +467,16 @@ export function StyleTargetBar({
 function wornLookLine(
   editor: EditorState,
   nodeId: string | null,
-  worn: readonly SharedStyleRow[]
+  worn: readonly SharedStyleRow[],
+  library: readonly NamedClass[] | undefined
 ): { wornLook?: { id: string; here: string; everywhere: string } } {
-  const look = worn.find(row => row.look === true);
   const node =
     nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
-  if (look === undefined || node === undefined) return {};
+  if (node === undefined || library === undefined) return {};
+  // The look the canvas applies, as the tiles read it: one answer for both.
+  const id = wornLook(node.classes, looksOfType(library, node.type));
+  const look = worn.find(row => row.id === id);
+  if (look === undefined) return {};
   const label = getBlock(node.type)?.editor?.label ?? "block";
   return {
     wornLook: {
