@@ -305,6 +305,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET`           | `/admin/api/dashboard/activity`                        | Activity feed.                                                                                                                                                                                       | Cookie                                                          |
 | `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
 | `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `read-settings` to read, `update-settings` to change                                               |
+| `GET`           | `/admin/api/translations`                              | One language's translation worklist across every localized collection: `?locale=es&state=missing&limit=50`. See [Languages](#languages). | Signed in; which rows come back is each collection's read rule |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
@@ -723,6 +724,30 @@ the parameter to get every field.
 ?richTextFormat=json       # Lexical JSON (default)
 ?richTextFormat=both       # { json, html }
 ```
+
+### Languages
+
+On a localized collection or Single (see [Localization](/docs/localization)). How each language
+falls back, and how access rules are told which languages a request involves, are described
+there; these are the parameters that choose them.
+
+| Parameter              | Values                                                   | What it does                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`               | A configured language code; `all` on a read; `*` on a write | The language a read returns or a write stores. Missing or unknown, the default language. `all` answers a read with every language's value for each translated field; `*` writes every language. |
+| `fallback-locale`      | A language code, or `none`                                | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `none` turns fallback off, so an untranslated field reads empty.    |
+| `translation-status`   | `1`                                                      | Adds `_translations` to each document: for every configured language, whether it has content of its own (`translated`) and, with a draft/published lifecycle, its `status`.                      |
+| `where[_translated]`   | `[locale]=<code>` and `[state]=<state>`                  | Lists only the documents in that state in that language: `missing`, `translated`, `draft`, `published` or `stale`. A reserved key, not a field filter.                                           |
+
+```
+?locale=es&fallback-locale=none
+?locale=all
+?translation-status=1
+?where[_translated][locale]=es&where[_translated][state]=missing
+```
+
+`GET /admin/api/translations` is the same question across every localized collection: one
+language's outstanding work, `?locale=es&state=missing&limit=50`, with `state` taking the values
+above. Each collection's read rules decide which of its documents come back.
 
 ## Pagination
 

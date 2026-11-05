@@ -789,6 +789,38 @@ const posts = await nextly.find({
 });
 ```
 
+## Languages
+
+On a localized collection or Single (see [Localization](/docs/localization)), a read or a
+write names its language with `locale`, and a read chooses its fallback with `fallbackLocale`:
+
+```ts
+// Spanish, falling back as the site configures it.
+const { items } = await nextly.find({ collection: "posts", locale: "es" });
+
+// Spanish only: an untranslated field reads empty.
+const post = await nextly.findByID({
+  collection: "posts",
+  id,
+  locale: "es",
+  fallbackLocale: false,
+});
+
+// Every language's value for each translated field, in one answer.
+const all = await nextly.findByID({ collection: "posts", id, locale: "all" });
+
+// A write stores into the language it names.
+await nextly.update({ collection: "posts", id, locale: "es", data: { title: "Hola" } });
+```
+
+| Option           | Type              | What it does                                                                                                                                                              |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field.               |
+| `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.               |
+
+Language filters and the per-language status overview are REST parameters; see
+[Languages](/docs/api-reference/rest-api#languages) in the REST reference.
+
 ## Sorting
 
 Pass a field name, prefixed with `-` for descending, or several in order:
