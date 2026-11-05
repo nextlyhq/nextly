@@ -16,7 +16,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { superAdminUser } from "../../__tests__/fixtures/permission-holders";
+import {
+  grantTo,
+  superAdminUser,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
+import { buildClaims } from "../../auth/jwt/claims";
+import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, defineSingle, number, text } from "../../config";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import type { CollectionService } from "../../domains/collections/services/collection-service";
@@ -202,6 +208,38 @@ async function codeOf(call: () => Promise<unknown>): Promise<string> {
   } catch (error) {
     return String((error as { code?: unknown }).code);
   }
+}
+
+/** `who`'s call on the document lock route, signed in: its status and JSON. */
+async function lockCall(
+  who: string,
+  method: "POST" | "PATCH",
+  body: Doc
+): Promise<{ status: number; json: Doc }> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: who,
+      email: `${who}@example.test`,
+      name: who,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET ?? ""
+  );
+  const res = await createDynamicHandlers()[method](
+    new Request("http://localhost/api/document-lock", {
+      method,
+      headers: {
+        origin: "http://localhost",
+        cookie: `nextly_session=${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: ["document-lock"] }) }
+  );
+  return { status: res.status, json: (await res.json()) as Doc };
 }
 
 /** A stored entry, read raw: the oracle for what was written. */
@@ -538,6 +576,35 @@ describe.each(getConfiguredTestDialects())(
         })
       );
       expect((await stored(t, NOTES, id)).title).toBe("first");
+    });
+
+    // A lock claim or renewal may name the version the editor holds, and is
+    // decoded as an update's would be, but it writes no document: one that
+    // names none is answered as before, while an update naming none is not.
+    it("still answers a lock claim and renewal that name no version", async () => {
+      const t = await boot(dialect);
+      const key = await adminKey(t);
+      const editor = "user-vr-editor";
+      await userWhoMay(t, editor, "update", [NOTES]);
+      await grantTo(t, editor, "read", [NOTES]);
+      const id = await create(t, NOTES, { title: "first" });
+      const ref = { scopeKind: "collection", slug: NOTES, entryId: id };
+
+      const claim = await lockCall(editor, "POST", ref);
+      expect(claim.status, JSON.stringify(claim.json)).toBe(200);
+      const held = claim.json.item as Doc;
+      expect(held.status).toBe("acquired");
+      const renewal = await lockCall(editor, "PATCH", {
+        ...ref,
+        claimToken: held.claimToken,
+      });
+      expect(renewal.status, JSON.stringify(renewal.json)).toBe(200);
+
+      expectVersionRequired(
+        await rest(key, "PATCH", ["collections", NOTES, "entries", id], {
+          title: "unsaid",
+        })
+      );
     });
 
     it("leaves creates and deletes as they were", async () => {
