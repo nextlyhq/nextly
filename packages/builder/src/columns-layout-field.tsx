@@ -21,6 +21,8 @@ import * as React from "react";
 
 import {
   COLUMNS_LAYOUTS,
+  defaultTemplate,
+  inheritedTemplate,
   layoutOf,
   planLayout,
   planStack,
@@ -30,6 +32,7 @@ import {
   type StackOn,
 } from "./columns-layout";
 import type { EditorState } from "./editor-state";
+import { radioGroupStep } from "./roving-radios";
 import { readStyleValue } from "./style-values";
 
 const STACK_LABELS: Readonly<Record<StackOn, string>> = {
@@ -63,11 +66,185 @@ function hintFor(current: string): string {
 function heldReason(
   row: Parameters<typeof planLayout>[0],
   pointed: string | undefined,
-  at: Parameters<typeof planLayout>[2]
+  at: Parameters<typeof planLayout>[2],
+  inherited: string | undefined
 ): string | undefined {
   if (pointed === undefined) return undefined;
-  const plan = planLayout(row, pointed, at);
+  const plan = planLayout(row, pointed, at, inherited);
   return plan.ok ? undefined : plan.reason;
+}
+
+/**
+ * The next choice an arrow key moves to, as every radio group here steps,
+ * wrapping at either end and passing over the choices that are held.
+ */
+function steppedTo(
+  key: string,
+  from: number,
+  allowed: readonly boolean[]
+): number | undefined {
+  const step = radioGroupStep(key);
+  if (step === null) return undefined;
+  for (let offset = 1; offset <= allowed.length; offset += 1) {
+    const index =
+      (from + step * offset + allowed.length * offset) % allowed.length;
+    if (allowed[index] === true) return index;
+  }
+  return undefined;
+}
+
+/** Move to the stepped choice: choose it, and take focus to it. */
+function arrowTo(
+  event: React.KeyboardEvent<HTMLElement>,
+  from: number,
+  allowed: readonly boolean[],
+  choose: (index: number) => void
+): void {
+  const next = steppedTo(event.key, from, allowed);
+  if (next === undefined) return;
+  event.preventDefault();
+  choose(next);
+  const options =
+    event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
+      '[role="radio"]'
+    );
+  options?.[next]?.focus();
+}
+
+type Row = NonNullable<ReturnType<typeof findNode>>;
+
+/** The width tiles: one tab stop, arrows choosing, a held tile saying why. */
+function WidthTiles({
+  row,
+  at,
+  inherited,
+  labelId,
+  hintId,
+  onPoint,
+  editor,
+}: {
+  row: Row;
+  at: { state: StyleState; breakpoint: BreakpointId };
+  inherited: string | undefined;
+  labelId: string;
+  hintId: string;
+  onPoint: (key: string | undefined) => void;
+  editor: EditorState;
+}): React.JSX.Element {
+  const stored = readStyleValue(row.styles, {
+    ...at,
+    property: "gridTemplateColumns",
+    path: [],
+  });
+  // What the canvas draws here: set here, or reaching it from a wider device.
+  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
+  const plans = COLUMNS_LAYOUTS.map(layout =>
+    planLayout(
+      row,
+      layout.key,
+      at,
+      stored === undefined ? inherited : undefined
+    )
+  );
+  const allowed = plans.map(plan => plan.ok);
+  const stop = Math.max(
+    0,
+    COLUMNS_LAYOUTS.findIndex(layout => layout.key === current)
+  );
+  const choose = (index: number) => {
+    const plan = plans[index];
+    if (plan?.ok === true && plan.ops.length > 0)
+      editor.applyAll([...plan.ops]);
+  };
+  return (
+    <div
+      role="radiogroup"
+      aria-labelledby={labelId}
+      className="nx-columns-layout__tiles"
+    >
+      {COLUMNS_LAYOUTS.map((layout, index) => {
+        const plan = plans[index];
+        const held = plan !== undefined && !plan.ok;
+        return (
+          <button
+            key={layout.key}
+            type="button"
+            role="radio"
+            aria-checked={layout.key === current}
+            aria-label={layout.label}
+            tabIndex={index === stop ? 0 : -1}
+            title={
+              layout.key === "auto"
+                ? "Equal columns that wrap when narrow"
+                : undefined
+            }
+            {...(layout.key === current &&
+            stored === undefined &&
+            inherited !== undefined
+              ? { "data-inherited": "" }
+              : {})}
+            // Held, not disabled: still reachable, so its reason can be read;
+            // the hint under the tiles says it, as its description.
+            {...(held
+              ? { "aria-disabled": true, "aria-describedby": hintId }
+              : {})}
+            className="nx-columns-layout__tile"
+            onMouseEnter={() => onPoint(held ? layout.key : undefined)}
+            onMouseLeave={() => onPoint(undefined)}
+            onFocus={() => onPoint(held ? layout.key : undefined)}
+            onBlur={() => onPoint(undefined)}
+            onKeyDown={event => arrowTo(event, index, allowed, choose)}
+            onClick={() => choose(index)}
+          >
+            <Glyph layout={layout} />
+            <span>{layout.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Where the row stacks: one tab stop, arrows choosing. */
+function StackChoices({
+  options,
+  on,
+  labelId,
+  onChoose,
+}: {
+  options: readonly StackOn[];
+  on: StackOn;
+  labelId: string;
+  onChoose: (on: StackOn) => void;
+}): React.JSX.Element {
+  const allowed = options.map(() => true);
+  return (
+    <div
+      role="radiogroup"
+      aria-labelledby={labelId}
+      className="nx-columns-layout__stack"
+    >
+      {options.map((option, index) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={on === option}
+          tabIndex={on === option ? 0 : -1}
+          className="nx-columns-layout__stack-option"
+          onKeyDown={event =>
+            arrowTo(event, index, allowed, next => {
+              const target = options[next];
+              if (target !== undefined) onChoose(target);
+            })
+          }
+          onClick={() => onChoose(option)}
+        >
+          {STACK_LABELS[option]}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function ColumnsLayoutControl({
@@ -90,14 +267,17 @@ export function ColumnsLayoutControl({
   const [pointed, setPointed] = React.useState<string | undefined>(undefined);
   const row = findNode(editor.document.nodes, nodeId);
   if (row === undefined) return null;
-  const current = layoutOf(
-    readStyleValue(row.styles, {
-      state,
-      breakpoint,
-      property: "gridTemplateColumns",
-      path: [],
-    })
-  );
+  const at = { state, breakpoint };
+  const stored = readStyleValue(row.styles, {
+    ...at,
+    property: "gridTemplateColumns",
+    path: [],
+  });
+  const inherited =
+    stored === undefined
+      ? inheritedTemplate(row, breakpoint, breakpoints, state)
+      : undefined;
+  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
   const tiers = stackTiers(breakpoints);
   const stack = stackOf(row, tiers, state);
   const options = (["tablet", "mobile", "never"] as const).filter(
@@ -113,53 +293,18 @@ export function ColumnsLayoutControl({
         <span className="nx-inspector__field-name" id={labelId}>
           Widths
         </span>
-        <div
-          role="radiogroup"
-          aria-labelledby={labelId}
-          className="nx-columns-layout__tiles"
-        >
-          {COLUMNS_LAYOUTS.map(layout => {
-            const plan = planLayout(row, layout.key, { state, breakpoint });
-            const refused = plan.ok ? undefined : plan.reason;
-            const point = (on: boolean) =>
-              setPointed(on && refused !== undefined ? layout.key : undefined);
-            return (
-              <button
-                key={layout.key}
-                type="button"
-                role="radio"
-                aria-checked={layout.key === current}
-                aria-label={layout.label}
-                title={
-                  layout.key === "auto"
-                    ? "Equal columns that wrap when narrow"
-                    : undefined
-                }
-                // Held, not disabled: still reachable, so its reason can be
-                // read; the hint under the tiles says it, as its description.
-                {...(refused === undefined
-                  ? {}
-                  : { "aria-disabled": true, "aria-describedby": hintId })}
-                className="nx-columns-layout__tile"
-                onMouseEnter={() => point(true)}
-                onMouseLeave={() => point(false)}
-                onFocus={() => point(true)}
-                onBlur={() => point(false)}
-                onClick={() => {
-                  if (plan.ok && plan.ops.length > 0) {
-                    editor.applyAll([...plan.ops]);
-                  }
-                }}
-              >
-                <Glyph layout={layout} />
-                <span>{layout.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <WidthTiles
+          row={row}
+          at={at}
+          inherited={inherited}
+          labelId={labelId}
+          hintId={hintId}
+          onPoint={setPointed}
+          editor={editor}
+        />
       </div>
       <p id={hintId} className="nx-inspector__note" aria-live="polite">
-        {heldReason(row, pointed, { state, breakpoint }) ?? hintFor(current)}
+        {heldReason(row, pointed, at, inherited) ?? hintFor(current)}
       </p>
       {options.length > 1 ? (
         <>
@@ -167,24 +312,12 @@ export function ColumnsLayoutControl({
             <span className="nx-inspector__field-name" id={stackId}>
               Stack on
             </span>
-            <div
-              role="radiogroup"
-              aria-labelledby={stackId}
-              className="nx-columns-layout__stack"
-            >
-              {options.map(on => (
-                <button
-                  key={on}
-                  type="button"
-                  role="radio"
-                  aria-checked={stack.on === on}
-                  className="nx-columns-layout__stack-option"
-                  onClick={() => restack(on, stack.reversed)}
-                >
-                  {STACK_LABELS[on]}
-                </button>
-              ))}
-            </div>
+            <StackChoices
+              options={options}
+              on={stack.on}
+              labelId={stackId}
+              onChoose={on => restack(on, stack.reversed)}
+            />
           </div>
           <div className="nx-inspector__field">
             <span className="nx-inspector__field-name">

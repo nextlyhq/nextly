@@ -186,6 +186,10 @@ The canvas wraps the page in an element of its own, which the editor needs. A la
 that selects your page as a direct child, such as `main > .nx-pb-page`, doesn't match in
 the canvas.
 
+On the blank page, a block that blends over a translucent site background (a block with
+`mix-blend-mode` over a background colour that is partly transparent) can look different in
+the editor than when published. Over an opaque background it looks the same.
+
 ## Breakpoints
 
 Breakpoints are desktop-first. The `base` breakpoint applies at every width. Each other
@@ -206,7 +210,10 @@ on a Mac) for actual size, or <kbd>Shift</kbd>+<kbd>1</kbd> to fit again. Choosi
 device goes back to fitting. The editor remembers the device and the zoom you left, for you
 rather than for the browser. If you remove the breakpoint you are styling, the editor moves to
 the next wider breakpoint that remains, or to Desktop when none is wider. A breakpoint removed
-while you were away is replaced by Desktop when you come back.
+while you were away is replaced by Desktop when you come back. If someone else removes a
+breakpoint while you still have the editor open, a save that adds styles or hiding at it is
+refused with "That breakpoint was removed from the site. Reload to keep editing.", since the
+published page would never show them. Styles a page already held there still save.
 
 ### Limits
 

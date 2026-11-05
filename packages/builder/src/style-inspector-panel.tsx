@@ -97,6 +97,8 @@ import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
+import { FocalFrame } from "./focal-frame";
+import { FocalPointField } from "./focal-point-field";
 import {
   FontChoicesContext,
   FontFamilyField,
@@ -605,13 +607,15 @@ function StyleInspectorBody({
    * both are only valid against the document they were read from, and an edit
    * anywhere changes the document and the values shown together.
    */
+  // The picture the canvas draws for the node, lent by the inspector.
+  const renderedPicture = React.useContext(FocalFrame).picture;
   const subject = selectedSubject(editor, cascade, renderedTag);
   const inspection = inspectStyle(editor.document, editor.selectedId, {
     ...policy,
     state,
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
-    media: rendersMedia(renderedTag),
+    media: rendersMedia(renderedTag, renderedPicture),
     breakpoints,
     cascade: targetCascade(target, cascadeFor(cascade, subject)),
     // A shared target's values are the style's own, so the controls show
@@ -729,27 +733,62 @@ function StyleInspectorBody({
             <ReadOnlyNote target={target} reason={readOnlyReason} />
           ) : null}
           <NoStyleProperties count={inspected.sections.length} />
-          <Accordion
-            type="single"
-            collapsible
-            value={open}
-            onValueChange={setOpenGroup}
-          >
-            {inspected.sections.map(section => (
-              <StyleSectionItem
-                // Keyed by node AND group: a bare group would let React reuse one
-                // block's inputs for the next block's same-named section, so a field
-                // would keep the previous block's uncommitted text.
-                key={`${inspected.nodeId}:${section.key}`}
-                section={section}
-                readOnlyReason={readOnlyReason}
-                {...surroundings}
-              />
-            ))}
-          </Accordion>
+          <StyleSections
+            sections={inspected.sections}
+            nodeId={inspected.nodeId}
+            open={open}
+            onOpen={setOpenGroup}
+            readOnlyReason={readOnlyReason}
+            surroundings={surroundings}
+            fit={inspected.objectFit}
+          />
         </div>
       </CanvasTokenModeProvider>
     </StyleTargetContext.Provider>
+  );
+}
+
+/**
+ * The panel's sections, one open at a time, with the block's picture and fit
+ * for the focal point drawn over it.
+ */
+function StyleSections({
+  sections,
+  nodeId,
+  open,
+  onOpen,
+  readOnlyReason,
+  surroundings,
+  fit,
+}: {
+  sections: readonly StyleSection[];
+  nodeId: string;
+  open: string;
+  onOpen: (group: string) => void;
+  readOnlyReason: React.ComponentProps<
+    typeof StyleSectionItem
+  >["readOnlyReason"];
+  surroundings: StyleFieldSurroundings;
+  fit: string | undefined;
+}): React.JSX.Element {
+  // The picture lent from above, with the fit in force here.
+  const { picture } = React.useContext(FocalFrame);
+  return (
+    <FocalFrame.Provider value={{ picture, fit }}>
+      <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
+        {sections.map(section => (
+          <StyleSectionItem
+            // Keyed by node AND group: a bare group would let React reuse one
+            // block's inputs for the next block's same-named section, so a
+            // field would keep the previous block's uncommitted text.
+            key={`${nodeId}:${section.key}`}
+            section={section}
+            readOnlyReason={readOnlyReason}
+            {...surroundings}
+          />
+        ))}
+      </Accordion>
+    </FocalFrame.Provider>
   );
 }
 
@@ -974,7 +1013,13 @@ const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
-function rendersMedia(renderedTag: string | undefined): boolean {
+function rendersMedia(
+  renderedTag: string | undefined,
+  renderedPicture?: string
+): boolean {
+  // A replaced element, or a picture of the block's own inside a link or a
+  // figure: a captioned or linked image's root is not the image.
+  if (renderedPicture !== undefined) return true;
   return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
 }
 
@@ -5091,6 +5136,12 @@ const OWN_FIELDS: Readonly<
   "text-decoration": {
     draws: drawsDecoration,
     Field: DecorationField,
+    buttons: true,
+  },
+  // Any position: the nine points, or one written as CSS beside them.
+  "object-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: FocalPointField,
     buttons: true,
   },
 };

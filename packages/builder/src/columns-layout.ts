@@ -94,10 +94,61 @@ export const COLUMNS_LAYOUTS: readonly ColumnsLayout[] = [
   },
 ];
 
-/** The tile a stored template is, `auto` for none, `custom` for any other. */
-export function layoutOf(stored: StyleValue | undefined): string {
+/** The template a row's block gives it by default: what Auto returns it to. */
+export function defaultTemplate(row: BlockNode): string | undefined {
+  const base = (
+    getBlock(row.type)?.baseStyles as
+      | { base?: { base?: Record<string, unknown> } }
+      | undefined
+  )?.base?.base?.gridTemplateColumns;
+  return typeof base === "string" ? base : undefined;
+}
+
+/**
+ * The template a row inherits at a device from the nearest wider one that
+ * sets one, the base last; `undefined` at the base, or where none does.
+ */
+export function inheritedTemplate(
+  row: BlockNode,
+  breakpoint: string,
+  breakpoints: BreakpointSet | undefined,
+  state: StyleState
+): string | undefined {
+  if (breakpoint === "base") return undefined;
+  const tiers = breakpoints?.viewport ?? [];
+  const width = tiers.find(tier => tier.id === breakpoint)?.maxWidth;
+  const wider = tiers
+    .filter(
+      tier =>
+        tier.maxWidth !== undefined &&
+        width !== undefined &&
+        tier.maxWidth > width
+    )
+    .sort((a, b) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0))
+    .map(tier => tier.id);
+  for (const id of [...wider, "base"]) {
+    const value = readStyleValue(row.styles, {
+      state,
+      breakpoint: id,
+      property: "gridTemplateColumns",
+      path: [],
+    });
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+/**
+ * The tile a template is: `auto` for none or the block's own default,
+ * `custom` for one no tile writes.
+ */
+export function layoutOf(
+  stored: StyleValue | undefined,
+  byDefault?: string
+): string {
   if (stored === undefined) return "auto";
   const written = typeof stored === "string" ? stored.trim() : undefined;
+  if (written !== undefined && written === byDefault?.trim()) return "auto";
   return (
     COLUMNS_LAYOUTS.find(
       layout => layout.template !== undefined && layout.template === written
@@ -166,10 +217,24 @@ function columnShape(
   };
 }
 
-/** Whether a column holds nothing, so removing it loses nothing. */
+/**
+ * Whether a column is blank, so removing it loses nothing: no blocks in it,
+ * and nothing an author set on it, no props, styles, classes, id or
+ * attributes. A styled column with nothing in it is still the author's.
+ */
 function isEmpty(column: BlockNode): boolean {
-  return Object.values(column.slots ?? {}).every(
-    children => children.length === 0
+  const node = column as BlockNode & {
+    classes?: readonly unknown[];
+    cssId?: unknown;
+    attributes?: Record<string, unknown>;
+  };
+  return (
+    Object.values(node.slots ?? {}).every(children => children.length === 0) &&
+    Object.keys(node.props ?? {}).length === 0 &&
+    node.styles === undefined &&
+    (node.classes?.length ?? 0) === 0 &&
+    node.cssId === undefined &&
+    Object.keys(node.attributes ?? {}).length === 0
   );
 }
 
@@ -224,7 +289,8 @@ function removedColumns(
 export function planLayout(
   row: BlockNode,
   key: string,
-  at: Address
+  at: Address,
+  inherited?: string
 ): LayoutPlan {
   const layout = COLUMNS_LAYOUTS.find(each => each.key === key);
   if (layout === undefined) return { ok: false, reason: "Not a layout." };
@@ -233,11 +299,18 @@ export function planLayout(
   if (!Array.isArray(removed)) return { ok: false, reason: removed.reason };
   const added = addedColumns(row, count);
   if (added === undefined) return { ok: false, reason: "No column to add." };
+  // Auto clears what is set here; where a wider device's layout reaches
+  // this one, clearing would leave it in force, so Auto writes the block's
+  // own template here instead.
+  const inheritsAnother =
+    layout.template === undefined &&
+    inherited !== undefined &&
+    layoutOf(inherited, defaultTemplate(row)) !== "auto";
+  const value = inheritsAnother
+    ? (defaultTemplate(row) ?? null)
+    : (layout.template ?? null);
   const style = chained(row, [
-    {
-      address: { ...at, property: "gridTemplateColumns", path: [] },
-      value: layout.template ?? null,
-    },
+    { address: { ...at, property: "gridTemplateColumns", path: [] }, value },
   ]);
   return {
     ok: true,
@@ -249,6 +322,15 @@ export function planLayout(
 export interface StackTiers {
   readonly tablet?: string;
   readonly mobile?: string;
+  /**
+   * Every tier at a tablet's width or narrower, widest first, with the stack
+   * choice it falls under: where a stack written before, at a tier no longer
+   * the widest of its kind, is still found and cleared.
+   */
+  readonly managed?: readonly {
+    readonly id: string;
+    readonly on: "tablet" | "mobile";
+  }[];
 }
 
 export function stackTiers(breakpoints: BreakpointSet | undefined): StackTiers {
@@ -258,13 +340,37 @@ export function stackTiers(breakpoints: BreakpointSet | undefined): StackTiers {
       .sort((a, b) => (b.maxWidth ?? 0) - (a.maxWidth ?? 0))[0]?.id;
   const tablet = widest(width => width > 640 && width <= 1024);
   const mobile = widest(width => width <= 640);
+  const managed = (breakpoints?.viewport ?? [])
+    .filter(tier => tier.maxWidth !== undefined && tier.maxWidth <= 1024)
+    .sort((a, b) => (b.maxWidth ?? 0) - (a.maxWidth ?? 0))
+    .map(tier => ({
+      id: tier.id,
+      on:
+        (tier.maxWidth ?? 0) > 640 ? ("tablet" as const) : ("mobile" as const),
+    }));
   return {
     ...(tablet === undefined ? {} : { tablet }),
     ...(mobile === undefined ? {} : { mobile }),
+    ...(managed.length === 0 ? {} : { managed }),
   };
 }
 
 export type StackOn = "tablet" | "mobile" | "never";
+
+/** The stack this control writes at a tier, if that is what the tier holds. */
+function stackAt(
+  row: BlockNode,
+  breakpoint: string,
+  state: StyleState
+): { reversed: boolean } | undefined {
+  const read = (property: string) =>
+    readStyleValue(row.styles, { state, breakpoint, property, path: [] });
+  const direction = read("flexDirection");
+  if (read("display") !== "flex") return undefined;
+  if (direction !== "column" && direction !== "column-reverse")
+    return undefined;
+  return { reversed: direction === "column-reverse" };
+}
 
 /** Where a row stacks, read from what it stores, and whether it is reversed. */
 export function stackOf(
@@ -272,18 +378,9 @@ export function stackOf(
   tiers: StackTiers,
   state: StyleState
 ): { on: StackOn; reversed: boolean } {
-  for (const on of ["tablet", "mobile"] as const) {
-    const breakpoint = tiers[on];
-    if (breakpoint === undefined) continue;
-    const read = (property: string) =>
-      readStyleValue(row.styles, { state, breakpoint, property, path: [] });
-    const direction = read("flexDirection");
-    if (
-      read("display") === "flex" &&
-      (direction === "column" || direction === "column-reverse")
-    ) {
-      return { on, reversed: direction === "column-reverse" };
-    }
+  for (const tier of tiers.managed ?? []) {
+    const stack = stackAt(row, tier.id, state);
+    if (stack !== undefined) return { on: tier.on, reversed: stack.reversed };
   }
   return { on: "never", reversed: false };
 }
@@ -300,11 +397,13 @@ export function planStack(
   { tiers, state }: { tiers: StackTiers; state: StyleState }
 ): BuilderOp | null {
   const steps: { address: StyleAddress; value: StyleValue | null }[] = [];
-  for (const tier of [tiers.tablet, tiers.mobile]) {
-    if (tier === undefined) continue;
+  // Only a stack this control wrote is cleared: a display set at a tier for
+  // another reason (hidden on mobile) is the author's and stays.
+  for (const tier of tiers.managed ?? []) {
+    if (stackAt(row, tier.id, state) === undefined) continue;
     for (const property of ["display", "flexDirection"]) {
       steps.push({
-        address: { state, breakpoint: tier, property, path: [] },
+        address: { state, breakpoint: tier.id, property, path: [] },
         value: null,
       });
     }

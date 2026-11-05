@@ -2202,6 +2202,113 @@ describe("the site's ground and text on the canvas root", () => {
     expect(opaque("var(--elsewhere)")).toBe(false);
   });
 
+  it("judges the ground by the colour it resolves to, which host CSS can change", () => {
+    /*
+     * The tokens say opaque, but the host's own CSS sets the token's
+     * property to a half-transparent colour. What the canvas paints is the
+     * resolved value, so that is what decides whether the page repeats it.
+     */
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") return "rgba(0, 0, 0, 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reads the alpha of a wide-gamut colour the ground resolves to", () => {
+    // A browser can keep `color(display-p3 …)` in the computed value; a
+    // half-transparent one must not be taken for the opaque token.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor")
+              return "color(display-p3 0 0 0 / 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("judges the ground again when the site's theme changes, with no render", async () => {
+    // The theme marker writes the root's theme without a render; a light
+    // ground that is opaque and a dark one that is not must each be judged.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        const dark = element.getAttribute("data-nx-site-theme") === "dark";
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return dark ? "rgba(11, 15, 25, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      root?.setAttribute("data-nx-site-theme", "dark");
+      await act(async () => undefined);
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("names nothing when the host serves no site sheet", () => {
     const root = rootOf(false);
     expect(root?.style.getPropertyValue("--nx-canvas-site-ground")).toBe("");

@@ -13,6 +13,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  inheritedTemplate,
   layoutOf,
   planLayout,
   planStack,
@@ -36,7 +37,18 @@ beforeAll(() => {
   });
   registerBlocks(
     [
-      block("core/columns", { allow: ["core/column"] }),
+      {
+        ...block("core/columns", { allow: ["core/column"] }),
+        baseStyles: {
+          base: {
+            base: {
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
+            },
+          },
+        },
+      },
       block("core/column", {}),
       { ...block("core/text", {}), slots: undefined },
     ] as never,
@@ -168,7 +180,10 @@ describe("planLayout", () => {
 
 describe("stacking", () => {
   it("finds the tablet and mobile tiers by width, as the device switcher does", () => {
-    expect(stackTiers(BREAKPOINTS)).toEqual({ tablet: "md", mobile: "sm" });
+    expect(stackTiers(BREAKPOINTS)).toMatchObject({
+      tablet: "md",
+      mobile: "sm",
+    });
     expect(stackTiers(undefined)).toEqual({});
   });
 
@@ -207,5 +222,99 @@ describe("stacking", () => {
       state: "base",
     });
     expect(JSON.stringify(plan)).not.toContain("flexDirection");
+  });
+});
+
+describe("round one: what counts, what is kept", () => {
+  it("removes only truly blank columns, keeping a styled one", () => {
+    const styled: BlockNode = {
+      ...column("b"),
+      styles: { base: { base: { padding: { blockStart: "8px" } } } },
+    };
+    const plan = planLayout(
+      row([column("a", [text]), styled, column("c")]),
+      "50-50",
+      at
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(
+      plan.ops
+        .filter(op => op.kind === "remove")
+        .map(op => op.kind === "remove" && op.id)
+    ).toEqual(["c"]);
+    // With no blank column left, the styled one is content, and held.
+    const held = planLayout(row([column("a", [text]), styled]), "4", at);
+    expect(held.ok).toBe(true);
+    const fewer = planLayout(
+      row([column("a", [text]), styled, column("c", [text])]),
+      "50-50",
+      at
+    );
+    expect(fewer.ok).toBe(false);
+  });
+
+  it("leaves a responsive display that is not a stack alone on Never", () => {
+    const hidden = row([column("a")], {
+      base: { sm: { display: "none" } },
+    });
+    expect(stackOf(hidden, stackTiers(BREAKPOINTS), "base").on).toBe("never");
+    expect(
+      planStack(hidden, "never", false, {
+        tiers: stackTiers(BREAKPOINTS),
+        state: "base",
+      })
+    ).toBeNull();
+  });
+
+  it("finds and clears a stack set at a tier no longer the widest tablet", () => {
+    // Stacked at 768px; the site later added a 1024px tablet tier.
+    const devices: BreakpointSet = {
+      viewport: [
+        { id: "lg", label: "Large tablet", maxWidth: 1024 },
+        { id: "md", label: "Tablet", maxWidth: 768 },
+        { id: "sm", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    };
+    const stacked = row([column("a")], {
+      base: { md: { display: "flex", flexDirection: "column" } },
+    });
+    expect(stackOf(stacked, stackTiers(devices), "base").on).toBe("tablet");
+    const cleared = planStack(stacked, "never", false, {
+      tiers: stackTiers(devices),
+      state: "base",
+    });
+    expect(JSON.stringify(cleared)).not.toContain("flexDirection");
+  });
+});
+
+describe("an inherited layout", () => {
+  const wide = row([column("a"), column("b")], {
+    base: { base: { gridTemplateColumns: "1fr 2fr" } },
+  });
+  const mobile = { state: "base", breakpoint: "sm" } as const;
+
+  it("is read from the nearest wider device that sets one", () => {
+    expect(inheritedTemplate(wide, "sm", BREAKPOINTS, "base")).toBe("1fr 2fr");
+    const tablet = row([column("a"), column("b")], {
+      base: {
+        base: { gridTemplateColumns: "1fr 2fr" },
+        md: { gridTemplateColumns: "1fr 1fr" },
+      },
+    });
+    expect(inheritedTemplate(tablet, "sm", BREAKPOINTS, "base")).toBe(
+      "1fr 1fr"
+    );
+    expect(
+      inheritedTemplate(wide, "base", BREAKPOINTS, "base")
+    ).toBeUndefined();
+  });
+
+  it("is overridden by Auto with the block's own template, not by clearing nothing", () => {
+    const plan = planLayout(wide, "auto", mobile, "1fr 2fr");
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(JSON.stringify(plan.ops)).toContain('"sm":{"gridTemplateColumns":');
   });
 });

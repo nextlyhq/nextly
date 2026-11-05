@@ -70,6 +70,16 @@ beforeAll(() => {
           createElement("div", { className }),
       },
       {
+        // A block shaped by its own clip-path, which a case below gives it:
+        // jsdom's CSS parser drops `clip-path`, so it is answered there.
+        name: "acme/shaped",
+        version: 1,
+        description: "A block with its own clip-path.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("div", { className, "data-shaped": "" }),
+      },
+      {
         // A block that clips what it holds: its child sits partly outside it.
         name: "acme/clip",
         version: 1,
@@ -548,6 +558,63 @@ describe("selection marks", () => {
     }).toEqual({ left: "50px", top: "20px", width: "50px", height: "30px" });
     // Cut by the clip, so the halo band is not drawn along the cut edges.
     expect(mark.hasAttribute("data-clipped")).toBe(true);
+  });
+
+  it("draws no halo band for a block shaped by its own clip-path", async () => {
+    /*
+     * A circle cut from a square box leaves its corners showing the page
+     * behind. A halo band painted inside the ring would cover those corners,
+     * over content that is not the block's, so the ring is drawn without it,
+     * as for a block an ancestor clips.
+     */
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, 0, 100, 100)
+    );
+    // The computed `clip-path` a browser reports for the shaped block.
+    const computed = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.hasAttribute("data-shaped")) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "clipPath") return "circle(50%)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "round", type: "acme/shaped", version: 1, props: {} },
+            { id: "plain", type: "acme/leaf", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="round"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const mark = await waitFor(() => {
+      const [found] = halosIn(container);
+      if (found === undefined) throw new Error("no mark yet");
+      return found as HTMLElement;
+    });
+    expect(mark.hasAttribute("data-shaped")).toBe(true);
+    // The ring stays OUTSIDE the box, unlike a clipped one: the block's own
+    // shape does not cut the overlay, and inside it would cover the circle.
+    expect(mark.hasAttribute("data-clipped")).toBe(false);
+    expect({
+      left: mark.style.left,
+      top: mark.style.top,
+      width: mark.style.width,
+    }).toEqual({ left: "-4px", top: "-4px", width: "108px" });
   });
 
   it("draws no mark for a block its clipping ancestor hides entirely", async () => {

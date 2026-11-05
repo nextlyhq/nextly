@@ -201,6 +201,25 @@ describe("a Columns row's layout", () => {
     );
   });
 
+  it("is one tab stop whose arrows choose, skipping a held tile", () => {
+    const editor = mount([column("a"), column("b")]);
+    const tiles = screen.getAllByRole("radio").slice(0, 7);
+    expect(tiles.map(tile => tile.getAttribute("tabindex"))).toEqual([
+      "0",
+      "-1",
+      "-1",
+      "-1",
+      "-1",
+      "-1",
+      "-1",
+    ]);
+    fireEvent.keyDown(tiles[0] as HTMLElement, { key: "ArrowRight" });
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"gridTemplateColumns":"1fr 1fr"'
+    );
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("50 / 50");
+  });
+
   it("is not offered on a block that is not a Columns row", () => {
     register();
     expect(BASE_BREAKPOINT).toBe("base");
