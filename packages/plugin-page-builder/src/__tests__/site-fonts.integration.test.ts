@@ -965,6 +965,7 @@ describe.each(getConfiguredTestDialects())(
             src: [{ url: "https://fonts.gstatic.com/s/lora.woff2" }],
           },
         ],
+        _overwrite: true,
       });
       expect(answer.status).toBeGreaterThanOrEqual(400);
       expect(await storedFonts(t)).toEqual([]);

@@ -202,6 +202,7 @@ export async function sourceSite(t: TestNextly): Promise<SourceSite> {
         { id: "c-unused", slug: "unused", orderIndex: 1, styles: {} },
       ],
       breakpoints: SOURCE_BREAKPOINTS,
+      _overwrite: true,
     },
   });
   const media = await t.nextly.media.upload({

@@ -70,7 +70,10 @@ interface Singles {
   ): Promise<{ success: boolean }>;
   publishAllLocales(
     slug: string,
-    options: { overrideAccess?: boolean }
+    options: {
+      overrideAccess?: boolean;
+      data?: Readonly<Record<string, unknown>>;
+    }
   ): Promise<unknown>;
 }
 
@@ -157,13 +160,16 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: document("component", [text("d1")]) },
+        data: {
+          content: document("component", [text("d1")]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       return id;
@@ -180,7 +186,7 @@ describe.each(getConfiguredTestDialects())(
       const english = await singles.update(
         SLUG,
         { content: document("page", [placing("i1", split)]), status: "draft" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(english.success, JSON.stringify(english)).toBe(true);
       const german = await singles.update(
@@ -189,7 +195,7 @@ describe.each(getConfiguredTestDialects())(
           content: document("page", [placing("i1", split)]),
           status: "published",
         },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
       expect(german.success, JSON.stringify(german)).toBe(true);
       // A status-less edit of live German is held as its pending change, and
@@ -198,12 +204,15 @@ describe.each(getConfiguredTestDialects())(
       const held = await singles.update(
         SLUG,
         { content: threeDeep(split) },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
       const issues = await refusalOf(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       );
 
       // Named on the field, so the editor can show it where the content is.
@@ -219,12 +228,15 @@ describe.each(getConfiguredTestDialects())(
       const draft = await singles.update(
         SLUG,
         { content: threeDeep(split), status: "draft" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(draft.success, JSON.stringify(draft)).toBe(true);
 
       const issues = await refusalOf(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       );
 
       expect(issues).toEqual([
@@ -240,7 +252,7 @@ describe.each(getConfiguredTestDialects())(
       const shared = await singles.update(
         SLUG,
         { content: threeDeep(split) },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(shared.success, JSON.stringify(shared)).toBe(true);
       // A Single created with no translated defaults has no translation row
@@ -251,7 +263,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       const issues = await refusalOf(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       );
 
       expect(issues).toEqual([
@@ -265,7 +280,7 @@ describe.each(getConfiguredTestDialects())(
       const draft = await singles.update(
         SLUG,
         { content: threeDeep(split), status: "draft" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(draft.success, JSON.stringify(draft)).toBe(true);
 
@@ -273,7 +288,7 @@ describe.each(getConfiguredTestDialects())(
       const published = (await singles.update(
         SLUG,
         { status: "published" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       )) as { success: boolean; errors?: unknown; error?: unknown };
 
       expect(published.success).toBe(false);
