@@ -8,6 +8,10 @@
  * for that permission, and the `site-style` Single refuses every other write
  * that changes them (`refuseBreakpointsOutsideSettings`, beside the Single).
  *
+ * A set that removes breakpoints also strips every value stored under them
+ * from the site (`breakpoint-removal/service`): one removal at a time, each
+ * audited, carried on by its own route when the save runs out of time.
+ *
  * @module site-settings
  */
 import {
