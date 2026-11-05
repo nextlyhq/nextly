@@ -192,6 +192,35 @@ describe.each(getConfiguredTestDialects())(
       expect(await workflowEvents(t, "posts", post)).toEqual([]);
     });
 
+    it("refuses an assigner whose right to edit the collection's update rule refuses, though they hold update", async () => {
+      t = await bootSteps(dialect);
+      const dave = await person(t, "dave", [["update", "locked"]]);
+      const doc = await entry(t, "locked");
+
+      await expect(
+        assign(dave, [
+          {
+            document: {
+              scopeKind: "collection",
+              scopeSlug: "locked",
+              entryId: doc,
+            },
+            part: null,
+            revision: 0,
+            assignee: user("dave"),
+          },
+        ])
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicData: {
+          reason: "no-permission",
+          refused: [{ index: 0, anyOf: ["update-locked"] }],
+        },
+      });
+      expect(await stateOf(t, partOf("locked", doc, null))).toBeNull();
+      expect(await workflowEvents(t, "locked", doc)).toEqual([]);
+    });
+
     it("refuses each ineligible person, naming them and why, singly and in bulk, assigning nothing", async () => {
       t = await bootSteps(dialect);
       const dave = await person(t, "dave", [

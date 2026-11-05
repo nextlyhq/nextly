@@ -116,6 +116,12 @@ export function useStyleTarget(
 ): {
   target: StyleTarget;
   choose: (id: string | null) => void;
+  /**
+   * Why the selected block's design is held, or `undefined`: the one
+   * reading the target falls back on and the bar holds its chips by, so
+   * what an author may choose and where an edit goes cannot disagree.
+   */
+  held: string | undefined;
 } {
   const nodeId = editor.selectedId;
   const [chosen, setChosen] = React.useState<{
@@ -134,13 +140,24 @@ export function useStyleTarget(
     },
     [nodeId]
   );
+  // A block whose design is held (locked, or inside contentOnly) keeps the
+  // block as the target: its shared style's values are its design here, and
+  // editing them from this block would change that design all the same. A
+  // choice made before the hold landed falls back with it.
+  const held =
+    nodeId === null
+      ? undefined
+      : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
   const read =
-    chosen !== null && chosen.nodeId === nodeId && host !== undefined
+    chosen !== null &&
+    chosen.nodeId === nodeId &&
+    host !== undefined &&
+    held === undefined
       ? worn.find(row => row.id === chosen.id)
       : undefined;
   const queued = useQueuedStyles(read, host);
   if (read === undefined || host === undefined || queued === undefined) {
-    return { target: { kind: "block", worn }, choose };
+    return { target: { kind: "block", worn }, choose, held };
   }
   return {
     target: {
@@ -155,6 +172,7 @@ export function useStyleTarget(
       write: queued.write,
     },
     choose,
+    held,
   };
 }
 
@@ -273,6 +291,8 @@ export interface StyleTargetBarProps {
   readonly editor: EditorState;
   readonly target: StyleTarget;
   readonly onChoose: (id: string | null) => void;
+  /** Why the block's design is held, as {@link useStyleTarget} read it. */
+  readonly held: string | undefined;
   readonly library: readonly NamedClass[] | undefined;
   readonly libraryAbsence?: "pending" | "failed";
   readonly host: SharedStylesHost | undefined;
@@ -357,6 +377,7 @@ export function StyleTargetBar({
   editor,
   target,
   onChoose,
+  held,
   library,
   libraryAbsence,
   host,
@@ -375,10 +396,6 @@ export function StyleTargetBar({
     target.kind === "shared" ? target.style.id : undefined,
     host
   );
-  const held =
-    nodeId === null
-      ? undefined
-      : designReadOnlyReason(editor.document, nodeId, lockViewOf(editor));
   const worn = target.worn;
   return (
     <EditingBar
@@ -392,6 +409,8 @@ export function StyleTargetBar({
       onTargetChange={host === undefined ? undefined : onChoose}
       {...chipActions(editor, nodeId, worn, report, breakpoints)}
       chipActionsHeld={held}
+      // The shared chips too: choosing one would edit the held design.
+      targetHeld={held}
       sharedReadOnly={target.kind === "shared" ? target.readOnly : undefined}
       actions={
         nodeId === null || worn.length > 0 || held !== undefined ? null : (

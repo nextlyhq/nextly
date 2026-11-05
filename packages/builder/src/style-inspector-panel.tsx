@@ -74,11 +74,13 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
+  Slider,
   TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, RotateCcw } from "lucide-react";
 import * as React from "react";
 
+import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
@@ -86,6 +88,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { commitOnEnter } from "./commit-on-enter";
+import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
@@ -103,6 +106,11 @@ import {
   lockViewOf,
 } from "./inspector";
 import type { InspectorSectionKey } from "./inspector-sections";
+import {
+  LabelScrubRow,
+  useLabelScrub,
+  useLabelScrubProps,
+} from "./label-scrub";
 import { layerLabel } from "./layers";
 import {
   CanvasTokenModeProvider,
@@ -110,6 +118,7 @@ import {
   useCanvasTokenModeAt,
 } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
+import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import {
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -151,6 +160,7 @@ import {
   foldedControlFor,
   lineHeightFromText,
   lineHeightLeafFor,
+  lineHeightScrubOrigin,
   storedKey,
   type FoldedControl,
   type FoldedOption,
@@ -167,6 +177,8 @@ import {
   CSS_NUMBER,
   measurementOf,
   measurementOfText,
+  scrubbedValue,
+  scrubOrigin,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
@@ -404,6 +416,12 @@ export interface StyleInspectorPanelProps {
    * families. Absent, it lists the variables and the system families.
    */
   fonts?: FontChoices;
+  /**
+   * Whether the tab says above its controls why a held block's design can't
+   * be changed. True when omitted. A host that says it already, as the
+   * inspector's block card does, turns it off, so the reason is said once.
+   */
+  showReadOnlyReason?: boolean;
 }
 
 /**
@@ -522,6 +540,7 @@ function StyleInspectorBody({
   liveBreakpoints,
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
+  showReadOnlyReason = true,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -690,7 +709,9 @@ function StyleInspectorBody({
     <StyleTargetContext.Provider value={target}>
       <CanvasTokenModeProvider value={tokenMode}>
         <div className="nx-style-inspector" data-style-target={target.kind}>
-          <ReadOnlyNote target={target} reason={readOnlyReason} />
+          {showReadOnlyReason ? (
+            <ReadOnlyNote target={target} reason={readOnlyReason} />
+          ) : null}
           <NoStyleProperties count={inspected.sections.length} />
           <Accordion
             type="single"
@@ -1069,26 +1090,28 @@ function SectionFields({
       : undefined;
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
-      {rings === undefined ? null : (
-        <SpacingBox
-          margin={rings.margin}
-          padding={rings.padding}
-          surroundings={surroundings}
-        />
-      )}
-      {(rings?.rest ?? shown).map(property => (
-        <StylePropertyFields
-          key={`${surroundings.nodeId}:${property.property}`}
-          property={property}
-          namesSection={property.property === sectionKey}
-          {...surroundings}
-        />
-      ))}
-      {shown.length === 0 ? (
-        <p className="nx-inspector__note">
-          Nothing set here yet. Add a property from More.
-        </p>
-      ) : null}
+      <SectionHeld.Provider value={readOnly}>
+        {rings === undefined ? null : (
+          <SpacingBox
+            margin={rings.margin}
+            padding={rings.padding}
+            surroundings={surroundings}
+          />
+        )}
+        {(rings?.rest ?? shown).map(property => (
+          <StylePropertyFields
+            key={`${surroundings.nodeId}:${property.property}`}
+            property={property}
+            namesSection={property.property === sectionKey}
+            {...surroundings}
+          />
+        ))}
+        {shown.length === 0 ? (
+          <p className="nx-inspector__note">
+            Nothing set here yet. Add a property from More.
+          </p>
+        ) : null}
+      </SectionHeld.Provider>
     </fieldset>
   );
 }
@@ -1712,12 +1735,16 @@ function StyleFieldLabel({
   descendant: string | undefined;
 }): React.JSX.Element {
   const namedAbove = React.useContext(NamedAbove);
+  // Dragging the label to change a number field's value, while it can.
+  const scrub = useLabelScrubProps();
   return (
     <Label
       id={id}
       htmlFor={readOnly || focusOnly ? undefined : htmlFor}
       title={title}
       data-named-above={namedAbove ? "" : undefined}
+      // A read-only field's label names nothing, so it drags nothing either.
+      {...(readOnly ? {} : scrub)}
       {...(focusOnly && !readOnly
         ? {
             onClick: (event: React.MouseEvent<HTMLLabelElement>) =>
@@ -1875,33 +1902,36 @@ function StyleControlField({
       data-side={side}
       {...writes.caption}
     >
-      <StyleFieldLabel
-        id={labelId}
-        htmlFor={id}
-        readOnly={readOnly}
-        focusOnly={drawsIcons(control.leaf)}
-        title={summary}
-        label={label}
-        answer={answer}
-        editing={editing}
-        descendant={control.leaf.descendant}
-      />
-      <InheritedValue.Provider value={inherited}>
-        <ControlOrFont
-          id={id}
-          labelledBy={labelId}
-          control={control}
-          stored={stored}
-          actionName={actionName}
-          clearOnly={clearOnly}
-          tokens={tokens}
-          prefersDark={prefersDark}
-          pairedColour={pairedColour}
-          obscuredBy={obscuredBy}
-          describedBy={describedBy}
-          onCommit={commit}
+      {/* The label drags the value the number field below offers it. */}
+      <LabelScrubRow subject={`${nodeId} ${targetKey(writes.target)}`}>
+        <StyleFieldLabel
+          id={labelId}
+          htmlFor={id}
+          readOnly={readOnly}
+          focusOnly={labelFocusOnly(control.leaf, stored)}
+          title={summary}
+          label={label}
+          answer={answer}
+          editing={editing}
+          descendant={control.leaf.descendant}
         />
-      </InheritedValue.Provider>
+        <InheritedValue.Provider value={inherited}>
+          <ControlOrFont
+            id={id}
+            labelledBy={labelId}
+            control={control}
+            stored={stored}
+            actionName={actionName}
+            clearOnly={clearOnly}
+            tokens={tokens}
+            prefersDark={prefersDark}
+            pairedColour={pairedColour}
+            obscuredBy={obscuredBy}
+            describedBy={describedBy}
+            onCommit={commit}
+          />
+        </InheritedValue.Provider>
+      </LabelScrubRow>
       <BreakpointAction
         answer={answer}
         label={actionName}
@@ -3022,6 +3052,7 @@ function LengthOrNumberField({
       setDraft(storedText(stored));
     }
   };
+  const owning = useLineHeightLabelScrub({ draft, setDraft, stored, onCommit });
   return (
     <Input
       id={id}
@@ -3030,7 +3061,8 @@ function LengthOrNumberField({
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
-      onBlur={commit}
+      // Nothing of its own is written while a drag on the label owns it.
+      onBlur={() => owning() || commit()}
       onKeyDown={event => {
         if (commitOnEnter(event, commit)) return;
         // An arrow steps the value as its kind steps, a number or a length,
@@ -3049,6 +3081,40 @@ function LengthOrNumberField({
       }}
     />
   );
+}
+
+/**
+ * A line height offered to its row's label to drag, as its kind steps: a
+ * number or a length. Written once on release, as a typed value is.
+ *
+ * @returns whether a drag owns the value now, so the field writes nothing of
+ *   its own meanwhile
+ */
+function useLineHeightLabelScrub({
+  draft,
+  setDraft,
+  stored,
+  onCommit,
+}: {
+  draft: string;
+  setDraft: (value: string) => void;
+  stored: StyleValue | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): () => boolean {
+  const inherited = React.useContext(InheritedValue);
+  return useLabelScrub({
+    origin: lineHeightScrubOrigin(draft, inherited),
+    at: (from, delta) => {
+      const leaf = lineHeightLeafFor(String(from));
+      return leaf === undefined ? undefined : scrubbedValue(leaf, from, delta);
+    },
+    draft,
+    show: setDraft,
+    reset: () => setDraft(storedText(stored)),
+    commit: value => {
+      if (onCommit(value) === "unchanged") setDraft(storedText(stored));
+    },
+  });
 }
 
 function actionNameFor(propertyLabel: string, label: string): string {
@@ -4898,6 +4964,47 @@ const UNOFFERED_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
+/**
+ * Properties whose free CSS has a field of its own, by CSS property: an aspect
+ * ratio's menu and text decoration's icons, each with what it can draw.
+ */
+const OWN_FIELDS: Readonly<
+  Record<
+    string,
+    {
+      draws: (stored: StyleValue | undefined) => boolean;
+      Field: typeof AspectRatioField;
+      /** Whether its tab stop is a button a label's `for` would click. */
+      buttons: boolean;
+    }
+  >
+> = {
+  "aspect-ratio": {
+    draws: drawsAspectRatio,
+    Field: AspectRatioField,
+    buttons: false,
+  },
+  "text-decoration": {
+    draws: drawsDecoration,
+    Field: DecorationField,
+    buttons: true,
+  },
+};
+
+/**
+ * Whether a field's label only moves focus: where the control drawn is a
+ * group of buttons, whose tab stop a label's `for` would click. Read from the
+ * same decision that picks the control, so the two never disagree.
+ */
+function labelFocusOnly(
+  leaf: StyleControl["leaf"],
+  stored: StyleValue | undefined
+): boolean {
+  if (drawsIcons(leaf)) return true;
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own !== undefined && own.buttons && own.draws(stored);
+}
+
 /** The edited container's flow; CSS's defaults until it is measured or read. */
 const AlignmentFlow = React.createContext<Flow>({
   writingMode: "horizontal-tb",
@@ -4996,6 +5103,21 @@ function ValueField({
       />
     );
   }
+  // A property with a field of its own, where the stored value is one that
+  // field can draw; any other spelling keeps the text field.
+  const own = OWN_FIELDS[control.leaf.cssProperty];
+  if (own !== undefined && own.draws(stored)) {
+    return (
+      <own.Field
+        id={id}
+        labelledBy={labelledBy}
+        stored={stored}
+        actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   const toggle = toggleOptionsFor(control.leaf);
   if (toggle !== undefined && toggleShows(toggle, stored)) {
     return (
@@ -5024,8 +5146,10 @@ function ValueField({
       />
     );
   }
+  const Field =
+    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
   return (
-    <NumericField
+    <Field
       id={id}
       control={control}
       stored={stored}
@@ -5033,6 +5157,202 @@ function ValueField({
       tokens={tokens}
       describedBy={describedBy}
       onCommit={onCommit}
+    />
+  );
+}
+
+/**
+ * A number written as text, as CSS reads one (`0.5`, `1e-7`), with only the
+ * whitespace CSS trims around it: not JavaScript's `\s`, which also takes a
+ * no-break space the engine refuses. `undefined` for anything else.
+ */
+function textNumber(text: string): number | undefined {
+  const trimmed = trimCssWhitespace(text);
+  return CSS_NUMBER.test(trimmed) ? Number(trimmed) : undefined;
+}
+
+/**
+ * Whether the section a field sits in is held read-only. Its fieldset holds
+ * the form controls; a control that is not one (a slider's thumb) reads this.
+ */
+const SectionHeld = React.createContext(false);
+
+/**
+ * The id of words naming a field's unit for a screen reader, where the unit
+ * shows only as a sign beside it (opacity's %). Read by the number field and
+ * added to what describes it, never to what marks it invalid.
+ */
+const UnitWords = React.createContext<string | undefined>(undefined);
+
+/**
+ * A fraction as a percent, and back: multiplied or divided by 100 and no
+ * more, to twelve significant figures, which drops the binary noise of the
+ * division (`12.345 / 100` is `0.12345000000000001`) without rounding a
+ * value an author typed.
+ */
+function percentOf(fraction: number): number {
+  return Number((fraction * 100).toPrecision(12));
+}
+
+function fractionOf(percent: number): number {
+  return Number((percent / 100).toPrecision(12));
+}
+
+/** A stored opacity as the percent the field shows; anything else as stored. */
+function toPercent(value: StyleValue | undefined): StyleValue | undefined {
+  return typeof value === "number" ? percentOf(value) : value;
+}
+
+/**
+ * What the percent field commits, as the fraction CSS takes. A number, or a
+ * number typed as text, is divided by 100; a CSS-wide keyword is a whole
+ * value and passes through unscaled.
+ */
+function fromPercent(value: StyleValue | null): StyleValue | null {
+  const number =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? textNumber(value)
+        : undefined;
+  return number === undefined ? value : fractionOf(number);
+}
+
+/**
+ * Opacity, which an author thinks of in percent: a slider for "more or
+ * less" and the number field beside it for an exact value, both 0 to 100.
+ *
+ * The number field is the ordinary one, handed the value and its range in
+ * percent and converting what it commits back, so every behaviour it has (a
+ * draft held while its menu opens, a refused value said beside it, a keyword
+ * passed through, the variables at its end) is the same here. The inherited
+ * value it shows as a hint is converted the same way.
+ */
+function OpacityField(
+  props: React.ComponentProps<typeof NumericField>
+): React.JSX.Element {
+  const { control, stored, actionName, describedBy, onCommit } = props;
+  const unitId = React.useId();
+  const { shown, inheritedShown, resting } = opacityReading(
+    stored,
+    React.useContext(InheritedValue)
+  );
+  const leaf = control.leaf;
+  const percentControl =
+    leaf.kind === "number"
+      ? { ...control, leaf: { ...leaf, min: 0, max: 100 } }
+      : control;
+  return (
+    <div className="nx-style-inspector__opacity">
+      {resting === undefined ? null : (
+        <OpacitySlider
+          resting={resting}
+          actionName={actionName}
+          describedBy={describedBy}
+          onCommit={onCommit}
+        />
+      )}
+      <InheritedValue.Provider value={inheritedShown}>
+        <UnitWords.Provider value={unitId}>
+          <NumericField
+            {...props}
+            control={percentControl}
+            stored={shown}
+            onCommit={value => onCommit(fromPercent(value))}
+          />
+        </UnitWords.Provider>
+      </InheritedValue.Provider>
+      <span className="nx-style-inspector__percent" aria-hidden="true">
+        %
+      </span>
+      {/* The sign is not read; these words are, as the field's description. */}
+      <span id={unitId} className="sr-only">
+        percent
+      </span>
+    </div>
+  );
+}
+
+/**
+ * An opacity as the field shows it: the stored value in percent, the
+ * inherited one in percent as its hint, and where the slider's thumb rests.
+ *
+ * The thumb rests on the value set here, else the one inherited, else the
+ * 100% of an unset opacity. A keyword (`inherit`) is none of these, so it has
+ * no resting place and no slider: no position stands for it, and a nudge
+ * would replace it with a number built from a position it never had.
+ */
+function opacityReading(
+  stored: StyleValue | undefined,
+  inherited: string | undefined
+): {
+  shown: StyleValue | undefined;
+  inheritedShown: string | undefined;
+  resting: number | undefined;
+} {
+  const shown = toPercent(stored);
+  const inheritedNumber =
+    inherited === undefined ? undefined : textNumber(inherited);
+  const inheritedPercent =
+    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+  const unsetResting =
+    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+  return {
+    shown,
+    inheritedShown:
+      inheritedPercent === undefined ? inherited : String(inheritedPercent),
+    resting:
+      typeof shown === "number"
+        ? shown
+        : shown === undefined
+          ? unsetResting
+          : undefined,
+  };
+}
+
+/**
+ * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * written once it settles.
+ */
+function OpacitySlider({
+  resting,
+  actionName,
+  describedBy,
+  onCommit,
+}: {
+  resting: number;
+  actionName: string;
+  describedBy: string | undefined;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): React.JSX.Element {
+  const [preview, setPreview] = React.useState<number | undefined>(undefined);
+  // Held with its section, as the fieldset holds the form controls; a
+  // slider's thumb is not one, so it is told.
+  const held = React.useContext(SectionHeld);
+  const at = preview ?? resting;
+  return (
+    <Slider
+      value={[at]}
+      min={0}
+      max={100}
+      step={1}
+      disabled={held}
+      onValueChange={([next]) => setPreview(next)}
+      onValueCommit={([next]) => {
+        setPreview(undefined);
+        if (next !== undefined) onCommit(fractionOf(next));
+      }}
+      thumbs={[
+        {
+          "aria-label": `${actionName} slider`,
+          "aria-valuetext": `${at} percent`,
+          // A refusal said for the field is said for the slider too, which
+          // may hold the focus when it arrives.
+          ...(describedBy === undefined
+            ? {}
+            : { "aria-describedby": describedBy }),
+        },
+      ]}
     />
   );
 }
@@ -5141,6 +5461,8 @@ function NumericField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // Words for a unit shown only as a sign beside the field, for its description.
+  const unitWords = React.useContext(UnitWords);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -5183,6 +5505,15 @@ function NumericField({
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
   const extraUnit = unlistedUnit(measurement, units);
+  const commitText = useNumericLabelScrub({
+    control,
+    stored,
+    draft,
+    unit,
+    setDraft,
+    setTyping,
+    onCommit,
+  });
 
   return (
     <div className="nx-style-inspector__numeric">
@@ -5193,12 +5524,15 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={describedBy}
+        describedBy={
+          unitWords === undefined
+            ? describedBy
+            : [describedBy, unitWords].filter(Boolean).join(" ")
+        }
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
-        // A bare number takes the unit the field shows: "24" is 24px.
-        onCommit={value => onCommit(withDefaultUnit(control.leaf, value, unit))}
+        onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
         onStep={(draft, delta) => {
@@ -5316,6 +5650,67 @@ function unlistedUnit(
 ): string | null {
   const unit = unitOf(measurement);
   return unit !== undefined && !units.includes(unit) ? unit : null;
+}
+
+/**
+ * The number field's value, offered to its row's label to drag: shown in the
+ * field while the pointer is down, and written once on release through the
+ * same commit as a typed value, so one drag is one undo step.
+ *
+ * @returns the field's own commit for its text: a bare number given the unit
+ *   the field shows ("24" is 24px), and nothing written while a drag owns the
+ *   value — a blur mid-drag would write the preview, and the release again.
+ */
+function useNumericLabelScrub({
+  control,
+  stored,
+  draft,
+  unit,
+  setDraft,
+  setTyping,
+  onCommit,
+}: {
+  control: StyleControl;
+  stored: StyleValue | undefined;
+  draft: string;
+  unit: string;
+  setDraft: (value: string) => void;
+  setTyping: (typing: boolean) => void;
+  onCommit: (value: StyleValue | null) => CommitOutcome;
+}): (value: StyleValue | null) => CommitOutcome {
+  const inherited = React.useContext(InheritedValue);
+  const mode = useCanvasTokenMode();
+  const commitText = (value: StyleValue | null): CommitOutcome =>
+    onCommit(withDefaultUnit(control.leaf, value, unit));
+  const owning = useLabelScrub({
+    origin: scrubOrigin(control.leaf, draft, unit, inherited),
+    at: (from, delta) => scrubbedValue(control.leaf, from, delta),
+    draft,
+    show: text => {
+      // Shown as a value, not as typing, so the unit stays beside it.
+      setTyping(false);
+      setDraft(text);
+    },
+    reset: () => {
+      setTyping(false);
+      setDraft(storedText(stored));
+    },
+    commit: value =>
+      commitDraft({
+        draft: String(value),
+        stored,
+        kind: control.kind,
+        leaf: control.leaf,
+        // A drag writes a quantity, never a variable's name, so no variable
+        // is matched against it.
+        tokens: undefined,
+        mode,
+        onCommit: commitText,
+        setDraft,
+      }),
+  });
+  // "refused" keeps the text on screen, which is the drag's live value.
+  return value => (owning() ? "refused" : commitText(value));
 }
 
 /**
@@ -5892,13 +6287,18 @@ function stepOnKey(
  * the two rules it encodes sit together, since they are easy to change apart
  * and wrong apart.
  *
- * Arrow steps by one and Shift by ten, which is what Figma, Framer and Webflow
- * all do: an author arrives already knowing it, and a different scale here
- * would cost them for no gain.
+ * Arrow steps by one, Shift by ten and Alt by a tenth, which is what Figma,
+ * Framer and Webflow all do: an author arrives already knowing it, and a
+ * different scale here would cost them for no gain. The sizes are the label
+ * drag's own (`fieldStep`), so a modifier means the same on both.
  *
- * Alt, Control and Meta are refused outright. Those chords are platform,
- * browser and assistive-navigation shortcuts, so claiming one would mutate a
- * style and add an undo entry from a keystroke aimed somewhere else entirely.
+ * Alt+Up and Alt+Down are claimed only here, inside a number field: the
+ * editor's block moves on those keys stay out of fields, where they would be
+ * caret movement in a text field and are a step in this one.
+ *
+ * Control and Meta are refused outright. Those chords are platform, browser
+ * and assistive-navigation shortcuts, so claiming one would mutate a style
+ * and add an undo entry from a keystroke aimed somewhere else entirely.
  */
 function arrowStep(event: React.KeyboardEvent): number | null {
   // A keystroke arriving mid-composition belongs to the IME, which uses the
@@ -5907,11 +6307,11 @@ function arrowStep(event: React.KeyboardEvent): number | null {
   // shortcut manager states the same rule for the same reason, and this is the
   // second reader of a keyboard event in this repository that has to know it.
   if (event.nativeEvent.isComposing) return null;
-  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (event.ctrlKey || event.metaKey) return null;
   const direction =
     event.key === "ArrowUp" ? 1 : event.key === "ArrowDown" ? -1 : 0;
   if (direction === 0) return null;
-  return direction * (event.shiftKey ? 10 : 1);
+  return direction * fieldStep(scrubModifiersOf(event));
 }
 
 /**

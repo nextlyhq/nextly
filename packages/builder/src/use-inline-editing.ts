@@ -137,14 +137,13 @@ export function useInlineEditing(
     () => passages?.isOpen() ?? false,
     () => false
   );
-  const plain = useInlineText(editor);
   /*
-   * Passages only. The plain surface commits from its own blur handler and
-   * answers the pre-union way, so an edit it ends is not observable from here
-   * at all — a line of text lost to a capped write goes unreported, which is a
-   * defect of that surface rather than something this can translate. Stated so
-   * a host does not read silence as "nothing happened".
+   * The plain surface reports only a key's refused way out, the case where its
+   * line stays open: its blur commits and answers the pre-union way, so a line
+   * lost to a capped write on blur still goes unreported. Stated so a host
+   * does not read silence there as "nothing happened".
    */
+  const plain = useInlineText(editor, onFinished);
   const rich = useInlineRichText(editor, loadRichText, onFinished);
 
   /** The kind the block declared for this value, or `null` if it declared none. */

@@ -174,6 +174,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
+  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -288,6 +289,7 @@ import {
   sweepDeletedDocument,
 } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -326,6 +328,26 @@ import {
   takeLiveSharedValuesInto,
   wholeWritableFields,
 } from "../../versions/shared-publish-base";
+import {
+  assertVersionNamesEvery,
+  certainlyStale,
+  type DecodedVersion,
+  type DocumentRevisionState,
+  givenOf,
+  judgedLanguage,
+  judgeLanguageRow,
+  judgeMainRow,
+  type PartState,
+  poolRevisionReader,
+  refuseIfLanguageMoved,
+  refuseIfMainMoved,
+  releaseRunExemptFor,
+  type StaleWrite,
+  type StaleWriteHolder,
+  staleVersionErrorFor,
+  type VersionCheck,
+  versionCheckFor,
+} from "../../versions/stale-version";
 import {
   containedComponentResolver,
   rehydrateSnapshotDates,
@@ -2121,6 +2143,48 @@ export class CollectionMutationService extends BaseService {
   ): string[] | null {
     if (collection.localized !== true) return null;
     return resolveLocalizedFieldNames([...fields], true);
+  }
+
+  /**
+   * Record an overwrite in this document's history, when the update said to
+   * overwrite: whatever the collection keeps, in the write's transaction, so
+   * a save that cannot record it is not kept either. Whom it replaced is read
+   * from `before`, the rows as the save found them before writing. See
+   * `recordOverwriteEvent`.
+   */
+  private async recordOverwriteIfAsked(
+    tx: TransactionContext,
+    check: VersionCheck,
+    target: {
+      collection: string;
+      id: string;
+      actor: RequestActor | null | undefined;
+      user: UserContext | undefined;
+    },
+    before: {
+      main: DocumentRevisionState | undefined;
+      language: PartState | undefined;
+      locale: string | undefined;
+    }
+  ): Promise<void> {
+    if (check.kind !== "overwrite") return;
+    await recordOverwriteEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "collection", slug: target.collection, id: target.id },
+        actor: actorForWrite(target.actor, target.user),
+        personName: target.user?.name ?? null,
+        locale: before.locale ?? null,
+        ...overwriteRecordOf(check, {
+          main: before.main?.main,
+          language: before.language,
+        }),
+      }
+    ).catch(err => {
+      // See `recordHistoryEvent`: the transaction must not keep the write.
+      throw markWriteIntegrityFailure(err);
+    });
   }
 
   /** This document's status moves in its history; see `recordTransitionEvents`. */
@@ -9555,7 +9619,10 @@ export class CollectionMutationService extends BaseService {
             // publish left it and as it stood before. The default locale is
             // included: its companion event replaces the untagged main event
             // suppressed above.
-            // Every told language as the publish left it, in one read.
+            // Every told language, and every promoted change's own slot, as
+            // the publish left it, in one read. An unlocalized collection's
+            // change is keyed by no language and tells none, so it is read
+            // under its own key rather than found among the told ones.
             const storedAfter = await this.languageDocumentsOnTx(tx, {
               row: publishedParentRow ?? preImageRow,
               collectionName: params.collectionName,
@@ -9563,16 +9630,25 @@ export class CollectionMutationService extends BaseService {
               tableName,
               fields,
               manyToManyFields,
-              locales: told.map(language => language.locale),
+              locales: [
+                ...told.map(language => language.locale),
+                ...promotions.map(promoted => promoted.locale),
+              ],
             });
-            // What a publish of each promoted language alone hands its update
-            // hooks: that language's durable document, against how it stood.
+            // What a publish of each promoted change alone hands its update
+            // hooks: its durable document, against how it stood, both read
+            // under the change's own key (`storedBefore` holds every pending
+            // change's).
             promotedForHooks = promotions.flatMap(promoted => {
-              const locale = promoted.locale ?? defaultLocale ?? "";
-              const data = storedAfter.get(locale);
+              const data = storedAfter.get(promoted.locale);
               return data === undefined
                 ? []
-                : [{ data, originalData: storedBefore.get(locale) ?? null }];
+                : [
+                    {
+                      data,
+                      originalData: storedBefore.get(promoted.locale) ?? null,
+                    },
+                  ];
             });
             for (const language of told) {
               const data = storedAfter.get(language.locale) ?? {};
@@ -10194,10 +10270,35 @@ export class CollectionMutationService extends BaseService {
       args.collectionName,
       args.entryId
     );
+    // The fields every language shares, whose promoted values land beneath
+    // each language judged below.
+    const sharedNames = new Set(
+      args.fields.flatMap(field =>
+        typeof field.name === "string" && field.localized !== true
+          ? [field.name]
+          : []
+      )
+    );
     await this.assertLanguagesGoLiveValid({
       collectionName: args.collectionName,
       entryId: args.entryId,
-      row: args.row,
+      // Each language judged as stored is judged over the shared values the
+      // publish leaves, not those it replaces: every promotion writes the
+      // same shared state, so a language with no change of its own lands as
+      // its translation over the promotions' shared fields. Only the main
+      // row's own shared fields are taken, by the names the row is read
+      // under, so no language's translated values reach another's.
+      row: promotions.reduce<Record<string, unknown>>(
+        (row, promoted) => ({
+          ...row,
+          ...Object.fromEntries(
+            Object.entries(promoted.payload).filter(
+              ([name]) => name in args.row && sharedNames.has(name)
+            )
+          ),
+        }),
+        args.row
+      ),
       patch: {},
       writeLocale: undefined,
       writeLocaleValues: {},
@@ -10871,6 +10972,35 @@ export class CollectionMutationService extends BaseService {
    * including the published/draft `status`) makes the write persist the
    * promoted content with no separate code path.
    */
+  /**
+   * What a publish's caller contributes over a pending change: the payload
+   * the field gate has already judged, never the raw request, as one logical
+   * document. The fold credits the caller with it, and the out-of-date check
+   * judges the change with it merged over, so the check and the write agree
+   * on what the publish writes.
+   */
+  private callerContributionOf(args: {
+    finalData: Record<string, unknown>;
+    componentFieldData: Record<string, unknown>;
+    manyToManyData: Record<string, string[]>;
+    fields: FieldDefinition[];
+    manyToManyFields: FieldDefinition[];
+    componentSchemas: ComponentSchemas | null;
+  }): Record<string, unknown> {
+    return this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        {},
+        args.finalData,
+        args.componentFieldData,
+        args.manyToManyData,
+        args.fields,
+        args.manyToManyFields,
+        args.componentSchemas
+      ),
+      args.fields
+    );
+  }
+
   private async foldWorkingDraft(
     tx: TransactionContext,
     args: {
@@ -10947,18 +11077,14 @@ export class CollectionMutationService extends BaseService {
     // so the resolver credits them only with what the rules let them send, and
     // judges the rest as the pending change holds it. Logical, through the
     // same conversion as the document it is compared against.
-    const callerContribution = this.deserializeJsonFieldsForSnapshot(
-      this.assemblePromotedDocument(
-        {},
-        finalData,
-        componentFieldData,
-        manyToManyData,
-        fields,
-        manyToManyFields,
-        componentSchemas
-      ),
-      fields
-    );
+    const callerContribution = this.callerContributionOf({
+      finalData,
+      componentFieldData,
+      manyToManyData,
+      fields,
+      manyToManyFields,
+      componentSchemas,
+    });
     // The locked draft on its own, through the same conversion: the field gate
     // keeps a protected child of a group the caller sent at its LIVE value, so
     // where that group replaced the draft's, only the draft still says what
@@ -11089,8 +11215,37 @@ export class CollectionMutationService extends BaseService {
        * counter the upsert moves with it.
        */
       savedBy: RequestActor;
+      /**
+       * How the save is judged on the translation it writes, when it is: the
+       * row's version is claimed (`refuseIfLanguageMoved`) before anything
+       * is written, and a stale save throws, with where to answer from.
+       */
+      judge?: {
+        check: VersionCheck;
+        /** The language the save is judged on, if any. */
+        locale: string | undefined;
+        mainTable: string;
+        holder: StaleWriteHolder;
+      };
     }
-  ): Promise<void> {
+  ): Promise<PartState | undefined> {
+    const claim =
+      args.translation && args.judge
+        ? await refuseIfLanguageMoved(
+            tx,
+            this.dialect,
+            args.judge.check,
+            {
+              table: args.judge.mainTable,
+              id: args.entryId,
+              languagesTable: args.translation.companionTableName,
+              judged: args.judge.locale,
+              written: args.translation.writeLocale,
+            },
+            args.savedBy,
+            args.judge.holder
+          )
+        : undefined;
     await tx.update(
       args.tableName,
       args.columns,
@@ -11107,9 +11262,12 @@ export class CollectionMutationService extends BaseService {
         args.translation.writeLocale,
         args.translation.companionData,
         undefined,
-        { savedBy: args.savedBy }
+        { savedBy: args.savedBy, revisionClaimed: claim?.claimed === true }
       );
     }
+    // The translation row as it was before this write, read by the claim:
+    // for an overwrite, what it replaced.
+    return claim?.before;
   }
 
   /**
@@ -12252,6 +12410,213 @@ export class CollectionMutationService extends BaseService {
     return { workingDraftDocument, priorWorkingDraftDocument };
   }
 
+  /**
+   * An item's language judged inside a transaction it shares (see
+   * `judgeLanguageRow`): its refusal as a result, never thrown, since the
+   * transaction goes on with the rest of a batch. A version from a read of
+   * another language is a validation error.
+   */
+  private async judgeLanguageInTransaction(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
+    check: VersionCheck,
+    entryId: string,
+    row: { table: string; languagesTable: string; written: string }
+  ): Promise<
+    | Awaited<ReturnType<typeof judgeLanguageRow>>
+    | CollectionServiceResult<unknown>
+  > {
+    let judged: string | undefined;
+    try {
+      judged = judgedLanguage(givenOf(check), row.written);
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
+    const result = await judgeLanguageRow(
+      tx,
+      this.dialect,
+      check,
+      { ...row, id: entryId, judged },
+      actorForWrite(params.actor, params.user)
+    );
+    if (!result.stale || check.kind !== "judge") return result;
+    return this.staleVersionAnswerInTransaction(
+      tx,
+      params,
+      entryId,
+      check.given,
+      {
+        table: row.table,
+        languages: { table: row.languagesTable, locales: [row.written] },
+      }
+    );
+  }
+
+  /**
+   * The refusal of an item found out of date inside a transaction it shares,
+   * read on that transaction: a pooled read would wait behind it on SQLite.
+   * So who changed it and when are told to a trusted caller alone, unnamed,
+   * since the read gate and the people lookup both read on the pool.
+   */
+  private async staleVersionAnswerInTransaction(
+    tx: TransactionContext,
+    params: UpdateEntryWriteParams,
+    entryId: string,
+    given: DecodedVersion,
+    at: StaleWrite
+  ): Promise<CollectionServiceResult<unknown>> {
+    const refusal = await staleVersionErrorFor(tx, {
+      dialect: this.dialect,
+      scopeKind: "collection",
+      slug: params.collectionName,
+      id: entryId,
+      given,
+      at,
+      inSharedTransaction: true,
+      reader: {
+        user: params.user,
+        trusted: params.overrideAccess === true && !params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+      },
+    });
+    return errorToServiceResult(
+      refusal,
+      { defaultMessage: "Failed to update entry" },
+      this.dialect
+    );
+  }
+
+  /**
+   * How an update is judged, decided from its body before the version in it
+   * is dropped: a release run's own write is exempt, and nothing a caller
+   * sends can make a write one. A version that is not one is answered as the
+   * validation error it is.
+   */
+  private versionCheckOf(
+    target: { collectionName: string; entryId: string },
+    body: Record<string, unknown>
+  ): VersionCheck | CollectionServiceResult {
+    try {
+      return versionCheckFor(body, {
+        exempt: releaseRunExemptFor({
+          scopeKind: "collection",
+          scopeSlug: target.collectionName,
+          entryId: target.entryId,
+        }),
+      });
+    } catch (error) {
+      return errorToServiceResult(
+        error,
+        { defaultMessage: "Failed to update entry" },
+        this.dialect
+      );
+    }
+  }
+
+  /**
+   * The refusal of a save whose version is below the one the entry already
+   * holds, before any hook runs: a counter only goes up, so such a version is
+   * certainly out of date. Null otherwise, for the row lock to decide.
+   */
+  private async certainlyStaleAnswer(
+    params: Parameters<CollectionMutationService["staleVersionAnswer"]>[0] & {
+      locale?: string;
+    },
+    check: VersionCheck,
+    table: string,
+    /** A sweep of every language, judged on each of them. */
+    sweep: boolean
+  ): Promise<CollectionServiceResult | null> {
+    if (check.kind !== "judge") return null;
+    // The languages the save is judged on: compared here as the main row is,
+    // and named in the answer so it can be sent back with the same save.
+    // Read before any hook has split the body, so taken from the request:
+    // every language for a sweep, else the one it names or the default.
+    const companion = this.localization
+      ? await this.fileManager.loadCompanionSchema(params.collectionName)
+      : null;
+    const locales =
+      companion && this.localization
+        ? sweep
+          ? this.localization.locales.map(l => l.code)
+          : [resolveRequestedLocale(this.localization, params.locale)]
+        : [];
+    // A version from a read of another language, or for a sweep one that
+    // does not name every language, can't be judged: refused here, before
+    // any hook runs, as the validation error it is.
+    if (locales.length > 0) {
+      try {
+        if (sweep) assertVersionNamesEvery(check.given, locales);
+        else judgedLanguage(check.given, locales[0]);
+      } catch (error) {
+        return errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
+      }
+    }
+    const at: StaleWrite =
+      companion && locales.length > 0
+        ? { table, languages: { table: companion.companionTableName, locales } }
+        : { table };
+    const stale = await certainlyStale(poolRevisionReader(this.adapter), {
+      dialect: this.dialect,
+      table,
+      id: params.entryId,
+      given: check.given,
+      languages: at.languages,
+    });
+    return stale ? this.staleVersionAnswer(params, check.given, at) : null;
+  }
+
+  /**
+   * The refusal of an update made from an out-of-date version, read from the
+   * entry as it is now, on the pool. Who changed it last and when are told
+   * only to a caller who may read the entry, as a read of it would decide.
+   */
+  private async staleVersionAnswer(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      routeAuthorized?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      request?: Request;
+      context?: Record<string, unknown>;
+    },
+    given: DecodedVersion,
+    at: StaleWrite
+  ): Promise<CollectionServiceResult> {
+    const refusal = await staleVersionErrorFor(
+      poolRevisionReader(this.adapter),
+      {
+        dialect: this.dialect,
+        scopeKind: "collection",
+        slug: params.collectionName,
+        id: params.entryId,
+        given,
+        at,
+        reader: {
+          user: params.user,
+          trusted: params.overrideAccess === true && !params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+          hookInputs: { request: params.request, context: params.context },
+        },
+      }
+    );
+    return errorToServiceResult(
+      refusal,
+      { defaultMessage: "Failed to update entry" },
+      this.dialect
+    );
+  }
+
   async updateEntry(
     // Named `rawParams` because the body must not read it: the wildcard locale
     // is resolved away into `params` at the top of the method. See there.
@@ -12326,6 +12691,11 @@ export class CollectionMutationService extends BaseService {
     // Read once, as plain data: a caller's object may compute a key on each
     // read, and the gate a write asks and the write itself must read the same
     // body.
+    // Judged against the version the caller read, when it sent one: decided
+    // here, before the version is dropped below. A release run's own write is
+    // exempt, and nothing a caller sends can make a write one.
+    const versionCheck = this.versionCheckOf(rawParams, body);
+    if ("success" in versionCheck) return versionCheck;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
@@ -12422,6 +12792,9 @@ export class CollectionMutationService extends BaseService {
     // hold once locked; read after the transaction, as the adapter wraps
     // what is thrown out of it.
     const lockedPromotion: { refusal?: NextlyError } = {};
+    // Set when the version the caller gave is found out of date inside the
+    // transaction: where to read the current one once it has rolled back.
+    const staleWrite: StaleWriteHolder = {};
     // Which languages a wildcard sweep actually moved, and what each moved FROM.
     // Captured at the write because it is unrecoverable afterwards, and read at
     // the event step so each real transition is reported once.
@@ -12625,6 +12998,17 @@ export class CollectionMutationService extends BaseService {
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
+
+      // A version below the one the entry already held when it was read is
+      // certainly out of date, since a counter only goes up: refused here,
+      // before any hook runs. Any other is judged under the row lock.
+      const certainlyStale = await this.certainlyStaleAnswer(
+        params,
+        versionCheck,
+        tableName,
+        sweepAllLocales
+      );
+      if (certainlyStale) return certainlyStale;
 
       // Shared context between all hooks in this request
       const sharedContext: Record<string, unknown> = { ...params.context };
@@ -12943,6 +13327,31 @@ export class CollectionMutationService extends BaseService {
         params.locale,
         false
       );
+      // A translated save is judged on its own language too, so the version
+      // must name it; one from a read of another language is refused here,
+      // before anything is written.
+      const judgedLocale = judgedLanguage(
+        givenOf(versionCheck),
+        localizedUpdate?.writeLocale
+      );
+      // The languages a refusal's current version names: the one the save is
+      // judged on, or for a sweep of every language, each of them, all of
+      // which a sweep's version names and all of which it is judged on.
+      const sweepCompanion =
+        sweepAllLocales && versionCheck.kind === "judge"
+          ? await this.fileManager.loadCompanionSchema(params.collectionName)
+          : null;
+      const judgedLanguages = sweepCompanion
+        ? {
+            table: sweepCompanion.companionTableName,
+            locales: this.localization?.locales.map(l => l.code) ?? [],
+          }
+        : localizedUpdate && judgedLocale
+          ? {
+              table: localizedUpdate.companionTableName,
+              locales: [judgedLocale],
+            }
+          : undefined;
 
       // Whether this write targets a non-default locale's companion `_status`
       // (which the in-transaction check below reads under the lock) rather than
@@ -13312,6 +13721,23 @@ export class CollectionMutationService extends BaseService {
           // The adapter owns the dialect specifics and no-ops where row locking
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
+          // The main row's version, read under the lock as it is now: a save
+          // committed since the caller read leaves it out of date. Kept for an
+          // overwrite, whose history names whom it replaced from this read.
+          const mainBefore = await refuseIfMainMoved(
+            tx,
+            this.dialect,
+            versionCheck,
+            {
+              table: tableName,
+              id: params.entryId,
+              languages: judgedLanguages,
+            },
+            staleWrite
+          );
+          // The save's language row as it stood before this save wrote it,
+          // for an overwrite's history; set where the row is written below.
+          let languageBefore: PartState | undefined;
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the
@@ -13705,7 +14131,22 @@ export class CollectionMutationService extends BaseService {
                   locale: draftLocaleKey,
                   shared,
                   live,
-                  pending: snapshotRecord(workingDraft.snapshot),
+                  // Judged as the publish writes it: the stored change with
+                  // the caller's gated contribution merged over it. A request
+                  // that retypes the live value of a field the change is
+                  // behind on writes nothing behind live, so it goes through
+                  // in one step.
+                  pending: {
+                    ...snapshotRecord(workingDraft.snapshot),
+                    ...this.callerContributionOf({
+                      finalData,
+                      componentFieldData,
+                      manyToManyData,
+                      fields,
+                      manyToManyFields,
+                      componentSchemas: splitComponentSchemas,
+                    }),
+                  },
                   views,
                 });
                 if (stale.length > 0) {
@@ -13918,11 +14359,19 @@ export class CollectionMutationService extends BaseService {
           // `upsertsTranslation` says so: a wildcard only for the values of
           // the draft it promotes.
           if (!storeAsWorkingDraft) {
-            await this.writeRowAndTranslation(tx, {
+            languageBefore = await this.writeRowAndTranslation(tx, {
               tableName,
               entryId: params.entryId,
               columns,
               savedBy: actorForWrite(params.actor, params.user),
+              // The language's version, judged by the save's first write of
+              // its row: a refusal rolls the whole save back.
+              judge: {
+                check: versionCheck,
+                locale: judgedLocale,
+                mainTable: tableName,
+                holder: staleWrite,
+              },
               translation:
                 localizedUpdate &&
                 upsertsTranslation({
@@ -14668,6 +15117,18 @@ export class CollectionMutationService extends BaseService {
             params.user?.id ?? null
           );
 
+          await this.recordOverwriteIfAsked(
+            tx,
+            versionCheck,
+            {
+              collection: params.collectionName,
+              id: params.entryId,
+              actor: params.actor,
+              user: params.user,
+            },
+            { main: mainBefore, language: languageBefore, locale: judgedLocale }
+          );
+
           writtenVersion = await documentVersionOn(tx, {
             dialect: this.dialect,
             table: tableName,
@@ -15020,6 +15481,15 @@ export class CollectionMutationService extends BaseService {
       // wraps the thrown sentinel in a DatabaseError before it reaches here.
       if (transitionDeniedResult) {
         return transitionDeniedResult;
+      }
+      // Answered after the rollback, from the document as it now is, so the
+      // refusal names the save that came in between rather than this one.
+      if (staleWrite.at && versionCheck.kind === "judge") {
+        return this.staleVersionAnswer(
+          params,
+          versionCheck.given,
+          staleWrite.at
+        );
       }
       if (lockedPromotion.refusal) {
         return errorToServiceResult(
@@ -17656,6 +18126,14 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // How this item is judged, decided before the version and `_overwrite`
+    // are dropped, as on updateEntry: an item that gives a version is judged
+    // on its own, so a stale one is refused and the rest of a batch applied.
+    const versionCheck = this.versionCheckOf(
+      { collectionName: params.collectionName, entryId },
+      body
+    );
+    if ("success" in versionCheck) return versionCheck;
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
     // Computed right after the row is updated (before redaction can strip the
@@ -17752,6 +18230,9 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      // The main row's version, under the lock just taken and before this
+      // item writes anything, so a refused item leaves nothing behind in a
+      // transaction that goes on with the rest of a batch.
       if (rowFilter) {
         const outside = await this.refusalOutsideFilterOfWrite(
           tx,
@@ -17762,6 +18243,50 @@ export class CollectionMutationService extends BaseService {
         if (outside) {
           return asMissingItem(outside, entryId, options.identifyMissingEntry);
         }
+      }
+      // Judged once the caller is known to reach this entry, so a refusal
+      // never tells one the row filter excludes that the entry exists.
+      // The default language, the one a batch writes, when the version names
+      // it: judged with the main row, and named in a refusal so the answer
+      // can be sent back with the same save.
+      const defaultLocale = this.localization?.defaultLocale;
+      const batchCompanion =
+        versionCheck.kind !== "unjudged" &&
+        defaultLocale !== undefined &&
+        versionCheck.given !== undefined &&
+        Object.hasOwn(versionCheck.given.languages, defaultLocale)
+          ? await this.fileManager.loadCompanionSchema(
+              params.collectionName,
+              tx.getDrizzle()
+            )
+          : null;
+      const batchAt: StaleWrite =
+        batchCompanion && defaultLocale !== undefined
+          ? {
+              table: tableName,
+              languages: {
+                table: batchCompanion.companionTableName,
+                locales: [defaultLocale],
+              },
+            }
+          : { table: tableName };
+      // The main row's version and that language's, under the lock just
+      // taken and before this item writes or runs anything, so a refused
+      // item leaves nothing behind in a transaction that goes on with the
+      // rest of a batch.
+      const mainJudged = await judgeMainRow(tx, this.dialect, versionCheck, {
+        table: tableName,
+        id: entryId,
+        languages: batchAt.languages,
+      });
+      if (mainJudged.stale && versionCheck.kind === "judge") {
+        return this.staleVersionAnswerInTransaction(
+          tx,
+          params,
+          entryId,
+          versionCheck.given,
+          batchAt
+        );
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -18267,6 +18792,26 @@ export class CollectionMutationService extends BaseService {
           })
         : null;
 
+      // The language's version, by this item's first write of its row, ahead
+      // of the main row's write: a stale item is answered with nothing of it
+      // written. Only when the row is written, so no empty translation row is
+      // left behind.
+      const languageJudged =
+        localizedUpdate && writesCompanionRow
+          ? await this.judgeLanguageInTransaction(
+              tx,
+              params,
+              versionCheck,
+              entryId,
+              {
+                table: tableName,
+                languagesTable: localizedUpdate.companionTableName,
+                written: localizedUpdate.writeLocale,
+              }
+            )
+          : { stale: false, claimed: false };
+      if ("success" in languageJudged) return languageJudged;
+
       // Skip the live-row UPDATE for a held edit; the pending change is stored
       // below instead.
       const [updated] = storeAsWorkingDraft
@@ -18336,7 +18881,10 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.writeLocale,
             localizedUpdate.companionData,
             undefined,
-            { savedBy: actorForWrite(params.actor, params.user) }
+            {
+              savedBy: actorForWrite(params.actor, params.user),
+              revisionClaimed: languageJudged.claimed,
+            }
           );
         } catch (error: unknown) {
           throw markWriteIntegrityFailure(error);
@@ -18823,6 +19371,24 @@ export class CollectionMutationService extends BaseService {
           ]
         );
       }
+
+      // On the caller's transaction, so a batch that cannot record an
+      // overwrite keeps nothing of it.
+      await this.recordOverwriteIfAsked(
+        tx,
+        versionCheck,
+        {
+          collection: params.collectionName,
+          id: entryId,
+          actor: params.actor,
+          user: params.user,
+        },
+        {
+          main: mainJudged.before,
+          language: languageJudged.before,
+          locale: localizedUpdate?.writeLocale,
+        }
+      );
 
       // What this update wrote, as the single-entry update reports it: a held
       // edit leaves the live row unchanged, so the hooks, the field hooks and

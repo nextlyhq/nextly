@@ -40,6 +40,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
@@ -702,6 +703,17 @@ export function CanvasMarks({
     () => watchCanvasFor(() => layer.current, measure),
     [measure, canvasFrame]
   );
+
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, canvasFrame]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the

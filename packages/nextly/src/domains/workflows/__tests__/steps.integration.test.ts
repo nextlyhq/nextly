@@ -218,6 +218,54 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("the collection's own access rule", () => {
+      it("refuses a step needing update when the collection's update rule refuses it, though the person holds update, writing nothing", async () => {
+        t = await bootSteps(dialect);
+        const dave = await person(t, "dave", [["update", "locked"]]);
+        const doc = await entry(t, "locked");
+
+        await expect(
+          step(doc, "send", dave, { slug: "locked", part: null })
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "no-permission", permission: "update-locked" },
+        });
+        expect(await stateOf(t, partOf("locked", doc, null))).toBeNull();
+        expect(await workflowEvents(t, "locked", doc)).toEqual([]);
+      });
+
+      it("refuses a step needing publish when the collection's publish rule refuses it, though the person holds publish", async () => {
+        t = await bootSteps(dialect);
+        const erin = await person(t, "erin", [["publish", "locked"]]);
+        const doc = await entry(t, "locked");
+        const shared = partOf("locked", doc, null);
+        await seedState(t, shared, "hold", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+        });
+
+        await expect(
+          step(doc, "fastTrack", erin, {
+            slug: "locked",
+            part: null,
+            revision: 1,
+          })
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: {
+            reason: "no-permission",
+            permission: "publish-locked",
+          },
+        });
+        expect(await stateOf(t, shared)).toMatchObject({
+          stage: "hold",
+          approval: null,
+          revision: 1,
+        });
+        expect(await workflowEvents(t, "locked", doc)).toEqual([]);
+      });
+    });
+
     describe("approvals come only from a signed-in person", () => {
       const callers: Array<[string, () => WorkflowCaller]> = [
         [

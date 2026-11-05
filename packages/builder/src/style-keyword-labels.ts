@@ -84,6 +84,13 @@ const KEYWORD_LABELS: Readonly<
   "min-height": SIZE_KEYWORDS,
   "max-width": SIZE_KEYWORDS,
   "max-height": SIZE_KEYWORDS,
+  // Strikethrough is what an author calls a line through text.
+  "text-decoration-line": {
+    none: "None",
+    underline: "Underline",
+    "line-through": "Strikethrough",
+    overline: "Overline",
+  },
   "object-fit": {
     fill: "Stretch to fill",
     contain: "Fit inside",

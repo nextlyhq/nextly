@@ -304,7 +304,8 @@ export interface SingleDocument {
    * The document's version: changed by every save and by no read, and naming
    * each language the read or write covered. Opaque — hand it back as it is.
    *
-   * @experimental Nothing is judged against the version yet.
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
    */
   _rev?: string;
 

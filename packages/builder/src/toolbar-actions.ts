@@ -142,10 +142,10 @@ export interface ToolbarAction {
   /**
    * Why it is disabled, phrased for an author, or `undefined` when enabled.
    *
-   * Only ever set for a reason an author can act on. "This block is at the top
-   * of its container" is a fact about the page they can see and is left unsaid;
-   * a lock is the opposite, because nothing on the canvas explains it and the
-   * remedy is one field away.
+   * Set for every disabled item, so nothing is dimmed without a word: a lock,
+   * which nothing on the canvas explains and whose remedy is one field away,
+   * and the plain edges too ("Already the first block here"), since a dimmed
+   * item with no reason reads as broken rather than as finished.
    */
   readonly reason?: string;
   /**
@@ -485,7 +485,9 @@ function singleMove<Id extends string>(
     return { id, label, enabled: false, reason: refusalAnnouncement(refused) };
   }
   return heldByLock(
-    { id, label, enabled: to !== null },
+    to === null
+      ? { id, label, enabled: false, reason: EDGE_REASONS[direction] }
+      : { id, label, enabled: true },
     ask,
     to === null
       ? undefined
@@ -501,6 +503,21 @@ function singleMove<Id extends string>(
 }
 
 /**
+ * Why a block, or a set moving as one, cannot move one step when there is
+ * simply nowhere to go: said as plainly as a lock is, since a dimmed item with
+ * no reason reads as broken. Worded to stay true for every `null` the keyboard
+ * move gives: an indent is refused both with no block above and with one
+ * whose several regions leave none to name, and the set's edge is its first
+ * or last block's.
+ */
+const EDGE_REASONS: Record<MoveDirection, string> = {
+  up: "Already at the top here",
+  down: "Already at the bottom here",
+  indent: "No block just above that it can go into",
+  outdent: "Already at the top level of the page",
+};
+
+/**
  * Whether a set can move one step, and what to say when it cannot.
  *
  * The plan itself is the answer: `selectionMove` already decides that a set
@@ -508,9 +525,8 @@ function singleMove<Id extends string>(
  * holds the rest, and asking it here keeps the bar agreeing with the keyboard
  * rather than testing those rules a second time.
  *
- * `null` is the edge of the container, which is dimmed WITHOUT a reason —
- * exactly as a single block at the end of its list is. Nothing needs saying
- * about a step that has nowhere to go.
+ * `null` is the edge of the container, which is dimmed with the same reason
+ * a single block at the end of its list gives.
  */
 function moveAction(
   document: BlockDocument,
@@ -521,7 +537,8 @@ function moveAction(
   ask?: LockQuestion
 ): ToolbarAction {
   const plan = selectionMove(document, ids, direction);
-  if (plan === null) return { id, label, enabled: false };
+  if (plan === null)
+    return { id, label, enabled: false, reason: EDGE_REASONS[direction] };
   if (isRefusal(plan))
     return { id, label, enabled: false, reason: plan.reason };
   return heldByLock({ id, label, enabled: true }, ask, plan.ops);
@@ -798,8 +815,10 @@ export function toolbarActions(
       id: "select-parent",
       label: "Select parent",
       // The path always ends at the selection itself, so a length of one means
-      // a top-level block with no container to step out to.
+      // a top-level block with no container to step out to: the outdent's
+      // reason, since it is the same fact.
       enabled: path.length > 1,
+      ...(path.length > 1 ? {} : { reason: EDGE_REASONS.outdent }),
     },
     singleMove(
       document,
@@ -966,7 +985,8 @@ export function toolbarPlacement(
   toolbar: ToolbarSize,
   canvas: ToolbarSize,
   gap: number = TOOLBAR_GAP_PX,
-  screen: ToolbarScreen = WHOLE_PAGE
+  screen: ToolbarScreen = WHOLE_PAGE,
+  parts: readonly Rect[] = [block]
 ): ToolbarPlacement {
   const above = block.y - toolbar.height - gap;
   const below = block.y + block.height + gap;
@@ -981,7 +1001,11 @@ export function toolbarPlacement(
   // off-screen.
   const left = screen.left ?? Number.NEGATIVE_INFINITY;
   const right = screen.right ?? Number.POSITIVE_INFINITY;
-  const crosses = block.x < right && block.x + block.width > left;
+  // Judged by each selected block, not by their union: two blocks off
+  // opposite sides have a union that crosses the screen through the gap.
+  const crosses = parts.some(
+    part => part.x < right && part.x + part.width > left
+  );
   const minX = Math.max(0, crosses ? left : 0);
   const maxX =
     Math.min(canvas.width, crosses ? right : Number.POSITIVE_INFINITY) -

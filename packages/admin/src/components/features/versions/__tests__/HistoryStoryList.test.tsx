@@ -365,6 +365,86 @@ describe("events between versions", () => {
     expect(list).not.toHaveTextContent("null");
     expect(list).not.toHaveTextContent("u-gone");
   });
+
+  it("shows an overwrite row naming whose changes it replaced", () => {
+    renderList(
+      [version(1, 1), version(2, 5)],
+      [
+        event("overwritten", 3, {
+          actorId: "u2",
+          actorName: "Ana",
+          payload: {
+            given: "stale",
+            replaced: { kind: "person", id: "u1", principalKind: null },
+            replacedName: "Ben",
+          },
+        }),
+      ]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    const row = within(list)
+      .getByText("Overwrote changes by Ben")
+      .closest("li") as HTMLElement;
+    // A row of its own, led by who overwrote, beside the versions.
+    expect(row).toHaveTextContent("Ana");
+    expect(row).not.toHaveTextContent("Version");
+  });
+
+  it.each([
+    [
+      "a person the server could not name",
+      { given: "stale", replaced: { kind: "person", id: "u-gone" } },
+      "Overwrote changes (previous editor unavailable)",
+    ],
+    [
+      "a change nobody recorded the maker of",
+      { given: "stale", replaced: null },
+      "Overwrote changes (previous editor unavailable)",
+    ],
+    [
+      "a member of a plugin's sign-in",
+      {
+        given: "stale",
+        replaced: { kind: "principal", id: null, principalKind: "customer" },
+      },
+      "Overwrote changes by a member",
+    ],
+    [
+      "an API key",
+      { given: "stale", replaced: { kind: "apiKey", id: "k1" } },
+      "Overwrote changes by an API key",
+    ],
+    [
+      "a scheduled release",
+      { given: "stale", replaced: { kind: "release", id: "r1" } },
+      "Overwrote changes by a scheduled release",
+    ],
+    [
+      "the system",
+      { given: "stale", replaced: { kind: "system", id: null } },
+      "Overwrote changes by the system",
+    ],
+    [
+      "no version given",
+      { given: "none", replaced: null },
+      "Saved as an overwrite (no version given)",
+    ],
+    [
+      "the current version given",
+      { given: "current", replaced: null },
+      "Saved as an overwrite",
+    ],
+  ])("says what an overwrite replaced for %s", (_, payload, sentence) => {
+    renderList(
+      [version(1, 1)],
+      [event("overwritten", 3, { actorName: "Ana", payload })]
+    );
+    const list = screen.getByRole("list", { name: "History, newest first" });
+    expect(within(list).getByText(sentence)).toBeInTheDocument();
+    expect(list).not.toHaveTextContent("null");
+    expect(list).not.toHaveTextContent("u-gone");
+    expect(list).not.toHaveTextContent("customer");
+  });
 });
 
 describe("filters", () => {

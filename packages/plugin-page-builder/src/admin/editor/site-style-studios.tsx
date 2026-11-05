@@ -17,6 +17,7 @@ import {
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
+  type SpacingMode,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -65,6 +66,7 @@ import {
   useFontCatalogueClient,
   useHeldSiteStyle,
   useSaveSiteStyle,
+  useSaveSpacingMode,
   type SiteStyleReplayed,
 } from "../site-style-client";
 import { useShown } from "../use-shown";
@@ -174,10 +176,16 @@ export function TokensStudio({
   merged,
   supplied,
   pending,
+  spacingMode,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
   merged: SiteTokenSet | undefined;
+  /**
+   * The site's spacing model as the canvas compiles under it, or `undefined`
+   * while the style has not been read, when the choice is not offered.
+   */
+  spacingMode?: SpacingMode;
   /** What the site's own code supplies, which the stored tier layers over. */
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
@@ -186,12 +194,7 @@ export function TokensStudio({
   children: React.ReactNode;
 }): React.JSX.Element {
   const { save } = useSaveSiteStyle();
-  const held = useHeldSiteStyle();
-  // Whatever an edit left waiting is written when the panel goes away, an
-  // import made from another tab included.
-  const release = useRef(held.release);
-  release.current = held.release;
-  useEffect(() => () => void release.current(), []);
+  const held = useReleasedOnLeave(useHeldSiteStyle());
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
   // refuse.
@@ -227,6 +230,8 @@ export function TokensStudio({
    */
   const [edits, show, shownNow] = useShown<SiteTokenSet | null>(null);
   const [issue, setIssue] = useState<string | undefined>(undefined);
+  // The spacing choice reports a refusal on the same line an edit does.
+  const spacing = useSpacingModeChoice(spacingMode, setIssue);
   /*
    * The last set a save is KNOWN to have stored, and what a refused edit falls
    * back to — not "whatever was on screen before it", which after an earlier
@@ -250,18 +255,9 @@ export function TokensStudio({
        */
       tokenOverrideOf(baseline, next),
       { hold: true }
-    ).then(result => {
-      const outcome = tokenSaveOutcome(
-        result.saved,
-        result.issues,
-        next,
-        latest.current,
-        persisted.current
-      );
-      if (result.saved) persisted.current = next;
-      if (outcome.tokens !== undefined) show(outcome.tokens);
-      if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
-    });
+    ).then(result =>
+      settleTokenSave(result, next, { latest, persisted }, show, setIssue)
+    );
   };
 
   /*
@@ -280,13 +276,14 @@ export function TokensStudio({
     tokens: edits ?? editable,
     supplied: baseline,
     issue,
-    absence: pending ? "pending" : "failed",
+    absence: absenceOf(pending),
     readOnly: !mayChange,
     onChange: commit,
     onActivity: held.extend,
     onSettle: () => void held.release(),
     currentTokens,
     header,
+    ...spacing,
   };
 
   return (
@@ -298,6 +295,97 @@ export function TokensStudio({
       {children}
     </VariablesStudio.Provider>
   );
+}
+
+/**
+ * The "Space between blocks" choice: what it shows and what choosing does.
+ *
+ * Shown as chosen at once, then saved; a refusal puts the stored answer back
+ * and says why. The canvas follows once the save has landed and the style is
+ * read again, so it never draws a model the site does not hold.
+ */
+function useSpacingModeChoice(
+  stored: SpacingMode | undefined,
+  report: (issue: string | undefined) => void
+): Pick<TokensPanelProps, "spacing"> {
+  const { save } = useSaveSpacingMode();
+  const [chosen, setChosen] = useState<SpacingMode | null>(null);
+  // The latest choice, by number, and the saves in the order they were made.
+  // Saves run one after another, so the server stores them in that order and
+  // the last choice is the one left stored; a choice superseded before its
+  // turn is never sent, and the answer to a superseded one changes nothing.
+  const latest = useRef(0);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  if (stored === undefined) return {};
+  return {
+    spacing: {
+      mode: chosen ?? stored,
+      onChange: mode => {
+        latest.current += 1;
+        const submission = latest.current;
+        setChosen(mode);
+        report(undefined);
+        queue.current = queue.current.then(async () => {
+          if (submission !== latest.current) return;
+          const result = await save(mode);
+          if (submission !== latest.current) return;
+          if (result.saved && result.refreshed) {
+            setChosen(null);
+            return;
+          }
+          // Stored but not read back: the choice stays shown, since the store
+          // holds it, and the editor says it could not refresh.
+          if (!result.saved) setChosen(null);
+          report(result.issue);
+        });
+      },
+    },
+  };
+}
+
+/**
+ * What a token save's answer does to the studio: the set it shows, the line
+ * it says, and the last set known to be stored. `tokenSaveOutcome` decides;
+ * this applies.
+ */
+function settleTokenSave(
+  result: { saved: boolean; issues: Readonly<Record<string, string>> },
+  next: SiteTokenSet,
+  refs: {
+    readonly latest: { current: SiteTokenSet | null };
+    readonly persisted: { current: SiteTokenSet | null };
+  },
+  show: (tokens: SiteTokenSet | null) => void,
+  setIssue: (issue: string | undefined) => void
+): void {
+  const outcome = tokenSaveOutcome(
+    result.saved,
+    result.issues,
+    next,
+    refs.latest.current,
+    refs.persisted.current
+  );
+  if (result.saved) refs.persisted.current = next;
+  if (outcome.tokens !== undefined) show(outcome.tokens);
+  if (outcome.issue !== undefined) setIssue(outcome.issue ?? undefined);
+}
+
+/**
+ * The held site-style writes, written when the panel goes away: whatever an
+ * edit left waiting is stored, an import made from another tab included.
+ */
+function useReleasedOnLeave<H extends { release: () => Promise<void> }>(
+  held: H
+): H {
+  const release = useRef(held.release);
+  release.current = held.release;
+  useEffect(() => () => void release.current(), []);
+  return held;
+}
+
+/** Why the studio has no variables to show: a read in flight, or one that failed. */
+function absenceOf(pending: boolean): "pending" | "failed" {
+  return pending ? "pending" : "failed";
 }
 
 /** The tokens studio's state, for the Variables tab inside it. */

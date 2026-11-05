@@ -107,13 +107,15 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
   {
     key: "size",
     label: "Size",
+    // An image's fit and ratio first: how it fills its box is what an author
+    // changes first on one. Both show only on a replaced element.
     properties: [
+      ["objectFit", "media"],
+      ["aspectRatio", "media"],
       ["width", "common"],
       ["height", "common"],
       ["minWidth", "common"],
       ["maxWidth", "common"],
-      ["aspectRatio", "media"],
-      ["objectFit", "media"],
       ["minHeight", "more"],
       ["maxHeight", "more"],
       ["overflow", "more"],
