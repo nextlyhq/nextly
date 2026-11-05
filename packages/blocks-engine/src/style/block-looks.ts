@@ -49,9 +49,11 @@ function lookSlug(blockType: string, name: string): string {
 
 /**
  * Every look the given block definitions declare, as classes bound to their
- * block types, in declaration order. A variation without styles is an insert
- * preset or the block's own look, not a class; a look whose name can't be
- * written as a class name is left out.
+ * block types, in declaration order. The block's own look (`isDefault`) comes
+ * with no styles of its own and the `isDefault` mark, so a site's edits to the
+ * block's base have a class to be stored as. Any other variation without
+ * styles is an insert preset, not a look; a look whose name can't be written
+ * as a class name is left out.
  */
 export function blockLooks(definitions: Iterable<LookSource>): NamedClass[] {
   const looks: NamedClass[] = [];
@@ -66,15 +68,18 @@ export function blockLooks(definitions: Iterable<LookSource>): NamedClass[] {
 
 /**
  * One variation as a look's class, or `undefined` for a variation that is no
- * look (no styles) or whose class the engine could not use (a name it can't
- * write, or one too long), rather than one declared and then dropped.
+ * look (an insert preset), one whose class the engine could not use (a name
+ * it can't write, or one too long), or a block's own look that also states
+ * styles: its styles are the block's base, so a second set would be two
+ * answers to what the block looks like.
  */
 function lookOf(
   blockType: string,
   variation: BlockVariation,
   orderIndex: number
 ): NamedClass | undefined {
-  if (variation.styles === undefined) return undefined;
+  const own = variation.isDefault === true;
+  if (own === (variation.styles !== undefined)) return undefined;
   const slug = lookSlug(blockType, variation.name);
   if (!NAMED_CLASS_SLUG_RE.test(slug)) return undefined;
   const look: NamedClass = {
@@ -83,7 +88,9 @@ function lookOf(
     ...(variation.label === undefined ? {} : { label: variation.label }),
     orderIndex,
     blockType,
-    styles: variation.styles,
+    // The own look starts with no edits: the block's base is its look.
+    styles: variation.styles ?? {},
+    ...(own ? { isDefault: true as const } : {}),
   };
   return isUsableNamedClass(look) ? look : undefined;
 }

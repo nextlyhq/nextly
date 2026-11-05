@@ -60,6 +60,7 @@ import {
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
   classNameOf,
+  isDefaultLook,
   isLook,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
@@ -159,16 +160,6 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
-  /**
-   * The site's own edits to block types' default looks, keyed by type: a
-   * button's Primary as the site changed it. Laid over each type's base
-   * (after the spacing model chose it) property by property, so a type keeps
-   * every default value the site did not change. A renderer reads it when it
-   * works out the bases; the compiler reads only the bases that result.
-   *
-   * @experimental
-   */
-  blockDefaults?: Readonly<Record<string, NodeStyles>>;
   /**
    * Base styles for the elements a block renders inside its root, keyed by
    * block name and then by part name.
@@ -2362,6 +2353,8 @@ export function compilePageCss(
   for (const position of orderedPositions) {
     const cls = library[position];
     if (written.has(position)) continue;
+    // A block's own look is read as its type's base edits, never written as a class: not dropped.
+    if (isUsableNamedClass(cls) && isDefaultLook(cls)) continue;
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.

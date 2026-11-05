@@ -1,4 +1,5 @@
 import {
+  blockDefaultsOf,
   compilePageCss,
   declaresNoMarkup,
   hasItemBindings,
@@ -529,7 +530,10 @@ function compileContextFor(
       blocks,
       styleContext.blockBases,
       styleContext.spacingMode,
-      styleContext.blockDefaults
+      // The site's edits to its blocks' own looks, which its class library
+      // holds as default looks: read here, so every page compiled from that
+      // library, canvas or published, lays them over the same bases.
+      blockDefaultsOf(styleContext.namedClasses)
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,

@@ -31,17 +31,38 @@ const button = {
 };
 
 describe("a block type's looks, as the site receives them", () => {
-  it("is one class per look that carries styles, bound to its block type", () => {
+  it("is one class per look, bound to its block type, the block's own look first with no edits", () => {
     expect(blockLooks([button])).toEqual([
+      {
+        id: lookClassId("core/button", "primary"),
+        slug: "button-primary",
+        label: "Primary",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: {},
+        isDefault: true,
+      },
       {
         id: lookClassId("core/button", "outline"),
         slug: "button-outline",
         label: "Outline",
-        orderIndex: 0,
+        orderIndex: 1,
         blockType: "core/button",
         styles: colour("red"),
       },
     ]);
+  });
+
+  it("refuses a block's own look that also states styles: its styles are the base", () => {
+    const both = {
+      name: "core/button",
+      editor: {
+        variations: [
+          { name: "primary", isDefault: true as const, styles: colour("red") },
+        ],
+      },
+    };
+    expect(blockLooks([both])).toEqual([]);
   });
 
   it("names a look of a type outside core by its whole type", () => {
@@ -61,7 +82,7 @@ describe("a block type's looks, as the site receives them", () => {
   });
 
   it("applies only to its own block type", () => {
-    const [outline] = blockLooks([button]);
+    const [, outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const on = (type: string) =>
       compilePageCss(
@@ -92,7 +113,7 @@ describe("a block type's looks, as the site receives them", () => {
   });
 
   it("styles a block that wears it, and a shared style still wins over it", () => {
-    const [outline] = blockLooks([button]);
+    const [, outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const card = {
       id: "c-card",
@@ -190,7 +211,7 @@ describe("a look the engine could not use", () => {
 
 describe("a look in the cascade's own reading", () => {
   it("reaches only a node of its own block type", () => {
-    const [outline] = blockLooks([button]);
+    const [, outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
     const traced = (type: string) => {
       const { trace } = compilePageCss(

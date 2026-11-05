@@ -20,14 +20,29 @@ describe("the looks the core blocks ship with", () => {
   const looks = blockLooks([button, image, section]);
 
   it("are the seeds the site receives, each bound to its block type", () => {
-    expect(looks.map(look => [look.blockType, look.slug, look.label])).toEqual([
-      ["core/button", "button-secondary", "Secondary"],
-      ["core/button", "button-outline", "Outline"],
-      ["core/button", "button-text", "Text"],
-      ["core/image", "image-rounded", "Rounded"],
-      ["core/image", "image-circle", "Circle"],
-      ["core/section", "section-hero", "Hero"],
+    expect(
+      looks.map(look => [
+        look.blockType,
+        look.slug,
+        look.label,
+        look.isDefault === true,
+      ])
+    ).toEqual([
+      // Each block's own look first, with no edits: where a site's edits to
+      // the block's base are stored.
+      ["core/button", "button-primary", "Primary", true],
+      ["core/button", "button-secondary", "Secondary", false],
+      ["core/button", "button-outline", "Outline", false],
+      ["core/button", "button-text", "Text", false],
+      ["core/image", "image-square", "Square", true],
+      ["core/image", "image-rounded", "Rounded", false],
+      ["core/image", "image-circle", "Circle", false],
+      ["core/section", "section-plain", "Plain", true],
+      ["core/section", "section-hero", "Hero", false],
     ]);
+    expect(
+      looks.filter(look => look.isDefault).map(look => look.styles)
+    ).toEqual([{}, {}, {}]);
   });
 
   it("each name the block's own look", () => {
@@ -38,7 +53,9 @@ describe("the looks the core blocks ship with", () => {
     expect(own).toEqual(["Primary", "Square", "Plain"]);
   });
 
-  it.each(looks.map(look => [look.slug, look] as const))(
+  // The looks a block wears; an own look is never written as a class.
+  const worn = looks.filter(look => look.isDefault !== true);
+  it.each(worn.map(look => [look.slug, look] as const))(
     "%s compiles with no warning, on the block it belongs to",
     (_slug, look) => {
       const document = {

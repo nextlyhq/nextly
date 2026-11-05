@@ -981,9 +981,13 @@ export type {
 // Named classes: reusable style presets a node applies by id.
 export type { NamedClass } from "./style/named-class";
 export {
+  // A block type's own look, and the edits to its base a site's library holds.
+  blockDefaultsOf,
   classNameOf,
+  isDefaultLook,
   isLook,
   isUsableNamedClass,
+  ownLooksRead,
   LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
