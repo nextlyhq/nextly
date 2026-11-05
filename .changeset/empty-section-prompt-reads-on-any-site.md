@@ -33,3 +33,8 @@ An empty section's "Drop a block here" prompt on the canvas now sits on a
 small plate of the editor's own surface, so it stays readable over any site
 background, in both the light and dark editor themes. Over a light site page
 the dark theme's prompt was faint.
+
+The canvas's selection and component marks now take their colours from the
+ground the site's page actually paints, not from the schemes it declares. A
+site offering a dark set showed a light page under the dark editor with the
+marks' faint dark-theme colours.
