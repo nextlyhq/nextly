@@ -235,5 +235,9 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
           http: context.req.http,
         }
       : undefined,
+    // Shared, not rebuilt: it holds an effect for the write this context
+    // belongs to, and a clone handed on without it would leave its receiver
+    // no way to wait for that write, so it would act at once.
+    afterCommit: context.afterCommit,
   };
 }

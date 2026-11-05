@@ -356,8 +356,12 @@ export interface HookContext<T = any> {
    * cannot take back, such as sending an email: done from an after-hook
    * directly, it would happen for a write that never landed.
    *
-   * Absent on a context a hook test builds by hand; core sets it on every
-   * context it builds for a collection hook.
+   * Offered only to the hooks that run after the write: `afterCreate`,
+   * `afterUpdate` and `afterDelete`. A before-hook (`beforeCreate`,
+   * `beforeUpdate`, `beforeChange`, `beforeDelete`) runs before the write opens
+   * its transaction and is not given one, since an effect handed over there
+   * would run at once, for a write that may still be refused. Absent too on a
+   * context a hook test builds by hand. `cloneContext` keeps it.
    */
   afterCommit?: (effect: () => unknown) => Promise<void>;
 }
