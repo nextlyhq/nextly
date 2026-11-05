@@ -24,6 +24,7 @@
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
+import { registerBlocks } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
@@ -335,6 +336,14 @@ const setting = (property: string, value: unknown): Change =>
   );
 
 /** What the inspector was handed for the class surface. */
+/**
+ * The site's own classes in the library the inspector is handed: without the
+ * looks the code tier always holds, which these cases are not about.
+ */
+function siteClasses() {
+  return classProps().classLibrary?.filter(entry => !("blockType" in entry));
+}
+
 function classProps(): {
   classLibrary?: readonly { id: string; slug: string }[];
   classLibraryAbsence?: "pending" | "failed";
@@ -396,7 +405,7 @@ describe("the library reaching the inspector", () => {
     };
     openEditor();
 
-    expect(classProps().classLibrary?.map(c => c.slug)).toEqual(["hero"]);
+    expect(siteClasses()?.map(c => c.slug)).toEqual(["hero"]);
   });
 
   it("hands it an EMPTY library, not undefined, when the site has none", () => {
@@ -407,7 +416,7 @@ describe("the library reaching the inspector", () => {
      */
     openEditor();
 
-    expect(classProps().classLibrary).toEqual([]);
+    expect(siteClasses()).toEqual([]);
   });
 
   it("hands it undefined while the stored read is still pending", () => {
@@ -454,7 +463,7 @@ describe("why the library is absent", () => {
     // absence would hide the surface that creates the first one.
     openEditor();
 
-    expect(classProps().classLibrary).toEqual([]);
+    expect(siteClasses()).toEqual([]);
   });
 });
 
@@ -536,7 +545,11 @@ describe("adding a shared style made from a block", () => {
 
   it("offers the save verb with the library and the author's right", () => {
     openEditor();
-    expect(seen.verbs).toMatchObject({ library: [], mayChange: true });
+    expect(seen.verbs).toMatchObject({ mayChange: true });
+    // The site's own styles: none here; the code tier's looks are beside them.
+    const library = (seen.verbs as { library?: { blockType?: string }[] })
+      .library;
+    expect(library?.filter(entry => entry.blockType === undefined)).toEqual([]);
   });
 });
 
@@ -1105,5 +1118,39 @@ describe("undoing a shared style added from the editor", () => {
       slug: "another",
     });
     expect(created).toBeUndefined();
+  });
+});
+
+describe("the looks the editor's library holds", () => {
+  it("include a look of a block another plugin registered, which the published config could not carry", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/hero",
+          version: 1,
+          description: "A hero.",
+          example: { props: {} },
+          editor: {
+            label: "Hero",
+            variations: [
+              {
+                name: "dark",
+                label: "Dark",
+                styles: { base: { base: { color: "white" } } },
+              },
+            ],
+          },
+          props: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "looks-test" }
+    );
+    clientConfig = {};
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    openEditor();
+    const ids = (classProps().classLibrary ?? []).map(each => each.id);
+    expect(ids).toContain("look:acme/hero:dark");
+    expect(ids).toContain("look:core/button:outline");
   });
 });
