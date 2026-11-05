@@ -205,6 +205,14 @@ export {
   type PluginCategory,
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
+// The admin places, for the same reason: the catalogue the server checks a
+// plugin's contributions against is the one the admin renders them from.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./plugins/admin-places";
 // And the same for a plugin's HTTP routes, for the same reason and with a
 // sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
 // this derived twice produces a request to a path nothing serves, which the

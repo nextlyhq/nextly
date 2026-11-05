@@ -286,7 +286,8 @@ describe.each(getConfiguredTestDialects())(
           where: {
             title: { in: ["Mine", "Mine too", "Theirs", "The editor's"] },
           },
-          data: { excerpt: "Bulk edited" },
+          // The author's rules are under test, not versions.
+          data: { excerpt: "Bulk edited", _overwrite: true },
           ...as(author),
         });
 

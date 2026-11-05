@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -12,9 +13,12 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerBuildCommand(program: Command): void {
-  program
-    .command("build")
-    .description("Production build - validate collections and generate files")
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("build")
+      .description("Production build - validate collections and generate files")
+  )
     .option("--strict", "Fail on any validation warnings", false)
     .option(
       "--skip-migrations-check",
