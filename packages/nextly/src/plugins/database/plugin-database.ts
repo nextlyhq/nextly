@@ -575,8 +575,10 @@ export interface PluginDatabase {
    * when it throws, and what `fn` threw reaches the caller as thrown. `tx` is
    * this surface bound to the transaction's own connection on every dialect;
    * write through it, since `ctx.db` itself runs outside the transaction on
-   * PostgreSQL and MySQL. On SQLite a core service or `ctx.settings` called
-   * inside joins it as a savepoint and rolls back with it, its after-commit
+   * PostgreSQL and MySQL. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction. On SQLite a core
+   * service called inside joins it as a savepoint and rolls back with it, its
+   * after-commit
    * effects (hooks, events, revalidation) wait for the commit and never run
    * on rollback, and deleting media is refused. Keep it short, and never
    * await network I/O inside it. `tx` lives only as long as `fn`: a statement

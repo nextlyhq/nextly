@@ -45,6 +45,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { publishesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -1482,7 +1483,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: single.status === true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published Single its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: single.status,
+                }),
               });
               if (companion) {
                 getSchemaRegistryFromDI()?.registerDynamicSchema(

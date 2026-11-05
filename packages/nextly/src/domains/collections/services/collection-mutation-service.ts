@@ -14942,10 +14942,10 @@ export class CollectionMutationService extends BaseService {
               // The version this update produced, which its status moves name below.
               let producedVersionNo: number | null = null;
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
-                const savedStatus =
-                  (updatePayload as { status?: unknown }).status ??
-                  effectiveLocaleStatus ??
-                  (currentParent as { status?: unknown }).status;
+                // The status the snapshot records, read from the row it was built from: the
+                // written value, this locale's own status, or an author's translatable `status`
+                // field, which the write routed to the companion and the payload no longer holds.
+                const savedStatus = (parentRow as { status?: unknown }).status;
                 const versionLocale = capturedLocaleState
                   ? (localizedUpdate?.writeLocale ??
                     this.componentSnapshotLocale(params.locale))
