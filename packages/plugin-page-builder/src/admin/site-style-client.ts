@@ -135,6 +135,8 @@ export interface SiteStyleRead {
   readonly pending: boolean;
   /** Why the read failed, when it did. */
   readonly error: Error | null;
+  /** Whether the stored tier is the site as it is now, as the read reports. */
+  readonly current: boolean;
 }
 
 /**
@@ -146,7 +148,7 @@ export interface SiteStyleRead {
  * does not fetch them twice.
  */
 export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
-  const { data, isPending, error } = useStoredSiteStyle();
+  const { data, isPending, error, current } = useStoredSiteStyle();
   const preview = useContext(SiteStylePreviewContext);
 
   // Narrowed and merged in one memo over one source. A stored row predates its
@@ -184,6 +186,7 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
     unreadableFonts,
     pending: isPending,
     error: error ?? null,
+    current,
   };
 }
 

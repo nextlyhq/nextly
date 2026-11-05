@@ -180,10 +180,20 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * geometry rather than following the animation: tracking the frames between
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
+   *
+   * `animation` likewise: an entrance motion or a site's `@keyframes` moves a
+   * block by transform, and its end and cancel bubble the same way. A block
+   * animating FOREVER never ends; its marks follow the geometry of the last
+   * measurement, re-taken whenever anything else re-measures, rather than
+   * chasing every frame — `animationiteration` would re-measure at whatever
+   * point of the motion each loop boundary falls, which moves the ring without
+   * making it right.
    */
   const settled = (): void => moved();
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
+  root.addEventListener("animationend", settled);
+  root.addEventListener("animationcancel", settled);
   root.addEventListener("scroll", settled, true);
   /*
    * And the root's DOCUMENT, in the bubble phase, for the viewport itself
@@ -201,6 +211,8 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
+    root.removeEventListener("animationend", settled);
+    root.removeEventListener("animationcancel", settled);
     root.removeEventListener("scroll", settled, true);
     doc.removeEventListener("scroll", settled);
   };
