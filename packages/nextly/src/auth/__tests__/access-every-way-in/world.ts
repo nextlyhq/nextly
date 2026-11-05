@@ -372,14 +372,14 @@ const SERVICE_CALLS: Record<
   create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
   "new-pub": (c, slug, _id, opts) =>
     c.createEntry(slug, { title: "made", status: "published" }, opts),
-  // Access is under test, not versions: an edit overwrites.
+  // Access is under test, not versions: every write overwrites.
   update: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { title: "changed", _overwrite: true }, opts),
   delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
   publish: (c, slug, id, opts) =>
-    c.updateEntry(slug, id, { status: "published" }, opts),
+    c.updateEntry(slug, id, { status: "published", _overwrite: true }, opts),
   unpublish: (c, slug, id, opts) =>
-    c.updateEntry(slug, id, { status: "draft" }, opts),
+    c.updateEntry(slug, id, { status: "draft", _overwrite: true }, opts),
   list: async (c, slug, _id, opts) =>
     probesRead(
       (await c.listEntries(slug, { where: PROBES_WHERE }, opts)).data.map(

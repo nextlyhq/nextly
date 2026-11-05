@@ -454,10 +454,11 @@ describe.each(getConfiguredTestDialects())(
         status: "draft",
       });
 
+      // A status set on every match whatever each holds: still a publish.
       await as(PUBLISHER).update({
         collection: POSTS,
         where,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await stored(POSTS, id)).status).toBe("published");
     });
