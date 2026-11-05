@@ -401,6 +401,10 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   objectFit: "Fit",
   // Which part of the picture stays in view: what an author is choosing.
   objectPosition: "Focal point",
+  // In an Accordion's own Icon section, where "Disclosure" says nothing an
+  // author does not already see.
+  disclosureIcon: "Icon",
+  disclosurePosition: "Position",
 };
 
 /**

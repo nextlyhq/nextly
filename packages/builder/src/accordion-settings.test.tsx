@@ -98,6 +98,14 @@ function open(section: string): void {
 }
 
 describe("an Accordion's Icon section", () => {
+  it("names its rows Icon and Position, as an author says them", () => {
+    mount();
+    open("Icon");
+    // Each control is named by its row's label.
+    expect(screen.getByRole("radiogroup", { name: "Icon" })).toBeDefined();
+    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
+  });
+
   it("offers each icon by name, and writes the one chosen", () => {
     const editor = mount();
     open("Icon");

@@ -158,7 +158,6 @@ test.describe("an Accordion's titles and icon", () => {
     const summary = frame
       .locator(`.nx-canvas [data-nx-node="${SECTION}"] > summary`)
       .first();
-    const icon = summary.locator(ICON);
     await expect
       .poll(async () =>
         summary.evaluate(element => {
@@ -171,8 +170,20 @@ test.describe("an Accordion's titles and icon", () => {
         })
       )
       .toBe(true);
-    const plus = (await icon.evaluate(iconLook)).mask;
-    expect(decodeURIComponent(plus)).toContain("M8 3.5v9");
+    // The click that selected the section toggles it as a browser does, so
+    // the glyph is read against the state the section is in: a plus while
+    // closed, a minus (the bar alone) while open.
+    const drawn = await summary.evaluate(element => ({
+      open: (element.parentElement as HTMLDetailsElement | null)?.open === true,
+      mask: decodeURIComponent(
+        getComputedStyle(
+          element.querySelector(".nx-pb-disclosure-icon") ?? element
+        ).maskImage
+      ),
+    }));
+    expect(drawn.mask).toContain("M3.5 8h9");
+    if (drawn.open) expect(drawn.mask).not.toContain("M8 3.5v9");
+    else expect(drawn.mask).toContain("M8 3.5v9");
 
     await page.getByRole("tab", { name: "Content" }).click();
     await page.getByRole("combobox", { name: "Titles as" }).click();
