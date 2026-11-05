@@ -117,6 +117,11 @@ export interface VersionWrite {
   /** The write's answer stored `item`: its version is the copy's now. */
   answered: (item: unknown) => void;
   /**
+   * The write went through: a hold on the copy it was made from no longer
+   * holds it. A copy shown since keeps its own hold.
+   */
+  released: () => void;
+  /**
    * Pin the form when `error` refuses `payload` because the document changed
    * since; answers whether it did. `shown` is the form values the write was
    * made from, where the form keeps values the write does not carry as is.
@@ -175,6 +180,9 @@ function writeFor(tracked: Tracked): VersionWrite {
     answered: item => {
       if (shownStill()) adoptAnswered(tracked, item);
     },
+    released: () => {
+      if (shownStill()) release(tracked);
+    },
     refused,
     refusedThen: (payload, shown) => (error: unknown) => {
       refused(error, payload, shown);
@@ -219,7 +227,8 @@ function fail(tracked: Tracked, message: string): void {
   const held = tracked.pin;
   // A hold on a told change has no dialog to say it in, nor a refused write
   // to save anyway: its notice says it, where the change was told.
-  if (held?.payload) tracked.setConflict({ stale: held.stale, failure: message });
+  if (held?.payload)
+    tracked.setConflict({ stale: held.stale, failure: message });
 }
 
 async function keepEdits(

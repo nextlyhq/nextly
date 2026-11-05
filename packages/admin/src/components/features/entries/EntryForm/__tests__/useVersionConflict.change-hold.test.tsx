@@ -49,4 +49,21 @@ describe("a form held on someone else's change", () => {
       failure: "The edits could not be kept.",
     });
   });
+
+  it("lets a save that went through release the hold on its own copy only", () => {
+    const { result } = renderHook(() => useVersionConflict());
+    const own = result.current.writeFor();
+    act(() => result.current.holdForChange(stale as never));
+    act(() => own.released());
+    expect(result.current.pinned()).toBe(false);
+
+    // 🔴 A save from a copy left behind (another entry or locale) answers
+    // after the copy now shown was held on a change: its hold stays, so no
+    // read resets the edits on screen.
+    const left = result.current.writeFor();
+    act(() => result.current.adoptRead({ updatedAt: "4" }));
+    act(() => result.current.holdForChange(stale as never));
+    act(() => left.released());
+    expect(result.current.pinned()).toBe(true);
+  });
 });

@@ -95,7 +95,10 @@ import {
   useRefusedForm,
 } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { useResetOnReload } from "@admin/components/features/entries/EntryForm/useResetOnReload";
-import { useVersionConflict } from "@admin/components/features/entries/EntryForm/useVersionConflict";
+import {
+  useVersionConflict,
+  type VersionWrite,
+} from "@admin/components/features/entries/EntryForm/useVersionConflict";
 import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
@@ -1028,19 +1031,16 @@ export function SingleForm({
   // A save the server stored: counted, its version adopted as the copy's,
   // and no change told before held over it, since the copy is now current.
   const adoptSaved = useCallback(
-    (
-      stored: Awaited<ReturnType<typeof onSubmit>>,
-      adopt: (item: unknown) => void
-    ) => {
+    (stored: Awaited<ReturnType<typeof onSubmit>>, write: VersionWrite) => {
       setSavedCount(n => n + 1);
       if (stored) {
         ownSave.current.storedKey = singleResetKey(stored, locale);
         // As the write that answered it asked, when it started.
-        adopt(stored);
+        write.answered(stored);
       }
-      version.release();
+      write.released();
     },
-    [locale, version]
+    [locale]
   );
   const writeStatus = useCallback(
     async (status: "published" | "draft"): Promise<SubmitOutcome> => {
@@ -1054,7 +1054,7 @@ export function SingleForm({
             throw error;
           }
         );
-        adoptSaved(stored, item => write.answered(item));
+        adoptSaved(stored, write);
         return { ok: true, item: { id: document.id } };
       } catch (error) {
         return submitFailed(error);
@@ -1149,7 +1149,7 @@ export function SingleForm({
             if (stored) write.answered(stored);
             // Saved, so the copy is the current version: nothing a change
             // told before still holds it.
-            version.release();
+            write.released();
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -1223,7 +1223,7 @@ export function SingleForm({
     const write = version.writeFor();
     try {
       const stored = await onSubmit(payload, refusedForm);
-      adoptSaved(stored, item => write.answered(item));
+      adoptSaved(stored, write);
       if (sent !== undefined) {
         form.reset(
           stored && !holdsPlaceholders(schema.fields, sent)
