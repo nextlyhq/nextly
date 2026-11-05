@@ -8,7 +8,8 @@
  * - Height's Full screen stores `min-height: 100svh`, and the canvas draws the
  *   Section at least as tall as its frame.
  * - Size's Small stores the button's own padding tokens scaled, and the canvas
- *   draws the button with less padding than Medium.
+ *   draws the button with less padding than Medium; Full width spans its
+ *   container with the label centred.
  * - The overlay is offered only once the Section has an image.
  *
  * @module tests/builder-section-button-shortcuts.spec
@@ -168,15 +169,16 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
         drawn.evaluate(element => {
           // The canvas is drawn at a zoom, so its box on screen is scaled:
           // the min height the canvas resolves, in the frame's own pixels,
-          // is the frame's height.
-          const frame = element.ownerDocument.defaultView;
+          // is the frame's small viewport, which leaves out a scrollbar.
           const minHeight = Number.parseFloat(
             getComputedStyle(element).minHeight
           );
-          return Math.abs(minHeight - (frame?.innerHeight ?? 0)) <= 1;
+          return Math.abs(
+            minHeight - element.ownerDocument.documentElement.clientHeight
+          );
         })
       )
-      .toBe(true);
+      .toBeLessThanOrEqual(2);
     await pressSave(page);
     await expect
       .poll(async () => {
@@ -215,6 +217,24 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     expect(medium).toBeGreaterThan(0);
     await page.getByRole("radio", { name: "Small" }).click();
     await expect.poll(paddingTop).toBeCloseTo(medium * 0.75, 1);
+    // Full width spans the button's container, its label centred in it as a
+    // `<button>`'s would be, though this one is a link.
+    await page.getByRole("switch", { name: "Full width" }).click();
+    await expect
+      .poll(async () =>
+        drawn.evaluate(element => {
+          const parent = element.parentElement;
+          if (parent === null) return "no container";
+          const inner =
+            parent.clientWidth -
+            Number.parseFloat(getComputedStyle(parent).paddingLeft) -
+            Number.parseFloat(getComputedStyle(parent).paddingRight);
+          // Both in layout pixels, which the canvas's zoom scales alike.
+          const wide = Math.abs(element.offsetWidth - inner) <= 2;
+          return `${String(wide)} ${getComputedStyle(element).textAlign}`;
+        })
+      )
+      .toBe("true center");
     await pressSave(page);
     await expect
       .poll(async () => {
