@@ -50,6 +50,12 @@ let livesBeforeChangeCalls = 0;
 /** Updatable only through an update rule that answers a filter: the caller's own. */
 const OWNED = "owned";
 const AUTHOR = "stale-author";
+/** A second person who may update, but whom each read rule below refuses. */
+const OTHER = "stale-other";
+/** Readable only by AUTHOR, by a rule that answers yes or no. */
+const READ_BY_AUTHOR = "read_by_author";
+/** Readable only where `owner` is the caller, by a rule that answers a filter. */
+const READ_OWN = "read_own";
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
   ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 /** Keeps history and runs an after-change hook, to see a refusal reach neither. */
@@ -112,6 +118,21 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "headline", localized: true })],
       }),
       defineCollection({
+        slug: READ_BY_AUTHOR,
+        access: {
+          read: ({ user }: { user: { id: string } | null }) =>
+            user?.id === AUTHOR,
+          create: () => true,
+          update: () => true,
+        },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
+      defineCollection({
+        slug: READ_OWN,
+        access: { read: ownEntries, create: () => true, update: () => true },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
+      defineCollection({
         slug: OWNED,
         access: { read: () => true, create: () => true, update: ownEntries },
         fields: [text({ name: "title" }), text({ name: "owner" })],
@@ -152,8 +173,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     updatedAt: now,
   });
   // A code rule only narrows a permission, so the author holds each one.
-  await userWhoMay(current, AUTHOR, "read", [OWNED]);
-  await grantTo(current, AUTHOR, "update", [OWNED]);
+  await userWhoMay(current, AUTHOR, "read", [OWNED, READ_BY_AUTHOR, READ_OWN]);
+  await grantTo(current, AUTHOR, "update", [OWNED, READ_BY_AUTHOR, READ_OWN]);
+  // A code rule only narrows a permission: OTHER holds read and update too,
+  // so only the rules refuse them the read.
+  await userWhoMay(current, OTHER, "read", [READ_BY_AUTHOR, READ_OWN]);
+  await grantTo(current, OTHER, "update", [READ_BY_AUTHOR, READ_OWN]);
   return current;
 }
 
@@ -1530,6 +1555,48 @@ describe.each(getConfiguredTestDialects())(
           })
         ).rejects.toMatchObject({ code: "STALE_VERSION" });
         expect(await languageCounters(t, [id])).toEqual({ [`${id}.en`]: 1 });
+      }
+    );
+
+    it.each([
+      ["a read rule that answers yes or no", READ_BY_AUTHOR],
+      ["a read rule that answers a filter", READ_OWN],
+    ])(
+      "tells who changed it and when only to a caller %s lets read the entry",
+      async (_name, collection) => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: collection, overrideAccess: true },
+          { title: "first", owner: AUTHOR }
+        );
+        const id = idOf(created);
+        await update(t, collection, id, { title: "theirs" });
+        const refusalTo = (userId: string) =>
+          handlerOf(t).updateEntry(
+            {
+              collectionName: collection,
+              entryId: id,
+              overrideAccess: false,
+              user: { id: userId },
+            } as never,
+            { title: "mine", _rev: revOf(created) }
+          ) as Promise<Result>;
+        // The owner may read it: told who and when.
+        const owner = await refusalTo(AUTHOR);
+        expect(owner, JSON.stringify(owner)).toMatchObject({
+          code: "STALE_VERSION",
+        });
+        expect(owner.publicData).toHaveProperty("changedBy");
+        expect(owner.publicData).toHaveProperty("changedAt");
+        // Another who may update it, but whom the read rule refuses: the
+        // current version only.
+        const other = await refusalTo(OTHER);
+        expect(other, JSON.stringify(other)).toMatchObject({
+          code: "STALE_VERSION",
+        });
+        expect(other.publicData).not.toHaveProperty("changedBy");
+        expect(other.publicData).not.toHaveProperty("changedAt");
+        expect(other.publicData).not.toHaveProperty("historyVersion");
       }
     );
   }
