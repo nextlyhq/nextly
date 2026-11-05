@@ -189,38 +189,12 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
           </SelectContent>
         </Select>
 
-        <Select
-          value={eventType ?? ALL}
-          onValueChange={value =>
-            onEventTypeChange(value === ALL ? undefined : value)
-          }
-        >
-          <SelectTrigger
-            className="w-full sm:w-64"
-            aria-label="Filter by event"
-          >
-            <SelectValue placeholder="All events" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All events</SelectItem>
-            {/* The filter in force stays offered, named, though the server
-                no longer lists it, as a disabled plugin's type is not. */}
-            {webhookEventChoices(
-              eventTypes ?? [],
-              eventType === undefined ? [] : [eventType]
-            ).map(choice => (
-              <SelectItem key={choice.type} value={choice.type}>
-                {eventChoiceText(choice)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {eventTypesFailed && (
-          <p className="text-sm text-destructive-500">
-            Could not load the event types to filter by. Reload the page to try
-            again.
-          </p>
-        )}
+        <DeliveryEventFilter
+          eventType={eventType}
+          eventTypes={eventTypes}
+          eventTypesFailed={eventTypesFailed}
+          onEventTypeChange={onEventTypeChange}
+        />
       </div>
 
       <DataTableView<WebhookDeliverySummary>
@@ -253,3 +227,54 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
     </div>
   );
 };
+
+/**
+ * The delivery log's event filter: the types the server lists, by label, and
+ * the filter in force kept named when the server no longer lists it. Says so
+ * when the list could not be loaded, rather than offer an empty one.
+ */
+function DeliveryEventFilter({
+  eventType,
+  eventTypes,
+  eventTypesFailed,
+  onEventTypeChange,
+}: {
+  eventType: WebhookEventType | undefined;
+  eventTypes: readonly WebhookEventTypeEntry[] | undefined;
+  eventTypesFailed: boolean;
+  onEventTypeChange: (eventType?: WebhookEventType) => void;
+}): React.ReactElement {
+  return (
+    <>
+      <Select
+        value={eventType ?? ALL}
+        onValueChange={value =>
+          onEventTypeChange(value === ALL ? undefined : value)
+        }
+      >
+        <SelectTrigger className="w-full sm:w-64" aria-label="Filter by event">
+          <SelectValue placeholder="All events" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>All events</SelectItem>
+          {/* The filter in force stays offered, named, though the server
+          no longer lists it, as a disabled plugin's type is not. */}
+          {webhookEventChoices(
+            eventTypes ?? [],
+            eventType === undefined ? [] : [eventType]
+          ).map(choice => (
+            <SelectItem key={choice.type} value={choice.type}>
+              {eventChoiceText(choice)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {eventTypesFailed && (
+        <p className="text-sm text-destructive-500">
+          Could not load the event types to filter by. Reload the page to try
+          again.
+        </p>
+      )}
+    </>
+  );
+}
