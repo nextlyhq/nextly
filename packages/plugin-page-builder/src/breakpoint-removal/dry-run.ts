@@ -17,7 +17,7 @@
  */
 import type { DocumentLimits, NamedClass } from "@nextlyhq/blocks-engine";
 
-import type { HostAddress } from "../host-rewrite/contract";
+import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import type {
   HostDocument,
   HostRead,
@@ -102,6 +102,9 @@ export interface RemovalDryRun {
 /** How many documents one list names; the rest are counted. */
 export const NAMED_AT_MOST = 10;
 
+/** How many documents one ask of the caller names at once. */
+const NAMES_PER_ASK = 50;
+
 /** What the dry run reads the site through. */
 export interface DryRunDeps {
   /** Every document holding blocks, as the shared walk yields them. */
@@ -111,10 +114,13 @@ export interface DryRunDeps {
   /** Which place a document is in, by its first host. */
   readonly placeOf: (host: HostAddress) => RemovalPlace;
   /**
-   * What the caller knows a document by, or `null` when the caller may not
-   * read it. Asked only for documents that would be named.
+   * What the caller knows each of `hosts` by, by document key, for the ones
+   * the caller may read; one they may not is absent. Asked in batches, after
+   * the walk, only for documents that would be named.
    */
-  readonly nameFor: (host: HostAddress) => Promise<string | null>;
+  readonly namesFor: (
+    hosts: readonly HostAddress[]
+  ) => Promise<ReadonlyMap<string, string>>;
   /** The bounds the compiler reads a document within. */
   readonly limits: DocumentLimits;
   /** The site's shared styles, as stored and defaulted. */
@@ -303,32 +309,90 @@ async function addHost(
   return true;
 }
 
-/** A list being named as it fills, past the cap only counted. */
+/** A list as the walk fills it: the documents to name from, and the ones only counted. */
 interface Naming {
   readonly hosts: HostAddress[];
   unnamed: number;
 }
 
-/** Add a document to a list, holding its address while there is room to name it. */
+/**
+ * Add a document to a list to name from. Every one is kept, however many the
+ * caller may not read ahead of it: an address is small, and the naming that
+ * follows stops at ten names or the deadline, whichever comes first.
+ */
 function addTo(naming: Naming, host: HostAddress): void {
-  if (naming.hosts.length < NAMED_AT_MOST) naming.hosts.push(host);
-  else naming.unnamed += 1;
+  naming.hosts.push(host);
 }
 
-/** A list's names, asked of the caller: one they may not read is counted. */
+/**
+ * What the caller knows each document by, `null` for one they may not read,
+ * asked once however many lists hold it.
+ */
+type NameCache = Map<string, string | null>;
+
+/**
+ * A list's names: its documents asked of the caller in batches, in the order
+ * the walk found them, until {@link NAMED_AT_MOST} are named. One the caller
+ * may not read uses up no place, so a readable one however late is named;
+ * the rest are counted. Asked after the walk, so naming never takes time from
+ * counting; past the deadline the rest are counted unasked.
+ */
 async function named(
   naming: Naming,
-  deps: DryRunDeps
+  deps: DryRunDeps,
+  cache: NameCache
 ): Promise<NamedDocuments> {
   const names: string[] = [];
   let unnamed = naming.unnamed;
-  for (const host of naming.hosts) {
-    // Past the deadline a document is counted rather than named.
-    const name = await beforeDeadline(deps.nameFor(host), deps);
-    if (name === null || name === TIMED_OUT) unnamed += 1;
-    else names.push(name);
+  for (let at = 0; at < naming.hosts.length; at += NAMES_PER_ASK) {
+    const left = naming.hosts.length - at;
+    if (names.length >= NAMED_AT_MOST)
+      return { named: names, unnamed: unnamed + left };
+    const batch = naming.hosts.slice(at, at + NAMES_PER_ASK);
+    if (!(await askBatch(batch, deps, cache))) {
+      return { named: names, unnamed: unnamed + left };
+    }
+    unnamed += takeNames(batch, cache, names);
   }
   return { named: names, unnamed };
+}
+
+/**
+ * Ask the caller for the names of a batch's documents not asked about yet,
+ * caching each answer; false when the deadline passed first.
+ */
+async function askBatch(
+  batch: readonly HostAddress[],
+  deps: DryRunDeps,
+  cache: NameCache
+): Promise<boolean> {
+  const unasked = batch.filter(host => !cache.has(documentKeyOf(host)));
+  if (unasked.length === 0) return true;
+  const answer = await beforeDeadline(deps.namesFor(unasked), deps);
+  if (answer === TIMED_OUT) return false;
+  for (const host of unasked) {
+    const key = documentKeyOf(host);
+    cache.set(key, answer.get(key) ?? null);
+  }
+  return true;
+}
+
+/**
+ * Name a batch's documents from the cache while the list has room; answers
+ * how many were only counted.
+ */
+function takeNames(
+  batch: readonly HostAddress[],
+  cache: NameCache,
+  names: string[]
+): number {
+  let unnamed = 0;
+  for (const host of batch) {
+    const name = cache.get(documentKeyOf(host)) ?? null;
+    if (name !== null && names.length < NAMED_AT_MOST) names.push(name);
+    else unnamed += 1;
+  }
+  return unnamed;
 }
 
 /** What one removed breakpoint has gathered while the site is walked. */
@@ -446,14 +510,15 @@ export async function countRemoval(
       ? { unreadable: 0, complete: true }
       : await walkSite(ids, per, deps);
   const out: RemovedBreakpoint[] = [];
+  const names: NameCache = new Map();
   for (const [id, entry] of per) {
     out.push({
       id,
       label: removed.get(id) ?? id,
       places: entry.places,
       sharedStyles: shared.get(id) ?? { classes: 0, styles: 0, locked: [] },
-      documents: await named(entry.documents, deps),
-      locked: await named(entry.locked, deps),
+      documents: await named(entry.documents, deps, names),
+      locked: await named(entry.locked, deps, names),
       unaddressable: entry.unaddressable,
     });
   }
