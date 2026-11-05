@@ -167,11 +167,25 @@ function objectLiteral(value: Record<string, unknown>): string {
 }
 
 /**
+ * `data` as an object literal with the version sent under `_rev`, `version`
+ * being code rather than JSON, so it joins the literal as text.
+ */
+function withVersion(data: Record<string, unknown>, version: string): string {
+  const line = `"${VERSION_KEY}": ${version}`;
+  const literal =
+    Object.keys(data).length === 0
+      ? `{\n  ${line}\n}`
+      : `${JSON.stringify(data, null, 2).slice(0, -2)},\n  ${line}\n}`;
+  return literal.split("\n").join("\n  ");
+}
+
+/**
  * The data of an update made from a read: the body as typed when it already
  * names its version or chooses to overwrite, and otherwise the body with the
  * version of `current`, which the snippet reads first. An update that sends
  * a version is refused when the document changed since that read, rather
- * than writing over the change.
+ * than writing over the change. The read answers `null` for a document it
+ * cannot find, so the version is read through `?.`.
  */
 function versionedData(body: string | undefined): {
   data: string;
@@ -181,14 +195,20 @@ function versionedData(body: string | undefined): {
   if (data === null || VERSION_KEY in data || OVERWRITE_KEY in data) {
     return { data: dataArg(body), readsFirst: false };
   }
-  const keys = Object.keys(data).length;
-  const version = `"${VERSION_KEY}": current.${VERSION_KEY}`;
-  // `current._rev` is code, not JSON, so it joins the literal as text.
-  const literal =
-    keys === 0
-      ? `{\n  ${version}\n}`
-      : `${JSON.stringify(data, null, 2).slice(0, -2)},\n  ${version}\n}`;
-  return { data: literal.split("\n").join("\n  "), readsFirst: true };
+  return {
+    data: withVersion(data, `current?.${VERSION_KEY}`),
+    readsFirst: true,
+  };
+}
+
+/** A bulk body's `revs`, the version it gives each id, when it gives any. */
+function bulkRevs(
+  body: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  const revs = body?.revs;
+  return revs !== null && typeof revs === "object" && !Array.isArray(revs)
+    ? (revs as Record<string, unknown>)
+    : null;
 }
 
 /** The ids a bulk action addresses, read out of its body. */
@@ -309,16 +329,35 @@ export function toSdk(req: CodeRequest): string {
     }
 
     case "bulk-update": {
-      // No `bulkUpdate` on the SDK: `update` with a `where` is the bulk form,
-      // so the ids the REST body carries become a `where` on id. An update by
-      // query names no document whose version it could send, so it sets the
-      // values over whatever each document holds, and says so.
       const ids = bulkIds(req.body);
-      const shared = bodyObject(req.body)?.data;
+      const body = bodyObject(req.body);
+      const shared = body?.data;
       const data =
         shared !== null && typeof shared === "object" && !Array.isArray(shared)
           ? (shared as Record<string, unknown>)
           : {};
+      const revs = bulkRevs(body);
+      // A version for each id: the SDK's bulk form is an update by query,
+      // which takes none, so each id is updated on its own with its version,
+      // and refused alone if it changed since it was read.
+      if (revs !== null) {
+        return call([
+          `const revs: Record<string, string> = ${JSON.stringify(revs, null, 2)};`,
+          `const results = await Promise.all(`,
+          `  ${ids ?? JSON.stringify(Object.keys(revs))}.map(id =>`,
+          `    nextly.update({`,
+          `      collection: ${slug},`,
+          `      id,`,
+          `      data: ${withVersion(data, "revs[id]").split("\n").join("\n    ")},`,
+          `    })`,
+          `  )`,
+          `);`,
+        ]);
+      }
+      // No `bulkUpdate` on the SDK: `update` with a `where` is the bulk form,
+      // so the ids the REST body carries become a `where` on id. An update by
+      // query names no document whose version it could send, so it sets the
+      // values over whatever each document holds, and says so.
       return call([
         `const result = await nextly.update({`,
         `  collection: ${slug},`,

@@ -275,7 +275,7 @@ describe("sdk — the version an update sends", () => {
     expect(out).toContain(
       'const current = await nextly.findByID({ collection: "posts", id: "abc123" });'
     );
-    expect(out).toContain('"title": "New",\n    "_rev": current._rev\n  }');
+    expect(out).toContain('"title": "New",\n    "_rev": current?._rev\n  }');
     expect(out.indexOf("nextly.findByID(")).toBeLessThan(
       out.indexOf("nextly.update(")
     );
@@ -283,7 +283,7 @@ describe("sdk — the version an update sends", () => {
 
   it("an update with an empty body still sends the version", () => {
     const out = toSdk(req({ action: "update", entryId: "abc123", body: "" }));
-    expect(out).toContain('data: {\n    "_rev": current._rev\n  },');
+    expect(out).toContain('data: {\n    "_rev": current?._rev\n  },');
   });
 
   it("a Single update reads the Single first and sends the version of that read", () => {
@@ -293,7 +293,7 @@ describe("sdk — the version an update sends", () => {
     expect(out).toContain(
       'const current = await nextly.findSingle({ slug: "posts" });'
     );
-    expect(out).toContain('"title": "Home",\n    "_rev": current._rev\n  }');
+    expect(out).toContain('"title": "Home",\n    "_rev": current?._rev\n  }');
   });
 
   it("an update that already names its version or overwrites is sent as typed, with no read", () => {
@@ -303,7 +303,7 @@ describe("sdk — the version an update sends", () => {
     ]) {
       const out = toSdk(req({ action: "update", entryId: "abc123", body }));
       expect(out).not.toContain("findByID");
-      expect(out).not.toContain("current._rev");
+      expect(out).not.toContain("current?._rev");
     }
   });
 
@@ -312,7 +312,7 @@ describe("sdk — the version an update sends", () => {
       req({ action: "update", entryId: "abc123", body: "{not json" })
     );
     expect(out).toContain("{ /* the body above is not valid JSON */ }");
-    expect(out).not.toContain("current._rev");
+    expect(out).not.toContain("current?._rev");
   });
 
   it("bulk update by query chooses to overwrite", () => {
@@ -324,6 +324,40 @@ describe("sdk — the version an update sends", () => {
     );
     expect(out).toContain('"status": "published",\n    "_overwrite": true');
     expect(out).not.toContain("_rev");
+  });
+
+  // The read answers null for an entry it cannot find, so the snippet must
+  // not read the version off it unguarded: it would not compile under strict.
+  it("reads the version through ?. on a read that may answer null", () => {
+    const update = toSdk(
+      req({ action: "update", entryId: "abc123", body: '{"title":"New"}' })
+    );
+    const single = toSdk(
+      req({ isSingle: true, action: "update", body: '{"title":"Home"}' })
+    );
+    for (const out of [update, single]) {
+      expect(out).toContain("current?._rev");
+      expect(out).not.toMatch(/current\._rev/);
+    }
+  });
+
+  // The SDK's bulk form is an update by query, which takes no versions, so
+  // a body giving each id its version becomes one update per id, each with
+  // its own: never an overwrite that drops them.
+  it("bulk update with revs updates each id with its own version", () => {
+    const out = toSdk(
+      req({
+        action: "bulk-update",
+        body: '{"ids":["a","b"],"revs":{"a":"3","b":"5"},"data":{"status":"published"}}',
+      })
+    );
+    expect(out).toContain('"a": "3"');
+    expect(out).toContain('"b": "5"');
+    expect(out).toContain('["a","b"].map(id =>');
+    expect(out).toContain("nextly.update({");
+    expect(out).toContain('"_rev": revs[id]');
+    expect(out).not.toContain("where:");
+    expect(out).not.toContain("_overwrite");
   });
 
   it("bulk update keeps an overwrite choice the body already makes", () => {
