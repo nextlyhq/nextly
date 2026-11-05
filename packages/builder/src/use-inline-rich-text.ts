@@ -136,17 +136,38 @@ function caretOffsetAt(
 ): number | undefined {
   const found = caretRangeAt(element.ownerDocument, point);
   if (found === undefined) return undefined;
-  if (!element.contains(found.container)) return undefined;
+  return characterOffsetIn(element, found.container, found.offset);
+}
+
+/**
+ * How many characters of `element`'s text come before a position in it, or
+ * `undefined` when the position is outside it or no range can end there. The
+ * one measure both a pointer's caret and the selection's are taken by.
+ */
+function characterOffsetIn(
+  element: HTMLElement,
+  container: Node,
+  offset: number
+): number | undefined {
+  if (!element.contains(container)) return undefined;
   const upToCaret = element.ownerDocument.createRange();
   upToCaret.selectNodeContents(element);
   try {
-    upToCaret.setEnd(found.container, found.offset);
+    upToCaret.setEnd(container, offset);
   } catch {
     // The located node is not one this range can end in — an offset past its
     // length, or a node type the range refuses. The editor's own answer stands.
     return undefined;
   }
   return upToCaret.toString().length;
+}
+
+/** Where the selection's caret is in `element`, as a character offset. */
+function selectionOffsetIn(element: HTMLElement): number | undefined {
+  const selection = element.ownerDocument.getSelection();
+  const at = selection?.focusNode;
+  if (selection === null || at === null || at === undefined) return undefined;
+  return characterOffsetIn(element, at, selection.focusOffset);
 }
 
 /** Which passage is being edited. */
@@ -235,6 +256,8 @@ interface CarriedPassage {
   readonly words: unknown;
   readonly opened: unknown;
   readonly baseline: unknown;
+  /** Where the caret was, so the passage resumes there. */
+  readonly caret?: number;
 }
 
 /**
@@ -373,6 +396,12 @@ export function useInlineRichText(
     opened: unknown;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
+    /**
+     * Where the caret last was, as a character offset, kept as the author
+     * moves it: by the time a frame replaces its page, the old page's
+     * selection may be gone with it.
+     */
+    caret?: number;
     /**
      * The passage as it was when its write was last refused, while it stays
      * open. A second deliberate Escape over the SAME passage lets it go; one
@@ -588,7 +617,16 @@ export function useInlineRichText(
     // Read once, here, rather than depended on — see `latest`. A host that
     // supplies no loader edits plain text and simply never opens a passage.
     const fetch = latest.current.load;
-    if (fetch === undefined) return;
+    if (fetch === undefined) {
+      // No editor to resume a carried passage in: it is finished here.
+      const pending = carried.current;
+      if (pending !== null) {
+        carried.current = null;
+        setEditing(null);
+        report(settleCarried(editorRef.current, pending));
+      }
+      return;
+    }
     // The element the gesture landed on, when there was one. Searching the
     // canvas's document is the fallback for a keyboard caller, which has no
     // element: the frame's when the canvas is in one.
@@ -719,7 +757,7 @@ export function useInlineRichText(
         // Taken up: the session holds the words now.
         carried.current = null;
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-        session.focus(caret);
+        session.focus(carry?.caret ?? caret);
         mounted.current = {
           session,
           element,
@@ -788,6 +826,11 @@ export function useInlineRichText(
      */
     const onBlur = () => commit();
 
+    const trackCaret = () => {
+      const live = mounted.current;
+      if (live?.element === element) live.caret = selectionOffsetIn(element);
+    };
+    element.ownerDocument.addEventListener("selectionchange", trackCaret);
     element.addEventListener("keydown", onKeyDown);
     element.addEventListener("blur", onBlur);
     element.addEventListener("pointerdown", swallow);
@@ -827,6 +870,7 @@ export function useInlineRichText(
           words: live.session.read(),
           opened: live.opened,
           baseline: live.baseline,
+          caret: live.caret,
         };
         mounted.current = null;
         live.session.detach();
@@ -848,6 +892,7 @@ export function useInlineRichText(
         carried.current = null;
         report(settleCarried(editorRef.current, pending));
       }
+      element.ownerDocument.removeEventListener("selectionchange", trackCaret);
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", onBlur);
       element.removeEventListener("pointerdown", swallow);

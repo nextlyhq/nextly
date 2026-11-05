@@ -326,6 +326,102 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
     expect(result.current.editing).toBeNull();
   });
 
+  it("resumes a carried passage where the caret was", async () => {
+    // The author was typing mid-passage when the page was replaced; the
+    // caret goes back to that place, not to the end of the passage.
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const focus = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: { focus, read: () => null, detach: () => {}, hold: () => {} },
+    }));
+    const load = vi.fn(async () => ({ attach }));
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editorState(), load as never),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    // The caret after "A pa", as typing leaves it.
+    const text = first.inside.querySelector(
+      '[data-nx-prop="content"] p'
+    )?.firstChild;
+    if (text === null || text === undefined) throw new Error("no text");
+    const selection = first.inside.getSelection();
+    const range = first.inside.createRange();
+    range.setStart(text, 4);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    first.inside.dispatchEvent(new Event("selectionchange"));
+
+    frame = framedPage().frame;
+    await act(async () => {
+      rerender();
+    });
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenLastCalledWith(4);
+  });
+
+  it("finishes a carried passage when the editor can no longer be loaded", async () => {
+    // The host stops supplying the editor in the same render that replaces
+    // the page: the carried words are written, not stranded.
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const stored = { root: { type: "root", children: [] } };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "Typed" }] },
+        ],
+      },
+    };
+    let reads = 0;
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: {
+        focus: () => {},
+        read: () => (reads++ === 0 ? stored : typed),
+        detach: () => {},
+        hold: () => {},
+      },
+    }));
+    let load: (() => Promise<unknown>) | undefined = vi.fn(async () => ({
+      attach,
+    }));
+    const editor = editorState();
+    editor.apply = vi.fn(() => editor.document);
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editor, load as never),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    load = undefined;
+    frame = framedPage().frame;
+    await act(async () => {
+      rerender();
+    });
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(result.current.editing).toBeNull();
+  });
+
   it("takes the caret into the frame's new page when the frame replaces its document mid-edit", () => {
     registerArticle();
     const first = framedPage();
