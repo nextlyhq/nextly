@@ -15,6 +15,7 @@ import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
 import { libraryDefinition } from "./classic-spacing";
+import { buttonLooks } from "./looks";
 import { boundText, LINK_PROPS, linkFor, oneOf, text } from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
@@ -182,6 +183,8 @@ export const button: BlockDefinition<ButtonProps, PageContext> =
         icon: "button",
         category: INTERACTIVE,
         keywords: ["link", "cta", "call to action"],
+        // Its looks, offered as tiles on a block already on the page.
+        variations: buttonLooks(),
       },
       baseStyles: BUTTON_BASE_STYLES,
       props: {
