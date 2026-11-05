@@ -79,6 +79,32 @@ try {
   const read = (folder, file) =>
     JSON.parse(readFileSync(join(folder, file), "utf8"));
 
+  /*
+   * The alias map must be cut from the SAME Lucide release: an older one
+   * omits the renames made since, and an id stored under a renamed name then
+   * stops resolving. Iconify stamps its set with when it was built from
+   * Lucide; that has to fall within a day and a half of the Lucide release's
+   * publication, or nothing is written.
+   */
+  const published = JSON.parse(
+    execFileSync("npm", ["view", "lucide-static", "time", "--json"], {
+      encoding: "utf8",
+    })
+  )[lucide];
+  const built = read(iconifyPackage, "icons.json").lastModified;
+  const apart =
+    typeof published === "string" && typeof built === "number"
+      ? Math.abs(Date.parse(published) - built * 1000)
+      : Number.NaN;
+  if (!(apart <= 36 * 60 * 60 * 1000)) {
+    throw new Error(
+      `@iconify-json/lucide ${iconify} was not built from Lucide ${lucide} ` +
+        `(Lucide published ${String(published)}, Iconify built ` +
+        `${typeof built === "number" ? new Date(built * 1000).toISOString() : "at an unknown time"}). ` +
+        "Choose the Iconify release cut from this Lucide release."
+    );
+  }
+
   const nodes = read(staticPackage, "icon-nodes.json");
   const tags = read(staticPackage, "tags.json");
   const iconifySet = read(iconifyPackage, "icons.json");

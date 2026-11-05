@@ -41,13 +41,31 @@ function loadedBy(entry: string, through: "static" | "any" = "any"): string[] {
   return [...seen];
 }
 
-/** Whether a built file carries the icon data, by an alias only the data holds. */
-const carriesIcons = (file: string): boolean =>
-  readFileSync(file, "utf8").includes('"activity-square"');
+/**
+ * The set's three tables, each of which a bundler can keep or drop on its
+ * own: an entry importing only the bodies would carry them without the
+ * aliases. The build keeps each table's declared name, which no other code
+ * declares.
+ */
+const TABLES = ["LUCIDE_ICONS", "LUCIDE_ALIASES", "LUCIDE_TAGS"];
+
+/** Which of the set's tables a built file declares. */
+const tablesIn = (file: string): string[] => {
+  const source = readFileSync(file, "utf8");
+  return TABLES.filter(table =>
+    new RegExp(`\\b(?:const|let|var)\\s+${table}\\b`).test(source)
+  );
+};
+
+/** Whether a built file carries any of the icon data. */
+const carriesIcons = (file: string): boolean => tablesIn(file).length > 0;
 
 describe("the icon set's reach", () => {
   it("is carried by the server entries, so the check can see it", () => {
     // The control: without it, a probe that never matched would pass below.
+    // Every table is seen, so the probe is not one table's.
+    const seen = new Set(loadedBy("icons/lucide.mjs").flatMap(tablesIn));
+    expect([...seen].sort()).toEqual([...TABLES].sort());
     expect(loadedBy("icons/lucide.mjs").some(carriesIcons)).toBe(true);
     expect(loadedBy("next.mjs").some(carriesIcons)).toBe(true);
   });
