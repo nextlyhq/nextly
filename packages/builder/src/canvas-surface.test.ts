@@ -187,12 +187,13 @@ describe("the canvas surface is the site's, not the admin's", () => {
     expect(declared(rule, "color-scheme")).toBe("light");
   });
 
-  it("paints the page with no admin token: only a Layout region's chrome reads them", () => {
+  it("paints the page with no admin token: only the admin's own chrome reads them", () => {
     /*
      * The admin's tokens would repaint the page whenever the admin changed
-     * theme, so the page's own rules name only the site's tokens. The one
-     * exception is a Layout region's badge and tag, which are the admin's
-     * words on the page and take the tokens the frame hands it.
+     * theme, so the page's own rules name only the site's tokens. The
+     * exceptions are the admin's words on the page, which take the tokens the
+     * frame hands them: a Layout region's badge and tag, and a collection
+     * list's note to its author and its "When empty" tag.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
@@ -211,7 +212,7 @@ describe("the canvas surface is the site's, not the admin's", () => {
       // content is, by the same handed token.
       for (const part of selectors) {
         expect(part, "a rule painting with an admin token").toMatch(
-          /^(\.nx-canvas-region|\[data-nx-site-chrome\])/
+          /^(\.nx-canvas-region|\[data-nx-site-chrome\]|\[data-nx-list-diagnostic|\.nx-canvas \[data-nx-list-)/
         );
       }
     }
@@ -541,5 +542,48 @@ describe("a refused drop's notice", () => {
       expect(declared(rule, "background"), place).toBe(undefined);
       expect(declared(rule, "background-color"), place).toBe(undefined);
     }
+  });
+});
+
+describe("a collection list's notes and tag in the canvas frame", () => {
+  it("draws a fallen-back sort amber and a failed read red, in the editor's own names", () => {
+    const amber = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '[data-nx-list-diagnostic="sort-fallback"]'
+    );
+    expect(declared(amber, "background")).toContain("var(--nx-builder-warning");
+    const red = ruleIn(
+      CANVAS_FRAME_SHEET,
+      '[data-nx-list-diagnostic="query-failed"]'
+    );
+    expect(declared(red, "background")).toContain("var(--nx-builder-danger");
+    // Each is the theme's own, so it follows light and dark.
+    expect(
+      ruleFor(
+        ".nx-builder-tokens,\n.nx-builder-chrome,\n:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))"
+      )
+    ).toContain("--nx-builder-warning: var(--nx-warning)");
+  });
+
+  it("tags a list drawing its empty state with why, at the admin's size", () => {
+    const tagged = (because: string) =>
+      declared(
+        ruleIn(
+          CANVAS_FRAME_SHEET,
+          `.nx-canvas [data-nx-list-empty-because="${because}"]::before`
+        ),
+        "content"
+      );
+    expect(tagged("chosen")).toBe('"When empty"');
+    expect(tagged("none")).toBe('"No entries match · showing When empty"');
+    expect(tagged("failed")).toBe('"Showing When empty"');
+    const tag = ruleIn(
+      CANVAS_FRAME_SHEET,
+      ".nx-canvas [data-nx-list-shows]::before"
+    );
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(tag, "background")).toBe(
+      "var(--nx-builder-select, Highlight)"
+    );
   });
 });

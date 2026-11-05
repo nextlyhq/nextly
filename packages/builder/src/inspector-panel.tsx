@@ -1118,6 +1118,8 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      document={editor.document}
+      listView={listViewOf(editor, inspection.nodeId)}
     />
   );
   const Custom =
@@ -1282,6 +1284,22 @@ class CustomInspectorBoundary extends React.Component<
   }
 }
 
+/** Whether the canvas draws a list's empty state, and the way to switch it. */
+interface ListView {
+  readonly showsEmpty: boolean;
+  readonly onShowEmpty: (empty: boolean) => void;
+}
+
+/** A block's list view, where the editor keeps one. */
+function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
+  const show = editor.showListEmpty;
+  if (show === undefined) return undefined;
+  return {
+    showsEmpty: editor.listsShowingEmpty?.has(nodeId) === true,
+    onShowEmpty: empty => show(nodeId, empty),
+  };
+}
+
 /** The Content tab: one field per declared prop, or the note that there are none. */
 function ContentFields({
   inspection,
@@ -1291,8 +1309,14 @@ function ContentFields({
   fields,
   writable,
   onCommitMany,
+  document,
+  listView,
 }: {
   inspection: BlockInspection;
+  /** The document the block is in, for a group that reads around it. */
+  document: BlockDocument;
+  /** Whether the canvas draws this block's empty state, and the switch. */
+  listView?: ListView | undefined;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   /** Several props written as one edit, for a block's prop groups. */
   onCommitMany: (
@@ -1370,6 +1394,10 @@ function ContentFields({
                 services,
                 placedWith: inspection.placedWith,
                 onCommitMany,
+                document,
+                nodeId: inspection.nodeId,
+                showsEmpty: listView?.showsEmpty === true,
+                onShowEmpty: listView?.onShowEmpty,
               })}
             </React.Fragment>
           );

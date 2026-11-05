@@ -22,6 +22,7 @@
  * @module collection-loop-controls
  */
 
+import { listKindSortable } from "@nextlyhq/blocks-engine";
 import {
   Button,
   Label,
@@ -36,9 +37,10 @@ import { ChoiceList, type ListedChoice } from "./choice-list";
 import type {
   ContentControlProps,
   LoopCollection,
-  LoopSortField,
+  LoopListField,
 } from "./content-controls";
 import { propLabel } from "./inspector";
+import { firstDirection } from "./list-query-model";
 import { readSort, restKeys, writeSort, type SortKey } from "./loop-sort";
 
 type ListLoopCollections = NonNullable<
@@ -46,7 +48,7 @@ type ListLoopCollections = NonNullable<
 >;
 
 /** The host's answer, as the controls hold it. */
-type LoopCollections =
+export type LoopCollections =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly collections: readonly LoopCollection[] }
   | { readonly kind: "failed" };
@@ -79,7 +81,7 @@ function readShared(
 }
 
 /** The collections, or `undefined` when the host lends no way to list them. */
-function useLoopCollections(
+export function useLoopCollections(
   list: ListLoopCollections | undefined
 ): LoopCollections | undefined {
   const [found, setFound] = React.useState<{
@@ -108,7 +110,7 @@ function useLoopCollections(
 }
 
 /** A stored text value, trimmed, or `undefined` for anything else or nothing. */
-function storedName(value: unknown): string | undefined {
+export function storedName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
@@ -121,7 +123,7 @@ interface LoopControlProps extends ContentControlProps {
 }
 
 /** One row of a loop picker's list. */
-interface LoopChoice extends ListedChoice {
+export interface LoopChoice extends ListedChoice {
   /** What picking it writes; `undefined` removes the prop. */
   readonly value: string | undefined;
 }
@@ -130,8 +132,12 @@ interface LoopChoice extends ListedChoice {
  * The button that shows a loop prop's value, and the list it opens: searched
  * once long. Its name is the field's label and its value together, so a
  * screen reader hears "Collection, Blog posts".
+ *
+ * Shared by a collection list's own controls, which add groups to the list
+ * (related sources above collections), a line above or below it, an icon
+ * before the value, and an invalid state for a value a save would refuse.
  */
-function LoopPicker({
+export function LoopPicker<C extends ListedChoice>({
   id,
   labelId,
   shown,
@@ -144,6 +150,14 @@ function LoopPicker({
   noMatch,
   searchFrom,
   onPick,
+  groups,
+  renderChoice,
+  above,
+  below,
+  icon,
+  invalid,
+  describedBy,
+  defaultOpen,
 }: {
   id: string;
   labelId: string;
@@ -152,20 +166,36 @@ function LoopPicker({
   /** Whether they are a prompt, or a stored value the list does not hold. */
   state: "value" | "prompt" | "unknown";
   disabled: boolean;
-  choices: readonly LoopChoice[];
+  choices: readonly C[];
   currentKey: string;
   listLabel: string;
   searchLabel: string;
   noMatch: string;
   searchFrom?: number;
-  onPick: (choice: LoopChoice) => void;
+  onPick: (choice: C) => void;
+  /** The list's group headings, in order, for a list of grouped rows. */
+  groups?: ReadonlyArray<{ group: string; heading: string }>;
+  renderChoice?: (choice: C) => React.ReactNode;
+  /** Drawn in the open list above its rows: a group with nothing to offer. */
+  above?: React.ReactNode;
+  /** Drawn in the open list below its rows: what the list leaves out. */
+  below?: React.ReactNode;
+  /** Drawn before the value, such as the mark of a related source. */
+  icon?: React.ReactNode;
+  /** A value the save would refuse, marked as the field's error. */
+  invalid?: boolean;
+  /** The id of the text describing the value, such as its error. */
+  describedBy?: string;
+  /** Opened as soon as it is drawn, as a new filter's field menu is. */
+  defaultOpen?: boolean;
 }): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen === true);
   const valueId = `${id}-value`;
   return (
     <div
       className="nx-font-pick"
       data-unknown={state === "unknown" ? "" : undefined}
+      data-invalid={invalid === true ? "" : undefined}
     >
       <Popover open={open} onOpenChange={setOpen} modal={false}>
         <PopoverTrigger asChild>
@@ -176,8 +206,11 @@ function LoopPicker({
             aria-haspopup="listbox"
             aria-expanded={open}
             aria-labelledby={`${labelId} ${valueId}`}
+            aria-invalid={invalid === true ? true : undefined}
+            aria-describedby={describedBy}
             disabled={disabled}
           >
+            {icon}
             <span
               id={valueId}
               className="nx-font-pick__value"
@@ -198,6 +231,7 @@ function LoopPicker({
           onOpenAutoFocus={event => event.preventDefault()}
         >
           <div className="nx-font-pick__body">
+            {above}
             <ChoiceList
               choices={choices}
               currentKey={currentKey}
@@ -205,11 +239,14 @@ function LoopPicker({
               searchLabel={searchLabel}
               noMatch={noMatch}
               {...(searchFrom === undefined ? {} : { searchFrom })}
+              {...(groups === undefined ? {} : { groups })}
+              {...(renderChoice === undefined ? {} : { renderChoice })}
               onPick={choice => {
                 setOpen(false);
                 onPick(choice);
               }}
             />
+            {below}
           </div>
         </PopoverContent>
       </Popover>
@@ -259,7 +296,7 @@ function withLoopCollections(
 }
 
 /** The collections in the order the list offers them: by name, ignoring case. */
-function alphabetical(
+export function alphabetical(
   collections: readonly LoopCollection[]
 ): LoopCollection[] {
   return [...collections].sort(
@@ -351,18 +388,23 @@ function CollectionField({
 export const CollectionControl: (props: LoopControlProps) => React.JSX.Element =
   withLoopCollections(CollectionField);
 
-/** A collection's sortable fields as the menu lists them: dates first. */
-function datesFirst(fields: readonly LoopSortField[]): LoopSortField[] {
+/**
+ * A collection's fields a list may sort by, as the menu lists them: dates
+ * first. A relation sorts by its stored id, which the engine's
+ * `listKindSortable` leaves out.
+ */
+function datesFirst(fields: readonly LoopListField[]): LoopListField[] {
+  const sortable = fields.filter(field => listKindSortable(field.kind));
   return [
-    ...fields.filter(field => field.date),
-    ...fields.filter(field => !field.date),
+    ...sortable.filter(field => field.kind === "date"),
+    ...sortable.filter(field => field.kind !== "date"),
   ];
 }
 
 /** A key's field in words: its label where the collection has it. */
 function fieldWords(
   field: string,
-  fields: readonly LoopSortField[]
+  fields: readonly LoopListField[]
 ): string | undefined {
   return fields.find(each => each.name === field)?.label;
 }
@@ -380,10 +422,10 @@ function sortedCollection(
 function sortFieldsFor(
   listed: DrawnCollections,
   collection: string | undefined
-): LoopSortField[] {
+): LoopListField[] {
   if (listed.kind !== "ready") return [];
   const found = listed.collections.find(each => each.slug === collection);
-  return datesFirst(found?.sortFields ?? []);
+  return datesFirst(found?.fields ?? []);
 }
 
 /** What the sort button shows for the stored first key. */
@@ -391,7 +433,7 @@ function sortShown(
   waiting: boolean,
   first: SortKey | undefined,
   collection: string | undefined,
-  fields: readonly LoopSortField[]
+  fields: readonly LoopListField[]
 ): Shown {
   if (waiting) return { words: "Loading fields…", state: "prompt" };
   if (first === undefined) {
@@ -417,12 +459,15 @@ function sortShown(
  */
 function pickedKey(
   picked: string | undefined,
-  fields: readonly LoopSortField[],
+  fields: readonly LoopListField[],
   first: SortKey | undefined
 ): SortKey | undefined {
   const field = fields.find(each => each.name === picked);
   if (field === undefined) return undefined;
-  return { field: field.name, descending: first?.descending ?? field.date };
+  return {
+    field: field.name,
+    descending: first?.descending ?? firstDirection(field.kind),
+  };
 }
 
 /** The direction toggle beside the sort menu: pressed is descending. */
@@ -468,7 +513,7 @@ function FurtherKeys({
   fields,
 }: {
   keys: readonly SortKey[];
-  fields: readonly LoopSortField[];
+  fields: readonly LoopListField[];
 }): React.JSX.Element | null {
   if (keys.length === 0) return null;
   let lost = false;

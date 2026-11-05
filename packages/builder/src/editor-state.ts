@@ -227,6 +227,16 @@ export interface EditorState {
    * test can read it — which a boolean derived inside a component cannot.
    */
   undoDepth: number;
+  /**
+   * The collection lists the canvas draws in their empty state rather than
+   * their entries, by id: what "Canvas shows: When empty" chose, so an author
+   * can design what visitors see when nothing matches. Editor state only,
+   * never stored, and not a step of the history.
+   * @experimental
+   */
+  listsShowingEmpty?: ReadonlySet<string>;
+  /** Draw one list's empty state on the canvas, or its entries again. */
+  showListEmpty?: (id: string, empty: boolean) => void;
 }
 
 export interface UseEditorStateArgs {
@@ -1340,6 +1350,21 @@ export function useEditorState({
     []
   );
 
+  // Which lists the canvas shows empty: a new set only when one changes, so
+  // the canvas, which draws per set, draws again only then.
+  const [listsShowingEmpty, setListsShowingEmpty] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const showListEmpty = useCallback((id: string, empty: boolean) => {
+    setListsShowingEmpty(current => {
+      if (current.has(id) === empty) return current;
+      const next = new Set(current);
+      if (empty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
   return useMemo(
     () => ({
       document,
@@ -1359,6 +1384,8 @@ export function useEditorState({
       canRedo: depths.redo > 0,
       limits,
       undoDepth: depths.document,
+      listsShowingEmpty,
+      showListEmpty,
     }),
     [
       document,
@@ -1375,6 +1402,8 @@ export function useEditorState({
       recordStep,
       depths,
       limits,
+      listsShowingEmpty,
+      showListEmpty,
     ]
   );
 }

@@ -204,6 +204,77 @@ ${ROOT} [data-nx-drag-source] { opacity: 0.4; }
 ${ROOT} [contenteditable] { -webkit-touch-callout: default; }
 ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
 
+/* A collection list's note to its author: why its sort fell back (amber) or
+   its read failed (red). Drawn in the page, where the list draws it, in the
+   admin's scheme and face, which the frame hands these notes as values. A
+   visitor's page never carries one. */
+[data-nx-list-diagnostic] {
+  color-scheme: var(--nx-builder-scheme, light);
+  margin-block-end: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid;
+  border-radius: var(--radius-sm, 0.25rem);
+  color: var(--nx-builder-text, CanvasText);
+  font-family: var(--font-sans, system-ui), sans-serif;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+[data-nx-list-diagnostic="sort-fallback"] {
+  border-color: color-mix(in srgb, var(--nx-builder-warning, Mark) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-warning, Mark) 12%,
+    var(--nx-builder-surface-raised, Canvas)
+  );
+}
+
+[data-nx-list-diagnostic="query-failed"] {
+  border-color: color-mix(in srgb, var(--nx-builder-danger, CanvasText) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-danger, CanvasText) 8%,
+    var(--nx-builder-surface-raised, Canvas)
+  );
+}
+
+/* A list drawing its empty state is tagged above its top edge, in the
+   editing colour, with why: the author chose to see it, nothing matched, or
+   its read failed. Positioned for its tag on the canvas only. */
+${ROOT} [data-nx-list-shows] {
+  position: relative;
+}
+
+${ROOT} [data-nx-list-shows]::before {
+  position: absolute;
+  z-index: 2;
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.1875rem 0.1875rem 0 0;
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+${ROOT} [data-nx-list-empty-because="chosen"]::before {
+  content: "When empty";
+}
+
+${ROOT} [data-nx-list-empty-because="none"]::before {
+  content: "No entries match · showing When empty";
+}
+
+${ROOT} [data-nx-list-empty-because="failed"]::before {
+  content: "Showing When empty";
+}
+
 /* A region of the page's Layout, drawn locked around the page. Its content
    keeps the site's own colours, quietened, so it reads as what surrounds the
    page; its links and forms are inert. The region is one focus stop: its
