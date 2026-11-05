@@ -22,10 +22,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  COMPONENT_RETIRED_SLUG,
-  retiredKey,
-} from "../collections/component-retired-exposures";
+import { COMPONENT_RETIRED_SLUG } from "../collections/component-retired-exposures";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
@@ -33,6 +30,8 @@ import {
   FIELD_BEING_REMOVED,
   REMOVAL_HOLD,
   REMOVAL_RECOUNT,
+  removalHoldStore,
+  type HoldDirectApi,
 } from "../removal-hold";
 
 type Row = Record<string, unknown>;
@@ -151,24 +150,23 @@ describe.each(getConfiguredTestDialects())(
       until = Date.now() + 60_000,
       confirmed = 1
     ): Promise<void> {
-      await t.nextly.create({
+      await holdsOver(t).hold(componentId, {
+        properties: ["title"],
+        slots: [],
+        confirmed,
+        // A floor, as the dialog says while the usage index is not known
+        // whole: the count's completeness then plays no part here.
+        confirmedComplete: false,
+        until,
+        token: "integration",
+      });
+    }
+
+    /** The store the plugin keeps holds in, over this database. */
+    function holdsOver(t: TestNextly) {
+      return removalHoldStore({
+        nextly: async () => t.nextly as unknown as HoldDirectApi,
         collection: COMPONENT_RETIRED_SLUG,
-        data: {
-          identity: await retiredKey(componentId, REMOVAL_HOLD, ""),
-          componentId,
-          kind: REMOVAL_HOLD,
-          exposureId: JSON.stringify({
-            properties: ["title"],
-            slots: [],
-            confirmed,
-            // A floor, as the dialog says while the usage index is not known
-            // whole: the count's completeness then plays no part here.
-            confirmedComplete: false,
-            until,
-            token: "integration",
-          }),
-        },
-        overrideAccess: true,
       });
     }
 
@@ -313,9 +311,37 @@ describe.each(getConfiguredTestDialects())(
         })
       );
 
-      expect(await holdRows(t)).toHaveLength(1);
+      expect((await holdsOver(t).of([heroId])).get(heroId)).toHaveLength(1);
       expect(codesOf(refused)).toEqual([FIELD_BEING_REMOVED]);
     });
+
+    it("keeps a hold of as many fields as an envelope may hold", async () => {
+      const t = await boot();
+      const heroId = await publishedHero(t);
+      // Past 64 KiB as one value, which a MySQL TEXT column refuses.
+      const many = Array.from({ length: 1000 }, (_, at) =>
+        `field-${String(at)}`.padEnd(64, "x")
+      );
+      const hold = {
+        properties: many,
+        slots: [],
+        confirmed: 0,
+        confirmedComplete: true,
+        until: Date.now() + 60_000,
+        token: "many",
+      };
+
+      await holdsOver(t).hold(heroId, hold);
+
+      const [read, ...others] =
+        (await holdsOver(t).of([heroId])).get(heroId) ?? [];
+      // Read back in the table's order, which no dialect promises.
+      expect({
+        ...read,
+        properties: [...(read?.properties ?? [])].sort(),
+      }).toEqual({ ...hold, properties: [...many].sort() });
+      expect(others).toEqual([]);
+    }, 120_000);
 
     it("refuses publishing a held removal once more documents place the component", async () => {
       const t = await boot();

@@ -18,11 +18,19 @@
  * - As the publish is written the count is taken once more, on every path
  *   that publishes, and a grown count refuses it: a write already past its
  *   check when the hold was recorded is caught there.
+ * - What the designer confirms is the documents placing the component, each
+ *   of which loses the removed fields' values, whenever they were set. A
+ *   value set before the hold, by a write already committed or already past
+ *   its check, is set in a document that count includes; the hold keeps
+ *   that count final and refuses a value set after it, which the author is
+ *   told of, rather than lost unseen.
  * - A hold ends once a publish no longer exposes the held fields, or after
  *   {@link HOLD_MS}, so a publish that never lands holds nothing for long.
  *
  * Holds are kept in the plugin's bookkeeping table beside the retired ids,
- * under a kind of their own, read and written as the system.
+ * under a kind of their own, one row per held field or slot, read and written
+ * as the system. Each removal asked for keeps its own hold, so two asked for
+ * at once neither end nor replace each other's.
  *
  * @module removal-hold
  */
@@ -59,8 +67,8 @@ export interface RemovalHold extends RetiredExposures {
   /** When the hold ends, in ms since the epoch. */
   readonly until: number;
   /**
-   * Which request recorded it. Only that request's recount ends it, so two
-   * asked for at once cannot end each other's.
+   * Which request recorded it: the key it is renewed and ended by, so a
+   * request ends or renews only its own.
    */
   readonly token: string;
 }
@@ -73,14 +81,24 @@ export type HoldDirectApi = Pick<
 
 /** The holds, recorded, read and ended. */
 export interface RemovalHoldStore {
-  /** Record a component's hold, in place of any it had. */
+  /**
+   * Record a component's hold beside any others in force on it: two removals
+   * asked for at once each keep their own, so neither can end or replace the
+   * other's.
+   */
   hold(componentId: string, hold: RemovalHold): Promise<void>;
-  /** The holds in force on these components; one ended is absent. */
+  /** The holds in force on these components; one ended or run out is absent. */
   of(
     componentIds: readonly string[]
-  ): Promise<ReadonlyMap<string, RemovalHold>>;
+  ): Promise<ReadonlyMap<string, readonly RemovalHold[]>>;
   /**
-   * End a component's hold, or only the one `token` recorded. Nothing to end
+   * Run the hold `token` recorded until `until`, if it is still in force:
+   * `false` when it has ended or run out, which nothing then revives. Where
+   * nothing is ever held, every hold is in force.
+   */
+  renew(componentId: string, token: string, until: number): Promise<boolean>;
+  /**
+   * End a component's holds, or only the one `token` recorded. Nothing to end
    * is no failure.
    */
   release(componentId: string, token?: string): Promise<void>;
@@ -89,39 +107,142 @@ export interface RemovalHoldStore {
 /** How many component ids one read names, as the retired-ids read bounds it. */
 const IDS_PER_READ = 128;
 
-/** A stored hold, read strictly: anything else holds nothing. */
-function holdOf(text: unknown): RemovalHold | null {
+/** How many rows one page of a read asks for. */
+const ROWS_PER_PAGE = 500;
+
+/**
+ * One stored row of a hold. A hold is filed as one row per held field or
+ * slot, each a short id as the retired ids are, so no row outgrows the text
+ * column on any dialect however many fields a removal names; and a head row
+ * with the rest, written LAST and ended FIRST, so a hold is read only whole.
+ * A head carries its lease in its key, so renewing it writes a new head
+ * before ending the old one, and the hold is never unheld between the two.
+ */
+type HoldRow =
+  | {
+      readonly part: "head";
+      readonly token: string;
+      readonly until: number;
+      readonly confirmed: number;
+      readonly confirmedComplete: boolean;
+      readonly properties: number;
+      readonly slots: number;
+    }
+  | {
+      readonly part: "property" | "slot";
+      readonly token: string;
+      /** Until when an id with no head is a hold still being written. */
+      readonly until: number;
+      readonly id: string;
+    };
+
+/** A stored hold row, read strictly: anything else holds nothing. */
+function holdRowOf(text: unknown): HoldRow | null {
   if (typeof text !== "string") return null;
   try {
-    const parsed = JSON.parse(text) as Partial<RemovalHold> | null;
-    const ids = (value: unknown): string[] | null =>
-      Array.isArray(value) &&
-      value.every((id): id is string => typeof id === "string")
-        ? value
-        : null;
-    const properties = ids(parsed?.properties);
-    const slots = ids(parsed?.slots);
+    const row = JSON.parse(text) as Record<string, unknown> | null;
     if (
-      properties === null ||
-      slots === null ||
-      typeof parsed?.confirmed !== "number" ||
-      typeof parsed.confirmedComplete !== "boolean" ||
-      typeof parsed.until !== "number" ||
-      typeof parsed.token !== "string"
+      !isPlainRecord(row) ||
+      typeof row.token !== "string" ||
+      typeof row.until !== "number"
+    ) {
+      return null;
+    }
+    const { token, until } = row;
+    if (row.part === "property" || row.part === "slot") {
+      return typeof row.id === "string"
+        ? { part: row.part, token, until, id: row.id }
+        : null;
+    }
+    const count = (value: unknown): value is number =>
+      typeof value === "number" && Number.isInteger(value) && value >= 0;
+    if (
+      row.part !== "head" ||
+      typeof row.confirmed !== "number" ||
+      typeof row.confirmedComplete !== "boolean" ||
+      !count(row.properties) ||
+      !count(row.slots)
     ) {
       return null;
     }
     return {
-      properties,
-      slots,
-      confirmed: parsed.confirmed,
-      confirmedComplete: parsed.confirmedComplete,
-      until: parsed.until,
-      token: parsed.token,
+      part: "head",
+      token,
+      until,
+      confirmed: row.confirmed,
+      confirmedComplete: row.confirmedComplete,
+      properties: row.properties,
+      slots: row.slots,
     };
   } catch {
     return null;
   }
+}
+
+/** One table row of a hold, with the row's own id to end it by. */
+interface StoredRow {
+  readonly id: string;
+  readonly componentId: string;
+  readonly row: HoldRow;
+}
+
+/** A table row as one of a hold's rows; anything else is none. */
+function storedRowOf(item: unknown): StoredRow[] {
+  if (!isPlainRecord(item)) return [];
+  const { id, componentId, exposureId } = item;
+  if (typeof componentId !== "string") return [];
+  if (typeof id !== "string" && typeof id !== "number") return [];
+  const row = holdRowOf(exposureId);
+  return row === null ? [] : [{ id: String(id), componentId, row }];
+}
+
+/** A component's rows, by the token of the hold they belong to. */
+function byToken(rows: readonly StoredRow[]): Map<string, StoredRow[]> {
+  const tokens = new Map<string, StoredRow[]>();
+  for (const stored of rows) {
+    const list = tokens.get(stored.row.token) ?? [];
+    list.push(stored);
+    tokens.set(stored.row.token, list);
+  }
+  return tokens;
+}
+
+/** The latest head among a hold's rows, if it has one. */
+function headOf(
+  rows: readonly StoredRow[]
+): Extract<HoldRow, { part: "head" }> | undefined {
+  let head: Extract<HoldRow, { part: "head" }> | undefined;
+  for (const { row } of rows) {
+    if (row.part === "head" && (head === undefined || row.until > head.until)) {
+      head = row;
+    }
+  }
+  return head;
+}
+
+/** A hold read from its rows, or `null` when they are not one whole hold. */
+function holdFrom(rows: readonly StoredRow[]): RemovalHold | null {
+  const head = headOf(rows);
+  if (head === undefined) return null;
+  const properties: string[] = [];
+  const slots: string[] = [];
+  for (const { row } of rows) {
+    if (row.part === "property") properties.push(row.id);
+    if (row.part === "slot") slots.push(row.id);
+  }
+  // A head is written after its ids and ended before them, so a count that
+  // differs is no hold this store wrote.
+  if (properties.length !== head.properties || slots.length !== head.slots) {
+    return null;
+  }
+  return {
+    properties,
+    slots,
+    confirmed: head.confirmed,
+    confirmedComplete: head.confirmedComplete,
+    until: head.until,
+    token: head.token,
+  };
 }
 
 /** The store over the bookkeeping table, by its RESOLVED slug. */
@@ -133,70 +254,140 @@ export function removalHoldStore(args: {
 }): RemovalHoldStore {
   const now = args.clock ?? (() => Date.now());
   const rowsOf = async (nextly: HoldDirectApi, componentIds: string[]) => {
-    const rows: {
-      id: string;
-      componentId: string;
-      hold: RemovalHold | null;
-    }[] = [];
+    const rows: StoredRow[] = [];
     for (let at = 0; at < componentIds.length; at += IDS_PER_READ) {
-      const found = await nextly.find({
-        collection: args.collection,
-        where: {
-          componentId: { in: componentIds.slice(at, at + IDS_PER_READ) },
-          kind: { equals: REMOVAL_HOLD },
-        },
-        limit: IDS_PER_READ,
-        depth: 0,
-        overrideAccess: true,
-      });
-      for (const item of found.items) {
-        if (!isPlainRecord(item)) continue;
-        const { id, componentId, exposureId } = item;
-        if (typeof componentId !== "string") continue;
-        if (typeof id !== "string" && typeof id !== "number") continue;
-        rows.push({ id: String(id), componentId, hold: holdOf(exposureId) });
+      const ids = componentIds.slice(at, at + IDS_PER_READ);
+      let more = true;
+      for (let page = 1; more; page += 1) {
+        const found = await nextly.find({
+          collection: args.collection,
+          where: { componentId: { in: ids }, kind: { equals: REMOVAL_HOLD } },
+          limit: ROWS_PER_PAGE,
+          page,
+          sort: "id",
+          depth: 0,
+          overrideAccess: true,
+        });
+        rows.push(...found.items.flatMap(storedRowOf));
+        more = found.meta.hasNext;
       }
     }
     return rows;
   };
-  const release = async (componentId: string, token?: string) => {
-    const nextly = await args.nextly();
-    for (const row of await rowsOf(nextly, [componentId])) {
-      if (token !== undefined && row.hold?.token !== token) continue;
+  const write = async (
+    nextly: HoldDirectApi,
+    componentId: string,
+    row: HoldRow
+  ) => {
+    // Keyed by what makes the row one of a kind: a head by its lease, an id
+    // by its field or slot, each within its hold.
+    const key =
+      row.part === "head"
+        ? [row.token, row.part, String(row.until)]
+        : [row.token, row.part, row.id];
+    await nextly.create({
+      collection: args.collection,
+      data: {
+        identity: await retiredKey(
+          componentId,
+          REMOVAL_HOLD,
+          JSON.stringify(key)
+        ),
+        componentId,
+        kind: REMOVAL_HOLD,
+        exposureId: JSON.stringify(row),
+      },
+      overrideAccess: true,
+    });
+  };
+  // Heads first, so the hold ends at once and its ids go after it unread.
+  const end = async (nextly: HoldDirectApi, rows: readonly StoredRow[]) => {
+    const heads = rows.filter(({ row }) => row.part === "head");
+    const ids = rows.filter(({ row }) => row.part !== "head");
+    for (const { id } of [...heads, ...ids]) {
       await nextly.delete({
         collection: args.collection,
-        id: row.id,
+        id,
         overrideAccess: true,
       });
     }
+  };
+  const release = async (componentId: string, token?: string) => {
+    const nextly = await args.nextly();
+    const rows = await rowsOf(nextly, [componentId]);
+    await end(
+      nextly,
+      token === undefined ? rows : rows.filter(({ row }) => row.token === token)
+    );
   };
   return {
     of: async componentIds => {
       const ids = [...new Set(componentIds)];
       if (ids.length === 0) return new Map();
       const at = now();
-      const held = new Map<string, RemovalHold>();
-      for (const row of await rowsOf(await args.nextly(), ids)) {
-        if (row.hold !== null && row.hold.until > at) {
-          held.set(row.componentId, row.hold);
+      const held = new Map<string, RemovalHold[]>();
+      const rows = await rowsOf(await args.nextly(), ids);
+      for (const componentId of ids) {
+        const own = rows.filter(row => row.componentId === componentId);
+        for (const hold of byToken(own).values()) {
+          const read = holdFrom(hold);
+          if (read === null || read.until <= at) continue;
+          held.set(componentId, [...(held.get(componentId) ?? []), read]);
         }
       }
       return held;
     },
     release,
-    hold: async (componentId, hold) => {
-      // Ended first, so the one row the unique key allows is this hold.
-      await release(componentId);
+    renew: async (componentId, token, until) => {
       const nextly = await args.nextly();
-      await nextly.create({
-        collection: args.collection,
-        data: {
-          identity: await retiredKey(componentId, REMOVAL_HOLD, ""),
-          componentId,
-          kind: REMOVAL_HOLD,
-          exposureId: JSON.stringify(hold),
-        },
-        overrideAccess: true,
+      const rows = (await rowsOf(nextly, [componentId])).filter(
+        ({ row }) => row.token === token
+      );
+      const head = headOf(rows);
+      if (head === undefined || head.until <= now()) return false;
+      if (until <= head.until) return true;
+      await write(nextly, componentId, { ...head, until });
+      await end(
+        nextly,
+        rows.filter(({ row }) => row.part === "head")
+      );
+      return true;
+    },
+    hold: async (componentId, hold) => {
+      const nextly = await args.nextly();
+      // What ran out is ended first: a hold whose lease has passed, and the
+      // ids of one never finished, once they could no longer be one.
+      const at = now();
+      for (const rows of byToken(
+        await rowsOf(nextly, [componentId])
+      ).values()) {
+        const head = headOf(rows);
+        const lapsed =
+          head === undefined
+            ? rows.every(({ row }) => row.until <= at)
+            : head.until <= at;
+        if (lapsed) await end(nextly, rows);
+      }
+      const { token, until } = hold;
+      for (const id of hold.properties) {
+        await write(nextly, componentId, {
+          part: "property",
+          token,
+          until,
+          id,
+        });
+      }
+      for (const id of hold.slots) {
+        await write(nextly, componentId, { part: "slot", token, until, id });
+      }
+      await write(nextly, componentId, {
+        part: "head",
+        token,
+        until,
+        confirmed: hold.confirmed,
+        confirmedComplete: hold.confirmedComplete,
+        properties: hold.properties.length,
+        slots: hold.slots.length,
       });
     },
   };
@@ -206,6 +397,7 @@ export function removalHoldStore(args: {
 export const NO_HOLDS: RemovalHoldStore = {
   hold: () => Promise.resolve(),
   of: () => Promise.resolve(new Map()),
+  renew: () => Promise.resolve(true),
   release: () => Promise.resolve(),
 };
 
@@ -285,9 +477,11 @@ export function registerHoldRelease(args: {
     const definition = asDocument(data[args.componentField]);
     if (definition === null) return;
     try {
-      const hold = (await args.holds().of([String(id)])).get(String(id));
-      if (hold === undefined || stillExposes(definition, hold)) return;
-      await args.holds().release(String(id));
+      const holds = (await args.holds().of([String(id)])).get(String(id));
+      for (const hold of holds ?? []) {
+        if (stillExposes(definition, hold)) continue;
+        await args.holds().release(String(id), hold.token);
+      }
     } catch (error) {
       args.ctx.logger.error(
         `[page-builder] the hold on component "${String(id)}" was not ended after its publish; it ends on its own shortly.`,
@@ -353,12 +547,15 @@ export function registerPublishRecount(args: {
       ? fields.originalData.id
       : undefined;
     if (typeof id !== "string" && typeof id !== "number") return;
-    const hold = (await args.holds().of([String(id)])).get(String(id));
-    if (hold === undefined) return;
-    // A publish naming a definition that still exposes every held field does
-    // not remove them; one naming none publishes the held draft, which may.
+    const holds = (await args.holds().of([String(id)])).get(String(id)) ?? [];
+    // A publish naming a definition that still exposes every field a hold is
+    // for does not remove them; one naming none publishes the held draft,
+    // which may. Each hold is judged on its own count.
     const definition = asDocument(data[args.componentField]);
-    if (definition !== null && !removesAny(definition, hold)) return;
+    const removing = holds.filter(
+      hold => definition === null || removesAny(definition, hold)
+    );
+    if (removing.length === 0) return;
     if (fields.executor !== undefined) {
       throw NextlyError.validation({
         errors: [
@@ -372,7 +569,7 @@ export function registerPublishRecount(args: {
       });
     }
     const now = await args.count(String(id));
-    if (!countGrew(now, hold)) return;
+    if (!removing.some(hold => countGrew(now, hold))) return;
     throw NextlyError.validation({
       errors: [
         {
@@ -495,7 +692,7 @@ async function fenceWrite(
     }
   }
   if (placed.size === 0) return;
-  let holds: ReadonlyMap<string, RemovalHold>;
+  let holds: ReadonlyMap<string, readonly RemovalHold[]>;
   try {
     holds = await args.holds().of([...placed]);
   } catch (error) {
@@ -510,7 +707,7 @@ async function fenceWrite(
   }
   if (holds.size === 0) return;
   const stored = await storedForms(args, fields, paths);
-  for (const [componentId, hold] of holds) {
+  for (const [componentId, hold] of eachHold(holds)) {
     const where = newlySet(componentId, hold, written, stored, limits);
     if (where === undefined) continue;
     const title = (await args.titleOf?.(componentId)) ?? componentId;
@@ -523,6 +720,15 @@ async function fenceWrite(
         },
       ],
     });
+  }
+}
+
+/** Every hold in force, with the component it is on. */
+function* eachHold(
+  holds: ReadonlyMap<string, readonly RemovalHold[]>
+): Generator<readonly [string, RemovalHold]> {
+  for (const [componentId, list] of holds) {
+    for (const hold of list) yield [componentId, hold];
   }
 }
 

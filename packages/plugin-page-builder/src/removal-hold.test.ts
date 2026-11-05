@@ -98,30 +98,66 @@ const HELD: RemovalHold = {
 };
 
 describe("the hold store", () => {
-  it("records a hold in place of the one before, and reads it back", async () => {
-    const table = memoryTable();
-    const store = removalHoldStore({
+  const storeOver = (
+    table: ReturnType<typeof memoryTable>,
+    now = () => 1_000
+  ) =>
+    removalHoldStore({
       nextly: async () => table,
       collection: TABLE,
-      clock: () => 1_000,
+      clock: now,
     });
 
-    await store.hold("hero", { ...HELD, confirmed: 1 });
+  it("records a hold and reads it back", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+
     await store.hold("hero", HELD);
 
-    expect(table.rows).toHaveLength(1);
-    expect(table.rows[0]!.kind).toBe(REMOVAL_HOLD);
-    expect(await store.of(["hero", "card"])).toEqual(new Map([["hero", HELD]]));
+    expect(table.rows.every(row => row.kind === REMOVAL_HOLD)).toBe(true);
+    expect(await store.of(["hero", "card"])).toEqual(
+      new Map([["hero", [HELD]]])
+    );
+  });
+
+  it("keeps two holds asked for at once, each ended only by its own token", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+    const other = { ...HELD, properties: ["body"], slots: [], token: "t2" };
+    await store.hold("hero", HELD);
+    await store.hold("hero", other);
+
+    expect(await store.of(["hero"])).toEqual(
+      new Map([["hero", [HELD, other]]])
+    );
+
+    await store.release("hero", "t1");
+
+    expect(await store.of(["hero"])).toEqual(new Map([["hero", [other]]]));
+  });
+
+  it("files a hold of as many fields as an envelope may hold in short rows", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+    const many = Array.from({ length: 1000 }, (_, at) =>
+      `field-${String(at)}`.padEnd(64, "x")
+    );
+    const big = { ...HELD, properties: many, slots: many };
+
+    await store.hold("hero", big);
+
+    expect(await store.of(["hero"])).toEqual(new Map([["hero", [big]]]));
+    // Each row far under MySQL's 64 KiB TEXT, whatever the removal names.
+    const longest = Math.max(
+      ...table.rows.map(row => String(row.exposureId).length)
+    );
+    expect(longest).toBeLessThan(1_024);
   });
 
   it("reads a hold that has run out as none", async () => {
     const table = memoryTable();
     let now = 1_000;
-    const store = removalHoldStore({
-      nextly: async () => table,
-      collection: TABLE,
-      clock: () => now,
-    });
+    const store = storeOver(table, () => now);
     await store.hold("hero", HELD);
 
     now = 2_000;
@@ -129,8 +165,16 @@ describe("the hold store", () => {
     expect(await store.of(["hero"])).toEqual(new Map());
   });
 
-  it("reads a row it cannot parse as holding nothing", async () => {
-    const table = memoryTable([
+  it("reads rows that are not one whole hold as none", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+    await store.hold("hero", HELD);
+    // Its head gone first, as an ending takes it, with its ids still there.
+    const head = table.rows.findIndex(row =>
+      String(row.exposureId).includes('"head"')
+    );
+    table.rows.splice(head, 1);
+    const unparsed = memoryTable([
       {
         id: "1",
         componentId: "hero",
@@ -138,38 +182,75 @@ describe("the hold store", () => {
         exposureId: '{"properties":"title"}',
       },
     ]);
-    const store = removalHoldStore({
-      nextly: async () => table,
-      collection: TABLE,
-      clock: () => 0,
-    });
+
+    expect(await store.of(["hero"])).toEqual(new Map());
+    expect(await storeOver(unparsed).of(["hero"])).toEqual(new Map());
+  });
+
+  it("reads a head whose ids are missing as no hold", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+    await store.hold("hero", HELD);
+    const id = table.rows.findIndex(row =>
+      String(row.exposureId).includes('"property"')
+    );
+    table.rows.splice(id, 1);
 
     expect(await store.of(["hero"])).toEqual(new Map());
   });
 
-  it("ends only the hold a token names", async () => {
+  it("renews a hold in force, writing the new lease before ending the old", async () => {
     const table = memoryTable();
-    const store = removalHoldStore({
-      nextly: async () => table,
-      collection: TABLE,
-      clock: () => 0,
-    });
-    await store.hold("hero", { ...HELD, token: "second" });
+    const store = storeOver(table);
+    await store.hold("hero", HELD);
+    const heads = () =>
+      table.rows.filter(row => String(row.exposureId).includes('"head"'));
+    const before = heads().length;
 
-    await store.release("hero", "first");
-    expect(table.rows).toHaveLength(1);
-    await store.release("hero", "second");
-    expect(table.rows).toEqual([]);
+    expect(await store.renew("hero", "t1", 9_000)).toBe(true);
+
+    expect(before).toBe(1);
+    expect(heads()).toHaveLength(1);
+    expect(await store.of(["hero"])).toEqual(
+      new Map([["hero", [{ ...HELD, until: 9_000 }]]])
+    );
   });
 
-  it("ends a hold", async () => {
+  it("revives no hold that has run out, or another request's", async () => {
     const table = memoryTable();
-    const store = removalHoldStore({
-      nextly: async () => table,
-      collection: TABLE,
-      clock: () => 0,
-    });
+    let now = 1_000;
+    const store = storeOver(table, () => now);
     await store.hold("hero", HELD);
+
+    expect(await store.renew("hero", "someone-else", 9_000)).toBe(false);
+    now = 2_000;
+    expect(await store.renew("hero", "t1", 9_000)).toBe(false);
+    expect(await store.of(["hero"])).toEqual(new Map());
+  });
+
+  it("clears what ran out when it records a hold, keeping one in force", async () => {
+    const table = memoryTable();
+    let now = 1_000;
+    const store = storeOver(table, () => now);
+    await store.hold("hero", { ...HELD, token: "lapsing", until: 1_500 });
+    await store.hold("hero", { ...HELD, token: "kept", until: 5_000 });
+    const rows = table.rows.length;
+
+    now = 1_600;
+    await store.hold("hero", HELD);
+
+    // The lapsed hold's two ids and head gone; the new one's three added.
+    expect(table.rows).toHaveLength(rows);
+    expect(
+      (await store.of(["hero"])).get("hero")!.map(hold => hold.token)
+    ).toEqual(["kept", "t1"]);
+  });
+
+  it("ends a component's every hold", async () => {
+    const table = memoryTable();
+    const store = storeOver(table, () => 0);
+    await store.hold("hero", HELD);
+    await store.hold("hero", { ...HELD, token: "t2" });
 
     await store.release("hero");
 
@@ -180,7 +261,7 @@ describe("the hold store", () => {
 /** The fence's and the release's handlers, over a fixed set of holds. */
 function harness(
   options: {
-    holds?: Record<string, RemovalHold>;
+    holds?: Record<string, RemovalHold | RemovalHold[]>;
     draft?: unknown;
     failRead?: boolean;
     /** Whether the component store has the Draft/Published lifecycle. */
@@ -199,7 +280,7 @@ function harness(
       ids.flatMap(id =>
         options.holds?.[id] === undefined
           ? []
-          : [[id, options.holds[id]] as const]
+          : [[id, [options.holds[id]].flat()] as const]
       )
     );
   };
@@ -230,8 +311,8 @@ function harness(
     componentField: "content",
     holds: () => ({
       of: holdsOf,
-      release: async id => {
-        released.push(id);
+      release: async (id, token) => {
+        released.push(token === undefined ? id : `${id} ${token}`);
       },
     }),
     lifecycle: async () => options.lifecycle !== false,
@@ -316,6 +397,22 @@ describe("the fence while a removal is held", () => {
       )
     );
     expect(NextlyError.isCode(slotted, "VALIDATION_ERROR")).toBe(true);
+  });
+
+  it("refuses a field held by any of a component's holds", async () => {
+    const other = { ...HELD, properties: ["body"], slots: [], token: "t2" };
+    const { run } = harness({ holds: { hero: [HELD, other] } });
+
+    const error = await refusal(
+      Promise.resolve(
+        run("beforeUpdate", "*", {
+          data: { content: page([placing("i1", "hero", { body: "new" })]) },
+          originalData: { id: "p1", content: page([placing("i1", "hero")]) },
+        })
+      )
+    );
+
+    expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
   });
 
   it("lets a document keep a held value its live row and its draft both store", async () => {
@@ -480,7 +577,18 @@ describe("ending a hold", () => {
       data: { id: "hero", status: "published", content: definition(["body"]) },
     });
 
-    expect(released).toEqual(["hero"]);
+    expect(released).toEqual(["hero t1"]);
+  });
+
+  it("ends only the holds whose fields the publish drops", async () => {
+    const keepsBody = { ...HELD, properties: ["body"], slots: [], token: "t2" };
+    const { run, released } = harness({ holds: { hero: [HELD, keepsBody] } });
+
+    await run("afterUpdate", "components", {
+      data: { id: "hero", status: "published", content: definition(["body"]) },
+    });
+
+    expect(released).toEqual(["hero t1"]);
   });
 
   it("keeps it through a publish that still exposes a held field", async () => {
@@ -545,6 +653,28 @@ describe("counting again as a held removal is published", () => {
       ((error as NextlyError).publicData as { errors: { code: string }[] })
         .errors[0]!.code
     ).toBe(REMOVAL_RECOUNT);
+  });
+
+  it("judges each hold the publish removes on its own count, and no other", async () => {
+    // Another removal, of `body`, confirmed at none.
+    const body = {
+      ...HELD,
+      properties: ["body"],
+      slots: [],
+      confirmed: 0,
+      token: "t2",
+    };
+    const both = harness({
+      holds: { hero: [HELD, body] },
+      count: { documents: 2, complete: true },
+    });
+
+    // Keeping `body`: only the first hold, confirmed at 2, is judged.
+    expect(await publish(both.run, ["body"])).toBeUndefined();
+    // Dropping it too: the second hold's count of none has grown.
+    expect(
+      NextlyError.isCode(await publish(both.run, []), "VALIDATION_ERROR")
+    ).toBe(true);
   });
 
   it("refuses it when a whole count confirmed is now only a floor", async () => {
@@ -624,6 +754,6 @@ describe("a component store with no Draft/Published lifecycle", () => {
       data: { id: "hero", content: definition(["body"]) },
     });
 
-    expect(released).toEqual(["hero"]);
+    expect(released).toEqual(["hero t1"]);
   });
 });

@@ -44,7 +44,7 @@ import {
   Button,
 } from "@nextlyhq/ui";
 import { TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 
 import {
   componentFactsPath,
@@ -58,23 +58,47 @@ import {
 } from "../removal-hold-contract";
 import { exposureIdsOf } from "../retired-history";
 
-/** What the hook reads when a publish starts. */
+/** A count of the documents placing a component, as the dialogs say it. */
+type Reach = RemovalHoldResult["reach"];
+
+/** What the hook reads. */
 export interface RemovalHoldInput {
-  /** The document the publish stores. */
+  /** The document the publish stores, read when a publish starts. */
   readonly document: () => BlockDocument;
-  /** How many documents placing it the removal dialog said, if it said one. */
-  readonly confirmed: () => RemovalHoldResult["reach"] | undefined;
+  /** The document being edited now, as each render has it. */
+  readonly editing: BlockDocument;
+  /**
+   * How many documents place the component, as the removal dialog says it
+   * now. Kept as it stood when each field was removed: that is the count the
+   * designer confirmed, however the number has moved since.
+   */
+  readonly reach: () => Reach | undefined;
+}
+
+/** The removed fields and slots a publish takes out. */
+interface Removed {
+  readonly properties: readonly string[];
+  readonly slots: readonly string[];
 }
 
 /** The question shown when the count has grown. */
 interface Recount {
   /** The count the designer was told, or `undefined` where none was said. */
-  readonly confirmed: RemovalHoldResult["reach"] | undefined;
-  readonly reach: RemovalHoldResult["reach"];
+  readonly confirmed: Reach | undefined;
+  readonly reach: Reach;
 }
 
-/** How many times a grown count is asked about before giving up. */
+/**
+ * How many times a grown count is asked about before giving up. Each answer
+ * is followed by one more request, so every "Publish and remove" is tried.
+ */
 const MAX_ASKS = 3;
+
+/**
+ * How many times the document may change under a hold being asked for before
+ * giving up: each change asks again for what it removes.
+ */
+const MAX_CHANGES = 3;
 
 /** Said when the hold cannot be had, so the publish is refused. */
 export const HOLD_FAILED =
@@ -104,6 +128,7 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
     recount: Recount;
     answer: (go: boolean) => void;
   } | null>(null);
+  const told = useToldReach(input.editing, input.reach);
   const latest = useRef({ input, id: identity?.documentId, locale, lifecycle });
   useEffect(() => {
     latest.current = { input, id: identity?.documentId, locale, lifecycle };
@@ -111,34 +136,27 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
 
   useBeforeDocumentAction(async action => {
     if (!putsLive(action, latest.current.lifecycle)) return;
-    const { input: current, id, locale: language } = latest.current;
-    const document = current.document();
-    if (id === undefined || !isComponentDocument(document)) return;
-    const removed = await removedIds(id, document, language?.code ?? undefined);
-    if (removed.properties.length === 0 && removed.slots.length === 0) return;
-    // None said is asked about as nothing confirmed: any document placing
-    // the component is then one the designer has not been told of.
-    let said = current.confirmed();
-    for (let ask = 0; ask < MAX_ASKS; ask += 1) {
-      const answer = await askHold({
+    const { id, locale: language } = latest.current;
+    if (id === undefined) return;
+    const ask = (recount: Recount) =>
+      new Promise<boolean>(resolve => {
+        setQuestion({ recount, answer: resolve });
+      }).finally(() => setQuestion(null));
+    for (let change = 0; change < MAX_CHANGES; change += 1) {
+      const document = latest.current.input.document();
+      if (!isComponentDocument(document)) return;
+      const removed = await removedIds(
         id,
-        ...removed,
-        confirmed: said?.count ?? 0,
-        // A count of none told is held to as a whole one: a floor now asks.
-        confirmedComplete: said?.complete ?? true,
-      });
-      if (answer.kind === "held") return;
-      const confirmed = said;
-      const go = await new Promise<boolean>(resolve => {
-        setQuestion({
-          recount: { confirmed, reach: answer.reach },
-          answer: resolve,
-        });
-      });
-      setQuestion(null);
-      if (!go)
-        throw new DOMException("Publishing was cancelled.", "AbortError");
-      said = answer.reach;
+        document,
+        language?.code ?? undefined
+      );
+      if (removed.properties.length === 0 && removed.slots.length === 0) {
+        return;
+      }
+      await holdRemoval({ id, removed, said: told(removed), ask });
+      // Held for the document read above: a change made meanwhile may remove
+      // more, so it is asked about in turn before anything is stored.
+      if (latest.current.input.document() === document) return;
     }
     throw new Error(HOLD_MOVING);
   });
@@ -149,6 +167,93 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
       onAnswer={go => question?.answer(go)}
     />
   );
+}
+
+/**
+ * Hold a removal at the count the designer confirmed, asking again while it
+ * has grown. Every answer to go ahead is followed by a request for the count
+ * it confirmed; the asking stops once that has grown {@link MAX_ASKS} times.
+ */
+async function holdRemoval(args: {
+  readonly id: string;
+  readonly removed: Removed;
+  /** The count the designer was told; none told asks of any document. */
+  readonly said: Reach | undefined;
+  readonly ask: (recount: Recount) => Promise<boolean>;
+}): Promise<void> {
+  let said = args.said;
+  for (let asked = 0; ; asked += 1) {
+    const answer = await askHold({
+      id: args.id,
+      properties: [...args.removed.properties],
+      slots: [...args.removed.slots],
+      confirmed: said?.count ?? 0,
+      // A count of none told is held to as a whole one: a floor now asks.
+      confirmedComplete: said?.complete ?? true,
+    });
+    if (answer.kind === "held") return;
+    if (asked === MAX_ASKS) throw new Error(HOLD_MOVING);
+    if (!(await args.ask({ confirmed: said, reach: answer.reach }))) {
+      throw new DOMException("Publishing was cancelled.", "AbortError");
+    }
+    said = answer.reach;
+  }
+}
+
+/** A removed field's or slot's key among the counts told. */
+const toldKey = (kind: "property" | "slot", id: string) => `${kind}\u001F${id}`;
+
+/**
+ * The count the removal dialog said as each field or slot left the edited
+ * document, kept from then on: a later read of the number, refetched when the
+ * window regains focus say, is not what the designer confirmed. Answers, for
+ * the fields a publish removes, the smallest count told, or `undefined` where
+ * one left with no count said (removed before this editor opened, say), so
+ * the designer is asked with the count now.
+ */
+function useToldReach(
+  editing: BlockDocument,
+  reach: () => Reach | undefined
+): (removed: Removed) => Reach | undefined {
+  const told = useRef(new Map<string, Reach | undefined>());
+  const before = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const exposed = isComponentDocument(editing)
+      ? exposureIdsOf(editing)
+      : { properties: [], slots: [] };
+    const now = new Set([
+      ...exposed.properties.map(id => toldKey("property", id)),
+      ...exposed.slots.map(id => toldKey("slot", id)),
+    ]);
+    // The first count told for a field is the one kept: an undo and a redo
+    // say nothing again, and asking more often is the safe side.
+    for (const key of before.current ?? []) {
+      if (!now.has(key) && !told.current.has(key)) {
+        told.current.set(key, reach());
+      }
+    }
+    before.current = now;
+  }, [editing, reach]);
+  return useCallback((removed: Removed) => {
+    const keys = [
+      ...removed.properties.map(id => toldKey("property", id)),
+      ...removed.slots.map(id => toldKey("slot", id)),
+    ];
+    let least: Reach | undefined;
+    for (const key of keys) {
+      const said = told.current.get(key);
+      if (said === undefined) return undefined;
+      // The smallest number, held as whole if any was: both ask the most.
+      least =
+        least === undefined
+          ? said
+          : {
+              count: Math.min(least.count, said.count),
+              complete: least.complete || said.complete,
+            };
+    }
+    return least;
+  }, []);
 }
 
 /**

@@ -16,7 +16,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { JSX } from "react";
+import { useMemo, type JSX } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RemovalHoldResult } from "../removal-hold-contract";
@@ -82,17 +82,34 @@ const component = (fields: string[]) => ({
   })),
 });
 
+type Reach = { count: number; complete: boolean };
+
 function Harness({
   fields,
-  confirmed,
+  reach,
+  stored,
 }: {
+  /** The fields the edited document exposes, and, unless said, the stored. */
   fields: string[];
-  confirmed?: { count: number; complete: boolean };
+  /** What the removal dialog says now. */
+  reach?: Reach;
+  stored?: () => unknown;
 }): JSX.Element {
+  // One document per set of fields, as the editor hands the same one back
+  // until it changes.
+  const editing = useMemo(() => component(fields), [fields.join(",")]);
   return useRemovalHold({
-    document: () => component(fields) as never,
-    confirmed: () => confirmed,
+    document: (stored ?? (() => editing)) as never,
+    editing: editing as never,
+    reach: () => reach,
   });
+}
+
+/** `title` removed in the editor while the dialog said `told`. */
+function removedWhileTold(told: Reach, fields = ["body"]) {
+  const view = render(<Harness fields={["title", "body"]} reach={told} />);
+  view.rerender(<Harness fields={fields} reach={told} />);
+  return view;
 }
 
 /** The live definition exposes `title` and `body`. */
@@ -116,9 +133,7 @@ describe("a publish removing a component's fields", () => {
     writes.mockResolvedValue(
       answer({ kind: "held", reach: { count: 2, complete: true } })
     );
-    render(
-      <Harness fields={["body"]} confirmed={{ count: 2, complete: true }} />
-    );
+    removedWhileTold({ count: 2, complete: true });
 
     await publish();
 
@@ -164,9 +179,7 @@ describe("a publish removing a component's fields", () => {
       .mockResolvedValueOnce(
         answer({ kind: "held", reach: { count: 3, complete: false } })
       );
-    render(
-      <Harness fields={["body"]} confirmed={{ count: 2, complete: true }} />
-    );
+    removedWhileTold({ count: 2, complete: true });
 
     let done = false;
     const running = publish().then(() => {
@@ -192,9 +205,7 @@ describe("a publish removing a component's fields", () => {
     writes.mockResolvedValue(
       answer({ kind: "recount", reach: { count: 3, complete: true } })
     );
-    render(
-      <Harness fields={["body"]} confirmed={{ count: 2, complete: true }} />
-    );
+    removedWhileTold({ count: 2, complete: true });
 
     const running = publish();
     await screen.findByRole("alertdialog");
@@ -219,6 +230,76 @@ describe("a publish removing a component's fields", () => {
     expect(dialog.textContent).toContain(
       "This component is placed directly in 1 document."
     );
+  });
+
+  it("holds to the count told as the field was removed, not one read later", async () => {
+    liveExposes();
+    writes.mockResolvedValue(
+      answer({ kind: "held", reach: { count: 3, complete: true } })
+    );
+    const view = removedWhileTold({ count: 2, complete: true });
+    // The facts read again, on the window regaining focus say.
+    view.rerender(
+      <Harness fields={["body"]} reach={{ count: 3, complete: true }} />
+    );
+
+    await publish();
+
+    expect(writes.mock.calls[0]![1]).toMatchObject({
+      confirmed: 2,
+      confirmedComplete: true,
+    });
+  });
+
+  it("asks for a hold after every answer to go ahead, the last one too", async () => {
+    liveExposes();
+    let count = 2;
+    writes.mockImplementation(async () => {
+      count += 1;
+      return answer({ kind: "recount", reach: { count, complete: true } });
+    });
+    removedWhileTold({ count: 2, complete: true });
+
+    // Settled as soon as the last request answers, so caught from the start.
+    const outcome = publish().catch((refused: unknown) => refused);
+    for (let asked = 0; asked < 3; asked += 1) {
+      await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Publish and remove" })
+        );
+      });
+      await waitFor(() => expect(writes).toHaveBeenCalledTimes(asked + 2));
+    }
+
+    expect(String(await outcome)).toContain("kept changing");
+    // The third answer, at 5, was asked for before giving up.
+    expect(writes.mock.calls[3]![1]).toMatchObject({ confirmed: 5 });
+  });
+
+  it("asks again for what a change made while holding removes", async () => {
+    liveExposes();
+    let stored = component(["body"]);
+    const emptied = component([]);
+    writes.mockImplementation(async () => {
+      // The draft changes while the first hold is asked for.
+      stored = emptied;
+      return answer({ kind: "held", reach: { count: 2, complete: true } });
+    });
+    render(
+      <Harness
+        fields={["body"]}
+        reach={{ count: 2, complete: true }}
+        stored={() => stored}
+      />
+    );
+
+    await publish();
+
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes.mock.calls[1]![1]).toMatchObject({
+      properties: ["title", "body"],
+    });
   });
 
   it("refuses the publish when the hold cannot be asked for", async () => {

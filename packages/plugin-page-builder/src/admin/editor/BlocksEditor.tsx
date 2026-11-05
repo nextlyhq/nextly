@@ -1005,8 +1005,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     onCommit,
     onClose,
     savePoint,
-    // The count the removal dialog says, read when a publish starts.
-    confirmedRemoval: () => mount.componentFacts?.reach,
+    // The count the removal dialog says now; the hold keeps it as it stood
+    // when each field was removed.
+    removalReach: () => mount.componentFacts?.reach,
   });
 
   const page = usePageFacts(control);

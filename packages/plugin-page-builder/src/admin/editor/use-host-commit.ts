@@ -304,7 +304,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onCommit,
   onClose,
   savePoint,
-  confirmedRemoval,
+  removalReach,
 }: {
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
@@ -319,10 +319,11 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   /** Where the history stood at the last store; see `useSavePoint`. */
   savePoint: ReturnType<typeof useSavePoint>;
   /**
-   * For a component, how many documents placing it the removal dialog said:
+   * For a component, how many documents placing it the removal dialog says
+   * now. The hold keeps the number as it stood when each field was removed:
    * the count a publish removing fields confirms (see `useRemovalHold`).
    */
-  confirmedRemoval?: () =>
+  removalReach?: () =>
     | { readonly count: number; readonly complete: boolean }
     | undefined;
 }): {
@@ -403,7 +404,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    */
   const removalHold = useRemovalHold({
     document: storing,
-    confirmed: () => confirmedRemoval?.(),
+    editing: editor.document,
+    reach: () => removalReach?.(),
   });
 
   /*

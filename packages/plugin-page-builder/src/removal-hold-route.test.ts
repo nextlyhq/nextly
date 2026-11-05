@@ -46,9 +46,18 @@ function contextFor(
 /** The route over a recording store and a fixed count. */
 function route(
   count: UsageCount | (() => Promise<UsageCount>),
-  options: { mayPublish?: boolean; localized?: boolean } = {}
+  options: {
+    mayPublish?: boolean;
+    localized?: boolean;
+    /** Whether the hold is still in force once counted; it is unless said. */
+    inForce?: boolean;
+    /** How long the count takes, on the route's clock. */
+    countTakes?: number;
+  } = {}
 ) {
   const ctx = contextFor(options);
+  let now = 1_000;
+  const renewed: string[] = [];
   const held: { id: string; hold: RemovalHold }[] = [];
   const released: string[] = [];
   const counted: string[] = [];
@@ -60,6 +69,11 @@ function route(
       held.push({ id, hold });
     },
     of: async () => new Map(),
+    renew: async (id, token, until) => {
+      steps.push("renew");
+      renewed.push(`${id} ${token} ${String(until)}`);
+      return options.inForce !== false;
+    },
     release: async (id, token) => {
       steps.push("release");
       released.push(`${id} ${token ?? "any"}`);
@@ -71,9 +85,10 @@ function route(
     countPlacements: () => async id => {
       steps.push("count");
       counted.push(id);
+      now += options.countTakes ?? 0;
       return typeof count === "function" ? count() : count;
     },
-    clock: () => 1_000,
+    clock: () => now,
   });
   const ask = (body: unknown) =>
     declared!.handler(
@@ -83,7 +98,15 @@ function route(
       }),
       ctx
     );
-  return { declared: declared!, ask, held, released, counted, steps };
+  return {
+    declared: declared!,
+    ask,
+    held,
+    released,
+    renewed,
+    counted,
+    steps,
+  };
 }
 
 const BODY = {
@@ -144,6 +167,32 @@ describe("asking for a removal's hold", () => {
     const answer = await (await ask(BODY)).json();
 
     expect(answer.item.kind).toBe("recount");
+  });
+
+  it("runs its own lease again from when the count ends", async () => {
+    const { ask, held, renewed, steps } = route(
+      { documents: 2, complete: true },
+      { countTakes: 100_000 }
+    );
+
+    const answer = await (await ask(BODY)).json();
+
+    expect(answer.item.kind).toBe("held");
+    expect(steps).toEqual(["hold", "count", "renew"]);
+    // Counted from 101,000, not from 1,000 when the hold was recorded.
+    expect(renewed).toEqual([`hero ${held[0]!.hold.token} 221000`]);
+  });
+
+  it("answers no hold, ending its own, when that hold ran out while counting", async () => {
+    const { ask, held, released } = route(
+      { documents: 2, complete: true },
+      { inForce: false, countTakes: 130_000 }
+    );
+
+    const error = await ask(BODY).catch((refused: unknown) => refused);
+
+    expect(NextlyError.isCode(error, "CONFLICT")).toBe(true);
+    expect(released).toEqual([`hero ${held[0]!.hold.token}`]);
   });
 
   it("refuses a component the caller cannot read before counting it", async () => {

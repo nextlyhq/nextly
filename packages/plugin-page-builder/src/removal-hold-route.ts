@@ -114,7 +114,7 @@ export function removalHoldRoutes(
         // removed field unseen. A write already past its check when the hold
         // landed is caught by the count taken again as the publish is written
         // (`registerPublishRecount`). Only this request's own hold is ended
-        // below, so two asked for at once cannot end each other's.
+        // or renewed below; another asked for at once keeps its own.
         await args.holds().hold(body.id, hold);
         let counted: UsageCount;
         try {
@@ -131,6 +131,19 @@ export function removalHoldRoutes(
             "More documents place this component than you confirmed.",
             { kind: "recount", reach }
           );
+        }
+        // The lease ran while counting, so it is run again from now, and only
+        // while this request's hold is still in force: one that ran out
+        // during a slow count fenced nothing for part of it, so "held" would
+        // not be true.
+        if (!(await args.holds().renew(body.id, hold.token, now() + HOLD_MS))) {
+          await args.holds().release(body.id, hold.token);
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "Counting the documents that place this component took too long. Publish again.",
+            logContext: { reason: "removal-hold-lapsed", id: body.id },
+          });
         }
         return held(counted);
       },
