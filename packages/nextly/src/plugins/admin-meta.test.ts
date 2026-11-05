@@ -1250,3 +1250,39 @@ describe("buildPluginAdminMeta menu slugs", () => {
     });
   });
 });
+
+describe("buildPluginAdminMeta, a plugin's translations", () => {
+  const catalog = { en: { "acme-p.cart.title": "Cart" } };
+
+  it("serves an enabled plugin's translations, and not a disabled one's", () => {
+    const [enabled] = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes: { translations: catalog } }]),
+      undefined
+    );
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([
+        { ...base, enabled: false, contributes: { translations: catalog } },
+      ]),
+      undefined
+    );
+
+    expect(enabled?.translations).toEqual(catalog);
+    expect(disabled).not.toHaveProperty("translations");
+  });
+
+  it("refuses to serve a catalog startup would refuse", () => {
+    expect(() =>
+      buildPluginAdminMeta(
+        asPlugins([
+          {
+            ...base,
+            contributes: {
+              translations: { en: { "other.cart.title": "Cart" } },
+            },
+          },
+        ]),
+        undefined
+      )
+    ).toThrow(NextlyError);
+  });
+});

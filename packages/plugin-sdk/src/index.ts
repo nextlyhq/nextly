@@ -263,6 +263,7 @@ export type {
   PluginSchedule,
   ScheduledTask,
   PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
   ServiceOpts,
   AuthUser,

@@ -575,6 +575,7 @@ export {
   type PluginSchedule,
   type ScheduledTask,
   type PluginWebhookEventType,
+  type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
   type PluginFilterRegistry,
