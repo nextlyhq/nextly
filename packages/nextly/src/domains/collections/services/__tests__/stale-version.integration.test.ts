@@ -50,6 +50,12 @@ let livesBeforeChangeCalls = 0;
 /** Updatable only through an update rule that answers a filter: the caller's own. */
 const OWNED = "owned";
 const AUTHOR = "stale-author";
+/** A second person who may update, but whom each read rule below refuses. */
+const OTHER = "stale-other";
+/** Readable only by AUTHOR, by a rule that answers yes or no. */
+const READ_BY_AUTHOR = "read_by_author";
+/** Readable only where `owner` is the caller, by a rule that answers a filter. */
+const READ_OWN = "read_own";
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
   ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 /** Keeps history and runs an after-change hook, to see a refusal reach neither. */
@@ -79,6 +85,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         access: OPEN,
         hooks: {
+          // Every phase that runs before the write, so a check moved behind
+          // any one of them shows.
+          beforeOperation: [
+            (args: unknown) => {
+              docsBeforeChangeCalls += 1;
+              return args as never;
+            },
+          ],
+          beforeValidate: [
+            ({ data }: { data?: unknown }) => {
+              docsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
           beforeChange: [
             ({ data }: { data?: unknown }) => {
               docsBeforeChangeCalls += 1;
@@ -110,6 +130,21 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           ],
         },
         fields: [text({ name: "headline", localized: true })],
+      }),
+      defineCollection({
+        slug: READ_BY_AUTHOR,
+        access: {
+          read: ({ user }: { user: { id: string } | null }) =>
+            user?.id === AUTHOR,
+          create: () => true,
+          update: () => true,
+        },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
+      defineCollection({
+        slug: READ_OWN,
+        access: { read: ownEntries, create: () => true, update: () => true },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
       }),
       defineCollection({
         slug: OWNED,
@@ -152,8 +187,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     updatedAt: now,
   });
   // A code rule only narrows a permission, so the author holds each one.
-  await userWhoMay(current, AUTHOR, "read", [OWNED]);
-  await grantTo(current, AUTHOR, "update", [OWNED]);
+  await userWhoMay(current, AUTHOR, "read", [OWNED, READ_BY_AUTHOR, READ_OWN]);
+  await grantTo(current, AUTHOR, "update", [OWNED, READ_BY_AUTHOR, READ_OWN]);
+  // A code rule only narrows a permission: OTHER holds read and update too,
+  // so only the rules refuse them the read.
+  await userWhoMay(current, OTHER, "read", [READ_BY_AUTHOR, READ_OWN]);
+  await grantTo(current, OTHER, "update", [READ_BY_AUTHOR, READ_OWN]);
   return current;
 }
 
@@ -1411,5 +1450,168 @@ describe.each(getConfiguredTestDialects())(
       expect(swept).toMatchObject({ success: false, statusCode: 400 });
       expect(livesBeforeChangeCalls).toBe(before);
     });
+
+    it("refuses with 400, before any hook, a batch item whose version comes from another language's read", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      // A read of Spanish alone: its version names no English counter.
+      const spanish = revOf(
+        await update(t, DOCS, id, { title: "hola" }, { locale: "es" })
+      );
+      expect(spanish).not.toMatch(/en:/);
+      const before = docsBeforeChangeCalls;
+      // A batch writes the default language, English.
+      const batch = await serviceOf(t).updateMany(
+        DOCS,
+        [{ id, data: { title: "mine", _rev: spanish } }],
+        { overrideAccess: true } as never
+      );
+      expect(
+        batch.errors.map(e => e.code),
+        JSON.stringify(batch)
+      ).toEqual(["VALIDATION_ERROR"]);
+      expect(docsBeforeChangeCalls).toBe(before);
+    });
+
+    it("refuses a first translation when someone else's save created that language since the version given", async () => {
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DOCS, overrideAccess: true, locale: "en" },
+        { title: "hello", note: "n" }
+      );
+      const id = idOf(created);
+      // A read of Spanish before any Spanish row exists: its counter is 0.
+      const before = String(
+        (
+          (await t.nextly.findByID({
+            collection: DOCS as never,
+            id,
+            locale: "es",
+            overrideAccess: true,
+          } as never)) as { _rev: string }
+        )._rev
+      );
+      expect(before).toMatch(/\.es:0$/);
+      const theirs = await update(
+        t,
+        DOCS,
+        id,
+        { title: "hola" },
+        { locale: "es" }
+      );
+      expect(theirs.success, JSON.stringify(theirs)).toBe(true);
+      // The claim of a row that is now there finds it out of date.
+      const mine = await update(
+        t,
+        DOCS,
+        id,
+        { title: "mía", _rev: before },
+        { locale: "es" }
+      );
+      expect(mine).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(await languageCounters(t, [id])).toMatchObject({
+        [`${id}.es`]: 1,
+      });
+    });
+
+    // SQLite runs one write transaction at a time: the other connection's
+    // save would wait for the caller's transaction to end.
+    it.skipIf(dialect === "sqlite")(
+      "refuses, in a caller's transaction that read first, a first translation another connection created meanwhile",
+      async () => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { note: "n" }
+        );
+        const id = idOf(created);
+        // An entry with no translation row, as one saved before translation
+        // was turned on: a read's version gives English as 0.
+        await t.adapter.executeQuery(`DELETE FROM ${q(t, LANGUAGES)}`, []);
+        const read = String(
+          (
+            (await t.nextly.findByID({
+              collection: DOCS as never,
+              id,
+              locale: "en",
+              overrideAccess: true,
+            } as never)) as { _rev: string }
+          )._rev
+        );
+        expect(read).toMatch(/\.en:0$/);
+        let go!: () => void;
+        const signalled = new Promise<void>(resolve => {
+          go = resolve;
+        });
+        const theirs = signalled.then(() =>
+          update(t, DOCS, id, { title: "theirs" }, { locale: "en" })
+        );
+        await expect(
+          t.adapter.transaction(async tx => {
+            // The caller's own read of the translation table first: on MySQL
+            // every plain read in this transaction sees it as it was then.
+            await tx.execute(`SELECT * FROM ${q(t, LANGUAGES)}`, []);
+            go();
+            const saved = await theirs;
+            expect(saved.success, JSON.stringify(saved)).toBe(true);
+            // A transactional update writes the default language, English.
+            await serviceOf(t).updateEntryInTransaction(
+              tx,
+              DOCS,
+              id,
+              { title: "mine", _rev: read },
+              { overrideAccess: true } as never
+            );
+          })
+        ).rejects.toMatchObject({ code: "STALE_VERSION" });
+        expect(await languageCounters(t, [id])).toEqual({ [`${id}.en`]: 1 });
+      }
+    );
+
+    it.each([
+      ["a read rule that answers yes or no", READ_BY_AUTHOR],
+      ["a read rule that answers a filter", READ_OWN],
+    ])(
+      "tells who changed it and when only to a caller %s lets read the entry",
+      async (_name, collection) => {
+        const t = await boot(dialect);
+        const created = await handlerOf(t).createEntry(
+          { collectionName: collection, overrideAccess: true },
+          { title: "first", owner: AUTHOR }
+        );
+        const id = idOf(created);
+        await update(t, collection, id, { title: "theirs" });
+        const refusalTo = (userId: string) =>
+          handlerOf(t).updateEntry(
+            {
+              collectionName: collection,
+              entryId: id,
+              overrideAccess: false,
+              user: { id: userId },
+            } as never,
+            { title: "mine", _rev: revOf(created) }
+          ) as Promise<Result>;
+        // The owner may read it: told who and when.
+        const owner = await refusalTo(AUTHOR);
+        expect(owner, JSON.stringify(owner)).toMatchObject({
+          code: "STALE_VERSION",
+        });
+        expect(owner.publicData).toHaveProperty("changedBy");
+        expect(owner.publicData).toHaveProperty("changedAt");
+        // Another who may update it, but whom the read rule refuses: the
+        // current version only.
+        const other = await refusalTo(OTHER);
+        expect(other, JSON.stringify(other)).toMatchObject({
+          code: "STALE_VERSION",
+        });
+        expect(other.publicData).not.toHaveProperty("changedBy");
+        expect(other.publicData).not.toHaveProperty("changedAt");
+        expect(other.publicData).not.toHaveProperty("historyVersion");
+      }
+    );
   }
 );

@@ -1029,3 +1029,61 @@ describe("one class object supplied in two library slots", () => {
     expect(css.split(".nx-c-card").length - 1).toBe(1);
   });
 });
+
+describe("a look, a class bound to one block type", () => {
+  // A look is the block type's named variant (Outline, Rounded): a shared
+  // style an author wears ON TOP of, so every shared style the site makes
+  // comes after it, whatever their positions in the library.
+  const outline: NamedClass = {
+    id: "look:core/box:outline",
+    slug: "box-outline",
+    orderIndex: 9,
+    blockType: "core/box",
+    styles: styles({ color: "red" }),
+  };
+
+  it("is written before every shared style, whatever its position", () => {
+    const { css } = compile(doc({ classes: [outline.id, card.id] }), [
+      outline,
+      card,
+    ]);
+    expect(at(css, ".nx-l-box-outline")).toBeLessThan(at(css, ".nx-c-card"));
+  });
+
+  it("keeps library order among looks", () => {
+    const rounded: NamedClass = {
+      ...outline,
+      id: "look:core/box:rounded",
+      slug: "box-rounded",
+      orderIndex: 2,
+    };
+    const { css } = compile(doc({ classes: [outline.id, rounded.id] }), [
+      outline,
+      rounded,
+    ]);
+    expect(at(css, ".nx-l-box-rounded")).toBeLessThan(
+      at(css, ".nx-l-box-outline")
+    );
+  });
+});
+
+describe("a look and a shared style wanting one name", () => {
+  it("leaves the name with the shared style, so a site's own style is never dropped", () => {
+    const look: NamedClass = {
+      id: "look:core/box:outline",
+      slug: "box-outline",
+      orderIndex: 0,
+      blockType: "core/box",
+      styles: styles({ color: "red" }),
+    };
+    const own: NamedClass = {
+      id: "c-own",
+      slug: "box-outline",
+      orderIndex: 9,
+      styles: styles({ color: "blue" }),
+    };
+    const { css } = compile(doc({ classes: [own.id, look.id] }), [look, own]);
+    expect(css).toContain(".nx-c-box-outline { color: blue }");
+    expect(css).not.toContain("color: red");
+  });
+});

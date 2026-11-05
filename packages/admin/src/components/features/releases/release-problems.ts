@@ -117,7 +117,10 @@ function countedFields(
  */
 const HARD_WORDS: Record<
   string,
-  (finding: ReleaseReadinessFinding) => ProblemWords
+  (
+    finding: ReleaseReadinessFinding,
+    viewpoint: ProblemViewpoint
+  ) => ProblemWords
 > = {
   REQUIRED_FIELD_MISSING: finding => ({
     text: countedFields(
@@ -135,15 +138,15 @@ const HARD_WORDS: Record<
     ),
     remedy: "open",
   }),
-  FIELD_NOT_PERMITTED: finding => {
+  FIELD_NOT_PERMITTED: (finding, viewpoint) => {
     const fields = fieldList(finding);
     return {
-      text: `The person who added it may no longer change ${fields.length > 0 ? joined(fields) : "one of its fields"}`,
+      text: `${WHO_MAY_NOT[viewpoint]} change ${fields.length > 0 ? joined(fields) : "one of its fields"}`,
       remedy: "remove",
     };
   },
-  AUTHOR_MAY_NOT_ACT: finding => ({
-    text: `The person who added it may no longer ${ACTION_VERB[finding.action]} it`,
+  AUTHOR_MAY_NOT_ACT: (finding, viewpoint) => ({
+    text: `${WHO_MAY_NOT[viewpoint]} ${ACTION_VERB[finding.action]} it`,
     remedy: "remove",
   }),
   DOCUMENT_GONE: () => ({
@@ -168,10 +171,24 @@ const HARD_WORDS: Record<
   },
 };
 
+/**
+ * Who a problem is said to: the release page speaks of the person who added
+ * the document; a dialog adding it speaks to the reader doing so.
+ */
+type ProblemViewpoint = "author" | "reader";
+
+const WHO_MAY_NOT: Record<ProblemViewpoint, string> = {
+  author: "The person who added it may no longer",
+  reader: "You may not",
+};
+
 /** A problem that stops the release, in words. */
-function hardWords(finding: ReleaseReadinessFinding): ProblemWords {
+function hardWords(
+  finding: ReleaseReadinessFinding,
+  viewpoint: ProblemViewpoint = "author"
+): ProblemWords {
   const words = HARD_WORDS[finding.code];
-  if (words) return words(finding);
+  if (words) return words(finding, viewpoint);
   if (isBlockerReason(finding.code)) {
     return {
       text: capitalised(BLOCKER_REASON[finding.code].summary),
@@ -314,4 +331,27 @@ export function otherReleaseIds(
     if (id) ids.add(id);
   }
   return [...ids];
+}
+
+/**
+ * A hard problem a refusal named, said to the reader who was adding the
+ * document: the same words the release page uses, from the same table.
+ */
+export function refusalProblemText(
+  problem: { code: string; detail?: ReleaseReadinessFinding["detail"] },
+  action: ReleaseReadinessFinding["action"]
+): string {
+  return hardWords(
+    {
+      memberId: "",
+      code: problem.code,
+      source: "",
+      action,
+      scopeKind: "collection",
+      scopeSlug: "",
+      entryId: "",
+      detail: problem.detail,
+    },
+    "reader"
+  ).text;
 }

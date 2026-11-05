@@ -157,7 +157,8 @@ export async function publishedLayoutIds(
  */
 export async function layoutExists(
   nextly: Pick<DefaultLayoutDirectApi, "find">,
-  slugs: DefaultLayoutSlugs,
+  // Only the Layouts slug: a page's publish asks this without the Single.
+  slugs: Pick<DefaultLayoutSlugs, "layouts">,
   id: string
 ): Promise<boolean> {
   const found = await nextly.find({

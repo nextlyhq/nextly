@@ -353,6 +353,8 @@ export interface SavePatternRequest {
   /** The nodes to lift out of it, in the editor's own vocabulary. */
   readonly selectedIds: readonly string[];
   readonly fields: SavePatternFields;
+  /** Answer the pattern the save would store, and store nothing. */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -375,6 +377,25 @@ export interface SavePatternResponse {
   readonly item: { readonly id: string } & Record<string, unknown>;
   /** Side effects that failed after the row committed, when any did. */
   readonly warnings?: readonly HookWarning[];
+}
+
+/**
+ * What a save asked as a dry run answers, inside the envelope's `item`: the
+ * pattern it would store, and why the site would refuse it, empty when it
+ * would not. Nothing was stored, so there is no id.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface SavePatternDryRun {
+  readonly dryRun: true;
+  readonly pattern: Readonly<Record<string, unknown>>;
+  readonly refusals: readonly string[];
+}
+
+/** What a dry-run save answers: the envelope around {@link SavePatternDryRun}. */
+export interface SavePatternDryRunResponse {
+  readonly message: string;
+  readonly item: SavePatternDryRun;
 }
 
 /**
@@ -566,6 +587,13 @@ export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
  */
 export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
+  /**
+   * Save nothing, and answer with what saving this set would drop: every
+   * style and hide stored under each breakpoint it removes.
+   *
+   * @experimental
+   */
+  readonly dryRun?: boolean;
 }
 
 /**

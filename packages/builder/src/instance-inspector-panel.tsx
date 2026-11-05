@@ -35,6 +35,7 @@ import {
   isUnsetOverride,
   neededFor,
   richTextToPlainText,
+  type BlockDocument,
   type ComponentDocument,
   type OverrideValue,
 } from "@nextlyhq/blocks-engine";
@@ -66,11 +67,12 @@ import {
   ChosenMedia,
   ContentServicesContext,
   MediaChoice,
+  RichTextField,
   type PickedMedia,
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { markExposedParts } from "./exposed-outline";
-import { HeldByLock } from "./held-by-lock";
+import { HeldByLock, HeldHere } from "./held-by-lock";
 import { lockOp, lockStatusOf, lockViewOf, renameOp } from "./inspector";
 import {
   resetOverrideOp,
@@ -193,10 +195,14 @@ export function InstanceInspectorPanel({
     () => findNode(editor.document.nodes, inspection.nodeId),
     [editor.document, inspection.nodeId]
   );
-  const set = React.useCallback(
+  // Answers the document the write produced, or `null` when it was refused,
+  // so a field holding words only it has (a rich-text passage) can keep them.
+  const set: SetExposed = React.useCallback(
     (id: string, value: OverrideValue) => {
       const node = nodeNow();
-      if (node !== undefined) editor.apply(setOverrideOp(node, id, value));
+      return node === undefined
+        ? null
+        : editor.apply(setOverrideOp(node, id, value));
     },
     [editor, nodeNow]
   );
@@ -343,7 +349,7 @@ function ExposedField({
   onReset,
 }: {
   row: ExposedRow;
-  onSet: (id: string, value: OverrideValue) => void;
+  onSet: SetExposed;
   onReset: (id: string) => void;
 }): React.JSX.Element {
   // Unique per MOUNTED ROW, not per property: a page can hold two blocks
@@ -374,7 +380,10 @@ function ExposedField({
         Style rows rather than a label, a field and a line under it.
       */}
       <div className="nx-inspector__exposed-name">
-        <Label {...(hasControl ? { htmlFor: id } : {})}>{row.label}</Label>
+        {/* Its id names a control no `for` can reach: a rich-text passage. */}
+        <Label id={`${id}-label`} {...(hasControl ? { htmlFor: id } : {})}>
+          {row.label}
+        </Label>
         {/*
           The source is VISIBLE, and words rather than the label's styling:
           "Set on this page" is what tells an author the reset beside the field
@@ -443,7 +452,7 @@ function ExposedControl({
 }: {
   id: string;
   row: ExposedRow;
-  onSet: (id: string, value: OverrideValue) => void;
+  onSet: SetExposed;
 }): React.JSX.Element {
   if (row.shadowedBy !== undefined) {
     return (
@@ -459,20 +468,15 @@ function ExposedControl({
   // replaces the whole value with what was typed into that blank. Shown rather
   // than offered for editing, so nothing is lost to a control that cannot hold
   // it.
-  if (!row.supported || !representable(row)) {
-    const shown = valueSummary(row.value);
-    return (
-      <p className="nx-inspector__note">
-        {shown === "" ? null : `“${shown}” — `}
-        Not editable here yet ({TYPE_LABEL[row.type]}).
-      </p>
-    );
-  }
+  if (!row.supported || !representable(row)) return <NotEditable row={row} />;
   if (row.type === "visibility") {
     return <ExposedVisibilityField id={id} row={row} onSet={onSet} />;
   }
   if (row.type === "image") {
     return <ExposedImageField id={id} row={row} onSet={onSet} />;
+  }
+  if (row.type === "richText") {
+    return <ExposedRichTextField id={id} row={row} onSet={onSet} />;
   }
   if (row.type === "select") {
     return (
@@ -563,10 +567,69 @@ function dataOf(value: object): string {
  * so a value they cannot show is repairable by using the control, and hiding it
  * would strand the property instead.
  */
+/** Writes one exposed field's value: the document written, or `null` if refused. */
+type SetExposed = (id: string, value: OverrideValue) => BlockDocument | null;
+
+/**
+ * A row with no control: its value in words, so an author can read what the
+ * component holds without being offered a control that could not keep it.
+ */
+function NotEditable({ row }: { row: ExposedRow }): React.JSX.Element {
+  const shown = valueSummary(row.value);
+  return (
+    <p className="nx-inspector__note">
+      {shown === "" ? null : `“${shown}” — `}
+      Not editable here yet ({TYPE_LABEL[row.type]}).
+    </p>
+  );
+}
+
+/**
+ * A placement's own passage, edited with the admin's one rich-text editor,
+ * the control the Content tab's rich text uses. Opened on what the page
+ * shows (the component's passage until the page has its own), written once
+ * when the field is left, so an edit is one step of the history. Without the
+ * host's editor the row says it cannot be edited here: the canvas's passage
+ * is the component's, so the Content tab's "edit it on the canvas" would not
+ * be true of it.
+ */
+function ExposedRichTextField({
+  id,
+  row,
+  onSet,
+}: {
+  id: string;
+  row: ExposedRow;
+  onSet: SetExposed;
+}): React.JSX.Element {
+  const services = React.useContext(ContentServicesContext);
+  // Held by the placement's Layers lock or a lock inside the component.
+  const held = React.useContext(HeldHere);
+  if (services?.loadRichTextEditor === undefined) {
+    return <NotEditable row={row} />;
+  }
+  return (
+    <RichTextField
+      id={id}
+      labelledBy={`${id}-label`}
+      value={row.value}
+      // Passed to the passage itself: a held row's wrapper disables its
+      // fieldset, which does not stop typing in a `contenteditable`.
+      disabled={held}
+      onCommit={value => onSet(row.id, value)}
+      services={services}
+    />
+  );
+}
+
 function representable(row: ExposedRow): boolean {
   if (row.type === "visibility" || row.type === "select") return true;
   const { value } = row;
   if (value === undefined || value === null) return true;
+  // A passage is one the editor can open. Plain words are a passage to the
+  // page but not to the editor, which would open them EMPTY, and the first
+  // keystroke would replace what the page shows; they stay shown instead.
+  if (row.type === "richText") return isRichTextValue(value);
   // An image row shows a cleared override as nothing chosen.
   // An image is a file's id, a string, or a cleared override; anything else
   // stays shown as it is rather than offered to a picker that would replace

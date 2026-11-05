@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +170,20 @@ describe("the list", () => {
     expect(card.textContent).toContain(".nx-c-card");
     // A style made before names shows its class name as its name.
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
+  });
+
+  it("lists no look among the shared styles", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    await panel({ library: [CARD, outline] });
+    expect(row(/^Card, \.nx-c-card/)).toBeTruthy();
+    expect(screen.queryByText("Outline")).toBeNull();
   });
 
   it("says how to make one when there are none, with no + to create an empty one", async () => {
@@ -862,6 +877,97 @@ describe("counting the pages now", () => {
     });
     expect(count).toHaveBeenCalledTimes(2);
     await screen.findByRole("button", { name: "Card, .nx-c-card, On 3 pages" });
+  });
+
+  it("offers a count again once a later read says counting can get further", async () => {
+    // The count said nothing more could be counted; then the site gained
+    // something to count (a new scope, a failed write marked), and a later
+    // read says so. The final word gives way to it.
+    const base = accessOf().access;
+    let counting = true;
+    const count = vi.fn(async (): Promise<SharedStylesCount> => {
+      counting = false;
+      return { kind: "counted", whole: false, counting: false };
+    });
+    const access: SharedStylesAccess = {
+      ...base,
+      count,
+      usage: vi.fn(async (ids: readonly string[]) => ({
+        whole: false,
+        counting,
+        mayLock: false,
+        mayCount: true,
+        styles: new Map(ids.map(id => [id, reach({ pages: 1 }, false)])),
+      })),
+    };
+    const view = await panel({ library: [CARD], access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    expect(countNow()).toBeNull();
+    // Something new to count; a style made meanwhile is read, and that read
+    // says so.
+    counting = true;
+    await act(async () => {
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(countNow()).not.toBeNull());
+    expect(screen.queryByText("The pages left can't be counted.")).toBeNull();
+  });
+
+  it("offers a count again on the first later read, when the count's own read never answered", async () => {
+    // The read the count sets off fails, so it says nothing; the next read
+    // that answers is the first word after the count, and says counting.
+    const base = accessOf().access;
+    let failNext = false;
+    const count = vi.fn(async (): Promise<SharedStylesCount> => {
+      failNext = true;
+      return { kind: "counted", whole: false, counting: false };
+    });
+    const usage = vi.fn(async (ids: readonly string[]) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("offline");
+      }
+      return {
+        whole: false,
+        counting: true,
+        mayLock: false,
+        mayCount: true,
+        styles: new Map(ids.map(id => [id, reach({ pages: 1 }, false)])),
+      };
+    });
+    const access: SharedStylesAccess = { ...base, count, usage };
+    const view = await panel({ library: [CARD], access });
+    await act(async () => {
+      fireEvent.click(countNow() as HTMLElement);
+    });
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(2));
+    expect(countNow()).toBeNull();
+    // A style comes on screen, and its read is the first to answer.
+    await act(async () => {
+      view.rerender(
+        <SharedStylesPanel
+          library={[CARD, HERO]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+          access={access}
+        />
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(usage).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(countNow()).not.toBeNull());
   });
 
   it("offers no further count when the answer says counting cannot get further", async () => {
