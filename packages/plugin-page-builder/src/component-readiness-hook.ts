@@ -49,6 +49,7 @@ import {
   asDocument,
   publishedStoreSource,
 } from "./component-store-source";
+import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import {
   requestContextFor,
   writeTargetOf,
@@ -137,6 +138,12 @@ export function registerComponentReadinessNotice(args: {
    * and report a page as holed when it draws correctly.
    */
   componentField: string;
+  /**
+   * The RESOLVED slug Layouts are stored under, when a host has them. A Layout
+   * names its area components in a repeater rather than a blocks field, so its
+   * writes are read through that repeater; unset, Layouts are not examined.
+   */
+  layoutCollection?: string;
   /** The bounds documents are read under, asked per call. */
   limits: () => DocumentLimits;
 }): void {
@@ -232,10 +239,7 @@ async function composeNotice(
     // scope on purpose — the hole it leaves appears on every page embedding it
     // — and telling its author "this page embeds…" points them at a document
     // they were not editing.
-    message: describe(
-      missing.size,
-      target.slug === args.componentCollection ? "component" : "page"
-    ),
+    message: describe(missing.size, subjectNoun(args, target.slug)),
     entryId: target.documentId,
   };
 }
@@ -269,13 +273,16 @@ async function subjectOf(
   );
   if (!leavesDocumentPublished(context, collection)) return null;
 
-  const documents = writtenDocuments(
-    context,
-    renderedFields(
-      blocksFieldsOf(collection as never),
-      fieldFor(args, target.slug)
-    )
-  );
+  const documents =
+    target.slug === args.layoutCollection
+      ? layoutDocuments(context)
+      : writtenDocuments(
+          context,
+          renderedFields(
+            blocksFieldsOf(collection as never),
+            fieldFor(args, target.slug)
+          )
+        );
   return documents.length === 0 ? null : { target, documents };
 }
 
@@ -312,7 +319,9 @@ function withinRenderedScope(
 ): boolean {
   if (args.renderedCollections === undefined) return true;
   return (
-    args.renderedCollections.includes(slug) || slug === args.componentCollection
+    args.renderedCollections.includes(slug) ||
+    slug === args.componentCollection ||
+    slug === args.layoutCollection
   );
 }
 
@@ -398,14 +407,38 @@ function writtenDocuments(
 }
 
 /**
+ * A written Layout's areas, as the one document of placements they are.
+ * None when its areas name no component.
+ */
+function layoutDocuments(context: HookContext<unknown>): BlockDocument[] {
+  const data = (context as unknown as Record<string, unknown>).data as
+    | Record<string, unknown>
+    | undefined;
+  const components = areaComponentIds(data?.areas);
+  return components.length === 0 ? [] : [layoutAreasDocument(components)];
+}
+
+/** What the written document is, in the sentence's words. */
+function subjectNoun(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  slug: string
+): "page" | "component" | "Layout" {
+  if (slug === args.componentCollection) return "component";
+  if (slug === args.layoutCollection) return "Layout";
+  return "page";
+}
+
+/**
  * The sentence an author reads.
  *
- * States the fact and stops. It offers no action on purpose: publishing the
- * components alongside the page is a separate capability that does not exist
- * yet, and copy that promises an affordance nobody can reach is worse than copy
- * that promises nothing.
+ * States the fact and stops. The offer to publish the components too is made
+ * by the editor and the form BEFORE a publish; this is said after it, to every
+ * writer, the API's included, so it names no action only one of them has.
  */
-function describe(count: number, subject: "page" | "component"): string {
+function describe(
+  count: number,
+  subject: "page" | "component" | "Layout"
+): string {
   const noun = count === 1 ? "1 component" : `${String(count)} components`;
   const tail =
     count === 1

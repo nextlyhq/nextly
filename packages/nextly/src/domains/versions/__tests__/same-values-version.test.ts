@@ -65,6 +65,17 @@ describe("sameValuesVersionRequirement", () => {
     ).toBe("VERSION_REQUIRED");
   });
 
+  it("reads only an id's own version, never one a prototype member names", () => {
+    expect(
+      verdict(() =>
+        sameValuesVersionRequirement(
+          {},
+          { ids: ["a", "toString"], revs: { a: "4" } }
+        )
+      )
+    ).toBe("VERSION_REQUIRED");
+  });
+
   it.each([
     ["a version in the shared data", { _rev: "4" }, { ids: IDS }],
     [

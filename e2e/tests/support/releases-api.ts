@@ -105,3 +105,53 @@ export async function releasesPerDay(
   };
   return new Map(read.days.map(day => [day.date, day.total]));
 }
+
+/**
+ * Put one post into a release in one step, as the editor's Schedule… does:
+ * `into` names the way, and the rest of `body` is that way's fields.
+ */
+export async function scheduleDocument(
+  page: Requester,
+  postId: string,
+  action: "publish" | "unpublish",
+  body: Record<string, unknown>
+): Promise<string> {
+  const { item } = await ok<{ item: { release: { id: string } } }>(
+    await page.request.post(`${API}/releases/schedule-document`, {
+      data: {
+        document: {
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: postId,
+          action,
+        },
+        ...body,
+      },
+    })
+  );
+  return item.release.id;
+}
+
+/** The documents a release holds, with what it does to each. */
+export async function membersOf(
+  page: Requester,
+  id: string
+): Promise<Array<{ entryId: string; action: string }>> {
+  const { items } = await ok<{
+    items: Array<{ entryId: string; action: string }>;
+  }>(await page.request.get(`${API}/releases/${id}/members`));
+  return items;
+}
+
+/** One release as its page reads it. */
+export async function readRelease(
+  page: Requester,
+  id: string
+): Promise<{ title: string; description: string | null; state: string }> {
+  type Read = { title: string; description: string | null; state: string };
+  // A detail read answers the release itself; an envelope is unwrapped.
+  const body = await ok<Read | { item: Read }>(
+    await page.request.get(`${API}/releases/${id}`)
+  );
+  return "item" in body ? body.item : body;
+}

@@ -374,6 +374,8 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+export { PageInserters } from "./page-inserters";
+export type { PageInsertersProps } from "./page-inserters";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -544,7 +546,11 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  * decides when an edit is persisted; this exports the surface, not the save.
  */
 export { TokensPanel, useVariablesHeader } from "./tokens-panel";
-export type { TokensPanelProps, VariablesHeader } from "./tokens-panel";
+export type {
+  SpacingModeControl,
+  TokensPanelProps,
+  VariablesHeader,
+} from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
@@ -601,6 +607,7 @@ export type {
   SharedStyleKind,
   SharedStyleReach,
   SharedStyleRefusal,
+  SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,

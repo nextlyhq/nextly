@@ -13,6 +13,7 @@
 import type {
   SharedStyleReach,
   SharedStylesAccess,
+  SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUsesPage,
 } from "@nextlyhq/builder/shell";
@@ -25,6 +26,7 @@ import { useCallback, useMemo } from "react";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
+  SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
@@ -32,6 +34,7 @@ import {
   sharedStyleWhereUsedPath,
   type SharedStyleLockRequest,
   type SharedStyleRemoveRequest,
+  type SharedStylesCountResponse,
   type SharedStylesUsageResponse,
   type SharedStyleUseItem,
 } from "../library-contract";
@@ -51,6 +54,7 @@ function usageFromResponse(
     whole: body.whole,
     counting: body.counting,
     mayLock: body.mayLock,
+    mayCount: body.mayCount,
     styles,
   };
 }
@@ -183,6 +187,31 @@ export function useSharedStylesClient(): SharedStylesAccess {
     [send]
   );
 
+  // Counting writes no site style, so nothing is read again here: the tab
+  // reads the counts again itself.
+  const count = useCallback(async (): Promise<SharedStylesCount> => {
+    try {
+      // The mutation envelope, `{ message, item }`; the health is its item.
+      const answer = await writePluginRoute<{
+        readonly item?: SharedStylesCountResponse;
+      }>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path: SHARED_STYLE_COUNT_ROUTE_PATH,
+        body: {},
+      });
+      const item = answer?.item;
+      if (item === undefined) {
+        throw new Error("The count answered without how far it got.");
+      }
+      return { kind: "counted", whole: item.whole, counting: item.counting };
+    } catch (refused) {
+      return {
+        kind: "refused",
+        reason: refusalWords(refused, "The pages could not be counted."),
+      };
+    }
+  }, []);
+
   // The words alone, as `remove` has always answered.
   const remove = useCallback(
     async (ids: readonly string[]) => (await removeWithReason(ids))?.reason,
@@ -190,7 +219,7 @@ export function useSharedStylesClient(): SharedStylesAccess {
   );
 
   return useMemo(
-    () => ({ usage, uses, lock, remove, removeWithReason }),
-    [usage, uses, lock, remove, removeWithReason]
+    () => ({ usage, uses, lock, remove, removeWithReason, count }),
+    [usage, uses, lock, remove, removeWithReason, count]
   );
 }

@@ -52,8 +52,8 @@ export type { PageRendererProps } from "./page-renderer";
 // The rest are `SiteSheetInput`'s TRANSITIVE closure, and they are not padding.
 // Naming the outer type alone lets a consumer declare a variable and not build
 // one: the tokens are a `SiteTokenSet` of `SiteToken`s whose `kind` is a
-// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, and `darkMode` is
-// a `DarkModeStrategy`. A caller writing a site's design system needs every one
+// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, `darkMode` is
+// a `DarkModeStrategy` and `spacingMode` is a `SpacingMode`. A caller writing a site's design system needs every one
 // of them by name, so withholding any makes the prop typeable but unusable —
 // which is the same defect as not exporting the outer type, one level in.
 /**
@@ -75,6 +75,7 @@ export type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
   TokenKind,
 } from "@nextlyhq/blocks-engine";
 

@@ -12,8 +12,10 @@ import {
 } from "./library-contract";
 import { pageBuilder } from "./plugin";
 import {
+  countSharedStyleUsage,
   firstReadableTitle,
   LOCK_SHARED_STYLES_PERMISSION,
+  SHARED_STYLE_COUNT_MS,
   lockSharedStyle,
   mayReadSharedStyleUsage,
   readSharedStyleUsage,
@@ -151,6 +153,8 @@ describe("the shared-style permission", () => {
       ["POST", "/shared-styles/lock", "lock-page-builder-shared-styles"],
       ["GET", "/shared-styles/usage", undefined],
       ["GET", "/shared-styles/where-used", undefined],
+      // Design's update: whoever a whole count lets remove a style.
+      ["POST", "/shared-styles/count", "update-renamed_site-style"],
       ["POST", "/shared-styles/remove", "update-renamed_site-style"],
     ]);
   });
@@ -271,11 +275,15 @@ describe("how widely shared styles are used", () => {
     new Request(
       `http://local/shared-styles/usage?${ids.map(id => `id=${encodeURIComponent(id)}`).join("&")}`
     );
-  const caller = (lock: boolean) => ({
+  const caller = (lock: boolean, design = false) => ({
+    self: { singles: { "site-style": "renamed_site-style" } } as never,
     caller: {
-      can: vi.fn(async (action: string, resource: string) =>
-        lock ? `${action}-${resource}` === LOCK_SHARED_STYLES_PERMISSION : false
-      ),
+      can: vi.fn(async (action: string, resource: string) => {
+        const held = `${action}-${resource}`;
+        if (lock && held === LOCK_SHARED_STYLES_PERMISSION) return true;
+        // Design's update of the RESOLVED site style.
+        return design && held === "update-renamed_site-style";
+      }),
     } as never,
   });
 
@@ -296,6 +304,8 @@ describe("how widely shared styles are used", () => {
       whole: true,
       counting: false,
       mayLock: true,
+      // The lock alone counts nothing: counting is Design's update.
+      mayCount: false,
       styles: {
         "c-card": {
           documents: 4,
@@ -309,6 +319,22 @@ describe("how widely shared styles are used", () => {
         },
       },
     });
+  });
+
+  it("says this caller may count the pages now only with Design's update", async () => {
+    const { source } = usageOf(NOT_WHOLE);
+    const design = await readSharedStyleUsage(
+      usageRequest("c-card"),
+      caller(false, true),
+      source
+    );
+    expect(design.mayCount).toBe(true);
+    const lockOnly = await readSharedStyleUsage(
+      usageRequest("c-card"),
+      caller(true),
+      source
+    );
+    expect(lockOnly.mayCount).toBe(false);
   });
 
   it("says whether the counts may still become whole", async () => {
@@ -400,7 +426,10 @@ describe("the paths the browser asks on", () => {
     const { source, asked } = usageOf(WHOLE);
     const answer = await readSharedStyleUsage(
       new Request(`http://local${sharedStyleUsagePath(ids)}`),
-      { caller: { can: async () => false } as never },
+      {
+        self: { singles: { "site-style": "site-style" } } as never,
+        caller: { can: async () => false } as never,
+      },
       source
     );
     expect(asked).toEqual(ids);
@@ -831,5 +860,51 @@ describe("the version a shared-style write sends", () => {
     await store.write([card, hero], {}, read);
 
     expect(updates).toEqual([{ classes: [card, hero], _rev: "4" }]);
+  });
+});
+
+describe("counting the pages now", () => {
+  const jobsThat = (ran: boolean) => ({
+    runSweepNow: vi.fn(async () => ({ ran })),
+  });
+
+  it("runs the usage backfill for a bounded time, then answers the health after", async () => {
+    const jobs = jobsThat(true);
+    // Read once, after the run: the answer says how far this run got.
+    const health = vi.fn(async () => ({ ...NOT_WHOLE, backfillPending: true }));
+    const response = await countSharedStyleUsage(jobs, { health });
+    const body = (await response.json()) as {
+      item: { ran: boolean; whole: boolean; counting: boolean };
+    };
+
+    expect(jobs.runSweepNow).toHaveBeenCalledWith(
+      "page-builder:usage-backfill",
+      { maxDurationMs: SHARED_STYLE_COUNT_MS }
+    );
+    expect(health).toHaveBeenCalledTimes(1);
+    expect(
+      jobs.runSweepNow.mock.invocationCallOrder[0] ?? Infinity
+    ).toBeLessThan(health.mock.invocationCallOrder[0] ?? -Infinity);
+    expect(body.item).toEqual({ ran: true, whole: false, counting: true });
+  });
+
+  it("says when every page is counted", async () => {
+    const response = await countSharedStyleUsage(jobsThat(true), {
+      health: async () => WHOLE,
+    });
+    const body = (await response.json()) as {
+      message: string;
+      item: { whole: boolean; counting: boolean };
+    };
+    expect(body.item).toMatchObject({ whole: true, counting: false });
+    expect(body.message).toBe("Every page has been counted.");
+  });
+
+  it("says when another run was already counting", async () => {
+    const response = await countSharedStyleUsage(jobsThat(false), {
+      health: async () => ({ ...NOT_WHOLE, backfillPending: true }),
+    });
+    const body = (await response.json()) as { item: { ran: boolean } };
+    expect(body.item.ran).toBe(false);
   });
 });

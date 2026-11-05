@@ -45,6 +45,7 @@ import type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -66,6 +67,12 @@ export interface SiteStyleData {
   classes?: readonly NamedClass[];
   /** The site's breakpoints, on both axes. */
   breakpoints?: BreakpointSet;
+  /**
+   * The site's spacing model: blocks spaced by their own margins (`classic`)
+   * or by the gap of the container holding them (`gaps`). Absent means the
+   * engine's default, `gaps`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /**
@@ -110,6 +117,8 @@ export function resolveSiteStyle(
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
+    // One site-wide choice, so the stored one wins when there is one.
+    spacingMode: stored?.spacingMode ?? defaults?.spacingMode,
   });
 }
 
@@ -281,6 +290,9 @@ export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
     ...(sections.breakpoints === undefined
       ? {}
       : { breakpoints: sections.breakpoints }),
+    ...(sections.spacingMode === undefined
+      ? {}
+      : { spacingMode: sections.spacingMode }),
   };
 }
 
@@ -382,5 +394,9 @@ export function siteSheet(style?: SiteStyleData): SiteSheetInput {
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
     ...(style?.classes === undefined ? {} : { classes: style.classes }),
     breakpoints: siteBreakpoints(style),
+    // Carried to the renderer, which compiles the page under it.
+    ...(style?.spacingMode === undefined
+      ? {}
+      : { spacingMode: style.spacingMode }),
   };
 }

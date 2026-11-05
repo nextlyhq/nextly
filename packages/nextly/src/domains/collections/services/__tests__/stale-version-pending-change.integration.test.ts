@@ -278,6 +278,15 @@ describe.each(getConfiguredTestDialects())(
         const id = await englishBehindSpanish(t);
         const refused = await takeLive(t, id, { _rev: "seven" });
         expect(refused.code, JSON.stringify(refused)).toBe("VALIDATION_ERROR");
+        // Nothing was taken: the pending change still holds the old count.
+        const pending = (await t.nextly.findByID({
+          collection: ARTICLES as never,
+          id,
+          locale: "en",
+          draft: true,
+          overrideAccess: true,
+        } as never)) as Doc;
+        expect(pending.articleCount).toBe(10);
       });
     });
 

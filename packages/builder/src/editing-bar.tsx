@@ -25,10 +25,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  TooltipProvider,
 } from "@nextlyhq/ui";
 import { ChevronDown, Lock, Monitor } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { stateLabel } from "./state-switcher";
 
 /**
@@ -73,6 +75,12 @@ export interface EditingBarProps {
   readonly onDetach?: (id: string) => void;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
+  /**
+   * Why a shared style can't be made the target (the block's design is held,
+   * which its shared styles' values are part of), said on each such chip.
+   * The chips stay reachable so the reason can be read.
+   */
+  readonly targetHeld?: string;
   /** What line one offers after the chips: apply or save a shared style. */
   readonly actions?: React.ReactNode;
   /** Why a shared target's values can't be changed, when they can't. */
@@ -102,6 +110,7 @@ export function EditingBar({
   onRemove,
   onDetach,
   chipActionsHeld,
+  targetHeld,
   actions,
   sharedReadOnly,
   device,
@@ -113,83 +122,88 @@ export function EditingBar({
   const group = React.useRef<HTMLDivElement>(null);
   const labelId = React.useId();
   return (
-    <section
-      className="nx-editing-bar"
-      aria-label="What you're editing"
-      data-target={target.kind}
-      onKeyDown={event => {
-        // Escape on a shared target goes back to this block, so leaving a
-        // site-wide edit is one key from anywhere in the bar.
-        if (event.key !== "Escape" || activeId === null) return;
-        // A key a menu inside the bar already answered (its own Escape) is
-        // left alone, and the one answered here is marked, so the editor's
-        // Escape, which skips an answered key, does not also select the
-        // parent block.
-        if (onTargetChange === undefined || event.defaultPrevented) return;
-        event.preventDefault();
-        onTargetChange(null);
-        focusChip(group.current, null);
-      }}
-    >
-      <div className="nx-editing-bar__line">
-        <span className="nx-editing-bar__label" id={labelId}>
-          Editing
-        </span>
-        <div
-          ref={group}
-          className="nx-editing-bar__targets"
-          role="group"
-          aria-labelledby={labelId}
-          onKeyDown={event => moveBetweenChips(event, group.current)}
-        >
-          <TargetChip
-            id={null}
-            name="This block"
-            tone="local"
-            active={activeId === null}
-            onSelect={onTargetChange}
-          />
-          {chips.map(chip => (
-            <span key={chip.id} className="nx-editing-bar__chip-wrap">
-              <TargetChip
-                id={chip.id}
-                name={chip.name}
-                className={chip.className}
-                locked={chip.locked === true}
-                tone="shared"
-                active={activeId === chip.id}
-                onSelect={onTargetChange}
-              />
-              <ChipMenu
-                chip={chip}
-                onRemove={onRemove}
-                onDetach={onDetach}
-                held={chipActionsHeld}
-              />
-            </span>
-          ))}
+    // Its own provider, as each surface keeps one: the bar's held chips say
+    // why in the editor's tooltip, wherever the bar is drawn.
+    <TooltipProvider delayDuration={300}>
+      <section
+        className="nx-editing-bar"
+        aria-label="What you're editing"
+        data-target={target.kind}
+        onKeyDown={event => {
+          // Escape on a shared target goes back to this block, so leaving a
+          // site-wide edit is one key from anywhere in the bar.
+          if (event.key !== "Escape" || activeId === null) return;
+          // A key a menu inside the bar already answered (its own Escape) is
+          // left alone, and the one answered here is marked, so the editor's
+          // Escape, which skips an answered key, does not also select the
+          // parent block.
+          if (onTargetChange === undefined || event.defaultPrevented) return;
+          event.preventDefault();
+          onTargetChange(null);
+          focusChip(group.current, null);
+        }}
+      >
+        <div className="nx-editing-bar__line">
+          <span className="nx-editing-bar__label" id={labelId}>
+            Editing
+          </span>
+          <div
+            ref={group}
+            className="nx-editing-bar__targets"
+            role="group"
+            aria-labelledby={labelId}
+            onKeyDown={event => moveBetweenChips(event, group.current)}
+          >
+            <TargetChip
+              id={null}
+              name="This block"
+              tone="local"
+              active={activeId === null}
+              onSelect={onTargetChange}
+            />
+            {chips.map(chip => (
+              <span key={chip.id} className="nx-editing-bar__chip-wrap">
+                <TargetChip
+                  id={chip.id}
+                  name={chip.name}
+                  className={chip.className}
+                  locked={chip.locked === true}
+                  tone="shared"
+                  active={activeId === chip.id}
+                  onSelect={onTargetChange}
+                  held={targetHeld}
+                />
+                <ChipMenu
+                  chip={chip}
+                  onRemove={onRemove}
+                  onDetach={onDetach}
+                  held={chipActionsHeld}
+                />
+              </span>
+            ))}
+          </div>
+          {actions}
         </div>
-        {actions}
-      </div>
-      {target.kind === "shared" ? (
-        <SharedBanner
-          target={target}
-          readOnly={sharedReadOnly}
-          onLeave={
-            onTargetChange === undefined
-              ? undefined
-              : () => {
-                  onTargetChange(null);
-                  focusChip(group.current, null);
-                }
-          }
-        />
-      ) : null}
-      <BarContext device={device} state={state} stateControl={stateControl} />
-      <p className="nx-sr-only" role="status">
-        {announced}
-      </p>
-    </section>
+        {target.kind === "shared" ? (
+          <SharedBanner
+            target={target}
+            readOnly={sharedReadOnly}
+            onLeave={
+              onTargetChange === undefined
+                ? undefined
+                : () => {
+                    onTargetChange(null);
+                    focusChip(group.current, null);
+                  }
+            }
+          />
+        ) : null}
+        <BarContext device={device} state={state} stateControl={stateControl} />
+        <p className="nx-sr-only" role="status">
+          {announced}
+        </p>
+      </section>
+    </TooltipProvider>
   );
 }
 
@@ -294,6 +308,7 @@ function TargetChip({
   tone,
   active,
   onSelect,
+  held,
 }: {
   id: string | null;
   name: string;
@@ -304,26 +319,51 @@ function TargetChip({
   tone: "local" | "shared";
   active: boolean;
   onSelect: ((id: string | null) => void) | undefined;
+  /** Why this chip can't become the target, said in its tooltip. */
+  held?: string | undefined;
 }): React.JSX.Element {
-  return (
+  // Held, not disabled: a disabled button can't be reached to read why.
+  const refused = held !== undefined && !active;
+  const words = chipWords({ id, name, className, locked, active });
+  const reasonId = React.useId();
+  const chip = (
     <button
       type="button"
       className="nx-editing-bar__chip"
       data-tone={tone}
       data-target-chip={id ?? ""}
-      {...chipWords({ id, name, className, locked, active })}
+      {...words}
+      // The reason replaces the native tooltip, which focus never shows, and
+      // is the chip's description, heard without opening anything.
+      {...(refused
+        ? {
+            "aria-disabled": true,
+            title: undefined,
+            "aria-describedby": reasonId,
+          }
+        : {})}
       aria-pressed={active}
       // One tab stop for the group: the target. The arrows reach the rest.
       tabIndex={active ? 0 : -1}
       disabled={onSelect === undefined && !active}
       onClick={() => {
-        if (!active) onSelect?.(id);
+        if (!active && !refused) onSelect?.(id);
       }}
     >
       {name}
       {/* The lock in words is in the chip's name, said as one phrase. */}
       {locked ? <Lock aria-hidden="true" size={11} /> : null}
     </button>
+  );
+  if (!refused) return chip;
+  // Shown on hover and on keyboard focus, as every held control's reason is.
+  return (
+    <>
+      <ChromeTooltip content={held}>{chip}</ChromeTooltip>
+      <span id={reasonId} hidden>
+        {held}
+      </span>
+    </>
   );
 }
 

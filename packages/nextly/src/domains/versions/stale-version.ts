@@ -183,7 +183,7 @@ export function versionCheckFor(
  *
  * @throws NextlyError.validation when `data` carries `_rev`.
  */
-export function refuseVersionInSharedData(
+function refuseVersionInSharedData(
   data: Readonly<Record<string, unknown>>
 ): void {
   if (data[DOCUMENT_VERSION_KEY] === undefined) return;
@@ -198,7 +198,7 @@ export function refuseVersionInSharedData(
  *
  * @experimental
  */
-export const DOCUMENT_REVS_KEY = "revs";
+const DOCUMENT_REVS_KEY = "revs";
 
 /**
  * How an update that writes the same values to many documents is judged:
@@ -270,7 +270,8 @@ export function sameValuesVersionRequirement(
     // own refusal once the others are written.
     decodeDocumentVersion(rev);
   }
-  if (target.ids.some(id => !(id in parsed.data))) {
+  // Own keys only: an id named like a prototype member is not a version.
+  if (target.ids.some(id => !Object.hasOwn(parsed.data, id))) {
     throw versionRequiredFor("ids");
   }
   return { kind: "per-document", revs: parsed.data };
