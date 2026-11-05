@@ -1031,14 +1031,15 @@ describe("what the inspector is told about provenance", () => {
         },
       ],
     };
+    // The composed node's own colour: the site's looks set colours too.
     const hasColour = () =>
       (
         (
           seen.inspector?.cascade as
-            | { entries: { property: string }[] }
+            | { entries: { property: string; value: string }[] }
             | undefined
         )?.entries ?? []
-      ).some(entry => entry.property === "color");
+      ).some(entry => entry.property === "color" && entry.value === "crimson");
 
     clientConfig = { limits: { maxNodes: 1 } };
     openEditor();

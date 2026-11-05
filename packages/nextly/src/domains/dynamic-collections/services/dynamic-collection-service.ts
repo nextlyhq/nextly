@@ -1604,6 +1604,11 @@ export class DynamicCollectionService extends BaseService {
             rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
             addedColumnBackfill: field =>
               this.schemaService.addedColumnBackfill(field),
+            // Counts the rows a field made required would break, naming the collection.
+            requiredColumns: {
+              db: this.adapter.getDrizzle(),
+              entity: { kind: "collection", slug: collectionName },
+            },
           });
       if (tableDeployed) {
         this.refuseAddedColumnsTaken(

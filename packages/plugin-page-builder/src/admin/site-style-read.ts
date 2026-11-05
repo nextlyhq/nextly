@@ -48,6 +48,14 @@ export interface StoredSiteStyleRead {
   /** Why the read failed, when it did. */
   readonly error: Error | null;
   /**
+   * Whether `data` is the site as it is now: an answer read since this
+   * surface mounted, or one still inside the freshness the shared cache
+   * gives it. An older cached answer is shown while a new read runs, and an
+   * answer kept after a later read failed is shown beside that failure;
+   * neither is known to be current.
+   */
+  readonly current: boolean;
+  /**
    * Ask the route again, resolving once it has answered, with whether that
    * read failed: a caller waiting for a write to show must not take a failed
    * read for one that caught up.
@@ -82,6 +90,8 @@ export function useStoredSiteStyle(): StoredSiteStyleRead {
     data: query.data,
     isPending: query.isPending,
     error: query.error,
+    // `isSuccess` is false once a later read fails, even with data kept.
+    current: query.isSuccess && (query.isFetchedAfterMount || !query.isStale),
     refetch,
   };
 }

@@ -119,6 +119,7 @@ import {
   requireParam,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -259,7 +260,7 @@ export const SINGLE_VERSION_METHODS: Record<
     },
   },
   restoreSingleVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, never from the URL: a Single
       // has exactly one document and the client must not name which.
@@ -275,6 +276,8 @@ export const SINGLE_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -428,12 +431,15 @@ export const SINGLE_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized Single resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, from the query: a DELETE
+        // carries no body to read it from.
+        version: versionInputOfQuery(p),
       });
       return respondMutation("Working draft discarded.", item);
     },
   },
   takeLiveSingleSharedValues: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, body) => {
       const slug = String(p.slug ?? "");
       // The document id comes from the live row, as for a discard: it is what
       // the authorization checks are made against.
@@ -446,6 +452,8 @@ export const SINGLE_VERSION_METHODS: Record<
         // `?locale=` names the language whose pending change takes the live
         // values. An empty value is the same as none: the default language.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, judged as a save of it.
+        version: versionInputOf(body),
       });
       return respondMutation("Live values taken.", item);
     },
@@ -809,7 +817,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
@@ -825,6 +833,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // The service judges an API key's own `publish-{slug}` grant and the
         // rule, in each language the publish puts live.
         authenticatedScope: readAuthenticatedScope(),
+        // The version the publish was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const published = unwrapServiceResult<{
         id: string;

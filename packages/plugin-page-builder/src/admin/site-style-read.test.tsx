@@ -43,9 +43,12 @@ const STORED = {
 };
 
 /** A fresh client per test, retrying nothing so a refusal arrives at once. */
-function wrapper(): (props: { children: ReactNode }) => ReactNode {
+function wrapper(
+  /** How long an answer stays fresh in the cache; none by default. */
+  staleTime = 0
+): (props: { children: ReactNode }) => ReactNode {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, staleTime } },
   });
   return ({ children }) =>
     createElement(QueryClientProvider, { client }, children);
@@ -110,5 +113,60 @@ describe("the editor's read of the stored site style", () => {
       throw new Error("Offline");
     };
     expect(await result.current.refetch()).toMatchObject({ isError: true });
+  });
+});
+
+describe("whether the answer in hand is the site as it is now", () => {
+  it("is once the read answers, and is not after a later read fails", async () => {
+    const { result } = renderHook(() => useStoredSiteStyle(), {
+      wrapper: wrapper(),
+    });
+    expect(result.current.current).toBe(false);
+    await waitFor(() => expect(result.current.current).toBe(true));
+
+    answer = async () => {
+      throw new Error("Offline");
+    };
+    await result.current.refetch();
+
+    // The answer is kept beside the failure, and is no longer known current.
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.data).toEqual(STORED);
+    expect(result.current.current).toBe(false);
+  });
+
+  it("is not on a stale cached answer until the read it starts answers", async () => {
+    const shared = wrapper();
+    const first = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.current).toBe(true));
+    first.unmount();
+
+    // Mounted again on the cached answer, which the cache calls stale: it is
+    // shown while a new read runs, and is not current until that answers.
+    let release: (value: unknown) => void = () => {};
+    const after = { ...STORED, classes: [] };
+    answer = () =>
+      new Promise(resolve => {
+        release = resolve;
+      });
+    const second = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    expect(second.result.current.data).toEqual(STORED);
+    expect(second.result.current.current).toBe(false);
+
+    release(after);
+    await waitFor(() => expect(second.result.current.current).toBe(true));
+    expect(second.result.current.data).toEqual(after);
+  });
+
+  it("is on a cached answer still inside the cache's freshness", async () => {
+    const shared = wrapper(60_000);
+    const first = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.current).toBe(true));
+    first.unmount();
+
+    const second = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    expect(second.result.current.current).toBe(true);
+    // Fresh, so nothing was read again.
+    expect(reads).toHaveLength(1);
   });
 });

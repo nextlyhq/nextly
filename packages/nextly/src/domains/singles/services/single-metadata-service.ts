@@ -1125,6 +1125,11 @@ export class SingleMetadataService {
       ),
       addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
       presentColumns: new Set(liveColumnTypes.keys()),
+      // Counts the rows a field made required would break, naming the Single.
+      requiredColumns: {
+        db: adapter.getDrizzle(),
+        entity: { kind: "single", slug },
+      },
     });
     const companionTable = `${tableName}_locales`;
     const companionColumns =

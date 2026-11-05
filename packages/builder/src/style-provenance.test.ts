@@ -8,10 +8,13 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
+import { liveBreakpointsFor } from "./breakpoints";
+
 import {
   breakpointBadge,
   breakpointSource,
   inheritedProvenance,
+  provenanceBeneath,
   styleProvenance,
   type BreakpointBadge,
   type StyleProvenanceQuery,
@@ -1282,5 +1285,103 @@ describe("the breakpoint dimension of a control's provenance", () => {
         selectable: true,
       },
     });
+  });
+});
+
+describe("what a control would show without the node's own value here", () => {
+  /*
+   * The question the "overrides Card" line asks: with the node's own value at
+   * the position being edited taken away, whose value shows? Asked of a trace
+   * the compiler produced, at the edited tier, so a value the node sets at a
+   * narrow breakpoint or in an interaction state over the style's wider value
+   * still names the style.
+   */
+  const SET = {
+    viewport: [
+      { id: "base", label: "Desktop" },
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+    ],
+    container: [],
+  } as unknown as BreakpointSet;
+
+  function traceFor(node: NodeStyles, card: NodeStyles) {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["c1"],
+          styles: node,
+        },
+      ],
+    };
+    const compiled = compilePageCss(document, {
+      breakpoints: SET,
+      namedClasses: [{ id: "c1", slug: "card", orderIndex: 0, styles: card }],
+      trace: true,
+    } as never);
+    expect(compiled.warnings).toEqual([]);
+    return compiled.trace ?? [];
+  }
+
+  const beneath = (
+    trace: readonly StyleTraceEntry[],
+    at: { breakpoint: string; state?: "base" | "hover" }
+  ) =>
+    provenanceBeneath({
+      trace,
+      subject: { nodeId: "n1", classIds: ["c1"] },
+      cssProperty: "opacity",
+      state: at.state ?? "base",
+      breakpoint: at.breakpoint,
+      liveBreakpoints: liveBreakpointsFor(SET, at.breakpoint),
+    });
+
+  it("names the style whose wider-breakpoint value the node's own value covers", () => {
+    const trace = traceFor(
+      { base: { tablet: { opacity: 0.2 } } },
+      { base: { base: { opacity: 0.5 } } }
+    );
+    // The population first: both declarations were written.
+    expect(trace.filter(row => row.property === "opacity")).toHaveLength(2);
+    const found = beneath(trace, { breakpoint: "tablet" });
+    expect(found.kind).toBe("inherited");
+    expect(found.kind === "inherited" ? found.from : undefined).toEqual({
+      kind: "class",
+      id: "c1",
+      slug: "card",
+    });
+  });
+
+  it("names the style whose base-state value the node's hover value covers", () => {
+    const trace = traceFor(
+      { hover: { base: { opacity: 0.2 } } },
+      { base: { base: { opacity: 0.5 } } }
+    );
+    const found = beneath(trace, { breakpoint: "base", state: "hover" });
+    expect(found.kind === "inherited" ? found.from.kind : found.kind).toBe(
+      "class"
+    );
+  });
+
+  it("names the node itself when its own wider value is what would show", () => {
+    // Reset at tablet would show the node's base value, not Card's.
+    const trace = traceFor(
+      { base: { base: { opacity: 0.4 }, tablet: { opacity: 0.2 } } },
+      { base: { base: { opacity: 0.5 } } }
+    );
+    const found = beneath(trace, { breakpoint: "tablet" });
+    expect(found.kind === "inherited" ? found.from.kind : found.kind).toBe(
+      "node"
+    );
+  });
+
+  it("is unset when nothing else sets the property", () => {
+    const trace = traceFor({ base: { tablet: { opacity: 0.2 } } }, {});
+    expect(beneath(trace, { breakpoint: "tablet" }).kind).toBe("unset");
   });
 });

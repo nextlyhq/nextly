@@ -15,7 +15,11 @@ import {
 } from "../../plugins/test-nextly";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 
-import { countArchivedTranslations, runPrune } from "./prune";
+import {
+  countArchivedTranslations,
+  pruneUnderSchemaLock,
+  runPrune,
+} from "./prune";
 
 let current: TestNextly | undefined;
 
@@ -46,6 +50,8 @@ describe("nextly prune (D14)", () => {
     const result = await runPrune({
       registry,
       adapter: current!.adapter,
+      // The schema lock the command drops under, on this instance's database.
+      lock: pruneUnderSchemaLock(current!.adapter),
       currentSlugs: [], // plugin removed → its collection is orphaned
       approve: async () => false,
     });
@@ -62,6 +68,8 @@ describe("nextly prune (D14)", () => {
     const result = await runPrune({
       registry,
       adapter: current!.adapter,
+      // The schema lock the command drops under, on this instance's database.
+      lock: pruneUnderSchemaLock(current!.adapter),
       currentSlugs: [],
       approve: async () => true,
     });

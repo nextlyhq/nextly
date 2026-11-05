@@ -36,7 +36,7 @@ describe("readLayoutScanEntities", () => {
       answer: sql =>
         Promise.resolve(sql.includes("dynamic_collections") ? [ROW] : []),
     });
-    const entities = await readLayoutScanEntities(adapter, new Set(), true);
+    const entities = await readLayoutScanEntities(adapter, new Set());
     expect(entities).toEqual([
       expect.objectContaining({ kind: "collection", tableName: "dc_memos" }),
     ]);
@@ -47,9 +47,9 @@ describe("readLayoutScanEntities", () => {
       present: [],
       answer: () => Promise.reject(new Error("no such table: dynamic_x")),
     });
-    await expect(
-      readLayoutScanEntities(adapter, new Set(), true)
-    ).resolves.toEqual([]);
+    await expect(readLayoutScanEntities(adapter, new Set())).resolves.toEqual(
+      []
+    );
   });
 
   it("refuses when a registry that is there cannot be read", async () => {
@@ -61,7 +61,7 @@ describe("readLayoutScanEntities", () => {
           : Promise.resolve([]),
     });
     await expect(
-      readLayoutScanEntities(adapter, new Set(), true)
+      readLayoutScanEntities(adapter, new Set())
     ).rejects.toMatchObject({
       code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
     });
@@ -78,23 +78,9 @@ describe("readLayoutScanEntities", () => {
       listTables: () => Promise.reject(new Error("catalog unavailable")),
     } as unknown as DrizzleAdapter;
     await expect(
-      readLayoutScanEntities(adapter, new Set(), true)
+      readLayoutScanEntities(adapter, new Set())
     ).rejects.toMatchObject({
       code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
     });
-  });
-
-  // With the setting off an unread entity is never registered, so the boot goes on as it did.
-  it("reads past a registry it cannot read with the setting off", async () => {
-    const adapter = adapterWith({
-      present: ["dynamic_collections", "dynamic_singles"],
-      answer: sql =>
-        sql.includes("dynamic_collections")
-          ? Promise.reject(new Error("connection reset"))
-          : Promise.resolve([]),
-    });
-    await expect(
-      readLayoutScanEntities(adapter, new Set(), false)
-    ).resolves.toEqual([]);
   });
 });

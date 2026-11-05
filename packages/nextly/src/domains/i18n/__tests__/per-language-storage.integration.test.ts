@@ -394,6 +394,27 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ heading: "Made in the Builder", count: 4 });
     });
 
+    // A Draft/Published Single that is not translated publishes as a document too, so its
+    // per-language table holds values only: a `_status` there would stay `draft` and hide its
+    // translatable values from a published read.
+    it("lays out a Draft/Published Single the Schema Builder makes with no per-language status", async () => {
+      const t = await boot(dialect, true);
+      vi.stubEnv("NODE_ENV", "development");
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          status: true,
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      const columns = await columnsOf(t, ["single_notice_locales"]);
+      expect(columns.single_notice_locales).toContain("heading");
+      expect(columns.single_notice_locales).not.toContain("_status");
+    });
+
     // A Draft/Published collection that is not translated publishes as a document, so its
     // per-language table holds no `_status`: the process the Builder created it in must not
     // expect one either.
@@ -526,6 +547,72 @@ describe.each(getConfiguredTestDialects())(
           expect((refused as Error).message).toMatch(
             /the collection "dc_posts" \(heading\)/
           );
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
+    // A site that declared its languages and then drops its `localization` block would fall back
+    // to the implicit English, and its translations in any other language would read as gone. It
+    // is refused instead, naming those languages and the way back.
+    it.runIf(dialect === "sqlite")(
+      "refuses to boot in the implicit language over translations in languages it no longer declares",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const site = {
+          perLanguageStorage: true,
+          collections: [
+            defineCollection({
+              slug: "articles",
+              fields: [text({ name: "headline" })],
+            }),
+          ],
+        };
+        try {
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+            localization: { locales: ["en", "de"], defaultLocale: "en" },
+          });
+          const created = await before.nextly.create({
+            collection: "articles",
+            data: { headline: "Hello" },
+          });
+          await before.nextly.update({
+            collection: "articles",
+            id: (created.item as { id: string }).id,
+            locale: "de",
+            data: { headline: "Hallo" },
+          });
+          await before.destroy();
+
+          let refused: unknown;
+          try {
+            current = await createTestNextly({
+              ...site,
+              adapter: await onFile(),
+            });
+          } catch (error) {
+            refused = error;
+          }
+          expect(
+            NextlyError.isCode(
+              refused,
+              "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED"
+            )
+          ).toBe(true);
+          expect((refused as Error).message).toMatch(/"de"/);
+          expect((refused as Error).message).toMatch(/localization block/);
         } finally {
           _resetEnvCache();
           rmSync(folder, { recursive: true, force: true });

@@ -692,10 +692,14 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         seen.table?.endsWith("_locales")
       );
       expect(companionReads.length).toBeGreaterThan(0);
+      // Each companion read selects the field's own column and nothing else,
+      // whatever key the projection holds it under.
       for (const seen of companionReads) {
-        expect(Object.keys((seen.projection ?? {}) as object)).toEqual([
-          "value",
-        ]);
+        expect(
+          Object.values((seen.projection ?? {}) as object).map(
+            column => (column as { name?: unknown }).name
+          )
+        ).toEqual(["body"]);
       }
     });
 

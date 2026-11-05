@@ -23,7 +23,7 @@ import {
 } from "../services/field-column-descriptor";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
-import { classifyDifference } from "./classify";
+import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
 import { differenceCause } from "./difference-cause";
 import type {
@@ -351,16 +351,21 @@ async function appliedColumnFindings(
       findings.push(finding);
       continue;
     }
+    const difference = {
+      kind: entity.kind,
+      field: column.field,
+      location: finding.location,
+      live: finding.live,
+      expected: finding.expected,
+      ...liveNamesOf(live, finding.location),
+    };
+    const judgement = await classifyDifference(db, dialect, difference);
     findings.push({
       ...finding,
-      judgement: await classifyDifference(db, dialect, {
-        kind: entity.kind,
-        field: column.field,
-        location: finding.location,
-        live: finding.live,
-        expected: finding.expected,
-        ...liveNamesOf(live, finding.location),
-      }),
+      judgement,
+      // What the conversion would run and what the new type cannot keep, read from the same live
+      // table, so the report can say both and block what cannot be carried.
+      conversion: await planDifference(db, dialect, difference, judgement),
     });
   }
   return findings;
@@ -402,6 +407,7 @@ function judgeAppliedColumn(
     live: state,
     aspects,
     judgement: null,
+    conversion: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,
