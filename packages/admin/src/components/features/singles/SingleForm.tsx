@@ -1544,6 +1544,11 @@ export function SingleForm({
     await loadCurrentVersion(keepsRecoveryPoints);
     if (keepsRecoveryPoints) recovery.recheck();
   };
+  // Kept editing after a load that has not read the current version: that
+  // version no longer replaces the edits when it arrives.
+  lock.now.stopLoadingCurrent = () => {
+    awaitingCurrent.current = false;
+  };
 
   /*
    * Throwing away this language's pending change, through the same gate as a

@@ -140,6 +140,7 @@ const WRITES = [
   "generate:widget",
   "i18n:restore",
   "init",
+  "media reindex-usage",
   "migrate",
   "migrate:baseline",
   "migrate:create",
@@ -147,23 +148,16 @@ const WRITES = [
   "migrate:down",
   "migrate:resolve",
   "permissions:cleanup",
+  "plugins install",
+  "plugins uninstall",
   "prune",
   "setup-token",
   "telemetry disable",
   "telemetry enable",
   "telemetry reset",
+  "upgrade",
   "users:create-admin",
   "webhooks:prune",
-];
-/**
- * Commands that write by default and do not offer `--dry-run` yet. This list
- * may only shrink: a command leaves it in the change that gives it the flag.
- */
-const WRITES_WITHOUT_DRY_RUN_YET = [
-  "media reindex-usage",
-  "plugins install",
-  "plugins uninstall",
-  "upgrade",
 ];
 const PREVIEWS = [
   "media orphans",
@@ -189,12 +183,7 @@ describe("--dry-run and --apply by what a command does", () => {
     named(name).options.map(option => option.long);
 
   it("places every command the program defines exactly once", () => {
-    const placed = [
-      ...WRITES,
-      ...WRITES_WITHOUT_DRY_RUN_YET,
-      ...PREVIEWS,
-      ...READS,
-    ];
+    const placed = [...WRITES, ...PREVIEWS, ...READS];
     expect([...placed].sort()).toEqual([...paths].sort());
   });
 
@@ -202,14 +191,6 @@ describe("--dry-run and --apply by what a command does", () => {
     expect(WRITES.filter(name => !longs(name).includes("--dry-run"))).toEqual(
       []
     );
-  });
-
-  it("names, among the rest, none that already offers --dry-run", () => {
-    expect(
-      WRITES_WITHOUT_DRY_RUN_YET.filter(name =>
-        longs(name).includes("--dry-run")
-      )
-    ).toEqual([]);
   });
 
   it("describes --dry-run in the same words on every command", () => {
