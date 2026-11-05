@@ -952,6 +952,13 @@ export {
   safeTokenPrefix,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
+/**
+ * A background overlay's two custom properties, for an editor drawing their
+ * controls.
+ *
+ * @experimental
+ */
+export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {

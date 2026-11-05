@@ -37,7 +37,7 @@ export function overlaid(image: string): string {
 }
 
 /** The registrations a sheet using the overlay carries, once. */
-export const OVERLAY_REGISTRATION = [
+export const OVERLAY_REGISTRATION: string = [
   `@property ${OVERLAY_COLOR} { syntax: "<color>"; inherits: false; initial-value: transparent; }`,
   `@property ${OVERLAY_STRENGTH} { syntax: "<number>"; inherits: false; initial-value: ${DEFAULT_STRENGTH}; }`,
 ].join("\n");

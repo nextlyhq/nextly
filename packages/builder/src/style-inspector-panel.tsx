@@ -34,6 +34,7 @@ import {
   isRawColour,
   isStyleLeaf,
   isTokenRef,
+  OVERLAY_STRENGTH,
   STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
@@ -5263,10 +5264,23 @@ function ValueField({
       />
     );
   }
-  const Field =
-    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
+  const scale = PERCENT_SCALES[control.leaf.cssProperty];
+  if (scale !== undefined) {
+    return (
+      <PercentField
+        scale={scale}
+        id={id}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   return (
-    <Field
+    <NumericField
       id={id}
       control={control}
       stored={stored}
@@ -5329,9 +5343,28 @@ function fractionOf(percent: number): number {
   return Number((percent / 100).toPrecision(12));
 }
 
-/** A stored opacity as the percent the field shows; anything else as stored. */
-function toPercent(value: StyleValue | undefined): StyleValue | undefined {
-  return typeof value === "number" ? percentOf(value) : value;
+/**
+ * How a value an author reads in percent is stored: opacity as the fraction
+ * CSS takes, an overlay's strength as the percent itself; and where the
+ * slider rests while nothing is set.
+ */
+interface PercentScale {
+  readonly fraction: boolean;
+  readonly unset: number;
+}
+
+/** The values drawn in percent, by CSS property. */
+const PERCENT_SCALES: Readonly<Record<string, PercentScale>> = {
+  opacity: { fraction: true, unset: 100 },
+  [OVERLAY_STRENGTH]: { fraction: false, unset: 50 },
+};
+
+/** A stored value as the percent the field shows; anything else as stored. */
+function toPercent(
+  value: StyleValue | undefined,
+  scale: PercentScale
+): StyleValue | undefined {
+  return typeof value === "number" && scale.fraction ? percentOf(value) : value;
 }
 
 /**
@@ -5339,14 +5372,18 @@ function toPercent(value: StyleValue | undefined): StyleValue | undefined {
  * number typed as text, is divided by 100; a CSS-wide keyword is a whole
  * value and passes through unscaled.
  */
-function fromPercent(value: StyleValue | null): StyleValue | null {
+function fromPercent(
+  value: StyleValue | null,
+  scale: PercentScale
+): StyleValue | null {
   const number =
     typeof value === "number"
       ? value
       : typeof value === "string"
         ? textNumber(value)
         : undefined;
-  return number === undefined ? value : fractionOf(number);
+  if (number === undefined) return value;
+  return scale.fraction ? fractionOf(number) : number;
 }
 
 /**
@@ -5359,14 +5396,18 @@ function fromPercent(value: StyleValue | null): StyleValue | null {
  * passed through, the variables at its end) is the same here. The inherited
  * value it shows as a hint is converted the same way.
  */
-function OpacityField(
-  props: React.ComponentProps<typeof NumericField>
-): React.JSX.Element {
+function PercentField({
+  scale,
+  ...props
+}: React.ComponentProps<typeof NumericField> & {
+  scale: PercentScale;
+}): React.JSX.Element {
   const { control, stored, actionName, describedBy, onCommit } = props;
   const unitId = React.useId();
-  const { shown, inheritedShown, resting } = opacityReading(
+  const { shown, inheritedShown, resting } = percentReading(
     stored,
-    React.useContext(InheritedValue)
+    React.useContext(InheritedValue),
+    scale
   );
   const leaf = control.leaf;
   const percentControl =
@@ -5376,11 +5417,11 @@ function OpacityField(
   return (
     <div className="nx-style-inspector__opacity">
       {resting === undefined ? null : (
-        <OpacitySlider
+        <PercentSlider
           resting={resting}
           actionName={actionName}
           describedBy={describedBy}
-          onCommit={onCommit}
+          onCommit={next => onCommit(fromPercent(next, scale))}
         />
       )}
       <InheritedValue.Provider value={inheritedShown}>
@@ -5389,7 +5430,7 @@ function OpacityField(
             {...props}
             control={percentControl}
             stored={shown}
-            onCommit={value => onCommit(fromPercent(value))}
+            onCommit={value => onCommit(fromPercent(value, scale))}
           />
         </UnitWords.Provider>
       </InheritedValue.Provider>
@@ -5413,21 +5454,26 @@ function OpacityField(
  * no resting place and no slider: no position stands for it, and a nudge
  * would replace it with a number built from a position it never had.
  */
-function opacityReading(
+function percentReading(
   stored: StyleValue | undefined,
-  inherited: string | undefined
+  inherited: string | undefined,
+  scale: PercentScale
 ): {
   shown: StyleValue | undefined;
   inheritedShown: string | undefined;
   resting: number | undefined;
 } {
-  const shown = toPercent(stored);
+  const shown = toPercent(stored, scale);
   const inheritedNumber =
     inherited === undefined ? undefined : textNumber(inherited);
   const inheritedPercent =
-    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+    inheritedNumber === undefined
+      ? undefined
+      : scale.fraction
+        ? percentOf(inheritedNumber)
+        : inheritedNumber;
   const unsetResting =
-    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+    inheritedPercent ?? (inherited === undefined ? scale.unset : undefined);
   return {
     shown,
     inheritedShown:
@@ -5442,10 +5488,10 @@ function opacityReading(
 }
 
 /**
- * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * A percent's slider, 0 to 100: the thumb follows a drag, and the value is
  * written once it settles.
  */
-function OpacitySlider({
+function PercentSlider({
   resting,
   actionName,
   describedBy,
@@ -5471,7 +5517,7 @@ function OpacitySlider({
       onValueChange={([next]) => setPreview(next)}
       onValueCommit={([next]) => {
         setPreview(undefined);
-        if (next !== undefined) onCommit(fractionOf(next));
+        if (next !== undefined) onCommit(next);
       }}
       thumbs={[
         {
