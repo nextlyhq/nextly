@@ -20,12 +20,13 @@ import { useMemo } from "react";
 
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import { webhookEventChoices } from "@admin/lib/webhook-event-choices";
 import {
   WEBHOOK_DELIVERY_STATUSES,
-  WEBHOOK_EVENT_TYPES,
   type WebhookDeliveryStatus,
   type WebhookDeliverySummary,
   type WebhookEventType,
+  type WebhookEventTypeEntry,
 } from "@admin/types/webhooks";
 
 import {
@@ -51,6 +52,8 @@ export interface DeliveryTableProps {
   /** Active filters; undefined means unfiltered. */
   status?: WebhookDeliveryStatus;
   eventType?: WebhookEventType;
+  /** The event types the server lists, which the event filter offers. */
+  eventTypes: readonly WebhookEventTypeEntry[];
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   onStatusChange: (status?: WebhookDeliveryStatus) => void;
@@ -67,6 +70,7 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
   pageSize,
   status,
   eventType,
+  eventTypes,
   onPageChange,
   onPageSizeChange,
   onStatusChange,
@@ -167,9 +171,7 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
         <Select
           value={eventType ?? ALL}
           onValueChange={value =>
-            onEventTypeChange(
-              value === ALL ? undefined : (value as WebhookEventType)
-            )
+            onEventTypeChange(value === ALL ? undefined : value)
           }
         >
           <SelectTrigger
@@ -180,9 +182,16 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All events</SelectItem>
-            {WEBHOOK_EVENT_TYPES.map(value => (
-              <SelectItem key={value} value={value}>
-                {value}
+            {/* The filter in force stays offered, named, though the server
+                no longer lists it, as a disabled plugin's type is not. */}
+            {webhookEventChoices(
+              eventTypes,
+              eventType === undefined ? [] : [eventType]
+            ).map(choice => (
+              <SelectItem key={choice.type} value={choice.type}>
+                {choice.unavailable
+                  ? `${choice.type} (unavailable)`
+                  : choice.type}
               </SelectItem>
             ))}
           </SelectContent>

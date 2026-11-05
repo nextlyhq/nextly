@@ -33,11 +33,15 @@ import { Info, Loader2, Plus, Trash2 } from "@admin/components/icons";
 import { Form, FormField } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { webhookEventChoices } from "@admin/lib/webhook-event-choices";
 import {
   webhookFormSchema,
   type WebhookFormValues,
 } from "@admin/lib/webhook-validation";
-import { WEBHOOK_EVENT_TYPES } from "@admin/types/webhooks";
+import type {
+  WebhookEventType,
+  WebhookEventTypeEntry,
+} from "@admin/types/webhooks";
 
 const EMPTY_VALUES: WebhookFormValues = {
   name: "",
@@ -51,6 +55,14 @@ const EMPTY_VALUES: WebhookFormValues = {
 
 export interface WebhookFormProps {
   defaultValues?: WebhookFormValues;
+  /**
+   * The event types the server lists, which the subscription offers;
+   * `undefined` while they load. Until they arrive, nothing is offered, so a
+   * chosen type is never shown as unavailable only because the list is late.
+   */
+  eventTypes: readonly WebhookEventTypeEntry[] | undefined;
+  /** The list could not be loaded. */
+  eventTypesFailed?: boolean;
   /** Names of headers already configured (values are hidden), shown read-only. */
   existingHeaderNames?: string[];
   onSubmit: (values: WebhookFormValues) => void;
@@ -61,6 +73,8 @@ export interface WebhookFormProps {
 
 export const WebhookForm: React.FC<WebhookFormProps> = ({
   defaultValues,
+  eventTypes,
+  eventTypesFailed = false,
   existingHeaderNames,
   onSubmit,
   isPending,
@@ -78,7 +92,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
   const clearExistingHeaders = form.watch("clearExistingHeaders");
   const hasExistingHeaders = (existingHeaderNames?.length ?? 0) > 0;
 
-  const toggleEventType = (type: (typeof WEBHOOK_EVENT_TYPES)[number]) => {
+  const toggleEventType = (type: WebhookEventType) => {
     const next = selectedTypes.includes(type)
       ? selectedTypes.filter(value => value !== type)
       : [...selectedTypes, type];
@@ -193,21 +207,45 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
                 All events (current and future)
               </label>
 
-              {!allEvents && (
+              {!allEvents && eventTypesFailed && (
+                <p className="text-sm text-destructive-500">
+                  Could not load the event types. Reload the page to try again.
+                </p>
+              )}
+              {!allEvents && !eventTypesFailed && eventTypes === undefined && (
+                <p className="text-sm text-muted-foreground">
+                  Loading event types…
+                </p>
+              )}
+              {!allEvents && eventTypes !== undefined && (
                 <Grid cols={2} gap={2} responsive>
-                  {WEBHOOK_EVENT_TYPES.map(type => (
-                    <label
-                      key={type}
-                      className="flex items-center gap-2 text-sm text-foreground"
-                    >
-                      <Checkbox
-                        checked={selectedTypes.includes(type)}
-                        onCheckedChange={() => toggleEventType(type)}
-                        disabled={isPending}
-                      />
-                      <code className="font-mono text-xs">{type}</code>
-                    </label>
-                  ))}
+                  {webhookEventChoices(eventTypes, selectedTypes).map(
+                    choice => (
+                      <label
+                        key={choice.type}
+                        className="flex items-center gap-2 text-sm text-foreground"
+                      >
+                        <Checkbox
+                          checked={selectedTypes.includes(choice.type)}
+                          onCheckedChange={() => toggleEventType(choice.type)}
+                          disabled={isPending}
+                        />
+                        <code className="font-mono text-xs">{choice.type}</code>
+                        {choice.label !== choice.type && (
+                          <span className="text-muted-foreground">
+                            {choice.label}
+                          </span>
+                        )}
+                        {/* Kept and named, so saving does not drop it unseen;
+                          unticking it is how it is removed. */}
+                        {choice.unavailable && (
+                          <span className="text-muted-foreground">
+                            (unavailable)
+                          </span>
+                        )}
+                      </label>
+                    )
+                  )}
                 </Grid>
               )}
 

@@ -20,6 +20,32 @@ An endpoint is a URL plus a filter describing which events it wants. Registering
 to one URL works, but filtering per endpoint means a receiver is not woken for events it
 will ignore.
 
+## Event types
+
+An endpoint subscribes to event types, or to `*` for every current and future one. Core's are
+`entry.*`, `single.*`, `media.*`, `user.created`, `user.deleted` and the form builder's
+`form.submission.created`. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
+subscribe to, with the plugin or `core` that declares it, to anyone who may read, create or update
+webhooks.
+
+A plugin declares its own types in `contributes.webhookEvents`, each in its namespace (its admin slug
+and a dot):
+
+```ts
+contributes: {
+  webhookEvents: [{ type: "acme-shop.order.paid", label: "Order paid" }],
+}
+```
+
+Startup refuses a type outside that namespace, one of core's, one declared twice, or one that isn't
+lower-case segments separated by dots. These are webhook types, sent to other systems; they are
+separate from `contributes.events`, the plugin's own events inside the server.
+
+An endpoint can subscribe to a declared type, and the admin's webhook form offers it. A plugin cannot
+yet send an event of its own type, so such a subscription receives nothing for now. When a plugin is
+disabled its types are no longer offered and a new subscription to one is refused, while an endpoint
+that already subscribes keeps it, shown in the admin as unavailable.
+
 ## Signing
 
 Every delivery is signed so the receiver can prove it came from you and was not modified.
