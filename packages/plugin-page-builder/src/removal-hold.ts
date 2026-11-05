@@ -58,6 +58,11 @@ export interface RemovalHold extends RetiredExposures {
   readonly confirmedComplete: boolean;
   /** When the hold ends, in ms since the epoch. */
   readonly until: number;
+  /**
+   * Which request recorded it. Only that request's recount ends it, so two
+   * asked for at once cannot end each other's.
+   */
+  readonly token: string;
 }
 
 /** The Direct API the store reads and writes through, as the system. */
@@ -74,8 +79,11 @@ export interface RemovalHoldStore {
   of(
     componentIds: readonly string[]
   ): Promise<ReadonlyMap<string, RemovalHold>>;
-  /** End a component's hold. Nothing to end is no failure. */
-  release(componentId: string): Promise<void>;
+  /**
+   * End a component's hold, or only the one `token` recorded. Nothing to end
+   * is no failure.
+   */
+  release(componentId: string, token?: string): Promise<void>;
 }
 
 /** How many component ids one read names, as the retired-ids read bounds it. */
@@ -98,7 +106,8 @@ function holdOf(text: unknown): RemovalHold | null {
       slots === null ||
       typeof parsed?.confirmed !== "number" ||
       typeof parsed.confirmedComplete !== "boolean" ||
-      typeof parsed.until !== "number"
+      typeof parsed.until !== "number" ||
+      typeof parsed.token !== "string"
     ) {
       return null;
     }
@@ -108,6 +117,7 @@ function holdOf(text: unknown): RemovalHold | null {
       confirmed: parsed.confirmed,
       confirmedComplete: parsed.confirmedComplete,
       until: parsed.until,
+      token: parsed.token,
     };
   } catch {
     return null;
@@ -149,9 +159,10 @@ export function removalHoldStore(args: {
     }
     return rows;
   };
-  const release = async (componentId: string) => {
+  const release = async (componentId: string, token?: string) => {
     const nextly = await args.nextly();
     for (const row of await rowsOf(nextly, [componentId])) {
+      if (token !== undefined && row.hold?.token !== token) continue;
       await nextly.delete({
         collection: args.collection,
         id: row.id,
@@ -223,6 +234,15 @@ export interface RemovalFenceArgs {
     readonly collection: string;
     readonly id: string | undefined;
   }) => Promise<unknown>;
+  /**
+   * Where the written collection or Single stores each blocks field it
+   * declares: the same survey the strip on every write reads. A value of any
+   * other field is not a placement anything draws, whatever its shape.
+   */
+  readonly paths: (
+    collection: string,
+    context: unknown
+  ) => Promise<readonly (readonly string[])[]>;
   readonly limits: () => DocumentLimits;
   /** A component's title, for the refusal; its id where none is read. */
   readonly titleOf?: (componentId: string) => Promise<string | undefined>;
@@ -252,12 +272,14 @@ export function registerHoldRelease(args: {
   /** The field on a component row holding its definition. */
   readonly componentField: string;
   readonly holds: () => Pick<RemovalHoldStore, "of" | "release">;
+  /** Whether the component store has the Draft/Published lifecycle. */
+  readonly lifecycle: () => Promise<boolean>;
 }): void {
   args.ctx.hooks.on("afterUpdate", args.componentCollection, async context => {
     const fields = context as { data?: unknown; executor?: unknown };
     const data = fields.data;
     if (fields.executor !== undefined || !isPlainRecord(data)) return;
-    if (data._isWorkingDraft === true || data.status !== "published") return;
+    if (!(await putsLive(data, args.lifecycle))) return;
     const id = data.id;
     if (typeof id !== "string" && typeof id !== "number") return;
     const definition = asDocument(data[args.componentField]);
@@ -313,6 +335,8 @@ export function registerPublishRecount(args: {
   readonly componentField: string;
   readonly holds: () => Pick<RemovalHoldStore, "of">;
   readonly count: (componentId: string) => Promise<PlacementCount>;
+  /** Whether the component store has the Draft/Published lifecycle. */
+  readonly lifecycle: () => Promise<boolean>;
 }): void {
   args.ctx.hooks.on("beforeUpdate", args.componentCollection, async context => {
     const fields = context as {
@@ -322,7 +346,7 @@ export function registerPublishRecount(args: {
     };
     const data = fields.data;
     if (fields.executor !== undefined || !isPlainRecord(data)) return;
-    if (data.status !== "published") return;
+    if (!(await putsLive(data, args.lifecycle))) return;
     const id = isPlainRecord(fields.originalData)
       ? fields.originalData.id
       : undefined;
@@ -347,6 +371,19 @@ export function registerPublishRecount(args: {
   });
 }
 
+/**
+ * Whether a write to the component store puts its definition live: a publish
+ * where the store has the Draft/Published lifecycle (a working-draft save is
+ * not one), and every write where it has none.
+ */
+async function putsLive(
+  data: Record<string, unknown>,
+  lifecycle: () => Promise<boolean>
+): Promise<boolean> {
+  if (data._isWorkingDraft === true) return false;
+  return data.status === "published" || !(await lifecycle());
+}
+
 /** Whether a definition drops any field or slot the hold is for. */
 function removesAny(definition: BlockDocument, hold: RemovalHold): boolean {
   const exposed = exposureIdsOf(definition);
@@ -367,14 +404,17 @@ export function installRemovalHolds(args: {
   readonly componentCollection: string;
   readonly componentField: string;
   readonly storedDraft: RemovalFenceArgs["storedDraft"];
+  readonly paths: RemovalFenceArgs["paths"];
   readonly limits: () => DocumentLimits;
   readonly count: (componentId: string) => Promise<PlacementCount>;
+  readonly lifecycle: () => Promise<boolean>;
 }): RemovalHoldStore {
   const holds = () => args.store;
   registerRemovalFence({
     ctx: args.ctx,
     holds,
     storedDraft: args.storedDraft,
+    paths: args.paths,
     limits: args.limits,
   });
   registerHoldRelease({
@@ -382,6 +422,7 @@ export function installRemovalHolds(args: {
     componentCollection: args.componentCollection,
     componentField: args.componentField,
     holds,
+    lifecycle: args.lifecycle,
   });
   registerPublishRecount({
     ctx: args.ctx,
@@ -389,6 +430,7 @@ export function installRemovalHolds(args: {
     componentField: args.componentField,
     holds,
     count: args.count,
+    lifecycle: args.lifecycle,
   });
   return args.store;
 }
@@ -417,8 +459,19 @@ async function fenceWrite(
     return;
   }
   // Asked of the values first, so a write carrying no document, which is most
-  // of them, reads nothing.
-  const written = documentsIn(fields.data, 0, []);
+  // of them, reads nothing; then only the declared blocks fields count.
+  if (documentsIn(fields.data, 0, []).length === 0) return;
+  let paths: readonly (readonly string[])[];
+  try {
+    paths = await args.paths(fields.collection, context);
+  } catch (error) {
+    args.ctx.logger.error(
+      `[page-builder] a write to "${fields.collection}" was not checked against components whose fields are being removed.`,
+      { collection: fields.collection, error }
+    );
+    return;
+  }
+  const written = foundAt(fields.data, paths);
   if (written.length === 0) return;
   const limits = args.limits();
   const placed = new Set<string>();
@@ -442,7 +495,7 @@ async function fenceWrite(
     return;
   }
   if (holds.size === 0) return;
-  const stored = await storedForms(args, fields);
+  const stored = await storedForms(args, fields, paths);
   for (const [componentId, hold] of holds) {
     const where = newlySet(componentId, hold, written, stored, limits);
     if (where === undefined) continue;
@@ -480,7 +533,8 @@ async function storedForms(
     collection?: unknown;
     originalData?: unknown;
     executor?: unknown;
-  }
+  },
+  paths: readonly (readonly string[])[]
 ): Promise<Found[][]> {
   const original = fields.originalData;
   if (fields.executor !== undefined || !isPlainRecord(original)) return [];
@@ -491,19 +545,20 @@ async function storedForms(
       typeof id === "string" || typeof id === "number" ? String(id) : undefined,
   });
   return [
-    documentsIn(original, 0, []),
-    ...(isPlainRecord(draft) ? [documentsIn(draft, 0, [])] : []),
+    foundAt(original, paths),
+    ...(isPlainRecord(draft) ? [foundAt(draft, paths)] : []),
   ];
 }
 
 /**
- * Where the written documents set a held field more often than a stored form
- * does: the blocks field's path in the write, or `undefined` when they set
- * none anew. Counted with the strip that will take the values out, so "set"
- * here is exactly what the removal would remove. Compared per field, across
- * the whole document, so a value moved from one placement to another is not
- * new. Which stored form a write replaces is decided only once it runs, so it
- * is compared with the one setting the field least: a value the draft lacks
+ * Where the write sets a held field more often than a stored form does once
+ * the write is applied to it: the blocks field's path in the write, or
+ * `undefined` when it sets none anew. Counted with the strip that will take
+ * the values out, so "set" here is exactly what the removal would remove.
+ * Compared per field, across the whole document, so a value moved from one
+ * placement to another is not new, and a blocks field the write leaves out
+ * keeps what it stores. Which stored form a write replaces is decided only
+ * once it runs, so a value new to any of them is refused: one the draft lacks
  * is new to it, whatever the live row holds.
  */
 function newlySet(
@@ -523,10 +578,13 @@ function newlySet(
       stripRetiredExposures(found.document, only, limits).removed;
     const count = (form: readonly Found[]) =>
       form.reduce((sum, found) => sum + setIn(found), 0);
-    const before =
-      stored.length === 0 ? 0 : Math.min(...stored.map(form => count(form)));
-    const after = count(written);
-    if (after > before) {
+    const keys = new Set(written.map(found => found.path.join(".")));
+    const grows = (form: readonly Found[]) =>
+      count([
+        ...form.filter(found => !keys.has(found.path.join("."))),
+        ...written,
+      ]) > count(form);
+    if (stored.length === 0 ? count(written) > 0 : stored.some(grows)) {
       const first = written.find(found => setIn(found) > 0);
       return { path: first?.path.join(".") ?? "" };
     }
@@ -538,6 +596,22 @@ function newlySet(
 interface Found {
   readonly path: readonly string[];
   readonly document: BlockDocument;
+}
+
+/** The blocks documents a row holds at the declared paths. */
+function foundAt(
+  row: Record<string, unknown>,
+  paths: readonly (readonly string[])[]
+): Found[] {
+  return paths.flatMap(path => {
+    let value: unknown = row;
+    for (const key of path) {
+      if (!isPlainRecord(value) || !Object.hasOwn(value, key)) return [];
+      value = value[key];
+    }
+    const document = asDocument(value);
+    return document === null ? [] : [{ path, document }];
+  });
 }
 
 /** How deep a row's groups are looked into, as the strip looks. */

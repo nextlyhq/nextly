@@ -94,6 +94,7 @@ const HELD: RemovalHold = {
   confirmed: 2,
   confirmedComplete: true,
   until: 2_000,
+  token: "t1",
 };
 
 describe("the hold store", () => {
@@ -146,6 +147,21 @@ describe("the hold store", () => {
     expect(await store.of(["hero"])).toEqual(new Map());
   });
 
+  it("ends only the hold a token names", async () => {
+    const table = memoryTable();
+    const store = removalHoldStore({
+      nextly: async () => table,
+      collection: TABLE,
+      clock: () => 0,
+    });
+    await store.hold("hero", { ...HELD, token: "second" });
+
+    await store.release("hero", "first");
+    expect(table.rows).toHaveLength(1);
+    await store.release("hero", "second");
+    expect(table.rows).toEqual([]);
+  });
+
   it("ends a hold", async () => {
     const table = memoryTable();
     const store = removalHoldStore({
@@ -167,6 +183,8 @@ function harness(
     holds?: Record<string, RemovalHold>;
     draft?: unknown;
     failRead?: boolean;
+    /** Whether the component store has the Draft/Published lifecycle. */
+    lifecycle?: boolean;
     /** How many documents place each component now. */
     count?: { documents: number; complete: boolean };
   } = {}
@@ -200,6 +218,9 @@ function harness(
       draftReads.push(at.collection);
       return options.draft ?? null;
     },
+    // `content` at the top level, and `body` inside the named group `hero`;
+    // `settings` is a JSON field, which holds no placements.
+    paths: async () => [["content"], ["hero", "body"]],
     limits: () => LIMITS,
     titleOf: async id => (id === "hero" ? "Hero" : undefined),
   });
@@ -213,6 +234,7 @@ function harness(
         released.push(id);
       },
     }),
+    lifecycle: async () => options.lifecycle !== false,
   });
   registerPublishRecount({
     ctx,
@@ -220,6 +242,7 @@ function harness(
     componentField: "content",
     holds: () => ({ of: holdsOf }),
     count: async () => options.count ?? { documents: 0, complete: true },
+    lifecycle: async () => options.lifecycle !== false,
   });
   const run = (phase: string, collection: string, context: Row) =>
     handlers.get(`${phase} ${collection}`)!({
@@ -355,6 +378,44 @@ describe("the fence while a removal is held", () => {
 
     expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
     expect(draftReads).toEqual([]);
+  });
+
+  it("judges only declared blocks fields, not a block-shaped value elsewhere", async () => {
+    const { run } = harness({ holds: { hero: HELD } });
+
+    const error = await refusal(
+      Promise.resolve(
+        run("beforeUpdate", "*", {
+          data: {
+            settings: page([placing("i1", "hero", { title: "archived" })]),
+          },
+          originalData: { id: "p1" },
+        })
+      )
+    );
+
+    expect(error).toBeUndefined();
+  });
+
+  it("refuses a held value newly set in one field while another field keeps one", async () => {
+    const { run } = harness({ holds: { hero: HELD } });
+
+    const error = await refusal(
+      Promise.resolve(
+        run("beforeUpdate", "*", {
+          // Only `hero.body` is written; `content` keeps its stored value.
+          data: {
+            hero: { body: page([placing("i1", "hero", { title: "new" })]) },
+          },
+          originalData: {
+            id: "p1",
+            content: page([placing("i1", "hero", { title: "kept" })]),
+          },
+        })
+      )
+    );
+
+    expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
   });
 
   it("finds a held value under a named group", async () => {
@@ -511,5 +572,39 @@ describe("counting again as a held removal is published", () => {
     expect(await publish(at.run, ["body"])).toBeUndefined();
     expect(await publish(none.run, ["body"])).toBeUndefined();
     expect(await publish(keeping.run, ["title", "body"])).toBeUndefined();
+  });
+});
+
+describe("a component store with no Draft/Published lifecycle", () => {
+  it("counts again on a save, every one of which puts the definition live", async () => {
+    const { run } = harness({
+      holds: { hero: HELD },
+      lifecycle: false,
+      count: { documents: 3, complete: true },
+    });
+
+    const error = await refusal(
+      Promise.resolve(
+        run("beforeUpdate", "components", {
+          originalData: { id: "hero" },
+          data: { content: definition(["body"]) },
+        })
+      )
+    );
+
+    expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
+  });
+
+  it("ends the hold on the save that removes the fields", async () => {
+    const { run, released } = harness({
+      holds: { hero: HELD },
+      lifecycle: false,
+    });
+
+    await run("afterUpdate", "components", {
+      data: { id: "hero", content: definition(["body"]) },
+    });
+
+    expect(released).toEqual(["hero"]);
   });
 });

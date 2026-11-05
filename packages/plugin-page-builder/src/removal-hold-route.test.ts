@@ -19,18 +19,36 @@ import { REMOVAL_HOLD_ROUTE_PATH } from "./removal-hold-contract";
 import { removalHoldRoutes } from "./removal-hold-route";
 import type { UsageCount } from "./usage-count";
 
-const ctx = {
-  self: { collections: {} },
-  user: { id: "u1" },
-  caller: {
-    authMethod: "session",
-    can: async () => true,
-    identity: async () => ({ user: { id: "u1" } }),
-  },
-} as unknown as PluginRouteContext;
+/** A caller who may read and update components, and, unless said, publish. */
+function contextFor(
+  options: { mayPublish?: boolean; localized?: boolean } = {}
+): PluginRouteContext {
+  return {
+    self: { collections: {} },
+    user: { id: "u1" },
+    services: {
+      collections: {
+        getCollection: async () => ({
+          status: true,
+          localized: options.localized === true,
+        }),
+      },
+    },
+    caller: {
+      authMethod: "session",
+      can: async (action: string) =>
+        action !== "publish" || options.mayPublish !== false,
+      identity: async () => ({ user: { id: "u1" } }),
+    },
+  } as unknown as PluginRouteContext;
+}
 
 /** The route over a recording store and a fixed count. */
-function route(count: UsageCount) {
+function route(
+  count: UsageCount | (() => Promise<UsageCount>),
+  options: { mayPublish?: boolean; localized?: boolean } = {}
+) {
+  const ctx = contextFor(options);
   const held: { id: string; hold: RemovalHold }[] = [];
   const released: string[] = [];
   const counted: string[] = [];
@@ -42,9 +60,9 @@ function route(count: UsageCount) {
       held.push({ id, hold });
     },
     of: async () => new Map(),
-    release: async id => {
+    release: async (id, token) => {
       steps.push("release");
-      released.push(id);
+      released.push(`${id} ${token ?? "any"}`);
     },
   };
   const [declared] = removalHoldRoutes({
@@ -53,7 +71,7 @@ function route(count: UsageCount) {
     countPlacements: () => async id => {
       steps.push("count");
       counted.push(id);
-      return count;
+      return typeof count === "function" ? count() : count;
     },
     clock: () => 1_000,
   });
@@ -100,6 +118,7 @@ describe("asking for a removal's hold", () => {
           confirmed: 2,
           confirmedComplete: true,
           until: 121_000,
+          token: expect.any(String),
         },
       },
     ]);
@@ -135,6 +154,50 @@ describe("asking for a removal's hold", () => {
 
     expect(NextlyError.isNotFound(error)).toBe(true);
     expect(counted).toEqual([]);
+  });
+
+  it("ends only its own hold when the count has grown", async () => {
+    const { ask, held, released } = route({ documents: 3, complete: true });
+
+    await ask(BODY);
+
+    expect(released).toEqual([`hero ${held[0]!.hold.token}`]);
+  });
+
+  it("ends its hold, and fails, when the count cannot be taken", async () => {
+    const { ask, held, released } = route(() =>
+      Promise.reject(new Error("index unreadable"))
+    );
+
+    const error = await ask(BODY).catch((refused: unknown) => refused);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(released).toEqual([`hero ${held[0]!.hold.token}`]);
+  });
+
+  it("refuses a caller who may not publish components, holding nothing", async () => {
+    const { ask, held, counted } = route(
+      { documents: 0, complete: true },
+      { mayPublish: false }
+    );
+
+    const error = await ask(BODY).catch((refused: unknown) => refused);
+
+    expect(NextlyError.isForbidden(error)).toBe(true);
+    expect(held).toEqual([]);
+    expect(counted).toEqual([]);
+  });
+
+  it("holds nothing for a localized store, which retires nothing", async () => {
+    const { ask, held } = route(
+      { documents: 4, complete: true },
+      { localized: true }
+    );
+
+    const answer = await (await ask(BODY)).json();
+
+    expect(answer.item.kind).toBe("held");
+    expect(held).toEqual([]);
   });
 
   it("reads the component as the caller", async () => {

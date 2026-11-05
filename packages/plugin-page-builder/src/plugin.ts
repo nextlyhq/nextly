@@ -16,6 +16,7 @@ import {
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
+import type { HookContext } from "nextly";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
 // Imported rather than read at runtime so it can never drift from the published
@@ -161,6 +162,8 @@ import {
   installRemovalHolds,
   NO_HOLDS,
   removalHoldStore,
+  type HoldDirectApi,
+  type PlacementCount,
   type RemovalHoldStore,
 } from "./removal-hold";
 import { removalHoldRoutes } from "./removal-hold-route";
@@ -171,7 +174,10 @@ import {
   type RetiredCleanupService,
 } from "./retired-cleanup";
 import { retiredCleanupJob } from "./retired-cleanup-job";
-import { registerRetiredExposures } from "./retired-exposure-hooks";
+import {
+  blocksFieldPaths,
+  registerRetiredExposures,
+} from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
 import { allRetired, retiredStore } from "./retired-store";
@@ -1012,6 +1018,48 @@ function installContext(
 }
 
 /**
+ * The hold a component's removal takes while it is published, wired over the
+ * plugin's bookkeeping table: the fence on every write, the count again as
+ * the publish is written, and the release once it lands (`removal-hold`).
+ */
+function installHoldsFor(
+  ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
+  opts: PageBuilderOptions,
+  composition: CompositionSetup,
+  parts: {
+    readonly nextly: () => Promise<HoldDirectApi>;
+    readonly count: (componentId: string) => Promise<PlacementCount>;
+  }
+): RemovalHoldStore {
+  const { collection, field } = composition.store;
+  return installRemovalHolds({
+    ctx,
+    store: removalHoldStore({
+      nextly: parts.nextly,
+      // RESOLVED, for the reason every own table is: a host may rename it.
+      collection:
+        ctx.self.collections[COMPONENT_RETIRED_SLUG] ?? COMPONENT_RETIRED_SLUG,
+    }),
+    componentCollection: collection,
+    componentField: field,
+    storedDraft: storedDraftOf,
+    // The declared blocks fields, surveyed as the strip on every write
+    // surveys them.
+    paths: (slug, context) =>
+      blocksFieldPaths(ctx, slug, context as HookContext<unknown>),
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+    count: parts.count,
+    lifecycle: async () => {
+      const store = (await ctx.services.collections.getCollection(
+        collection,
+        undefined as never
+      )) as { status?: unknown } | null;
+      return store?.status === true;
+    },
+  });
+}
+
+/**
  * What the component-delete rewrite reads the installed site through: the
  * live registries, the Direct API (through the SDK, at call time), the
  * Layouts, and the usage index as a hint.
@@ -1742,18 +1790,8 @@ export const pageBuilder = (
         });
         // While a removal is published, no write may newly set one of its
         // fields: the count the designer confirmed is final until it lands.
-        removalHolds = installRemovalHolds({
-          ctx,
-          store: removalHoldStore({
-            nextly: () => requireInstalled().nextly(),
-            collection:
-              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-              COMPONENT_RETIRED_SLUG,
-          }),
-          componentCollection: composition.store.collection,
-          componentField: composition.store.field,
-          storedDraft: storedDraftOf,
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        removalHolds = installHoldsFor(ctx, opts, composition, {
+          nextly: () => requireInstalled().nextly(),
           count: countPlacements(ctx),
         });
         // The values already stored when a field was retired: walked out of

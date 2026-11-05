@@ -30,6 +30,7 @@ import {
   useBeforeDocumentAction,
   useDocumentIdentity,
   useDocumentLocale,
+  useDocumentStatus,
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
@@ -83,8 +84,13 @@ export const HOLD_FAILED =
 const HOLD_MOVING =
   "This component wasn’t published: the documents placing it kept changing. Try again in a moment.";
 
-/** The action ids that put the document live. */
-const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
+/**
+ * The action ids that put the definition live: Publish, and where the store
+ * has no Draft/Published lifecycle (the document has no status), every save.
+ */
+function putsLive(action: string, lifecycle: boolean): boolean {
+  return action === "publish" || (!lifecycle && action === "save");
+}
 
 /**
  * Hold a publish that removes fields, and return the dialog that asks again.
@@ -93,17 +99,18 @@ const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
 export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
   const identity = useDocumentIdentity();
   const locale = useDocumentLocale();
+  const lifecycle = useDocumentStatus() !== null;
   const [question, setQuestion] = useState<{
     recount: Recount;
     answer: (go: boolean) => void;
   } | null>(null);
-  const latest = useRef({ input, id: identity?.documentId, locale });
+  const latest = useRef({ input, id: identity?.documentId, locale, lifecycle });
   useEffect(() => {
-    latest.current = { input, id: identity?.documentId, locale };
+    latest.current = { input, id: identity?.documentId, locale, lifecycle };
   });
 
   useBeforeDocumentAction(async action => {
-    if (!PUBLISHING_ACTIONS.has(action)) return;
+    if (!putsLive(action, latest.current.lifecycle)) return;
     const { input: current, id, locale: language } = latest.current;
     const document = current.document();
     if (id === undefined || !isComponentDocument(document)) return;

@@ -25,6 +25,11 @@ import type { RemovalHoldResult } from "../removal-hold-contract";
 const befores = new Set<(action: string) => Promise<void> | void>();
 const writes = vi.fn();
 const reads = vi.fn();
+/** The document's status: `null` for a store with no Draft/Published lifecycle. */
+let status: { status: string; hasWorkingDraft: boolean } | null = {
+  status: "published",
+  hasWorkingDraft: true,
+};
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => {
   const React = await import("react");
@@ -46,6 +51,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => {
     },
     useDocumentIdentity: () => ({ documentId: "hero" }),
     useDocumentLocale: () => null,
+    useDocumentStatus: () => status,
     readPluginRoute: (args: { path: string }) => reads(args.path),
     writePluginRoute: (args: { path: string; body: unknown }) =>
       writes(args.path, args.body),
@@ -59,6 +65,7 @@ afterEach(() => {
   befores.clear();
   writes.mockReset();
   reads.mockReset();
+  status = { status: "published", hasWorkingDraft: true };
 });
 
 /** A component exposing these fields. */
@@ -133,6 +140,19 @@ describe("a publish removing a component's fields", () => {
     await Promise.all([...befores].map(run => run("save")));
 
     expect(writes).not.toHaveBeenCalled();
+  });
+
+  it("asks for a hold on a save where the store has no lifecycle", async () => {
+    status = null;
+    liveExposes();
+    writes.mockResolvedValue(
+      answer({ kind: "held", reach: { count: 1, complete: true } })
+    );
+    render(<Harness fields={["body"]} />);
+
+    await Promise.all([...befores].map(run => run("save")));
+
+    expect(writes).toHaveBeenCalledTimes(1);
   });
 
   it("asks again with the grown count, and holds what was confirmed", async () => {

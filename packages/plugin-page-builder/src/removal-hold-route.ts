@@ -19,6 +19,7 @@ import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
+import { componentStoreShape } from "./component-facts-route";
 import { readingAsUser, type ComponentStore } from "./library-route";
 import { countGrew, HOLD_MS, type RemovalHoldStore } from "./removal-hold";
 import {
@@ -75,36 +76,88 @@ export function removalHoldRoutes(
       requiredPermission: updatePermission,
       handler: async (req, ctx) => {
         const body = parsed(await req.json().catch(() => undefined));
-        await requireReadable(ctx, args.store, body.id);
+        const slug = componentsSlug(ctx, args.store);
+        // Preconditions, before anything is held: the caller reads the
+        // component, and may publish the removal a hold is for, which the
+        // route's update permission alone does not grant.
+        await requireReadable(ctx, slug, body.id);
+        if (
+          (await ctx.caller?.can("publish", slug, { anyEntry: true })) !== true
+        ) {
+          throw NextlyError.forbidden({
+            logContext: { reason: "removal-hold-cannot-publish", id: body.id },
+          });
+        }
+        const count = () => args.countPlacements(ctx)(body.id);
+        // A localized store retires nothing, publishing per language, so a
+        // removal there loses no value and nothing is held.
+        if (await isLocalized(ctx, slug)) {
+          return held(await count());
+        }
         const hold = {
           properties: body.properties,
           slots: body.slots,
           confirmed: body.confirmed,
           confirmedComplete: body.confirmedComplete,
           until: now() + HOLD_MS,
+          token: globalThis.crypto.randomUUID(),
         };
         // Held BEFORE the count, so no write judged after the count can set a
         // removed field unseen. A write already past its check when the hold
         // landed is caught by the count taken again as the publish is written
-        // (`registerPublishRecount`).
+        // (`registerPublishRecount`). Only this request's own hold is ended
+        // below, so two asked for at once cannot end each other's.
         await args.holds().hold(body.id, hold);
-        const count = await args.countPlacements(ctx)(body.id);
-        const reach = { count: count.documents, complete: count.complete };
-        if (countGrew(count, hold)) {
+        let counted: UsageCount;
+        try {
+          counted = await count();
+        } catch (error) {
+          await args.holds().release(body.id, hold.token);
+          throw error;
+        }
+        const reach = { count: counted.documents, complete: counted.complete };
+        if (countGrew(counted, hold)) {
           // The designer is asked again, so nothing stays held meanwhile.
-          await args.holds().release(body.id);
+          await args.holds().release(body.id, hold.token);
           return respondMutation<RemovalHoldResult>(
             "More documents place this component than you confirmed.",
             { kind: "recount", reach }
           );
         }
-        return respondMutation<RemovalHoldResult>(
-          "The removal is held until it is published.",
-          { kind: "held", reach }
-        );
+        return held(counted);
       },
     },
   ];
+}
+
+/** The answer for a removal held, or one that needs no hold. */
+function held(counted: UsageCount): Response {
+  return respondMutation<RemovalHoldResult>(
+    "The removal is held until it is published.",
+    {
+      kind: "held",
+      reach: { count: counted.documents, complete: counted.complete },
+    }
+  );
+}
+
+/** The component store's RESOLVED slug: a configured one, else the plugin's. */
+function componentsSlug(
+  ctx: PluginRouteContext,
+  store: ComponentStore
+): string {
+  return (
+    store.collection ?? ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG
+  );
+}
+
+/** Whether the component store stores definitions per language. */
+async function isLocalized(
+  ctx: PluginRouteContext,
+  slug: string
+): Promise<boolean> {
+  return (await componentStoreShape(ctx.services.collections, slug, ctx.user))
+    .localized;
 }
 
 /** The hold body, or the validation error naming what is wrong. */
@@ -130,13 +183,9 @@ function invalid(message: string): NextlyError {
  */
 async function requireReadable(
   ctx: PluginRouteContext,
-  store: ComponentStore,
+  slug: string,
   id: string
 ): Promise<void> {
-  const slug =
-    store.collection ??
-    ctx.self.collections[COMPONENTS_SLUG] ??
-    COMPONENTS_SLUG;
   try {
     const row = await requireNextly().findByID({
       collection: slug,
