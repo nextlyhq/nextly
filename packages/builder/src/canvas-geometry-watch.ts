@@ -37,8 +37,8 @@
  * @module canvas-geometry-watch
  */
 
-import { isTextEntry } from "./canvas-escape";
-import { isElement } from "./dom-kind";
+import { isEditableText, isTextEntry } from "./canvas-escape";
+import { isElement, isFormField } from "./dom-kind";
 import {
   overlaySpaceOf,
   screenScrollers,
@@ -229,12 +229,38 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     // leaving and no focus changing.
     "pointerup",
     "pointercancel",
-    // A form field's value changes with no DOM mutation, and can change what
-    // `:valid`, `:invalid` or `:placeholder-shown` styles.
-    "input",
-    "change",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
+  /*
+   * A value can change with no DOM mutation: a form field's, or a custom
+   * element's kept in script, and either can change what `:valid`,
+   * `:invalid`, `:placeholder-shown` or a custom state styles. So every
+   * `input` and `change` re-measures, with ONE exception: editable text in
+   * the canvas's own tree, whose edits mutate the DOM, which the mutation
+   * watch already measures — hearing its `input` too would measure every
+   * character twice. An edit inside a custom element's shadow root is a
+   * mutation no observer on the root sees, so it is not the exception.
+   *
+   * Read from the composed path, whose first entry is the element the edit
+   * reached: `target` is retargeted to the shadow host by the time the event
+   * reaches the root.
+   */
+  const valueChanged = (event: Event): void => {
+    const origin = event.composedPath()[0] ?? event.target;
+    // The editing host itself, the element carrying `contenteditable`, is
+    // where a browser fires an edit's `input`. A control nested in editable
+    // text that dispatches on itself inherits editability without being one,
+    // and its value can change with no mutation at all.
+    const mutatesOurTree =
+      isElement(origin) &&
+      !isFormField(origin) &&
+      origin.hasAttribute("contenteditable") &&
+      origin.getRootNode() === root.getRootNode() &&
+      isEditableText(origin);
+    if (!mutatesOurTree) restated();
+  };
+  root.addEventListener("input", valueChanged);
+  root.addEventListener("change", valueChanged);
   /*
    * The keyboard is heard for what it can change, not for every key: an
    * author typing would otherwise re-measure every overlay once a frame. A
@@ -294,6 +320,8 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     root.removeEventListener("animationend", settled);
     root.removeEventListener("animationcancel", settled);
     for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    root.removeEventListener("input", valueChanged);
+    root.removeEventListener("change", valueChanged);
     root.removeEventListener("keydown", keyDown);
     root.removeEventListener("keyup", keyUp);
     root.removeEventListener("pointerdown", pointerDown);
