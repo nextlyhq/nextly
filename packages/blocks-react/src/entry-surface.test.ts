@@ -405,6 +405,9 @@ describe("the root entry", () => {
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
       "INSTANCE_ATTRIBUTE",
+      // The action a collection list's note offers on the editor's canvas,
+      // public so the canvas acts on the name the renderer writes.
+      "LIST_ACTION_ATTRIBUTE",
       "NODE_ID_ATTRIBUTE",
       // The container names a preview compile aims its breakpoints at. Public
       // because the surface doing the previewing must put the same identifier
@@ -594,6 +597,10 @@ describe("the blocks entry", () => {
       "heading",
       "image",
       "list",
+      // Added deliberately: the editor's count of a list's matching entries,
+      // made with the list's own reading, so the two cannot disagree.
+      "listCountRead",
+      "listShownOf",
       "paragraph",
       "quote",
       "renderContainer",
