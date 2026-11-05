@@ -37,4 +37,5 @@ Publishing and unpublishing every language, batch and bulk updates, restoring a 
 - **A restore** (`POST …/versions/{n}/restore`, for an entry or a Single) takes `_rev` and `_overwrite` in its body, and answers with the document's new `_rev`.
 - **Taking the live values** (`POST …/versions/working-draft/take-live`) takes `_rev` and `_overwrite` in its body.
 - **Discarding a pending change** (`DELETE …/versions/working-draft`) takes them in the query string (`?locale=es&_rev=7.es:3&_overwrite=true`). For plugins, `ctx.services.versions.deleteWorkingDraft(ref, locale, opts, version)` takes a new optional fourth argument, `{ _rev, _overwrite }`.
+- **A body that is not an object** sent to publish-all, unpublish-all, restore or take-live, which those routes used to ignore, is now refused with 400: it can't say which version the request was made from.
 - **A release's run** and **autosave** are never judged. A release moves each document as it stands when it runs. A recovery point changes no version.
