@@ -14,6 +14,7 @@
 import { useState, type JSX } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
+import { ReleaseAttentionStrip } from "@admin/components/features/releases/ReleaseAttentionStrip";
 import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
 import { ReleaseList } from "@admin/components/features/releases/ReleaseList";
 import { Plus } from "@admin/components/icons";
@@ -90,6 +91,11 @@ export default function ReleasesPage(): JSX.Element {
             ) : null}
           </div>
         </div>
+
+        {/* Above both views: a stopped or overdue release needs acting on
+            whichever way the page is being read. "View all" leads to the
+            list's Needs attention tab, so it turns the page to the list. */}
+        <ReleaseAttentionStrip onShowAll={() => setView("list")} />
 
         {view === "calendar" ? (
           <ReleaseCalendar />

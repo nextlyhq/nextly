@@ -15,6 +15,7 @@ import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
+import { AttentionReleaseNames } from "./AttentionReleaseNames";
 import {
   attentionRows,
   type AttentionRow,
@@ -123,6 +124,11 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
                       },
                     })}
               />
+            )}
+            {/* A stopped or overdue release row names those releases, so the
+                card says which as well as how many. */}
+            {row.releases !== undefined && (
+              <AttentionReleaseNames reason={row.releases} />
             )}
           </li>
         ))}
