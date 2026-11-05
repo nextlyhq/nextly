@@ -1201,6 +1201,27 @@
 }
 
 /*
+ * A chip's menu, held to a readable width, so a held item's reason wraps
+ * under its label rather than stretching the menu across the canvas.
+ */
+.nx-editing-bar__menu {
+  max-width: 20rem;
+}
+
+.nx-editing-bar__item-words {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.nx-editing-bar__item-reason {
+  color: var(--nx-muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/*
  * The "what you're editing" bar: line one the target chips, line two the
  * device and the state, from the canvas. A box set apart from the panel, so it
  * reads as the frame the controls below sit in. Kept at the top of the Style tab while its

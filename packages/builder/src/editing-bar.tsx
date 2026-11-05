@@ -437,7 +437,11 @@ function ChipMenu({
         </button>
       </DropdownMenuTrigger>
       {/* Kept clear of the window's edge. */}
-      <DropdownMenuContent align="start" collisionPadding={8}>
+      <DropdownMenuContent
+        align="start"
+        collisionPadding={8}
+        className="nx-editing-bar__menu"
+      >
         {onDetach === undefined ? null : (
           <DetachItem
             reason={held ?? detachHeld?.(chip.id)}
@@ -471,10 +475,16 @@ function DetachItem({
 }): React.JSX.Element {
   return (
     <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
-      Detach: keep the look on this block only
-      {reason === undefined ? null : (
-        <span className="nx-block-card__reason"> — {reason}</span>
-      )}
+      <span className="nx-editing-bar__item-words">
+        <span>Detach: keep the look on this block only</span>
+        {reason === undefined ? null : (
+          <span className="nx-editing-bar__item-reason">
+            {/* Heard as one sentence; read as a line of its own. */}
+            <span className="nx-sr-only"> — </span>
+            {reason}
+          </span>
+        )}
+      </span>
     </DropdownMenuItem>
   );
 }
