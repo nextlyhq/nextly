@@ -9,6 +9,7 @@
  *
  * @module removal-hold-route
  */
+import { MAX_ENVELOPE_ENTRIES } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   respondMutation,
@@ -31,11 +32,18 @@ import type { UsageCount } from "./usage-count";
 /** An id, bounded as every id this plugin reads from outside. */
 const ID = z.string().trim().min(1).max(256);
 
+/**
+ * A field or slot id as the component envelope stores it: kept exactly as
+ * written, since the fence matches it against a placement's own keys.
+ */
+const EXPOSURE_ID = z.string().min(1).max(256);
+
 /** The body a hold is asked with, parsed at the boundary. */
 const HOLD_BODY = z.object({
   id: ID,
-  properties: z.array(ID).max(500),
-  slots: z.array(ID).max(500),
+  // As many as an envelope may hold.
+  properties: z.array(EXPOSURE_ID).max(MAX_ENVELOPE_ENTRIES),
+  slots: z.array(EXPOSURE_ID).max(MAX_ENVELOPE_ENTRIES),
   confirmed: z.number().int().min(0),
   confirmedComplete: z.boolean(),
 });

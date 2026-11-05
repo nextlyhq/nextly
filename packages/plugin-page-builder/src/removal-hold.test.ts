@@ -558,6 +558,25 @@ describe("counting again as a held removal is published", () => {
     ).toBe(true);
   });
 
+  it("refuses publishing a held removal inside a caller's transaction, counting nothing", async () => {
+    const { run } = harness({ holds: { hero: HELD } });
+
+    const error = await refusal(
+      Promise.resolve(
+        run("beforeUpdate", "components", {
+          executor: {},
+          originalData: { id: "hero" },
+          data: { status: "published", content: definition(["body"]) },
+        })
+      )
+    );
+
+    expect(
+      ((error as NextlyError).publicData as { errors: { code: string }[] })
+        .errors[0]!.code
+    ).toBe(REMOVAL_RECOUNT);
+  });
+
   it("lets it through at the confirmed count, with no hold, or keeping the fields", async () => {
     const at = harness({
       holds: { hero: HELD },

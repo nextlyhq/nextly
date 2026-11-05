@@ -10,13 +10,13 @@ import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   NextlyError,
+  type HookContext,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
   type PluginRouteContext,
   type PluginVersionPinHolder,
 } from "@nextlyhq/plugin-sdk";
-import type { HookContext } from "nextly";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
 // Imported rather than read at runtime so it can never drift from the published

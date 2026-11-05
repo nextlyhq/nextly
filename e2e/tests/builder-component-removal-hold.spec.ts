@@ -9,11 +9,16 @@
  *
  * @module tests/builder-component-removal-hold
  */
+import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { block, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { settleTransitions } from "./support/axe-scan.mjs";
 import { test } from "./support/test";
+
+/** The WCAG 2.2 AA rule tags, as the other accessibility scans name them. */
+const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 const API = "/admin/api";
 const COMPONENTS = `${API}/collections/components/entries`;
@@ -99,8 +104,12 @@ async function liveFields(
 }
 
 /** Open the component, remove its headline, and hand back the dialog's words. */
-async function removeHeadline(page: Page, id: string): Promise<string> {
-  await gotoAdmin(page, `/collections/components/${id}/builder`);
+async function removeHeadline(
+  page: Page,
+  id: string,
+  scheme: "light" | "dark" = "light"
+): Promise<string> {
+  await gotoAdmin(page, `/collections/components/${id}/builder`, scheme);
   await expect(await block(page, "rh-heading")).toBeVisible({
     timeout: 30_000,
   });
@@ -183,4 +192,30 @@ test.describe("publishing a component's removed field", () => {
     await expect(asked).toHaveCount(0);
     expect(await liveFields(page.request, id)).toEqual(["headline"]);
   });
+
+  for (const scheme of ["light", "dark"] as const) {
+    test(`asks again in words and colours that pass WCAG AA (${scheme})`, async ({
+      page,
+    }) => {
+      const id = await publishedComponent(page.request);
+      await pagePlacing(page.request, id);
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await removeHeadline(page, id, scheme);
+      await pagePlacing(page.request, id);
+
+      await saveThenPublish(page, id);
+      const asked = page.getByRole("alertdialog", {
+        name: "More documents use this component now",
+      });
+      await expect(asked).toBeVisible();
+      await settleTransitions(page);
+
+      const results = await new AxeBuilder({ page })
+        .include('[role="alertdialog"]')
+        .withTags(AA_TAGS)
+        .analyze();
+      expect(results.violations).toEqual([]);
+      await asked.getByRole("button", { name: "Cancel" }).click();
+    });
+  }
 });

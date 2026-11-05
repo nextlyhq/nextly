@@ -220,6 +220,23 @@ describe("asking for a removal's hold", () => {
     expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
   });
 
+  it("holds a field id exactly as the envelope stores it", async () => {
+    const { ask, held } = route({ documents: 2, complete: true });
+
+    await ask({ ...BODY, properties: [" title "] });
+
+    expect(held[0]!.hold.properties).toEqual([" title "]);
+  });
+
+  it("accepts a removal of as many fields as an envelope may hold", async () => {
+    const { ask, held } = route({ documents: 2, complete: true });
+    const many = Array.from({ length: 1000 }, (_, at) => `f${String(at)}`);
+
+    await ask({ ...BODY, properties: many });
+
+    expect(held[0]!.hold.properties).toHaveLength(1000);
+  });
+
   it("is gated on updating the component store", () => {
     const { declared } = route({ documents: 0, complete: true });
 

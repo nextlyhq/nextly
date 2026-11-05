@@ -218,7 +218,7 @@ function recountWords(recount: Recount): string {
     recount.confirmed === undefined
       ? `This component is placed directly in ${documentsWord(recount.reach)}.`
       : `When you removed its fields, this component was placed directly in ${documentsWord(recount.confirmed)}. It is now placed in ${documentsWord(recount.reach)}.`;
-  return `${now} Publishing removes those fields, and every use of it that set one loses its value.`;
+  return `${now} Publishing removes those fields, and every use that filled one in loses that value.`;
 }
 
 /** The question itself. */
@@ -256,6 +256,10 @@ function RemovalRecountDialog({
           <Button
             type="button"
             variant="destructive"
+            // A deeper red under the white label in the light theme, where
+            // the solid red holds under 4.5:1; the dark theme's dark label
+            // on its solid red holds already.
+            className="bg-destructive-700 hover:bg-destructive-800 dark:bg-destructive-solid dark:hover:bg-destructive-600"
             onClick={() => onAnswer(true)}
           >
             Publish and remove

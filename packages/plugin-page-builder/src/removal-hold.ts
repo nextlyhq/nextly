@@ -326,8 +326,10 @@ export function countGrew(
  * hold and the publish (one whose write was already under way when the hold
  * was made, say) still stops it. A publish of a component with no hold goes
  * ahead: nobody was shown a count to confirm, and its removed values are
- * cleaned up after it all the same. Not inside a caller's transaction, whose
- * count read would go to the pool outside it.
+ * cleaned up after it all the same. Inside a caller's transaction the count
+ * cannot be taken (it would read the pool, outside that transaction), so a
+ * publish there that removes a held field is refused: published on its own,
+ * it is counted.
  */
 export function registerPublishRecount(args: {
   readonly ctx: RemovalFenceContext;
@@ -345,7 +347,7 @@ export function registerPublishRecount(args: {
       executor?: unknown;
     };
     const data = fields.data;
-    if (fields.executor !== undefined || !isPlainRecord(data)) return;
+    if (!isPlainRecord(data)) return;
     if (!(await putsLive(data, args.lifecycle))) return;
     const id = isPlainRecord(fields.originalData)
       ? fields.originalData.id
@@ -357,6 +359,18 @@ export function registerPublishRecount(args: {
     // not remove them; one naming none publishes the held draft, which may.
     const definition = asDocument(data[args.componentField]);
     if (definition !== null && !removesAny(definition, hold)) return;
+    if (fields.executor !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: args.componentField,
+            code: REMOVAL_RECOUNT,
+            message:
+              "This component's removed fields are waiting to be published, and can't be published as part of a batch or import. Publish the component on its own.",
+          },
+        ],
+      });
+    }
     const now = await args.count(String(id));
     if (!countGrew(now, hold)) return;
     throw NextlyError.validation({
