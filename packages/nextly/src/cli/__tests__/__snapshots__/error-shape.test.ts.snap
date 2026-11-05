@@ -386,6 +386,13 @@ exports[`each cause a documented code covers, as a command ends with it > REQUIR
   Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
 `;
 
+exports[`each cause a documented code covers, as a command ends with it > REQUIRED_COLUMN_UNCOUNTED_THROUGH_A_QUALIFIER 1`] = `
+"✗ A column could not be made required, because its table is named through a qualifier that may reach another schema.
+  Why:  Table 'archive.dc_posts': the rows that would break making 'subtitle' required could not be counted through the qualifier 'archive', which may name another schema, so that change was refused before it ran. Write the table's unqualified name, then try again.
+  Next: Write the table's unqualified name in the migration, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)"
+`;
+
 exports[`each cause a documented code covers, as a command ends with it > SQLITE_FOREIGN_KEYS_STILL_ON 1`] = `
 "✗ Foreign-key enforcement could not be switched off for this migration.
   Why:  Another transaction was open on the connection. Nothing was applied.

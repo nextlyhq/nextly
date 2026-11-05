@@ -53,6 +53,7 @@ describe("RealPreCleanupExecutor", () => {
         },
       ],
       events: [notNullEvent],
+      operations: [],
       fields: [{ name: "email", type: "text" }],
       dialect: "postgresql",
     });
@@ -73,6 +74,7 @@ describe("RealPreCleanupExecutor", () => {
           },
         ],
         events: [notNullEvent],
+        operations: [],
         fields: [{ name: "email", type: "text" }],
         dialect: "postgresql",
       })
@@ -108,6 +110,7 @@ describe("RealPreCleanupExecutor", () => {
         },
       ],
       events: [addedOver(columnName)],
+      operations: [],
       fields: [field],
       dialect,
     });
@@ -149,6 +152,7 @@ describe("RealPreCleanupExecutor", () => {
       desiredSnapshot: baseSnapshot,
       resolutions: [{ kind: "delete_nonconforming", eventId: notNullEvent.id }],
       events: [notNullEvent],
+      operations: [],
       fields: [{ name: "email", type: "text" }],
       dialect: "postgresql",
     });
@@ -168,6 +172,7 @@ describe("RealPreCleanupExecutor", () => {
         desiredSnapshot: baseSnapshot,
         resolutions: [{ kind: "delete_nonconforming", eventId: bigEvent.id }],
         events: [bigEvent],
+        operations: [],
         fields: [{ name: "email", type: "text" }],
         dialect: "postgresql",
       })
@@ -183,6 +188,7 @@ describe("RealPreCleanupExecutor", () => {
       desiredSnapshot: baseSnapshot,
       resolutions: [{ kind: "make_optional", eventId: notNullEvent.id }],
       events: [notNullEvent],
+      operations: [],
       fields: [{ name: "email", type: "text" }],
       dialect: "postgresql",
     });
@@ -199,6 +205,7 @@ describe("RealPreCleanupExecutor", () => {
         desiredSnapshot: baseSnapshot,
         resolutions: [{ kind: "abort", eventId: notNullEvent.id }],
         events: [notNullEvent],
+        operations: [],
         fields: [{ name: "email", type: "text" }],
         dialect: "postgresql",
       })
@@ -213,6 +220,7 @@ describe("RealPreCleanupExecutor", () => {
       desiredSnapshot: baseSnapshot,
       resolutions: [],
       events: [],
+      operations: [],
       fields: [],
       dialect: "postgresql",
     });
@@ -236,6 +244,7 @@ describe("RealPreCleanupExecutor", () => {
           { kind: "delete_nonconforming", eventId: notNullEvent.id },
         ],
         events: [notNullEvent],
+        operations: [],
         fields: [{ name: "email", type: "text" }],
         dialect: "postgresql",
       })
@@ -256,6 +265,7 @@ describe("RealPreCleanupExecutor", () => {
         },
       ],
       events: [],
+      operations: [],
       fields: [],
       dialect: "postgresql",
     });
@@ -307,6 +317,7 @@ describe("RealPreCleanupExecutor", () => {
           desiredSnapshot: addedSnapshot,
           resolutions: [resolution as Resolution],
           events: [addedEvent],
+          operations: [],
           fields: [{ name: "nickname", type: "text" }],
           dialect: "postgresql",
         });
@@ -317,6 +328,53 @@ describe("RealPreCleanupExecutor", () => {
       }
     );
 
+    // A field renamed and made required in one apply: the drop and add pair is a confirmed rename,
+    // so the column is there, renamed, when pre-cleanup runs, and only its fill is left to do.
+    it("leaves a column a confirmed rename brings to only its fill", async () => {
+      const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
+      const renamed: Operation = {
+        type: "rename_column",
+        tableName: "dc_users",
+        fromColumn: "nick",
+        toColumn: "nickname",
+        fromType: "text",
+        toType: "text",
+      };
+      const resolutions: Resolution[] = [
+        { kind: "provide_default", eventId: addedEvent.id, value: "anon" },
+      ];
+      await new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: addedSnapshot,
+        resolutions,
+        events: [addedEvent],
+        operations: [renamed],
+        fields: [{ name: "nickname", type: "text" }],
+        dialect: "postgresql",
+      });
+      expect(await rendered(execute)).toEqual([
+        `UPDATE "dc_users" SET "nickname" = $1 WHERE "nickname" IS NULL`,
+      ]);
+      // The rest of the apply keeps the rename and makes the renamed column NOT NULL once it is
+      // filled: the rename alone carries no nullability, and SQLite's rebuild needs this to run.
+      expect(
+        withAddedColumnsLeftToTighten([renamed], resolutions, [addedEvent])
+      ).toEqual([
+        renamed,
+        {
+          type: "change_column_nullable",
+          tableName: "dc_users",
+          columnName: "nickname",
+          fromNullable: true,
+          toNullable: false,
+        },
+      ]);
+      // A rename the apply leaves optional raises no such event, and is left as it is.
+      expect(withAddedColumnsLeftToTighten([renamed], [], [])).toEqual([
+        renamed,
+      ]);
+    });
+
     it("leaves a column already in the table alone: only the fill runs", async () => {
       const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
       await new RealPreCleanupExecutor().execute({
@@ -326,6 +384,7 @@ describe("RealPreCleanupExecutor", () => {
           { kind: "provide_default", eventId: notNullEvent.id, value: "a@b.c" },
         ],
         events: [notNullEvent],
+        operations: [],
         fields: [{ name: "email", type: "text" }],
         dialect: "postgresql",
       });
@@ -397,6 +456,7 @@ describe("RealPreCleanupExecutor", () => {
           desiredSnapshot: addedSnapshot,
           resolutions,
           events: [addedEvent],
+          operations: [],
           fields: [{ name: "nickname", type: "text" }],
           dialect: "postgresql",
         })
@@ -435,6 +495,7 @@ describe("RealPreCleanupExecutor", () => {
             { kind: "provide_default", eventId: addedEvent.id, value: "anon" },
           ],
           events: [addedEvent],
+          operations: [],
           fields: [{ name: "nickname", type: "text" }],
           dialect: "postgresql",
         })

@@ -1176,6 +1176,7 @@ export class PushSchemaPipeline {
             desiredSnapshot,
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
+            operations: resolvedOps,
             fields: aggregatedFields,
             dialect,
           });

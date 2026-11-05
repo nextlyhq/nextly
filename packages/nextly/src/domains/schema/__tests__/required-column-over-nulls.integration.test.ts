@@ -431,6 +431,66 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     );
 
+    // A field renamed and made required in one save, a value chosen for its empty rows: the rename
+    // keeps the column and its rows, so the apply renames it, fills the empty ones and makes it
+    // NOT NULL. Adding the renamed column again would fail, and on MySQL after the rename committed.
+    it("renames a field and makes it required over its empty rows when a value is chosen", async () => {
+      const t = await boot();
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      await postsWithNulls(t);
+      const row = await registryRow(adapter, "dynamic_collections", "posts");
+      const fields: Field[] = [
+        ...storedFields(row).filter(f => f.name !== "summary"),
+        { name: "headline", type: "text", required: true },
+      ];
+      await inDevelopment(async () => {
+        expect(
+          await outcomeOf(() =>
+            applyCollection(
+              adapter,
+              fields,
+              [
+                {
+                  kind: "provide_default",
+                  eventId: "add_required_field_no_default:dc_posts.headline",
+                  value: "chosen",
+                },
+              ],
+              [
+                {
+                  tableName: "dc_posts",
+                  fromColumn: "summary",
+                  toColumn: "headline",
+                  choice: "rename",
+                },
+              ]
+            )
+          )
+        ).toEqual({ accepted: true });
+      });
+      const columns = await columnsOf(adapter, dialect, "dc_posts");
+      expect(Object.hasOwn(columns, "summary")).toBe(false);
+      expect(columns.headline).toBe(false);
+      // The row that had a value keeps it; the two empty ones hold the chosen value.
+      const values = await adapter.executeQuery<{ headline: string }>(
+        `SELECT headline FROM dc_posts ORDER BY headline`
+      );
+      expect(values.map(v => v.headline)).toEqual([
+        "chosen",
+        "chosen",
+        "filled in",
+      ]);
+      // The registry records the field under its new name, required, and not the old one.
+      const stored = storedFields(
+        await registryRow(adapter, "dynamic_collections", "posts")
+      );
+      expect(stored.find(f => f.name === "headline")).toMatchObject({
+        type: "text",
+        required: true,
+      });
+      expect(stored.some(f => f.name === "summary")).toBe(false);
+    });
+
     it("refuses a Single's schema save and its Builder apply", async () => {
       const t = await boot();
       const adapter = t.adapter as unknown as DrizzleAdapter;

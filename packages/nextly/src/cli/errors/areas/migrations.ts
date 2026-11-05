@@ -532,6 +532,27 @@ export const MIGRATION_CODES = defineCodes({
           ),
       },
       {
+        // Named through a qualifier that may reach another schema: nothing was counted, and the
+        // fix is the table's unqualified name, not the connection.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        when: error =>
+          error.logContext?.reason === "required-column-qualifier-not-read",
+        describe: error => {
+          const data = error.publicData as
+            | { errors?: Array<{ code?: string; message?: string }> }
+            | undefined;
+          const issue = data?.errors?.find(
+            e => e.code === "REQUIRED_COLUMN_UNCOUNTED"
+          );
+          return {
+            what: "A column could not be made required, because its table is named through a qualifier that may reach another schema.",
+            why: issue?.message ?? error.publicMessage,
+            next: "Write the table's unqualified name in the migration, then run the command again.",
+          };
+        },
+      },
+      {
         code: "VALIDATION_ERROR",
         issue: "REQUIRED_COLUMN_UNCOUNTED",
         describe: error => {

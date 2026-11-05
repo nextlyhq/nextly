@@ -65,6 +65,11 @@ export interface NotNullChange {
   } | null;
   /** An earlier statement of the unit wrote rows of this table, or may have. */
   writtenEarlier: boolean;
+  /**
+   * The qualifier the statement names the table through (`s.t`), lower-cased, when it names one.
+   * Which schema that reaches is decided against the database, not here.
+   */
+  qualifier?: string;
 }
 
 /** A table as the statements read so far leave it. */
@@ -342,6 +347,8 @@ class UnitReader {
   private readonly created = new Map<string, ColumnDefinition[]>();
   /** A statement whose reach is not read ran: it may have written rows of any table. */
   private anyWritten = false;
+  /** The qualifier the statement being read names its table through, if any. */
+  private qualifier: string | undefined;
   readonly changes: NotNullChange[] = [];
 
   constructor(private readonly dialect: SupportedDialect) {}
@@ -383,6 +390,7 @@ class UnitReader {
       required,
       before: this.beforeOf(state, column),
       writtenEarlier: state.written || this.anyWritten,
+      ...(this.qualifier === undefined ? {} : { qualifier: this.qualifier }),
     });
   }
 
@@ -585,15 +593,23 @@ class UnitReader {
   private readAlterTable(cursor: StatementCursor, index: number): void {
     cursor.acceptCondition();
     cursor.accept("ONLY");
-    let table = cursor.name();
+    // A qualified target is read under its own name, with the qualifier kept on each change it
+    // makes, for the guard to decide which schema that reaches.
+    const qualified = cursor.qualifiedName();
+    let table = qualified?.name ?? cursor.name();
     if (table === undefined) return;
-    for (const tokens of cursor.clauses()) {
-      const renamedTo = this.readAlterClause(
-        new StatementCursor(tokens),
-        table,
-        index
-      );
-      if (renamedTo !== undefined) table = renamedTo;
+    this.qualifier = qualified?.qualifier;
+    try {
+      for (const tokens of cursor.clauses()) {
+        const renamedTo = this.readAlterClause(
+          new StatementCursor(tokens),
+          table,
+          index
+        );
+        if (renamedTo !== undefined) table = renamedTo;
+      }
+    } finally {
+      this.qualifier = undefined;
     }
   }
 

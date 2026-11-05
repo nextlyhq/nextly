@@ -65,6 +65,11 @@ export interface RequiredColumnTarget {
    * added column, which every row breaks, when it is not.
    */
   addedIfMissing?: boolean;
+  /**
+   * The qualifier the statement names the table through (`s.t`): read as the table when the
+   * database says it is the table's own schema (`plainQualifier`), refused otherwise.
+   */
+  qualifier?: string;
 }
 
 /** A table the registry names, with the entity it belongs to. */
@@ -98,6 +103,12 @@ export interface RequiredColumnFacts {
     table: string,
     column: string | null
   ): { nullable: boolean; name?: string; table?: string } | undefined;
+  /**
+   * Whether a qualifier names the schema an unqualified name reaches, so `q.t` is `t`: SQLite's
+   * `main`, MySQL's current database. On PostgreSQL no qualifier is read as one, since which schema
+   * an unqualified name reaches depends on the search path.
+   */
+  plainQualifier(qualifier: string): boolean;
   count(target: {
     table: string;
     column: string | null;
@@ -131,22 +142,36 @@ async function judgeTarget(
 ): Promise<RequiredColumnBreak | undefined> {
   // A table that is not a collection, a Single or a field group (a plugin's, an extension's) is
   // judged too, and named by its table and column.
+  // A qualifier that may reach another schema names rows nothing here counts.
+  if (
+    target.qualifier !== undefined &&
+    !facts.plainQualifier(target.qualifier)
+  ) {
+    throw requiredColumnUncountedError({
+      table: `${target.qualifier}.${target.table}`,
+      field: target.required,
+      cause: undefined,
+      through: target.qualifier,
+    });
+  }
   const owner = facts.owners.owner(target.table);
   const live = liveTarget(target, owner?.table ?? target.table, facts);
   if (live === undefined) return undefined;
-  const rows = await countTarget(live, owner, facts);
+  // The field the column belongs to, named the same whether the count answers or fails.
+  const field = owner === undefined ? target.required : fieldOf(owner, target);
+  const rows = await countTarget(live, owner, facts, field);
   if (rows.total === 0) return undefined;
   if (owner === undefined) {
     return {
       entity: { kind: "table", slug: live.table },
-      field: target.required,
+      field,
       count: rows.total,
       added: live.column === null,
     };
   }
   return {
     entity: owner.entity,
-    field: fieldOf(owner, target),
+    field,
     count: rows.total,
     added: live.column === null,
     ...(owner.fieldGroup ? { users: usersOf(rows, facts) } : {}),
@@ -158,7 +183,6 @@ interface LiveTarget {
   table: string;
   /** The live column whose null rows break it, or `null` for an added one, which every row breaks. */
   column: string | null;
-  required: string;
 }
 
 /**
@@ -184,7 +208,6 @@ function liveTarget(
     return {
       table: live.table ?? table,
       column: null,
-      required: target.required,
     };
   }
   const live = facts.live(table, target.column);
@@ -197,7 +220,6 @@ function liveTarget(
   return {
     table: live.table ?? table,
     column: live.name ?? target.column,
-    required: target.required,
   };
 }
 
@@ -212,11 +234,12 @@ function fieldOf(owner: TableOwner, target: RequiredColumnTarget): string {
   );
 }
 
-/** The rows in the way, counted; a count that fails refuses, naming the table. */
+/** The rows in the way, counted; a count that fails refuses, naming the table and `field`. */
 async function countTarget(
   live: LiveTarget,
   owner: TableOwner | undefined,
-  facts: RequiredColumnFacts
+  facts: RequiredColumnFacts,
+  field: string
 ): Promise<RowsBreakingNotNull> {
   try {
     return await facts.count({
@@ -225,11 +248,7 @@ async function countTarget(
       byParent: owner?.fieldGroup === true,
     });
   } catch (cause) {
-    throw requiredColumnUncountedError({
-      table: live.table,
-      field: live.required,
-      cause,
-    });
+    throw requiredColumnUncountedError({ table: live.table, field, cause });
   }
 }
 
@@ -338,8 +357,16 @@ async function readFacts(
       columns: new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
     });
   }
+  const current =
+    dialect === "mysql" && targets.some(t => t.qualifier !== undefined)
+      ? await currentDatabase(db, dialect)
+      : undefined;
   return {
     owners,
+    plainQualifier: qualifier =>
+      dialect === "sqlite"
+        ? qualifier === "main"
+        : dialect === "mysql" && qualifier === current,
     live: (table, column) => {
       const live = byName.get(table.toLowerCase());
       if (live === undefined) return undefined;
@@ -351,6 +378,19 @@ async function readFacts(
     },
     count: target => countRowsBreakingNotNull(db, dialect, target),
   };
+}
+
+/** MySQL's current database, lower-cased, as a statement's qualifier would be read. */
+async function currentDatabase(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<string | undefined> {
+  const [row] = await querySqlRows<{ name: string | null }>(
+    db,
+    dialect,
+    sql`SELECT DATABASE() AS name`
+  );
+  return row?.name?.toLowerCase() ?? undefined;
 }
 
 /** The statement a run stopped at, the file's statements, and whether they ran in a transaction. */
@@ -463,6 +503,9 @@ async function requiredColumnBreaksBeforeRun(
             ...(change.before.addedIfMissing === true
               ? { addedIfMissing: true }
               : {}),
+            ...(change.qualifier === undefined
+              ? {}
+              : { qualifier: change.qualifier }),
           },
         ]
   );
@@ -548,14 +591,14 @@ function uncountedIssue(error: unknown): string | undefined {
  * The count a unit's runner makes before each statement, for each change an earlier statement
  * of the unit writes rows for, through the handle the statements run on (the transaction's,
  * when there is one): the rows still null after the fill. Undefined when the unit has no such
- * change, so a runner pays nothing for it. A DOWN is left to the database.
+ * change, so a runner pays nothing for it. A DOWN is judged as an UP is: it can make a column
+ * required again over rows saved since its UP ran.
  */
 export function requiredColumnCheckpoint(
   statements: readonly string[],
   dialect: SupportedDialect,
   unit: MigrationUnit
 ): ((db: unknown, index: number) => Promise<void>) | undefined {
-  if (unit.direction === "down") return undefined;
   const byStatement = new Map<number, RequiredColumnTarget[]>();
   for (const change of readNotNullChanges(statements, dialect)) {
     if (!change.writtenEarlier) continue;
@@ -564,6 +607,9 @@ export function requiredColumnCheckpoint(
       table: change.table,
       column: change.column,
       required: change.required,
+      ...(change.qualifier === undefined
+        ? {}
+        : { qualifier: change.qualifier }),
     });
     byStatement.set(change.statement, targets);
   }

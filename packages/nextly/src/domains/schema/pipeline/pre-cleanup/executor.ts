@@ -208,24 +208,54 @@ function sideEffectResolutions(args: {
 }
 
 /**
- * The columns pre-cleanup ADDS before it fills or deletes over them: those of
- * a provide_default or delete_nonconforming answer to an
- * add_required_field_no_default event. The column is new to the table, so the
- * statement that fills it (or deletes the rows it leaves empty) has nothing to
- * name until it exists. Derived from `sideEffectResolutions`, so the executor
- * that adds them and the operation rewrite that stops the rest of the apply
- * adding them again can never disagree about which columns these are.
+ * The columns of an add_required_field_no_default event answered with a value
+ * for the existing rows (provide_default), split by how they come to exist:
+ * `added`, which pre-cleanup ADDS, nullable, before it fills them (the column is
+ * new to the table, so the fill has nothing to name until it exists); and
+ * `renamed`, which a confirmed rename brings into place before pre-cleanup runs
+ * (a field renamed and made required in one apply keeps the event), so they are
+ * filled where they are, and adding them again would fail. Derived from
+ * `sideEffectResolutions`, so the executor and the operation rewrite that plans
+ * the rest of the apply can never disagree about which columns these are.
  */
-function columnsAddedByPreCleanup(args: {
+function columnsFilledByPreCleanup(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
-}): Array<{ tableName: string; columnName: string }> {
-  return sideEffectResolutions(args)
+  operations: readonly Operation[];
+}): {
+  added: Array<{ tableName: string; columnName: string }>;
+  renamed: Array<{ tableName: string; columnName: string }>;
+} {
+  const renamedTo = args.operations.flatMap(op =>
+    op.type === "rename_column"
+      ? [{ tableName: op.tableName, columnName: op.toColumn }]
+      : []
+  );
+  const answered = sideEffectResolutions(args)
     .filter(({ event }) => event.kind === "add_required_field_no_default")
     .map(({ event }) => ({
       tableName: event.tableName,
       columnName: event.columnName,
     }));
+  const isRenamed = (column: { tableName: string; columnName: string }) =>
+    renamedTo.some(
+      to =>
+        sameName(to.tableName, column.tableName) &&
+        sameName(to.columnName, column.columnName)
+    );
+  return {
+    added: answered.filter(column => !isRenamed(column)),
+    renamed: answered.filter(isRenamed),
+  };
+}
+
+/** The columns pre-cleanup adds before it fills them (`columnsFilledByPreCleanup`). */
+function columnsAddedByPreCleanup(args: {
+  resolutions: Resolution[];
+  events: ClassifierEvent[];
+  operations: readonly Operation[];
+}): Array<{ tableName: string; columnName: string }> {
+  return columnsFilledByPreCleanup(args).added;
 }
 
 /** Whether two table or column names are the same one, as the diff spells them. */
@@ -243,31 +273,65 @@ const sameName = (a: string, b: string): boolean =>
  * drizzle-kit, which re-reads the live table (now holding the nullable column)
  * and rebuilds or MODIFYs it to NOT NULL — the same road an existing column
  * made required over filled rows takes, and the rebuild it needs is approved by
- * this very operation. Any other operation is returned as it was.
+ * this very operation. A column a confirmed rename brings, which pre-cleanup
+ * fills where the rename put it, gets the same `change_column_nullable`, since
+ * the rename carries no nullability. Any other operation is returned as it was.
  */
 export function withAddedColumnsLeftToTighten(
   ops: readonly Operation[],
   resolutions: Resolution[],
   events: ClassifierEvent[]
 ): Operation[] {
-  const added = columnsAddedByPreCleanup({ resolutions, events });
-  if (added.length === 0) return [...ops];
-  return ops.map(op =>
-    op.type === "add_column" &&
-    added.some(
-      a =>
-        sameName(a.tableName, op.tableName) &&
-        sameName(a.columnName, op.column.name)
-    )
-      ? {
-          type: "change_column_nullable",
-          tableName: op.tableName,
-          columnName: op.column.name,
-          fromNullable: true,
-          toNullable: op.column.nullable,
-        }
-      : op
+  const { added, renamed } = columnsFilledByPreCleanup({
+    resolutions,
+    events,
+    operations: ops,
+  });
+  if (added.length === 0 && renamed.length === 0) return [...ops];
+  const tightened = ops.map(
+    (op): Operation =>
+      op.type === "add_column" &&
+      added.some(
+        a =>
+          sameName(a.tableName, op.tableName) &&
+          sameName(a.columnName, op.column.name)
+      )
+        ? {
+            type: "change_column_nullable",
+            tableName: op.tableName,
+            columnName: op.column.name,
+            fromNullable: true,
+            toNullable: op.column.nullable,
+          }
+        : op
   );
+  // A column a confirmed rename brings is made NOT NULL once filled: the rename carries no
+  // nullability of its own, and without this nothing approves SQLite's rebuild for it. One the
+  // plan already tightens is left to that operation.
+  const alreadyTightened = (column: {
+    tableName: string;
+    columnName: string;
+  }) =>
+    tightened.some(
+      op =>
+        op.type === "change_column_nullable" &&
+        sameName(op.tableName, column.tableName) &&
+        sameName(op.columnName, column.columnName)
+    );
+  return [
+    ...tightened,
+    ...renamed
+      .filter(column => !alreadyTightened(column))
+      .map(
+        (column): Operation => ({
+          type: "change_column_nullable",
+          tableName: column.tableName,
+          columnName: column.columnName,
+          fromNullable: true,
+          toNullable: false,
+        })
+      ),
+  ];
 }
 
 /**
@@ -281,6 +345,7 @@ export function withAddedColumnsLeftToTighten(
 function addStatementsFor(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
+  operations: readonly Operation[];
   desiredSnapshot: NextlySchemaSnapshot;
   dialect: SupportedDialect;
 }): Map<string, string> {
@@ -318,6 +383,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     desiredSnapshot: NextlySchemaSnapshot;
     resolutions: Resolution[];
     events: ClassifierEvent[];
+    operations: readonly Operation[];
     fields: Array<{ name: string; type: string }>;
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot> {

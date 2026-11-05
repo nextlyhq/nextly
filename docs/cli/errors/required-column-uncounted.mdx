@@ -11,9 +11,13 @@ Before a change makes a column NOT NULL, Nextly counts the rows of its table tha
 
 In `nextly migrate`, a change that comes after a statement of the same file writing to its table is counted at that statement, when the statements before it have already run. A count that fails there names the file, the statement it stopped at and the statements that ran before it, and says whether they stayed applied (outside a transaction, or a schema change on MySQL) or were rolled back.
 
+A table a migration names through a qualifier (`archive.posts`) is counted only when the qualifier is the one an unqualified name reaches: SQLite's `main`, or MySQL's current database. Any other qualifier may reach another schema, so nothing is counted and the change is refused before anything runs. On PostgreSQL, a change through a qualified name is refused earlier, by the schema guard.
+
 ## Fix
 
 The database couldn't be read: check the connection and that the table exists and can be read, then run the command again.
+
+When the refusal names a qualifier, write the table's unqualified name in the migration, then run it again.
 
 When the refusal names statements that stayed applied, check what they left before running the migration again: a statement that writes rows may not be safe to run twice.
 

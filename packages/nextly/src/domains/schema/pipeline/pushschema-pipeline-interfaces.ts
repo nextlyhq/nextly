@@ -124,6 +124,11 @@ export interface PreCleanupExecutor {
     desiredSnapshot: NextlySchemaSnapshot;
     resolutions: Resolution[];
     events: ClassifierEvent[];
+    /**
+     * The apply's operations as the renames answered them: a column a confirmed rename brings is
+     * renamed into place before pre-cleanup, so pre-cleanup fills it rather than adding it.
+     */
+    operations: readonly Operation[];
     fields: Array<{ name: string; type: string }>;
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot>;

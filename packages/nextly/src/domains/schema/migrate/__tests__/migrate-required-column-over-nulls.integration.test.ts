@@ -29,6 +29,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { migrateCore, runPluginPhase } from "../../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -42,6 +46,7 @@ import {
   introspectLiveColumns,
   introspectLiveSnapshot,
 } from "../../pipeline/diff/introspect-live";
+import { withMigrateLock } from "../../pipeline/locks";
 import {
   LOCK_DIALECTS,
   lockWorld,
@@ -250,14 +255,14 @@ describe.each(LOCK_DIALECTS)(
     }
 
     /** The file as `migrate:create` writes it. */
-    function writeFile(statements: string[]): void {
+    function writeFile(statements: string[], down: string[] = []): void {
       writeFileSync(
         join(migrationsDir, FILE),
         formatMigrationFile({
           name: NAME,
           dialect,
           sqlStatements: statements,
-          downSqlStatements: [],
+          downSqlStatements: down,
           collections: [],
           singles: [],
           components: [],
@@ -458,6 +463,94 @@ describe.each(LOCK_DIALECTS)(
       },
       120_000
     );
+
+    // A table named through a qualifier: counted as the table when the qualifier is the one an
+    // unqualified name reaches (MySQL's current database, SQLite's `main`), refused before anything
+    // runs through any other. PostgreSQL's schema guard refuses a qualified change first.
+    const makeRequiredThrough = (qualifier: string) =>
+      dialect === "mysql"
+        ? `ALTER TABLE ${q(qualifier)}.${q(POSTS)} MODIFY COLUMN ${q("subtitle")} text NOT NULL`
+        : dialect === "sqlite"
+          ? `ALTER TABLE ${qualifier}.${POSTS} ADD COLUMN ${q("code")} text NOT NULL`
+          : `ALTER TABLE ${q(qualifier)}.${q(POSTS)} ALTER COLUMN ${q("subtitle")} SET NOT NULL`;
+
+    it("counts a table named through the qualifier an unqualified name reaches", async () => {
+      const own =
+        dialect === "postgresql"
+          ? "public"
+          : dialect === "sqlite"
+            ? "main"
+            : String(
+                (
+                  await adapter.executeQuery<{ name: string }>(
+                    "SELECT DATABASE() AS name"
+                  )
+                )[0]?.name
+              );
+      writeFile([makeRequiredThrough(own)]);
+      const error = await refusal();
+      if (dialect === "postgresql") {
+        expect(error.publicMessage).toContain("schema-qualified name");
+      } else {
+        expect(issues(error)).toEqual([
+          dialect === "sqlite"
+            ? "Collection 'posts': field 'code' cannot be added as required without a default while 3 rows exist, which would hold no value in it. Give it a default, or add it as optional."
+            : "Collection 'posts': field 'subtitle' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the field optional.",
+        ]);
+      }
+      expect(await nullable(POSTS, "subtitle")).toBe(true);
+      expect(await hasColumn(POSTS, "code")).toBe(false);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    it.runIf(dialect !== "postgresql")(
+      "refuses a table named through any other qualifier before anything runs",
+      async () => {
+        const other = dialect === "sqlite" ? "temp" : "other_db";
+        writeFile([makeRequiredThrough(other)]);
+        const error = await refusal();
+        const data = error.publicData as {
+          errors: Array<{ code: string; message: string }>;
+        };
+        expect(data.errors).toMatchObject([
+          { code: "REQUIRED_COLUMN_UNCOUNTED" },
+        ]);
+        expect(data.errors[0].message).toContain(
+          `could not be counted through the qualifier '${other}'`
+        );
+        expect(await nullable(POSTS, "subtitle")).toBe(true);
+        expect(await ledger()).toEqual([]);
+      },
+      120_000
+    );
+
+    // `nextly migrate:down` runs a DOWN through the same runner, and a DOWN can make a column
+    // required again over rows saved since: it is judged before its first statement too, and the
+    // migration stays applied.
+    it("refuses a DOWN that makes a column required over null rows, before it runs", async () => {
+      const down = await makeRequired(POSTS, "subtitle");
+      writeFile(["SELECT 1"], down);
+      expect((await migrate()).applied).toBe(1);
+      const error = await migrateDownCore({
+        ...(await downDatabaseDeps({ adapter, dialect })),
+        nodeEnv: "test",
+        logger,
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: () =>
+          Promise.resolve({ sql: down.join(";\n"), transaction: true }),
+        withLock: withMigrateLock,
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error)).toBe(true);
+      expect(issues(error as NextlyError)).toEqual([
+        "Collection 'posts': field 'subtitle' cannot become required while 2 rows hold no value in it. Give those rows a value first, or keep the field optional.",
+      ]);
+      expect(await nullable(POSTS, "subtitle")).toBe(true);
+      expect(await ledger()).toEqual(["applied"]);
+    }, 120_000);
 
     it("refuses a Single's field, naming the Single", async () => {
       writeFile(await makeRequired(SETTINGS, "tagline"));

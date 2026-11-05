@@ -447,6 +447,18 @@ export const MIGRATION_MERGED_CASES: Record<
         }
       ),
   },
+  // Not a former code: the reading when the table is named through a qualifier that may reach
+  // another schema, which nothing counts.
+  REQUIRED_COLUMN_UNCOUNTED_THROUGH_A_QUALIFIER: {
+    code: "REQUIRED_COLUMN_UNCOUNTED",
+    make: () =>
+      requiredColumnUncountedError({
+        table: "archive.dc_posts",
+        field: "subtitle",
+        cause: undefined,
+        through: "archive",
+      }),
+  },
   MIGRATION_ATTEMPT_UNFINISHED: {
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
     make: () =>

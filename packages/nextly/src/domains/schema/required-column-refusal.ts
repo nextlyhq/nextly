@@ -126,18 +126,30 @@ export function requiredColumnUncountedError(args: {
   table: string;
   field: string;
   cause: unknown;
+  /**
+   * The qualifier the table was named through, when that is why nothing was counted: one that may
+   * name another schema, whose rows no count here reads.
+   */
+  through?: string;
 }): NextlyError {
+  const why =
+    args.through === undefined
+      ? "could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again."
+      : `could not be counted through the qualifier '${args.through}', which may name another schema, so that change was refused before it ran. Write the table's unqualified name, then try again.`;
   return NextlyError.validation({
     errors: [
       {
         path: `fields.${args.field}`,
         code: "REQUIRED_COLUMN_UNCOUNTED",
-        message: `Table '${args.table}': the rows that would break making '${args.field}' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.`,
+        message: `Table '${args.table}': the rows that would break making '${args.field}' required ${why}`,
       },
     ],
     ...(args.cause instanceof Error ? { cause: args.cause } : {}),
     logContext: {
-      reason: "required-column-count-failed",
+      reason:
+        args.through === undefined
+          ? "required-column-count-failed"
+          : "required-column-qualifier-not-read",
       table: args.table,
       field: args.field,
     },

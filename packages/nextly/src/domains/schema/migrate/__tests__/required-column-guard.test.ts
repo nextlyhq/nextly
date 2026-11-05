@@ -85,6 +85,8 @@ function facts(
             nullable: !NOT_NULL.has(`${table}.${String(column)}`),
             ...(SPELLED[table] === undefined ? {} : { table: SPELLED[table] }),
           },
+    // `main` stands for the plain table here, as SQLite's does; any other qualifier may not.
+    plainQualifier: qualifier => qualifier === "main",
     count: target => {
       const key = `${target.table}.${String(target.column)}`;
       counted.push(`${key}${target.byParent ? " by parent" : ""}`);
@@ -234,6 +236,54 @@ describe("judgeRequiredColumnTargets", () => {
     expect(f.counted).toEqual(["dc_pages.body", "dc_posts.null"]);
   });
 
+  // A qualifier the database says is the plain table's own (SQLite's `main`, MySQL's current
+  // database) is read as the table; any other may reach another schema, whose rows nothing here
+  // counts, so the change is refused before anything runs.
+  it("counts a table named through its own qualifier, and refuses one through any other", async () => {
+    const f = facts({ "dc_posts.sub_title": rows(2) });
+    expect(
+      await judgeRequiredColumnTargets(
+        [
+          {
+            table: "dc_posts",
+            column: "sub_title",
+            required: "sub_title",
+            qualifier: "main",
+          },
+        ],
+        f
+      )
+    ).toMatchObject([
+      { entity: { kind: "collection", slug: "posts" }, count: 2 },
+    ]);
+    const error = await judgeRequiredColumnTargets(
+      [
+        {
+          table: "dc_posts",
+          column: "sub_title",
+          required: "sub_title",
+          qualifier: "other",
+        },
+      ],
+      f
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    expect((error as NextlyError).publicData).toEqual({
+      errors: [
+        {
+          path: "fields.sub_title",
+          code: "REQUIRED_COLUMN_UNCOUNTED",
+          message:
+            "Table 'other.dc_posts': the rows that would break making 'sub_title' required could not be counted through the qualifier 'other', which may name another schema, so that change was refused before it ran. Write the table's unqualified name, then try again.",
+        },
+      ],
+    });
+    // Counted once, for the table named through its own qualifier.
+    expect(f.counted).toEqual(["dc_posts.sub_title"]);
+  });
+
   // A quoted mixed-case name is read lower-cased from the statement; the table is counted and
   // named as the database spells it.
   it("counts and names a table by its live spelling", async () => {
@@ -274,7 +324,8 @@ describe("judgeRequiredColumnTargets", () => {
     ]);
   });
 
-  it("a count that fails refuses, naming the table, rather than letting the change run", async () => {
+  // Named as the refusal over a counted break names it: by the field the column belongs to.
+  it("a count that fails refuses, naming the table and the field, rather than letting the change run", async () => {
     const cause = new Error("connection lost");
     const f = facts({ "dc_posts.sub_title": cause });
     const error = await judgeRequiredColumnTargets(
@@ -288,10 +339,10 @@ describe("judgeRequiredColumnTargets", () => {
     expect((error as NextlyError).publicData).toEqual({
       errors: [
         {
-          path: "fields.sub_title",
+          path: "fields.subTitle",
           code: "REQUIRED_COLUMN_UNCOUNTED",
           message:
-            "Table 'dc_posts': the rows that would break making 'sub_title' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
+            "Table 'dc_posts': the rows that would break making 'subTitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.",
         },
       ],
     });

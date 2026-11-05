@@ -106,6 +106,43 @@ describe("readNotNullChanges: the forms that make a column NOT NULL", () => {
     expect(changes.every(c => !c.writtenEarlier)).toBe(true);
   });
 
+  // Which schema a qualifier names is the guard's to decide, against the database: the reader
+  // keeps it on the change, and reads the table under its own name.
+  it("an ALTER through a qualified name, with its qualifier", () => {
+    for (const [dialect, sql] of [
+      [
+        "postgresql",
+        `ALTER TABLE "public"."dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`,
+      ],
+      ["mysql", "ALTER TABLE `app`.`dc_posts` MODIFY `subtitle` text NOT NULL"],
+      ["sqlite", `ALTER TABLE main.dc_posts ADD COLUMN "code" text NOT NULL`],
+    ] as const) {
+      const [change] = read(dialect, sql);
+      expect(change).toMatchObject({ table: "dc_posts" });
+      expect(change.qualifier).toBe(
+        dialect === "postgresql"
+          ? "public"
+          : dialect === "mysql"
+            ? "app"
+            : "main"
+      );
+    }
+    // A name with two qualifiers is not one this reading decides.
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "db"."public"."dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )
+    ).toEqual([]);
+    // An unqualified one carries none.
+    expect(
+      read(
+        "postgresql",
+        `ALTER TABLE "dc_posts" ALTER COLUMN "subtitle" SET NOT NULL`
+      )[0]
+    ).not.toHaveProperty("qualifier");
+  });
+
   // `DEFAULT NULL` leaves every existing row null, so it is no value for a NOT NULL column.
   it("ADD ... NOT NULL with DEFAULT NULL breaks every row, as one without a default does", () => {
     for (const [dialect, sql] of [
