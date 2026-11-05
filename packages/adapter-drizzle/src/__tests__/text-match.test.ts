@@ -8,7 +8,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { foldCase } from "../text-match";
+import {
+  foldCase,
+  registerSqliteFoldCase,
+  SQLITE_FOLD_CASE_FUNCTION,
+} from "../text-match";
 
 describe("foldCase", () => {
   it("folds capitals outside ASCII, as the other dialects' lower() does", () => {
@@ -32,5 +36,37 @@ describe("foldCase", () => {
   it("leaves a letter with no single capital, and ASCII punctuation, as it is", () => {
     expect(foldCase("STRAßE")).toBe("straße");
     expect(foldCase("50% A_B!")).toBe("50% a_b!");
+  });
+});
+
+describe("a final sigma", () => {
+  it("folds to the sigma its capital folds to, so a typed final sigma meets the stored capital", () => {
+    expect(foldCase("ΟΣ")).toBe("οσ");
+    expect(foldCase("ος")).toBe("οσ");
+  });
+});
+
+describe("registerSqliteFoldCase", () => {
+  it("registers the fold, deterministic, under the name the SQLite statements call", () => {
+    const registered: {
+      name: string;
+      deterministic: boolean;
+      fold: (v: unknown) => unknown;
+    }[] = [];
+    registerSqliteFoldCase({
+      function: (name, options, implementation) => {
+        registered.push({
+          name,
+          deterministic: options.deterministic,
+          fold: implementation,
+        });
+      },
+    });
+
+    expect(registered.map(entry => [entry.name, entry.deterministic])).toEqual([
+      [SQLITE_FOLD_CASE_FUNCTION, true],
+    ]);
+    expect(registered[0]?.fold("ΟΔΟΣ")).toBe("οδοσ");
+    expect(registered[0]?.fold(null)).toBeNull();
   });
 });

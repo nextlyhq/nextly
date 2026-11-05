@@ -15,6 +15,13 @@ import { WHERE_OPERATORS } from "../types";
 import type { WhereClause, WhereCondition, WhereOperator } from "../types";
 
 /**
+ * The final sigma and the letter it folds to: PostgreSQL and MySQL fold it after `lower()`, as
+ * SQLite's registered function does, so every dialect's case-insensitive match binds the pair.
+ */
+const SIGMA = "\u03C2";
+const FOLDED_SIGMA = "\u03C3";
+
+/**
  * Every assertion here compiles the returned condition to SQL text and parameters rather than
  * checking that a condition came back at all.
  *
@@ -117,8 +124,8 @@ const OPERATOR_CASES: ReadonlyArray<{
     // inherits. SQLite folds with its own function instead, compiled below.
     operator: "ILIKE",
     condition: { column: "name", op: "ILIKE", value: "%test%" },
-    sql: `lower("test_table"."name") like lower($1)`,
-    params: ["%test%"],
+    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5)`,
+    params: [SIGMA, FOLDED_SIGMA, "%test%", SIGMA, FOLDED_SIGMA],
   },
   {
     operator: "IN",
@@ -170,8 +177,8 @@ const OPERATOR_CASES: ReadonlyArray<{
     // both sides lower-cased, the value matched literally as CONTAINS matches it.
     operator: "ICONTAINS",
     condition: { column: "name", op: "ICONTAINS", value: "Test" },
-    sql: `lower("test_table"."name") like lower($1) escape '!'`,
-    params: ["%Test%"],
+    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+    params: [SIGMA, FOLDED_SIGMA, "%Test%", SIGMA, FOLDED_SIGMA],
   },
 ];
 
@@ -283,8 +290,8 @@ describe("buildDrizzleWhere", () => {
         expect(
           compile({ and: [{ column: "name", op: "ICONTAINS", value }] })
         ).toEqual({
-          sql: `lower("test_table"."name") like lower($1) escape '!'`,
-          params: [pattern],
+          sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+          params: [SIGMA, FOLDED_SIGMA, pattern, SIGMA, FOLDED_SIGMA],
         });
       }
     );

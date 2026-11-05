@@ -25,6 +25,8 @@ const TITLES = [
   "CRÈME",
   "Ärger",
   "straße",
+  // A capital sigma ending the word: a typed final sigma must meet it.
+  "ΟΔΟΣ",
   "İstanbul",
   "istanbul",
   "Spring launch",
@@ -104,6 +106,11 @@ describeEachDialect(
       expect(await titlesWhereContains("STRAßE")).toEqual(["straße"]);
       // The ASCII control: what matched before still matches.
       expect(await titlesWhereContains("SPRING")).toEqual(["Spring launch"]);
+    });
+
+    it("a `contains` filter meets a stored capital sigma with a typed final sigma", async () => {
+      expect(await titlesWhereContains("οδος")).toEqual(["ΟΔΟΣ"]);
+      expect(await titlesWhereContains("ΟΔΟΣ")).toEqual(["ΟΔΟΣ"]);
     });
 
     it("a `contains` filter matches the dotted capital İ as a plain i, as every dialect lowers it", async () => {

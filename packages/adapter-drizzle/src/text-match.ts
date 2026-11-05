@@ -37,14 +37,24 @@ export const SQLITE_FOLD_CASE_FUNCTION = "nextly_fold_case";
  * a plain "i", as `lower()` gives it on PostgreSQL (under a libc locale) and on MySQL; the
  * default mapping's "i" followed by a combining dot would keep "İstanbul" from matching
  * "istanbul" on SQLite alone. The dotless "ı" stays itself on all three, so it does not match "i".
+ *
+ * A final sigma ("ς") folds to "σ", so "ΟΣ" and "ος" meet: lower-casing alone leaves a typed
+ * final sigma as itself while its capital folds to "σ". {@link caseFolded} applies the same
+ * mapping after `lower()` on PostgreSQL and MySQL, so the three agree.
  */
 export function foldCase(text: string): string {
   let folded = "";
   for (const letter of text) {
-    folded += letter === "\u0130" ? "i" : letter.toLowerCase();
+    folded += FOLD_EXCEPTIONS[letter] ?? letter.toLowerCase();
   }
   return folded;
 }
+
+/** The letters whose fold is not their default lower case, and what they fold to. */
+const FOLD_EXCEPTIONS: Readonly<Record<string, string>> = {
+  "\u0130": "i",
+  "\u03C2": "\u03C3",
+};
 
 /**
  * `text` with its case folded, on `dialect`: the database's own `lower()` on PostgreSQL and
@@ -60,9 +70,44 @@ export function foldCase(text: string): string {
  * @returns The folded text
  */
 export function caseFolded(dialect: SupportedDialect, text: SQLWrapper): SQL {
+  // `replace` exists on both, with the same arguments: a final sigma folds as {@link foldCase}
+  // folds it on SQLite.
   return dialect === "sqlite"
     ? sql`${sql.identifier(SQLITE_FOLD_CASE_FUNCTION)}(${text})`
-    : sql`lower(${text})`;
+    : sql`replace(lower(${text}), ${"\u03C2"}, ${"\u03C3"})`;
+}
+
+/** The part of a SQLite connection that registers a SQL function, as `better-sqlite3` has it. */
+export interface SqliteFunctionHost {
+  function(
+    name: string,
+    options: { deterministic: boolean },
+    implementation: (value: unknown) => unknown
+  ): unknown;
+}
+
+/**
+ * Register {@link SQLITE_FOLD_CASE_FUNCTION} on a SQLite connection: what every connection a
+ * SQLite adapter opens must carry before Nextly's statements run on it, since `contains`,
+ * `ICONTAINS` and `ILIKE` call it there. The official SQLite adapter registers it on each
+ * connection it opens; an adapter of your own on SQLite calls this on each of its connections.
+ *
+ * Deterministic, since the fold reads nothing but its argument. NULL stays NULL, as `lower()`
+ * keeps it; a number or a blob is folded as the text SQLite would read it as.
+ *
+ * @experimental
+ */
+export function registerSqliteFoldCase(db: SqliteFunctionHost): void {
+  db.function(SQLITE_FOLD_CASE_FUNCTION, { deterministic: true }, value =>
+    value === null ? null : foldCase(textOf(value))
+  );
+}
+
+/** A SQL value as the text SQLite reads it as: a blob's bytes as UTF-8, anything else spelled. */
+function textOf(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+  return String(value);
 }
 
 /**
