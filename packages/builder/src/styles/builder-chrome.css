@@ -3628,7 +3628,11 @@
  * halo band would run along edges the page does not show, so only the ring is
  * drawn.
  */
-.nx-canvas-mark[data-clipped],
+.nx-canvas-mark[data-clipped] {
+  box-shadow: none;
+}
+
+/* As specific as a secondary selection's own halo rule, which it overrides. */
 .nx-canvas-mark[data-mark="selected"][data-secondary][data-clipped] {
   box-shadow: none;
 }
@@ -3638,7 +3642,10 @@
  * box's corners, which the shape leaves showing the page behind, so only the
  * ring is drawn, still outside the box.
  */
-.nx-canvas-mark[data-shaped],
+.nx-canvas-mark[data-shaped] {
+  box-shadow: none;
+}
+
 .nx-canvas-mark[data-mark="selected"][data-secondary][data-shaped] {
   box-shadow: none;
 }
