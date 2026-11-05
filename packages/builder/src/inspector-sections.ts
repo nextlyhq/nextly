@@ -48,6 +48,9 @@ export type InspectorSectionKey =
  * - `more`: only from "+ More", or once it holds a value.
  * - `flex`, `grid`, `flex-or-grid`: while the block is that kind of container.
  * - `media`: on a replaced element (an image, a video, an embed).
+ * - `framed-media`: on a replaced element whose fit leaves a choice of where
+ *   it sits: Cover (which part stays in view), Contain or None (where it sits
+ *   in its box). Fill stretches it to the box, so there is nothing to place.
  * - `state`: while a state other than Normal is being edited.
  */
 export type PropertyTier =
@@ -57,6 +60,7 @@ export type PropertyTier =
   | "grid"
   | "flex-or-grid"
   | "media"
+  | "framed-media"
   | "state";
 
 export interface InspectorSectionDef {
@@ -111,6 +115,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     // changes first on one. Both show only on a replaced element.
     properties: [
       ["objectFit", "media"],
+      ["objectPosition", "framed-media"],
       ["aspectRatio", "media"],
       ["width", "common"],
       ["height", "common"],
@@ -233,12 +238,17 @@ export function placementOf(
   return { section, tier: "more", order: index * 100 + 99 };
 }
 
+/** The fits that leave a choice of where the content sits. */
+const FRAMED_FITS: ReadonlySet<string> = new Set(["cover", "contain", "none"]);
+
 /** What the block is, as far as a tier needs to know. */
 export interface TierContext {
   /** The display the block is given here, if it is given one. */
   readonly display: string | undefined;
   /** Whether the block renders a replaced element: an image, a video, an embed. */
   readonly media: boolean;
+  /** The fit the block is given here, if it is given one. */
+  readonly objectFit?: string | undefined;
   /** The state being edited. */
   readonly state: StyleState;
 }
@@ -261,6 +271,8 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return flex || grid;
     case "media":
       return context.media;
+    case "framed-media":
+      return context.media && FRAMED_FITS.has(context.objectFit ?? "");
     case "state":
       return context.state !== "base";
   }

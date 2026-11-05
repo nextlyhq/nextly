@@ -179,6 +179,74 @@ export function relFor(
   return parts.size > 0 ? [...parts].join(" ") : undefined;
 }
 
+/** The props a block links with: an address or an entry, and how it opens. */
+export interface LinkProps {
+  href?: string;
+  entryCollection?: string;
+  entryId?: string;
+  target?: "_self" | "_blank";
+  rel?: string;
+}
+
+/**
+ * The link props a block declares, by the names the inspector's link control
+ * groups and {@link linkFor} follows: one declaration, so a button and a
+ * linked image cannot drift apart in what they store.
+ */
+export const LINK_PROPS = {
+  href: { label: "Link", role: "content", type: "url" },
+  entryCollection: {
+    label: "Linked collection",
+    role: "content",
+    type: "text",
+  },
+  entryId: { label: "Linked entry", role: "content", type: "text" },
+  target: {
+    label: "Open link in",
+    optionLabels: { _self: "This tab", _blank: "New tab" },
+    type: "select",
+    options: ["_self", "_blank"],
+  },
+  rel: { label: "Link relationship", type: "text" },
+} as const;
+
+/** A link's attributes, ready to spread onto an `<a>`. */
+export interface LinkAttributes {
+  readonly href: string;
+  readonly target?: "_blank";
+  readonly rel?: string;
+}
+
+/**
+ * Where a block links, or `undefined` for nowhere: every block that links
+ * reads its destination here, so a button and a linked image follow the same
+ * address for the same props.
+ *
+ * An entry reference beats a typed URL: it survives the entry being renamed,
+ * which a pasted path does not. Resolution is a read, so it can fail, and a
+ * failure means "no destination" rather than a lost page. Either address must
+ * be one `url` follows, so a `javascript:` link draws no link at all.
+ */
+export async function linkFor(
+  props: LinkProps,
+  resolveEntryPath: (collection: string, id: string) => Promise<string | null>
+): Promise<LinkAttributes | undefined> {
+  const collection = text(props.entryCollection);
+  const entryId = text(props.entryId);
+  const resolvedPath =
+    collection !== "" && entryId !== ""
+      ? await resolveEntryPath(collection, entryId).catch(() => null)
+      : null;
+  const href = url(resolvedPath ?? undefined) ?? url(props.href);
+  if (href === undefined) return undefined;
+  const rel = relFor(props.target, props.rel);
+  return {
+    href,
+    ...(props.target === "_blank" ? { target: "_blank" as const } : {}),
+    ...(rel === undefined ? {} : { rel }),
+  };
+}
+
 /**
  * Whether a URL's origin is one the host named as trusted.
  *

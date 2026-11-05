@@ -26,7 +26,7 @@ afterEach(cleanup);
 const DOCUMENT = {} as EditorState["document"];
 
 function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
-  const { tag, orientation } = useCanvasReading(root, "n1", {
+  const { tag, orientation, picture } = useCanvasReading(root, "n1", {
     document: DOCUMENT,
     state,
   });
@@ -38,6 +38,7 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
           ? "unknown"
           : `${orientation.writingMode}/${orientation.direction}`}
       </span>
+      <span data-testid="picture">{picture ?? "none"}</span>
       <span data-testid="layout">
         {orientation === undefined
           ? "unknown"
@@ -46,6 +47,35 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
     </>
   );
 }
+
+describe("reading the picture a node draws", () => {
+  it("reads the picture the node is, or the one inside it, and none for others", () => {
+    // What a focal point is aimed over: the picture the canvas really draws,
+    // whether the node is the image itself or a link or figure around it.
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<img data-nx-node="n1" src="/team.png" alt="">';
+    const view = render(<Reader root={canvas} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/team.png");
+
+    const linked = document.createElement("div");
+    linked.innerHTML =
+      '<a data-nx-node="n1" href="/about"><img src="/team.png" alt=""></a>';
+    view.rerender(<Reader root={linked} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/team.png");
+
+    const text = document.createElement("div");
+    text.innerHTML = '<p data-nx-node="n1">Words</p>';
+    view.rerender(<Reader root={text} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A block holding another block's image draws no picture of its own.
+    const card = document.createElement("div");
+    card.innerHTML =
+      '<div data-nx-node="n1"><img data-nx-node="n2" src="/child.png" alt=""></div>';
+    view.rerender(<Reader root={card} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+  });
+});
 
 describe("reading the tag from a canvas", () => {
   it("answers once a canvas that mounted LATE appears", () => {

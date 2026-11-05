@@ -8343,6 +8343,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   min-width: 0;
 }
 
+/* A square "…" at the control height: a decoration's style, a focal point's CSS. */
+.nx-focal__more,
 .nx-style-inspector__decoration-style {
   display: grid;
   place-items: center;
@@ -8388,6 +8390,140 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   align-items: center;
   gap: 0.5rem;
   font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * A focal point: nine points over the block's own picture, a readout of the
+ * point beside them, and "…" for a point written as CSS under them. The
+ * frame is a square three points across, each point a 24px target.
+ */
+/*
+ * The points on the left; beside them the readout, and "…" under it, so the
+ * readout has the width of the field less the points and reads in words.
+ */
+.nx-focal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "frame readout"
+    "frame more"
+    "css css";
+  align-items: start;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-focal__frame {
+  grid-area: frame;
+}
+
+.nx-focal__readout {
+  grid-area: readout;
+}
+
+.nx-focal__more {
+  grid-area: more;
+}
+
+.nx-focal__frame {
+  position: relative;
+  inline-size: 4.5rem;
+  block-size: 4.5rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-muted);
+}
+
+.nx-focal__picture,
+.nx-focal__swatch {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* No picture to aim over: a quiet field of the muted surface. */
+.nx-focal__swatch {
+  background: linear-gradient(
+    135deg,
+    var(--nx-muted) 0 50%,
+    var(--nx-builder-border) 50% 100%
+  );
+}
+
+.nx-focal__points {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+
+.nx-focal__point {
+  display: grid;
+  place-items: center;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Each point a dot with a ring, legible over any picture. */
+.nx-focal__point::after {
+  content: "";
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--nx-background);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  opacity: 0.75;
+}
+
+.nx-focal__point[aria-checked="true"]::after,
+.nx-focal__point[data-inherited]::after {
+  inline-size: 12px;
+  block-size: 12px;
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--nx-foreground);
+}
+
+/* Inherited: drawn, but hollow, so it never reads as set here. */
+.nx-focal__point[data-inherited]::after {
+  background: transparent;
+}
+
+.nx-focal__point:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+.nx-focal__point:disabled {
+  cursor: default;
+}
+
+.nx-focal__readout {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-focal__readout b {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.nx-focal__readout span {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-focal__css {
+  grid-area: css;
 }
 
 /*
