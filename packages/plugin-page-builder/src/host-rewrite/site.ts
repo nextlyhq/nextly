@@ -5,7 +5,8 @@
  * Read as the SYSTEM, because a host the person running the rewrite cannot see
  * still renders the component. Written as that PERSON, through the identity
  * their request resolved, so a host they may not update (or, for a live row,
- * publish) is refused by the same rules their own save would meet.
+ * publish) is refused by the same rules their own save would meet. A run no
+ * person started writes as the system instead (see `WriteIdentity`).
  *
  * @module host-rewrite/site
  */
@@ -13,8 +14,8 @@ import {
   NextlyError,
   readStoredFields,
   updateIfUnchanged,
-  type PluginRouteIdentity,
   type PluginStoredDocument,
+  type PluginStoredIdentity,
 } from "@nextlyhq/plugin-sdk";
 
 import { blocksFieldReach } from "../class-usage-blocks-fields";
@@ -68,6 +69,17 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
   }): Promise<unknown>;
 }
 
+/**
+ * The identity a write runs as: the caller's request, as it resolved it, or
+ * the system, for a run no person started (removing a component's retired
+ * field values, which no reader is ever shown and every write already drops).
+ * The conditional write's own identity, so either is judged by core.
+ */
+export type WriteIdentity = PluginStoredIdentity;
+
+/** The system, as the stored read and the conditional write take it. */
+const THE_SYSTEM = { overrideAccess: true } as const;
+
 /** What the rewrite needs from the installed plugin and the person running it. */
 export interface RewriteSite {
   /** The booted Direct API. */
@@ -89,10 +101,10 @@ export interface RewriteSite {
   /** The component being converted, for the Layout scan. */
   readonly componentId: string;
   /**
-   * Who the stored reads and the writes are made as, as the caller's own
-   * request resolved them.
+   * Who the writes are made as: resolved from the caller's own request, or the
+   * system for a run no person started.
    */
-  readonly identity: () => Promise<PluginRouteIdentity>;
+  readonly identity: () => Promise<WriteIdentity>;
 }
 
 /** A Single as the walk reads it. */
@@ -166,10 +178,18 @@ function cursorFrom(text: string | null): Cursor | null {
   return null;
 }
 
-/** The walk's hosts on a real site. */
-export function siteHostSource(site: RewriteSite): HostSource {
+/** What walking every document holding blocks needs of the site. */
+export type DocumentSite = Pick<
+  RewriteSite,
+  "nextly" | "collectionSlugs" | "resolveCollection" | "singles" | "locales"
+>;
+
+/** A collection's registry record, resolved once per walk. */
+function collectionResolver(
+  site: Pick<RewriteSite, "resolveCollection">
+): (slug: string) => Promise<unknown> {
   const reaches = new Map<string, Promise<unknown>>();
-  const collection = (slug: string) => {
+  return slug => {
     let held = reaches.get(slug);
     if (held === undefined) {
       held = site.resolveCollection(slug);
@@ -177,6 +197,24 @@ export function siteHostSource(site: RewriteSite): HostSource {
     }
     return held;
   };
+}
+
+/**
+ * Every document on the site holding blocks, with its hosts, after `cursor`:
+ * each collection's entries, then each Single. The walk every reader of the
+ * site's blocks shares, a rewrite's and a count's alike, so none of them
+ * reaches documents another misses.
+ */
+export function siteDocuments(
+  site: DocumentSite
+): (cursor: string | null) => AsyncGenerator<HostDocument> {
+  const collection = collectionResolver(site);
+  return cursor => walkDocuments(site, collection, cursorFrom(cursor));
+}
+
+/** The walk's hosts on a real site. */
+export function siteHostSource(site: RewriteSite): HostSource {
+  const collection = collectionResolver(site);
   return {
     documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
     cursorOf: document => JSON.stringify(cursorOfDocument(document)),
@@ -228,7 +266,7 @@ function cursorOfDocument(document: HostDocument): Cursor {
 
 /** Every document holding blocks: each collection's entries, then each Single. */
 async function* walkDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   collection: (slug: string) => Promise<unknown>,
   cursor: Cursor | null
 ): AsyncGenerator<HostDocument> {
@@ -240,7 +278,7 @@ async function* walkDocuments(
 
 /** Each collection's entries, by slug and then id, from the cursor on. */
 async function* collectionDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   collection: (slug: string) => Promise<unknown>,
   cursor: Cursor | null
 ): AsyncGenerator<HostDocument> {
@@ -255,7 +293,7 @@ async function* collectionDocuments(
 
 /** Each Single holding blocks, by slug, after `after` when given. */
 async function* singleDocuments(
-  site: RewriteSite,
+  site: DocumentSite,
   after: string | undefined
 ): AsyncGenerator<HostDocument> {
   const singles = await site.singles();
@@ -278,7 +316,7 @@ function unlisted(what: string): NextlyError {
 
 /** One collection's entries, by id, after `after`. */
 async function* entriesOf(
-  site: RewriteSite,
+  site: DocumentSite,
   slug: string,
   declaration: unknown,
   after: string | undefined
@@ -344,7 +382,9 @@ function hostsOf(
       ? [...locales]
       : [undefined];
   return [
-    ...reach.fields.flatMap(field => fieldHosts(at, field, languages)),
+    ...reach.fields.flatMap(field =>
+      fieldHosts(at, field, languages, everyField)
+    ),
     ...(reach.unreachable
       ? scanHosts(
           at,
@@ -365,14 +405,20 @@ function fieldHosts(
     readonly path: readonly string[];
     readonly descriptor: { readonly localized: boolean };
   },
-  languages: Languages
+  languages: Languages,
+  /** Whether the declaration's per-language fields are unknown. */
+  everyField: boolean
 ): HostCandidate[] {
   const hosts: HostCandidate[] = [];
   const topLevel = field.path.length === 1;
+  // Only a top-level field the declaration says is translated is known to be
+  // stored per language; any other read per language may be one stored value.
+  const perLanguage = topLevel && field.descriptor.localized && !everyField;
   for (const locale of languages(!topLevel || field.descriptor.localized)) {
     hosts.push({
       host: { ...at, path: field.path, ...inLanguage(locale) },
       access: topLevel ? "write" : "read",
+      ...(locale !== undefined && !perLanguage ? { maybeShared: true } : {}),
     });
   }
   return hosts;
@@ -391,6 +437,9 @@ function scanHosts(
       host: { ...at, path: [], ...inLanguage(locale) },
       access: "scan",
       excluded,
+      // A scan reads in every language because which values core keeps per
+      // language is unknown.
+      ...(locale === undefined ? {} : { maybeShared: true }),
     });
   }
   return hosts;
@@ -429,9 +478,7 @@ async function layoutsNaming(site: RewriteSite): Promise<LeftHost[]> {
 }
 
 /** Reads a host's stored forms as the system. */
-export function siteHostReader(
-  site: Pick<RewriteSite, "nextly" | "identity">
-): HostReader {
+export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
   return async host => {
     const nextly = await site.nextly();
     // The lifecycle facts, and only those, through the Direct API: whether
@@ -456,17 +503,12 @@ export function siteHostReader(
         liveState,
       };
     }
-    const identity = await site.identity();
     return {
       published:
         live === null
           ? { kind: "absent" }
-          : await storedValue(
-              identity,
-              host,
-              liveState === null ? "draft" : "published"
-            ),
-      draft: hasDraft ? await storedValue(identity, host, "draft") : null,
+          : await storedValue(host, liveState === null ? "draft" : "published"),
+      draft: hasDraft ? await storedValue(host, "draft") : null,
       liveState,
     };
   };
@@ -480,17 +522,16 @@ function storedDocumentOf(host: HostAddress): PluginStoredDocument {
 }
 
 /**
- * A host's field as stored, in one form and one language, as the person may
- * read it: no read hook shapes it, so the step judges, and the hash covers,
- * exactly what the write will replace.
+ * A host's field as stored, in one form and one language, read as the system
+ * as every host is read: no read hook shapes it, so the step judges, and the
+ * hash covers, exactly what the write will replace.
  */
 async function storedValue(
-  identity: PluginRouteIdentity,
   host: HostAddress,
   form: "published" | "draft"
 ): Promise<ReadValue> {
   const field = host.path.join(".");
-  const read = await readStoredFields(identity, {
+  const read = await readStoredFields(THE_SYSTEM, {
     ...storedDocumentOf(host),
     fields: [field],
     form,

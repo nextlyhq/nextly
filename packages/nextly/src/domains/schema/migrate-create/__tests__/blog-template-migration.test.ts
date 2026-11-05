@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../../../lib/system-columns";
 import { media } from "../../../../schemas/media/mysql";
 import { users } from "../../../../schemas/users/mysql";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
@@ -251,6 +252,10 @@ describe("the blog template's migration", () => {
         }
         const byName = new Map(columns.map(c => [c.name, c]));
         for (const column of table.columns) {
+          // `nextly migrate` adds the per-document columns to every content
+          // table after the app's files run, so a template's file need not
+          // carry them.
+          if (MIGRATE_STEP_COLUMN_NAMES.includes(column.name)) continue;
           const found = byName.get(column.name);
           const wanted = `${column.type}${column.nullable ? "" : " NOT NULL"}`;
           if (!found) {

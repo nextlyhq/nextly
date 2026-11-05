@@ -17,6 +17,7 @@ import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { batches } from "../../auth/access/retired-manage-permissions";
 import { isMissingNamedColumnError } from "../../database/missing-column";
+import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
@@ -130,31 +131,68 @@ export interface PopulateCompanionArgs {
 export async function populateCompanionFields(
   args: PopulateCompanionArgs
 ): Promise<void> {
-  const { db, companionTable, localizedFields, rows, localeChain } = args;
+  const { rows, localeChain, ...shared } = args;
+  await populateCompanionFieldsByLanguage({
+    ...shared,
+    byLanguage: [{ rows, localeChain }],
+  });
+}
+
+/**
+ * {@link populateCompanionFields} for several languages at once, each with its
+ * own rows and fallback chain: ONE query fetches the companion rows of every
+ * chain (`_parent ∈ ids`, `_locale ∈` their union), and each language's rows
+ * are then resolved from them by its own chain, as a read of that language
+ * alone resolves them. One language is the read above. Mutates each
+ * language's rows in place.
+ */
+export async function populateCompanionFieldsByLanguage(
+  args: Omit<PopulateCompanionArgs, "rows" | "localeChain"> & {
+    byLanguage: readonly {
+      rows: Record<string, unknown>[];
+      localeChain: string[];
+    }[];
+  }
+): Promise<void> {
+  const { db, companionTable, localizedFields } = args;
   const idKey = args.idKey ?? "id";
   // Not ready means there is nothing to join to, so the main table's values stand.
   if (args.readiness !== "ready") return;
-  if (
-    rows.length === 0 ||
-    localizedFields.length === 0 ||
-    localeChain.length === 0
-  ) {
-    return;
-  }
+  const languages = args.byLanguage.filter(
+    language => language.rows.length > 0 && language.localeChain.length > 0
+  );
+  if (localizedFields.length === 0 || languages.length === 0) return;
 
   // Every read first, then every row filled: a read that fails leaves no
-  // row half translated.
+  // row half translated. One row per entry and the union of the chains, so
+  // the entries every language asks about are read once for them all.
+  const ids = [
+    ...new Set(
+      languages
+        .flatMap(language => language.rows.map(r => r[idKey]))
+        .filter((id): id is string | number => id !== null && id !== undefined)
+    ),
+  ];
   const companionRows = await readCompanionRows({
     db,
     companionTable,
-    rows,
+    rows: ids.map(id => ({ [idKey]: id })),
     idKey,
-    locales: localeChain,
+    locales: [...new Set(languages.flatMap(language => language.localeChain))],
     maxParams: args.maxParams,
   });
   if (companionRows === undefined) return;
 
-  fillCompanionFields({ ...args, companionRows });
+  for (const language of languages) {
+    fillCompanionFields({
+      localizedFields,
+      statusValues: args.statusValues,
+      idKey: args.idKey,
+      rows: language.rows,
+      localeChain: language.localeChain,
+      companionRows,
+    });
+  }
 }
 
 /** How many values one companion read may bind. */
@@ -235,9 +273,13 @@ interface JoinableDb {
         table: unknown,
         on: SQL
       ) => {
-        where: (
-          where: SQL | SQLWrapper | undefined
-        ) => Promise<Record<string, Record<string, unknown> | null>[]>;
+        where: (where: SQL | SQLWrapper | undefined) => Promise<
+          {
+            entry: Record<string, unknown> | null;
+            translation: Record<string, unknown> | null;
+            revision: unknown;
+          }[]
+        >;
       };
     };
   };
@@ -263,7 +305,14 @@ export async function selectEntryWithCompanion(args: {
   const main = args.mainTable as Record<string, unknown>;
   const companion = args.companionTable as CompanionTable;
   const joined = await (args.db as JoinableDb)
-    .select({ entry: args.mainTable, translation: args.companionTable })
+    .select({
+      entry: args.mainTable,
+      translation: args.companionTable,
+      // Each translation row's version counter, named here because the
+      // translation table's runtime model does not declare it: the version a
+      // read returns comes out of this one statement too.
+      revision: sql`${args.companionTable}.${sql.identifier(DOCUMENT_REVISION_COLUMN)}`,
+    })
     .from(args.mainTable)
     .leftJoin(
       args.companionTable,
@@ -276,7 +325,9 @@ export async function selectEntryWithCompanion(args: {
   return {
     entry: joined[0]?.entry ?? undefined,
     companionRows: joined.flatMap(row =>
-      row.translation ? [row.translation] : []
+      row.translation
+        ? [{ ...row.translation, [DOCUMENT_REVISION_COLUMN]: row.revision }]
+        : []
     ),
   };
 }

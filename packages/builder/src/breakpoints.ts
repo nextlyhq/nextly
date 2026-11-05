@@ -414,6 +414,30 @@ export function liveBreakpointsFor(
 }
 
 /**
+ * The breakpoints that apply where a write at `edited` lands, as the canvas
+ * shows it: the edited axis's own band ({@link liveBreakpointsFor}), and on
+ * the other axis the contexts the canvas is already applying (`live`).
+ *
+ * Both axes apply at once in the browser, so a value at the canvas's tablet
+ * width still shows beneath a small-container value being edited.
+ */
+export function editedTierLive(
+  set: BreakpointSet | undefined,
+  edited: BreakpointId,
+  live: readonly BreakpointId[]
+): BreakpointId[] {
+  const axisOf = new Map(
+    breakpointContexts(set).map(context => [context.id, context.axis])
+  );
+  const axis = axisOf.get(edited);
+  const band = liveBreakpointsFor(set, edited);
+  const other = live.filter(
+    id => axisOf.has(id) && axisOf.get(id) !== axis && !band.includes(id)
+  );
+  return [...band, ...other];
+}
+
+/**
  * The breakpoints whose rules the BROWSER is currently applying.
  *
  * Asked of the browser rather than derived from the breakpoint being edited,

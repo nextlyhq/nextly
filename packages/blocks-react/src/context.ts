@@ -1,7 +1,10 @@
 import type {
+  BindingFieldShape,
+  BindingIssue,
   BlockRenderArgs as EngineBlockRenderArgs,
   BlockDefinition as EngineBlockDefinition,
   RemotePatternInput,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
@@ -104,6 +107,16 @@ export interface BlocksPublicReader {
   count(
     query: Pick<BlocksQuery, "collection" | "filters" | "locale">
   ): Promise<number>;
+  /**
+   * One Single, published, with the fields the public may read, or `null`
+   * when there is nothing a visitor may see. Absent from a reader made over a
+   * source that cannot read Singles.
+   */
+  findSingle?(query: {
+    slug: string;
+    locale?: string;
+    select?: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /**
@@ -296,6 +309,26 @@ export interface BlockHostPolicy {
 }
 
 /**
+ * An icon a host resolved: what it is now and the SVG it draws.
+ *
+ * @experimental
+ */
+export interface ResolvedIcon {
+  /** The id it resolved as, which names the current icon after a rename. */
+  readonly id: string;
+  /** Its name within the set (`star`), for an accessible name when none is given. */
+  readonly name: string;
+  /** The SVG's inner markup, trusted: it comes from the host's own set. */
+  readonly body: string;
+  readonly viewBox: string;
+  /**
+   * Drawn by its stroke in the text colour (`stroke="currentColor"`), as
+   * Lucide's are, rather than by its fill.
+   */
+  readonly stroked: boolean;
+}
+
+/**
  * The context every block render receives.
  *
  * Resolver functions rather than raw maps: a host that resolves media through a
@@ -337,6 +370,19 @@ export interface PageContext {
    */
   resolveMedia(id: string): Promise<ResolvedMedia | null>;
   /**
+   * Resolve an icon id (`lucide:star`) to the SVG it draws, or `null` when
+   * this host does not draw that icon.
+   *
+   * Async, so a set too large to load on every render is loaded only when a
+   * page draws one of its icons. Optional, so a host that draws no icons is
+   * not made to answer: a block asking an absent resolver draws nothing. A
+   * published page is given the Lucide set by its route; a standalone render
+   * passes `resolveLucideIcon` from `@nextlyhq/blocks-react/icons/lucide`.
+   *
+   * @experimental
+   */
+  resolveIcon?: (id: string) => Promise<ResolvedIcon | null>;
+  /**
    * Resolve an entry reference to a path, or `null` when it has none.
    *
    * Async for the same reason: the path depends on the referenced entry's slug
@@ -357,6 +403,14 @@ export interface PageContext {
    * Absent outside a repeater.
    */
   item?: Record<string, unknown>;
+  /**
+   * The collection {@link item} comes from, set by the repeater beside it, so
+   * a binding to the item is checked against that collection's fields.
+   *
+   * Absent outside a repeater, and in a repeater whose items have no
+   * collection; their bindings are then judged by the values' own shapes.
+   */
+  itemSource?: string;
   /**
    * What is left of this render's query allowance.
    *
@@ -397,7 +451,96 @@ export interface BlockRenderArgs<P>
    * context it built itself.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model, for a block whose markup differs by it. Absent
+   * is the engine's default, `gaps`. An argument for the reason `hostPolicy`
+   * is one.
+   */
+  spacingMode?: SpacingMode;
 }
+
+/**
+ * The site settings a page may bind, under the names the settings use, each
+ * `null` while the site has not set it.
+ *
+ * Only these: the settings also hold values no visitor may see, such as the
+ * administrator's address, so a page is handed this allowlist and nothing
+ * else. The shape of what `nextly/runtime` reads for a page, written out here
+ * because this entry must not import `nextly`.
+ *
+ * @experimental
+ */
+export interface BlocksSiteSettings {
+  readonly applicationName: string | null;
+  readonly siteUrl: string | null;
+  readonly logoUrl: string | null;
+  /** An IANA time zone such as `Europe/Paris`. */
+  readonly timezone: string | null;
+}
+
+/**
+ * Whose field shapes: a collection's entries, or one Single.
+ *
+ * @experimental
+ */
+export type BlocksFieldShapeRef =
+  | { readonly collection: string }
+  | { readonly single: string };
+
+/**
+ * The fields a page's bindings are checked against, as the public sees them.
+ *
+ * `undefined` for a source whose shapes are not known; its bindings are then
+ * judged by the values they read.
+ *
+ * @experimental
+ */
+export interface BlocksFieldShapes {
+  fieldsOf(ref: BlocksFieldShapeRef): readonly BindingFieldShape[] | undefined;
+}
+
+/**
+ * What a page's bindings read, already read, and how their values are shown.
+ *
+ * Every source here is the PUBLIC's: the entry re-read as an anonymous visitor
+ * reads it, the Singles and site settings likewise. The renderer takes values
+ * only from here, never from the context's `entry`, which a route may have
+ * read with more access than a visitor has. A source left out is one this
+ * page did not read: its bindings render their fallbacks and are reported.
+ *
+ * @experimental
+ */
+export interface PageBindings {
+  /** The entry the page shows, as the public reads it; `null` when it may see none. */
+  readonly entry?: Readonly<Record<string, unknown>> | null;
+  /** Where the entry's field shapes are found. */
+  readonly entryRef?: BlocksFieldShapeRef;
+  /** Each Single the page binds, by slug; `null` for one the public may not see. */
+  readonly singles?: ReadonlyMap<
+    string,
+    Readonly<Record<string, unknown>> | null
+  >;
+  /** The site settings a page may show; `null` when there are none. */
+  readonly site?: BlocksSiteSettings | null;
+  readonly fieldShapes?: BlocksFieldShapes;
+  /**
+   * The time zone a date-time is shown in. UTC when absent, and when it is
+   * not a zone the runtime knows. A calendar date is always shown as its own
+   * day, whatever the zone.
+   */
+  readonly timeZone?: string;
+}
+
+/**
+ * Told about the bindings a render could not use as stored.
+ *
+ * Called once with what the page's own pass found, and again for each new
+ * problem a list item's binding meets while the list draws. Nothing is
+ * written during a render; a route logs these, an editor shows them.
+ *
+ * @experimental
+ */
+export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
 
 /** A context with nothing wired up: the standalone default. */
 export function createStandaloneContext(

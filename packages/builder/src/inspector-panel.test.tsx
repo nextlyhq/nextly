@@ -29,11 +29,13 @@ import * as React from "react";
 
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import {
+  BASE_BREAKPOINT,
   clearBlocks,
   hasBlock,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
@@ -117,38 +119,32 @@ function mount(node: Partial<BlockNode> = {}) {
 }
 
 describe("what InspectorPanel forwards to the style tab", () => {
-  it("carries the class props through, so the selector reaches the editor", () => {
+  it("carries the class library through, so the bar lists the block's shared styles", () => {
     /*
-     * The chain is the feature. `StyleInspectorPanel` treats a missing
-     * `onCreateClass` as the host opting out, so a prop dropped ANYWHERE
-     * between the host and it is invisible: the selector renders fine in
-     * isolation, its own tests pass, and every real selection in the shipped
-     * editor shows nothing at all.
-     *
-     * Asserted through the rendered SELECTOR rather than by inspecting props,
-     * because what matters is that it arrives — a forwarding test that checked
-     * the call would pass on a panel that received the prop and ignored it.
+     * The chain is the feature: a library dropped anywhere between the host
+     * and the bar is invisible, the bar rendering fine with no chips at all.
+     * Asserted through the rendered chip, because what matters is that it
+     * arrives.
      */
     register();
-    const editor = editorFor(documentOf({}));
     render(
       <InspectorPanel
-        editor={editor}
-        onCreateClass={vi.fn(async () => ({
-          ok: true as const,
-          classId: "id-new",
-        }))}
+        editor={editorFor(documentOf({ classes: ["id-hero"] }))}
         classLibrary={[
-          { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+          {
+            id: "id-hero",
+            slug: "hero",
+            label: "Hero",
+            orderIndex: 0,
+            styles: {},
+          },
         ]}
       />
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.getByRole("combobox", { name: /add a class/i })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Hero" })).toBeDefined();
   });
 
   it("names Content and Style for the inspector's own tab rules", () => {
@@ -163,15 +159,19 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
   });
 
-  it("shows no class surface when the host passed nothing", () => {
-    // The control: the assertion above must be about forwarding, not about the
-    // selector rendering unconditionally.
+  it("lists no shared style when the host passed no library", () => {
+    // The control: the assertion above must be about forwarding, not about a
+    // chip drawn from the node's ids alone.
     register();
-    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({ classes: ["id-hero"] }))}
+      />
+    );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /hero/i })).toBeNull();
   });
 
   it("offers the state switcher when the host can act on the choice", () => {
@@ -185,9 +185,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.getByRole("radiogroup", { name: "Interaction state" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^State: / })).toBeDefined();
   });
 
   it("withholds it from a host that cannot act on the choice", () => {
@@ -202,9 +200,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
   });
 
   it("marks the states the SELECTED NODE has styles for", () => {
@@ -238,12 +234,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
+    // The State menu's trigger names a state with values the canvas is not
+    // showing, and only that one.
     expect(
-      screen.getByRole("radio", { name: /Hover.*has styles/ })
+      screen.getByRole("button", { name: "State: Normal, Hover has values" })
     ).toBeDefined();
-    expect(screen.queryByRole("radio", { name: /Pressed.*has styles/ })).toBe(
-      null
-    );
   });
 
   it("edits BASE when a host supplies a state with no setter", () => {
@@ -270,9 +265,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
     expect(editedStyleState({ state: "hover" })).toBe("base");
     expect(editedStyleState({ state: "hover", onChange: vi.fn() })).toBe(
       "hover"
@@ -300,9 +293,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
       />
     );
 
-    expect(
-      screen.getByRole("radiogroup", { name: "Interaction state" })
-    ).toBeDefined();
+    expect(screen.getByRole("button", { name: /^State: / })).toBeDefined();
   });
 
   it("still opens on Content for an ordinary mount", () => {
@@ -319,9 +310,7 @@ describe("what InspectorPanel forwards to the style tab", () => {
       />
     );
 
-    expect(
-      screen.queryByRole("radiogroup", { name: "Interaction state" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^State: / })).toBeNull();
   });
 
   it("reports the state the author chose", () => {
@@ -335,7 +324,11 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    fireEvent.click(screen.getByRole("radio", { name: /^Hover/ }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /^State: / }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Hover" }));
 
     expect(onStyleStateChange).toHaveBeenCalledWith("hover");
   });
@@ -396,6 +389,59 @@ function openAdvanced(): void {
     fireEvent.click(summary);
   }
 }
+
+describe("the picture the canvas draws, carried to the focal point", () => {
+  it("previews a contextual point where the canvas resolves it", () => {
+    /*
+     * The whole chain, from the canvas to the preview: the panel reads where
+     * the canvas places the picture and lends it, through the style tab and
+     * the panel's sections, to the focal point. A point the inspector cannot
+     * resolve itself (a variable) previews where the canvas put it, and a
+     * link dropped anywhere on the way previews the inspector's default.
+     */
+    // A block whose style tab offers only its dimensions, opened first.
+    registerBlocks(
+      [
+        {
+          name: "acme/picture",
+          version: 1,
+          description: "A picture.",
+          example: { props: {} },
+          editor: { label: "Picture" },
+          props: {},
+          supports: { dimensions: true },
+          render: () => null,
+        },
+      ] as never,
+      { source: "inspector-panel-test" }
+    );
+    const canvas = document.createElement("div");
+    canvas.innerHTML =
+      '<img data-nx-node="a" src="/team.png" alt="" style="object-position: 100% 0%">';
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          objectFit: "cover",
+          objectPosition: "var(--image-focus)",
+        },
+      },
+    } as NodeStyles;
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({ type: "acme/picture", styles }))}
+        canvasRoot={canvas}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    const backdrop = document.querySelector(
+      ".nx-focal__picture"
+    ) as HTMLImageElement | null;
+    expect(backdrop?.getAttribute("src")).toBe("/team.png");
+    expect(backdrop?.style.objectPosition).toBe("100% 0%");
+  });
+});
 
 describe("InspectorPanel block card", () => {
   it("shows the icon, the author's label beside the type, and the description", () => {
@@ -550,6 +596,19 @@ describe("InspectorPanel block card", () => {
       patch: {},
       unset: ["locked"],
     });
+  });
+
+  it("says why a locked block is held once, in its card, in one wording", () => {
+    // The card's lock line already says it, and so does a held control's
+    // tooltip: a line under the Style tab's bar said it a third time, and
+    // in other words.
+    mount({ locked: true, props: { text: "Hi" } });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(document.querySelector('[data-lock="layers"]')?.textContent).toBe(
+      "Locked: it can't be moved, deleted or edited. Unlock it from the block's menu."
+    );
+    expect(document.querySelector('[data-read-only="style"]')).toBeNull();
   });
 
   it("says a block inside a locked one is locked by it, withholds Rename, and offers Lock", () => {
@@ -2194,12 +2253,14 @@ describe("a block inside an area locked to its content", () => {
   it("shows the Style tab and the Advanced section read-only", () => {
     mountHeld();
 
-    // Controls that change something. A section's toggle and the state
-    // switcher only choose what is shown, so they stay usable.
+    // Controls that change something. A section's toggle, the state
+    // switcher and the target chips only choose what is shown, so they stay
+    // usable.
     const editingControls = (panel: Element) =>
       controlsIn(panel).filter(
         control =>
           !control.hasAttribute("aria-expanded") &&
+          !control.hasAttribute("aria-pressed") &&
           control.getAttribute("role") !== "radio"
       );
 

@@ -90,6 +90,8 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
   if (outcome.status === "discarded")
     return "That block changed while you were editing it, so your text was not saved.";
   if (outcome.status !== "refused") return null;
+  if (outcome.reason === "no-longer-editable")
+    return "That block can't be edited any more, so your text was not saved. It is still on screen \u2014 copy what you need, then press Escape.";
   return outcome.reason === "moved-on"
     ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
     : "Your text could not be saved into this page. Shortening it may help.";

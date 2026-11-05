@@ -10,11 +10,13 @@
  * reached the end; a write that re-queues a document during it sends the run
  * back to its converting walk.
  *
- * Every write is made as the person the run belongs to, writes only the blocks
- * field, and carries the hash of the value it was computed from, so a write
- * that would overwrite somebody's edit is refused and the host is read again
- * (core's conditional write, judged under the write's own row lock). Doubt never reads as "nothing to do": a host that
- * cannot be read, read to the end, or addressed is reported as left.
+ * Every write is made as the run's identity (the person it belongs to, or the
+ * system for a run no person started), writes only the blocks field, and
+ * carries the hash of the value it was computed from, so a write that would
+ * overwrite somebody's edit is refused and the host is read again (core's
+ * conditional write, judged under the write's own row lock). Doubt never reads
+ * as "nothing to do": a host that cannot be read, read to the end, or
+ * addressed is reported as left.
  *
  * @module host-rewrite/rewrite
  * @experimental
@@ -50,6 +52,13 @@ export interface HostCandidate {
   readonly access: HostAccess;
   /** For a `scan`: the paths whose values have hosts of their own. */
   readonly excluded?: readonly (readonly string[])[];
+  /**
+   * Read in this language only because whether the value is stored per
+   * language is unknown: the same value read in two languages may be one
+   * stored value. Absent where the value is known to be stored per language,
+   * or where there is no language.
+   */
+  readonly maybeShared?: true;
 }
 
 /** One document and its hosts: every blocks field, in every language. */

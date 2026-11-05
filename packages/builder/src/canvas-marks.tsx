@@ -40,24 +40,24 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
   CHROME_BLEED,
-  canvasScroller,
   clippedByAncestor,
+  onScreenOf,
   overlaySpaceOf,
   renderedScale,
   usedRadiiOf,
   visiblePartOf,
-  visibleBandOf,
   type OverlaySpace,
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
-import { toolbarPlacement } from "./toolbar-actions";
+import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -98,6 +98,11 @@ interface Mark {
   readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /**
+   * Around a block its own `clip-path` shapes: no halo band, the ring still
+   * outside the box.
+   */
+  readonly shaped?: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
   /**
@@ -105,6 +110,13 @@ interface Mark {
    * close to the top of what is on screen for a tag above it to show.
    */
   readonly placementTagInside?: boolean;
+  /** The block a hovered mark points at, by its address, for its name tag. */
+  readonly hoveredAddress?: string;
+  /**
+   * A hovered block's tag is drawn inside its outline: the outline's top is
+   * too close to the top of what is on screen for a tag above it to show.
+   */
+  readonly hoverTagInside?: boolean;
   readonly rect: Rect;
   /** The block's own corners, in the chrome's coordinates, as `border-radius`. */
   readonly radius: string;
@@ -163,11 +175,12 @@ export interface CanvasMarksProps {
 const RING_OUTSIDE = CHROME_BLEED;
 
 /**
- * The height of a placement's tag, drawn above its frame. A frame closer than
+ * The height of a mark's tag (a placement's, a hovered block's), drawn above
+ * its outline. An outline closer than
  * this to the top of what is on screen has its tag drawn inside instead,
  * where it still shows.
  */
-const PLACEMENT_TAG_HEIGHT = 18;
+const MARK_TAG_HEIGHT = 18;
 
 /** Everything that decides how a mark is drawn, as one comparable value. */
 function markKey(mark: Mark): string {
@@ -181,8 +194,11 @@ function markKey(mark: Mark): string {
     tagEdge,
     tagInset,
     clipped,
+    shaped,
     placement,
     placementTagInside,
+    hoveredAddress,
+    hoverTagInside,
     radius,
     rect,
   } = mark;
@@ -197,8 +213,11 @@ function markKey(mark: Mark): string {
     tagInset.bottom,
     tagInset.side,
     clipped,
+    shaped === true,
     placement,
     placementTagInside,
+    hoveredAddress,
+    hoverTagInside,
     radius,
     rect.x,
     rect.y,
@@ -228,6 +247,13 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
+  if (mark.kind === "hovered") {
+    // The hovered block's name tag moves in from the side the screen cuts.
+    return {
+      ...box,
+      "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    } as React.CSSProperties;
+  }
   if (!mark.hidden) return box;
   return {
     ...box,
@@ -257,6 +283,8 @@ interface Outline {
   readonly radius: string;
   readonly radii: CornerRadii;
   readonly clipped: boolean;
+  /** Shaped by the block's own `clip-path`: no halo band, ring outside. */
+  readonly shaped?: boolean;
 }
 
 /**
@@ -302,6 +330,24 @@ function outlineOf(
       clipped: true,
     };
   }
+  /*
+   * A block its OWN `clip-path` shapes — a circle cut from a square box —
+   * draws nothing of the box outside that shape. A halo band hugging the box
+   * would frame corners that show the page behind, so the ring is drawn
+   * square around the box with no band. Unlike an ancestor's clip, the
+   * block's own shape does not cut the overlay, so the ring stays OUTSIDE
+   * the box, where it covers nothing the shape shows.
+   */
+  const shape = style?.clipPath;
+  if (shape !== undefined && shape !== "" && shape !== "none") {
+    return {
+      rect: space.place(own),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
+      clipped: false,
+      shaped: true,
+    };
+  }
   const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
   return {
     rect: space.place(own),
@@ -334,6 +380,7 @@ function ringOf(outline: Outline): Outline {
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
+    ...(outline.shaped === true ? { shaped: true } : {}),
   };
 }
 
@@ -359,6 +406,7 @@ function placementOutline(parts: readonly Outline[]): Outline {
     radius: borderRadiusOf(SQUARE_CORNERS),
     radii: SQUARE_CORNERS,
     clipped: parts.some(part => part.clipped),
+    ...(parts.some(part => part.shaped === true) ? { shaped: true } : {}),
   };
 }
 
@@ -396,6 +444,7 @@ function selectedMark(
     rect: ring.rect,
     radius: ring.radius,
     clipped: ring.clipped,
+    ...(ring.shaped === true ? { shaped: true } : {}),
     kind: "selected",
     component: placement !== undefined,
     ...look,
@@ -443,6 +492,15 @@ function placementTag(
   return `◇ ${name === undefined || name === "" ? UNNAMED_COMPONENT : name}`;
 }
 
+/**
+ * Whether the block toolbar takes the place above a block: above it, or
+ * pinned over its top at the top of the screen, where a tag above would
+ * collide with it either way.
+ */
+function takesTheTop(side: "above" | "below" | "pinned"): boolean {
+  return side !== "below";
+}
+
 /** What the marks are drawn for besides what the canvas marks on the page. */
 interface MarkInputs {
   /** The block a Layers row points at, or `null`. */
@@ -461,15 +519,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
   if (space === null) return NO_MARKS;
   const { root } = space;
-  // What is on screen, in the chrome's coordinates: the part of the page the
-  // scroller shows, where the canvas cuts off anything drawn past it. The
-  // whole page where nothing scrolls it.
-  const scroller = canvasScroller(root, space.frame !== null);
-  const onScreen = space.place(
-    scroller === null
-      ? canvasContentRect(root, root)
-      : visibleBandOf(scroller, root)
-  );
+  const onScreen = onScreenOf(space);
   const screenBottom = onScreen.y + onScreen.height;
   const screenRight = onScreen.x + onScreen.width;
   // From the ring's right edge as far as the screen shows it.
@@ -483,7 +533,12 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const toolbarAbove = (rect: Rect): boolean =>
     toolbar !== null &&
     toolbar !== undefined &&
-    toolbarPlacement(rect, space.sizeOf(toolbar), pageBox).side === "above";
+    takesTheTop(
+      toolbarPlacement(rect, space.sizeOf(toolbar), pageBox, TOOLBAR_GAP_PX, {
+        top: onScreen.y,
+        bottom: onScreen.y + onScreen.height,
+      }).side
+    );
   // Below if it fits on screen, above if that does and the toolbar is not
   // there, and otherwise inside the ring, which is always on screen.
   const tagSide = (rect: Rect, primary: boolean): Mark["tag"] => {
@@ -582,7 +637,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       ...selectedMark(ring, look, placedTag, placement),
       // Measured from the top of what is on screen rather than of the page:
       // a placement scrolled to the top keeps its tag in view.
-      placementTagInside: ring.rect.y - onScreen.y < PLACEMENT_TAG_HEIGHT,
+      placementTagInside: ring.rect.y - onScreen.y < MARK_TAG_HEIGHT,
     });
   });
   const { hovered } = inputs;
@@ -608,8 +663,20 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
-        tagEdge: "right",
-        tagInset: NO_INSET,
+        tagEdge: "left",
+        // In from the screen's left edge as far as the outline runs past it,
+        // so a block scrolled partly off the side keeps its name in view. Not
+        // for one wholly off it: there is nothing on screen to tag.
+        tagInset: {
+          bottom: 0,
+          side:
+            outline.rect.x + outline.rect.width > onScreen.x
+              ? Math.max(0, onScreen.x - outline.rect.x)
+              : 0,
+        },
+        hoveredAddress: hovered,
+        // From the top of what is on screen, as the placement's tag is.
+        hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
       });
     });
   }
@@ -667,6 +734,17 @@ export function CanvasMarks({
     [measure, canvasFrame]
   );
 
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, canvasFrame]);
+
   return (
     // Hidden from assistive technology: the selection is announced by the
     // editor's live region and named in the inspector, and a box says nothing.
@@ -695,6 +773,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          data-shaped={mark.shaped === true ? "" : undefined}
           // The tag a placement's frame carries, drawn by the stylesheet from
           // this attribute: the layer is hidden from assistive technology,
           // and the inspector names the placement in words.
@@ -706,6 +785,14 @@ export function CanvasMarks({
           data-placement-tag-inside={
             mark.placementTagInside === true ? "" : undefined
           }
+          // The hovered block's name, drawn by the stylesheet as a small tag
+          // over its outline's corner, as the editor's design draws it.
+          data-hover-label={
+            mark.hoveredAddress === undefined
+              ? undefined
+              : nameOf?.(mark.hoveredAddress)?.trim() || undefined
+          }
+          data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
           style={markStyle(mark)}
         />
       ))}

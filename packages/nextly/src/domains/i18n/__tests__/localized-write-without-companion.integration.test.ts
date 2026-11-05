@@ -222,6 +222,69 @@ describe("localized write without a companion table (integration)", () => {
     expect(updated.success).toBe(true);
     expect(await physicalTitle(current)).toBe("First (edited)");
   });
+
+  it("saves back the version a read gave while translations are not ready, and still refuses a stale one", async () => {
+    current = await boot(false);
+    const created = await current
+      .getService<CollectionsHandler>("collectionsHandler")
+      .createEntry(
+        { collectionName: "i18nwin_posts", overrideAccess: true },
+        { title: "First" }
+      );
+    const id = (created.data as { id: string }).id;
+
+    current = await enterWindow();
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    // With no translation table, a read's version names no language.
+    const read = (await current.nextly.findByID({
+      collection: "i18nwin_posts" as never,
+      id,
+      locale: "en",
+      overrideAccess: true,
+    } as never)) as { _rev: string };
+    expect(read._rev).toMatch(/^\d+$/);
+
+    const saved = await handler.updateEntry(
+      {
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { title: "First (edited)", _rev: read._rev }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await physicalTitle(current)).toBe("First (edited)");
+
+    // A Spanish save with that version has nowhere to go: refused as a
+    // version naming no Spanish, before any hook runs.
+    const spanish = await handler.updateEntry(
+      {
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "es",
+      },
+      { title: "Primero", _rev: read._rev }
+    );
+    expect(spanish).toMatchObject({ success: false, statusCode: 400 });
+
+    const stale = await handler.updateEntry(
+      {
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      },
+      { title: "Second", _rev: read._rev }
+    );
+    expect(stale).toMatchObject({
+      success: false,
+      statusCode: 409,
+      code: "STALE_VERSION",
+    });
+  });
 });
 
 /**

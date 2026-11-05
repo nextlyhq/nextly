@@ -25,21 +25,34 @@
  * @experimental
  */
 
+import { z } from "zod";
+
+import {
+  registeredReadLanguagesFor,
+  registeredWriteLanguagesFor,
+  withRuleLanguage,
+  type RuleLanguage,
+} from "../auth/access/rule-language";
 import { readAccessCaller, entityReadFor } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { requireNextly } from "../direct-api/nextly";
 import {
   expectStoredValue,
+  prepareStoredRead,
   readStoredFieldsOn,
+  showsUnpublished,
+  STORED_FORMS,
+  type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
 import { appLocalization } from "../domains/i18n/configured-locales";
-import { EVERY_LOCALE } from "../domains/i18n/locale-selector";
+import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { getFieldType } from "../domains/schema/field-types/field-type-registry";
 import { singleDocumentEditable } from "../domains/singles/services/single-document-access";
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
 import { NextlyError } from "../errors";
+import { resolveStatusFilter } from "../lib/status-filter";
 
 import type { PluginStoredValue } from "./contributions";
 import type { PluginRouteIdentity } from "./routes/route-types";
@@ -60,6 +73,25 @@ export type PluginStoredDocument =
       readonly id?: never;
     };
 
+/**
+ * @experimental The system: trusted server code, such as a plugin's own job
+ * that no person started. Judged as a Direct API call made with
+ * `overrideAccess: true` is: no access rule, no draft gate and no lifecycle
+ * visibility is asked of it, as none is of that call. Everything else holds:
+ * the request is parsed alike, the read runs no hook, and a conditional
+ * write's expectation is judged under the write's own row lock.
+ */
+export interface PluginSystemIdentity {
+  readonly overrideAccess: true;
+}
+
+/**
+ * @experimental Who a stored read or a conditional write is made as: a route's
+ * caller, as `ctx.caller.identity()` resolved them and judged as their own
+ * read or update is, or the system.
+ */
+export type PluginStoredIdentity = PluginRouteIdentity | PluginSystemIdentity;
+
 /** @experimental A read of the stored form of some of a document's fields. */
 export type PluginStoredFieldsRequest = PluginStoredDocument & {
   /**
@@ -74,8 +106,10 @@ export type PluginStoredFieldsRequest = PluginStoredDocument & {
   readonly form: "published" | "draft";
   /**
    * The language to read, for a field stored per language; the default
-   * language where none is named. A language that stores nothing for the
-   * field reads as absent, never as another language's value.
+   * language where none is named, or where the site configures no such
+   * language, as an ordinary read resolves it. One language: a selector
+   * such as `all` is refused. A language that stores nothing for the field
+   * reads as absent, never as another language's value.
    */
   readonly locale?: string;
 };
@@ -96,7 +130,11 @@ export type PluginStoredFields =
  * the write's own row lock.
  */
 export interface PluginWriteExpectation {
-  /** The field read, by its name at top level or its path through named groups. */
+  /**
+   * The field read, by its top-level name. A field inside a named group is
+   * refused: an update writes a group's whole value, so an expectation on one
+   * field of it would not guard the siblings the write replaces.
+   */
   readonly field: string;
   /** The form it was read in, as {@link PluginStoredFieldsRequest.form}. */
   readonly form: "published" | "draft";
@@ -144,7 +182,8 @@ const PLUGIN_JSON_FIELDS: FieldScope = {
 
 /**
  * @experimental The stored form of some of a document's fields, as the
- * person `identity` names may read them, with no read hook run.
+ * person `identity` names may read them, or as the system, with no read hook
+ * run.
  *
  * Read as a write path reads them: the live row, or the working draft a
  * preview shows, in one language, with no `afterRead` hook of the collection
@@ -157,36 +196,123 @@ const PLUGIN_JSON_FIELDS: FieldScope = {
  * `readAccessCaller`, with a key judged on its own scope. A read rule that
  * allows only the entries a filter matches is refused rather than matched
  * here. The `draft` form shows unpublished work, so it is read only by a
- * person who may update the document, as a preview is.
+ * person who may update the document, as a preview is. So does a `published`
+ * read whose live row, in the language read, is in a state an ordinary read
+ * would not show them (one the workflow does not call public): to anyone else
+ * it answers `absent`, as the ordinary read answers not found. The system is
+ * judged as an `overrideAccess: true` read: none of this is asked of it.
  */
 export async function readStoredFields(
-  identity: PluginRouteIdentity,
+  identity: PluginStoredIdentity,
   request: PluginStoredFieldsRequest
 ): Promise<PluginStoredFields> {
-  if (request.fields.length === 0) {
+  const person = personOf(identity);
+  const named = parsedRequest(STORED_READ, request, READ_REFUSAL);
+  const document = documentOf(named);
+  // The language is resolved once, as the gate's own reads resolve it, and
+  // that one code is what the gate is told and what the read queries.
+  const language = oneLanguage(named.locale);
+  const asked: PluginStoredFieldsRequest = {
+    ...targetOf(document),
+    fields: named.fields,
+    form: named.form,
+    ...(language.locale === undefined ? {} : { locale: language.locale }),
+  };
+  if (person !== undefined) {
+    await assertMayRead(person, document, asked, language.rule);
+  }
+
+  const read = await storedSnapshot(document, asked);
+  if (!read.found) return { kind: "absent" };
+  if (
+    person !== undefined &&
+    !(await liveFormShown(person, document, asked, read.liveState))
+  ) {
+    return { kind: "absent" };
+  }
+  return { kind: "found", values: Object.fromEntries(read.values) };
+}
+
+/**
+ * The one language a stored read or a conditional write is made in, resolved
+ * as an ordinary read resolves it (`registeredReadLanguagesFor`, with no
+ * fallback): a language the site does not configure resolves to its default.
+ * A selector naming several languages (`all`, `*`) is refused, since this
+ * reads and writes one.
+ */
+function oneLanguage(requested: string | undefined): {
+  readonly rule: RuleLanguage;
+  readonly locale: string | undefined;
+} {
+  if (requested !== undefined && isLocaleSelector(requested)) {
     throw NextlyError.invalidInput({
-      message: "A stored read names at least one field.",
+      message: `A stored read or a conditional write is made in one language, and '${requested}' names more than one.`,
     });
   }
-  const document = documentOf(request);
-  await assertMayRead(identity, document, request);
+  const rule = registeredReadLanguagesFor(requested, false);
+  return { rule, locale: rule.locale };
+}
 
-  const read = await readStoredFieldsOn(
-    {
-      db: getService("adapter"),
-      executor: undefined,
-      defaultLocale: appLocalization()?.defaultLocale ?? null,
-    },
+/**
+ * The read itself, in one snapshot: the live row's state and every value are
+ * read inside one read-only transaction, at REPEATABLE READ on PostgreSQL and
+ * MySQL and in SQLite's one transaction at a time, so a write committing
+ * between the main row and its language row cannot pair one's state with the
+ * other's value. What a read inside a transaction can only remember is
+ * settled on the pool first.
+ */
+async function storedSnapshot(
+  document: ReturnType<typeof documentOf>,
+  request: PluginStoredFieldsRequest
+): Promise<StoredFieldsRead> {
+  const adapter = getService("adapter");
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
+  const target = {
+    ...targetOf(document),
+    fields: request.fields,
+    form: request.form,
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
+  };
+  await prepareStoredRead(
+    { db: adapter, executor: undefined, defaultLocale },
     PLUGIN_JSON_FIELDS,
-    {
-      ...targetOf(document),
-      fields: request.fields,
-      form: request.form,
-      ...(request.locale === undefined ? {} : { locale: request.locale }),
-    }
+    target
   );
-  if (!read.found) return { kind: "absent" };
-  return { kind: "found", values: Object.fromEntries(read.values) };
+  return adapter.transaction(
+    tx =>
+      readStoredFieldsOn(
+        { db: tx, executor: tx.getDrizzle(), defaultLocale },
+        PLUGIN_JSON_FIELDS,
+        target,
+        { askState: !showsUnpublished(request.form) }
+      ),
+    { isolationLevel: "repeatable read", readOnly: true }
+  );
+}
+
+/**
+ * Whether the live row, in the language read, is one this person would be
+ * shown. An ordinary read that names no status shows an untrusted reader the
+ * workflow's public states alone, as core's status filter decides; a row in
+ * any other state (a draft never published, a translation not yet released)
+ * is not found for them. The same holds here, unless the person may update
+ * the document, as an editor's own reads may show it. The `draft` form has
+ * required that already.
+ */
+async function liveFormShown(
+  identity: PluginRouteIdentity,
+  document: ReturnType<typeof documentOf>,
+  request: PluginStoredFieldsRequest,
+  liveState: string | null | undefined
+): Promise<boolean> {
+  if (showsUnpublished(request.form) || liveState === undefined) return true;
+  const shown = resolveStatusFilter({
+    collectionHasStatus: true,
+    overrideAccess: false,
+  });
+  if (shown === null) return true;
+  if (liveState !== null && shown.values.includes(liveState)) return true;
+  return mayEdit(identity, document, request.locale);
 }
 
 /**
@@ -195,33 +321,44 @@ export async function readStoredFields(
  *
  * The update is the ordinary one, made as the person `identity` names under
  * access rules: refused where they may not update the document (or publish
- * it, where `data` publishes). The expectation is judged inside the update's
- * own transaction, once it holds the entry's row lock, against the value as
- * committed then; where it no longer hashes to `expect.hash`, or a working
- * draft is pending under `noPendingDraft`, the update is refused with a
- * `CONFLICT` error and changes nothing. Read the document again and decide
- * again.
+ * it, where `data` publishes). Made as the system, it is an
+ * `overrideAccess: true` update, judged by no access rule. The expectation is
+ * judged inside the update's own transaction, once it holds the entry's row
+ * lock, against the value as committed then; where it no longer hashes to
+ * `expect.hash`, or a working draft is pending under `noPendingDraft`, the
+ * update is refused with a `CONFLICT` error and changes nothing. Read the
+ * document again and decide again.
  *
  * The expectation reads a stored value, so it is first judged as
  * {@link readStoredFields} is: a field that read could not return cannot be
- * the subject of one, and nothing is written.
+ * the subject of one, and nothing is written. It names a top-level field; a
+ * field inside a named group is refused with `INVALID_INPUT`, because an
+ * update writes the group's whole value and would replace siblings the
+ * expectation never compared.
  */
 export async function updateIfUnchanged(
-  identity: PluginRouteIdentity,
+  identity: PluginStoredIdentity,
   update: PluginConditionalUpdate
 ): Promise<void> {
-  if (update.locale === EVERY_LOCALE) {
+  const person = personOf(identity);
+  const named = parsedRequest(CONDITIONAL_UPDATE, update, WRITE_REFUSAL);
+  const expected = expectationOf(named.expect);
+  const language = oneLanguage(named.locale);
+  if (expected.field.includes(".")) {
     throw NextlyError.invalidInput({
-      message: `A conditional write is made in one language, not '${EVERY_LOCALE}'.`,
+      message: `A conditional write expects a top-level field, and "${expected.field}" is inside a group: an update writes the group's whole value, so an expectation on one field of it would not guard the rest.`,
     });
   }
-  const document = documentOf(update);
-  const inLocale = update.locale === undefined ? {} : { locale: update.locale };
+  const document = documentOf(named);
+  // The resolved code, for the read and the update alike, so the update is
+  // judged in the very language its expectation was read in.
+  const inLocale =
+    language.locale === undefined ? {} : { locale: language.locale };
   // The read half first: a precondition, so before anything is written.
   await readStoredFields(identity, {
     ...targetOf(document),
-    fields: [update.expect.field],
-    form: update.expect.form,
+    fields: [expected.field],
+    form: expected.form,
     ...inLocale,
   });
 
@@ -229,21 +366,26 @@ export async function updateIfUnchanged(
   // context object no other call is handed, which the write path receives
   // as its own and its hooks only as a copy.
   const context: Record<string, unknown> = {};
-  const pin = { document, expect: update.expect, checked: false };
+  const pin = { document, expect: expected, checked: false };
   expectStoredValue(context, pin);
-  const as = {
-    user: identity.user,
-    overrideAccess: false as const,
-    context,
-    ...(identity.authenticatedScope === undefined
-      ? {}
-      : { actor: identity.authenticatedScope }),
-  };
+  // As the person under access rules, or as the system, which the Direct
+  // API's own `overrideAccess: true` call is.
+  const as =
+    person === undefined
+      ? { overrideAccess: true as const, context }
+      : {
+          user: person.user,
+          overrideAccess: false as const,
+          context,
+          ...(person.authenticatedScope === undefined
+            ? {}
+            : { actor: person.authenticatedScope }),
+        };
   const nextly = requireNextly();
   if (document.kind === "single") {
     await nextly.updateSingle({
       slug: document.slug,
-      data: update.data,
+      data: named.data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -252,7 +394,7 @@ export async function updateIfUnchanged(
     await nextly.update({
       collection: document.slug,
       id: document.id,
-      data: update.data,
+      data: named.data,
       depth: 0,
       ...inLocale,
       ...as,
@@ -271,24 +413,142 @@ export async function updateIfUnchanged(
   }
 }
 
-/** The document a request names, as the write path matches it. */
-function documentOf(target: PluginStoredDocument):
+/**
+ * `input` as `schema` parses it, or refused with `INVALID_INPUT` naming what a
+ * request of its kind holds. A plugin's call is outside input as far as its
+ * types go: plain JavaScript, or an object passed on unchecked, can carry any
+ * shape, and a value no branch below expects must be refused here, before any
+ * gate is asked or anything is read, rather than read as one it resembles.
+ */
+function parsedRequest<T>(
+  schema: z.ZodType<T>,
+  input: unknown,
+  refusal: string
+): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw NextlyError.invalidInput({ message: refusal });
+  return parsed.data;
+}
+
+/**
+ * The person or key `identity` names, or `undefined` for the system. Parsed at
+ * the boundary with the request it comes with: `overrideAccess` is the
+ * system's alone, and only as `true`, so a caller carrying one of its own, or
+ * anything that is neither, is refused rather than read as either.
+ */
+function personOf(
+  identity: PluginStoredIdentity
+): PluginRouteIdentity | undefined {
+  if (!STORED_IDENTITY.safeParse(identity).success) {
+    throw NextlyError.invalidInput({ message: IDENTITY_REFUSAL });
+  }
+  return "user" in identity ? identity : undefined;
+}
+
+const IDENTITY_REFUSAL =
+  "A stored read or a conditional write is made as a route's caller, as `ctx.caller.identity()` resolved them, or as the system, `{ overrideAccess: true }`.";
+
+const READ_REFUSAL =
+  "A stored read names one document (a collection and an entry id, or a Single, and not both), at least one field, and the form `published` or `draft`.";
+
+const WRITE_REFUSAL =
+  "A conditional write names one document (a collection and an entry id, or a Single, and not both), the data to write, and what it expects: a field, the form `published` or `draft` it was read in, and its hash.";
+
+/** The document a parsed request names, as the write path matches it. */
+function documentOf(named: {
+  readonly single?: string | undefined;
+  readonly collection?: string | undefined;
+  readonly id?: string | undefined;
+}):
   | { readonly kind: "single"; readonly slug: string }
   | {
       readonly kind: "collection";
       readonly slug: string;
       readonly id: string;
     } {
-  if (typeof target.single === "string") {
-    return { kind: "single", slug: target.single };
-  }
-  if (typeof target.collection === "string" && typeof target.id === "string") {
-    return { kind: "collection", slug: target.collection, id: target.id };
-  }
-  throw NextlyError.invalidInput({
-    message: "Name a document: a collection and an entry id, or a Single.",
-  });
+  return named.single !== undefined
+    ? { kind: "single", slug: named.single }
+    : { kind: "collection", slug: named.collection ?? "", id: named.id ?? "" };
 }
+
+/** A parsed expectation, with only the keys it was given. */
+function expectationOf(
+  expect: z.infer<typeof EXPECTATION>
+): PluginWriteExpectation {
+  return {
+    field: expect.field,
+    form: expect.form,
+    hash: expect.hash,
+    ...(expect.noPendingDraft === undefined
+      ? {}
+      : { noPendingDraft: expect.noPendingDraft }),
+  };
+}
+
+/**
+ * The one document a request may name: an entry, by its collection and id
+ * with no Single beside them, or a Single with neither. Choosing either of a
+ * request naming both would read or write a document the caller did not mean.
+ */
+const AN_ENTRY = {
+  collection: z.string().min(1),
+  id: z.string().min(1),
+  single: z.undefined().optional(),
+};
+const A_SINGLE = {
+  single: z.string().min(1),
+  collection: z.undefined().optional(),
+  id: z.undefined().optional(),
+};
+
+/** A form, one of the forms every branch on a form names. */
+const STORED_FORM = z.enum(STORED_FORMS);
+
+/** The rest of a stored read: its fields, form and language. */
+const READ_PARTS = {
+  fields: z.array(z.string().min(1)).min(1),
+  form: STORED_FORM,
+  locale: z.string().optional(),
+};
+
+/** A whole stored read, parsed as one before anything is asked or read. */
+const STORED_READ = z.union([
+  z.object({ ...AN_ENTRY, ...READ_PARTS }),
+  z.object({ ...A_SINGLE, ...READ_PARTS }),
+]);
+
+/** What a conditional write expects, in the form it was read in. */
+const EXPECTATION = z.object({
+  field: z.string().min(1),
+  form: STORED_FORM,
+  hash: z.string().min(1),
+  noPendingDraft: z.boolean().optional(),
+});
+
+/** The rest of a conditional write: its data, language and expectation. */
+const UPDATE_PARTS = {
+  data: z.record(z.string(), z.unknown()),
+  locale: z.string().optional(),
+  expect: EXPECTATION,
+};
+
+/**
+ * Who a stored read or a conditional write is made as: the system exactly, or
+ * a caller with a user and no `overrideAccess` of its own.
+ */
+const STORED_IDENTITY = z.union([
+  z.strictObject({ overrideAccess: z.literal(true) }),
+  z.looseObject({
+    user: z.looseObject({ id: z.string().min(1) }),
+    overrideAccess: z.undefined().optional(),
+  }),
+]);
+
+/** A whole conditional write, parsed as one before anything is asked or read. */
+const CONDITIONAL_UPDATE = z.union([
+  z.object({ ...AN_ENTRY, ...UPDATE_PARTS }),
+  z.object({ ...A_SINGLE, ...UPDATE_PARTS }),
+]);
 
 /** A document as a request names it, and nothing else of the request. */
 function targetOf(
@@ -308,9 +568,16 @@ function targetOf(
 async function assertMayRead(
   identity: PluginRouteIdentity,
   document: ReturnType<typeof documentOf>,
-  request: PluginStoredFieldsRequest
+  request: PluginStoredFieldsRequest,
+  language: RuleLanguage
 ): Promise<void> {
-  const read = await entityReadFor(document.slug, readAccessCaller(identity));
+  // Each gate is told the languages its ordinary counterpart is: a read in
+  // the one language named, with no fallback, as this read makes none; an
+  // update as an update in that language. A rule answering by language then
+  // answers here as it does there.
+  const read = await withRuleLanguage(language, () =>
+    entityReadFor(document.slug, readAccessCaller(identity))
+  );
   const refuse = (reason: string) =>
     NextlyError.forbidden({
       logContext: {
@@ -321,25 +588,40 @@ async function assertMayRead(
       },
     });
   if (!read.allowed) throw refuse("stored-read-not-readable");
-  if (request.form !== "draft") return;
-  const editable =
+  if (!showsUnpublished(request.form)) return;
+  if (!(await mayEdit(identity, document, request.locale))) {
+    throw refuse("stored-draft-not-editable");
+  }
+}
+
+/**
+ * Whether the person may update the document, asked of the gate the update
+ * itself asks, in the language an update in `locale` is judged in.
+ */
+function mayEdit(
+  identity: PluginRouteIdentity,
+  document: ReturnType<typeof documentOf>,
+  locale: string | undefined
+): Promise<boolean> {
+  const inLocale = locale === undefined ? {} : { locale };
+  return withRuleLanguage(registeredWriteLanguagesFor(locale), () =>
     document.kind === "single"
-      ? await singleDocumentEditable(document.slug, {
+      ? singleDocumentEditable(document.slug, {
           user: identity.user,
           routeAuthorized: false,
           ...(identity.authenticatedScope === undefined
             ? {}
             : { actor: identity.authenticatedScope }),
-          ...(request.locale === undefined ? {} : { locale: request.locale }),
+          ...inLocale,
         })
-      : await getService("collectionsHandler").canUpdateEntry({
+      : getService("collectionsHandler").canUpdateEntry({
           collectionName: document.slug,
           entryId: document.id,
           user: identity.user,
           ...(identity.authenticatedScope === undefined
             ? {}
             : { authenticatedScope: identity.authenticatedScope }),
-          ...(request.locale === undefined ? {} : { locale: request.locale }),
-        });
-  if (!editable) throw refuse("stored-draft-not-editable");
+          ...inLocale,
+        })
+  );
 }

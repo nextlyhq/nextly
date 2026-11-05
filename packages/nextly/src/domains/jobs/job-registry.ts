@@ -267,8 +267,18 @@ export function defineJob<TInput extends JobInput = JobInput>(
  */
 export class JobRegistry {
   private readonly definitions = new Map<string, JobDefinition<never>>();
+  /** The plugin that declared each job, by slug; none for core's or the app's. */
+  private readonly plugins = new Map<string, string>();
 
-  register<TInput extends JobInput>(definition: JobDefinition<TInput>): void {
+  /**
+   * Register a job type, and the plugin that declared it when one did, so
+   * what a plugin may run as its own is the registry's answer, not a second
+   * reading of its manifest.
+   */
+  register<TInput extends JobInput>(
+    definition: JobDefinition<TInput>,
+    declaredBy?: { readonly plugin: string | undefined }
+  ): void {
     // Keyed by the NORMALISED slug. `JobDefinition` is structural, so a
     // definition can arrive without having passed through `defineJob`; keying it
     // verbatim would admit `" acme:export "` under a key no enqueue — which
@@ -289,10 +299,22 @@ export class JobRegistry {
     // under that type is what lets one registry hold job types with unrelated
     // input shapes while the runner still calls them uniformly.
     this.definitions.set(definition.slug, definition);
+    if (declaredBy?.plugin !== undefined) {
+      this.plugins.set(definition.slug, declaredBy.plugin);
+    }
   }
 
   get(slug: string): JobDefinition<never> | undefined {
     return this.definitions.get(slug);
+  }
+
+  /**
+   * The plugin that declared a registered job, or `undefined` for one core
+   * or the app declared, and for a slug nothing registered. Asked by the
+   * slug as the registry keys it.
+   */
+  pluginOf(slug: string): string | undefined {
+    return this.plugins.get(normalizeJobSlug(slug));
   }
 
   /**

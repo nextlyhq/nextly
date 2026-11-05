@@ -12,6 +12,7 @@
 import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
 import type { MigrationMap } from "./migration";
+import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
 export interface BlockIsland {
@@ -341,6 +342,22 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   name: string;
   label?: string;
   props?: Partial<P>;
+  /**
+   * A LOOK rather than an insert preset: the styles of one named variant of the block
+   * (Outline, Rounded), which an author picks for a block already on the page. The site
+   * receives it as a shared style bound to this block type (`blockLooks`), which it may edit;
+   * a variation with styles is not offered as a separate insert entry.
+   *
+   * @experimental
+   */
+  styles?: NodeStyles;
+  /**
+   * Names the block's own look, its `baseStyles`, as one of its looks (a button's Primary).
+   * Carries no styles of its own: wearing it is wearing no look.
+   *
+   * @experimental
+   */
+  isDefault?: true;
 }
 
 /**
@@ -403,6 +420,23 @@ export interface BlockRenderArgs<P, C = unknown> {
    * the convenience of an editor-only component.
    */
   markProp?: (name: string) => Record<string, string>;
+  /**
+   * What each bound prop's value is, by prop name, for a block that wants
+   * more than the value in `props`.
+   *
+   * A bound date reaches a text prop as text, formatted for the reader; its
+   * entry here is `{ kind: "date", datetime }`, the machine-readable value a
+   * block can put in `<time datetime>`. A prop filled from its binding's
+   * fallback says so. A prop showing its own value has no entry, and a block
+   * with no bound prop receives no `bound` at all.
+   *
+   * An argument rather than a field of `ctx`, so it comes from the renderer
+   * that filled the props and cannot be supplied by a block rebuilding the
+   * context its children see.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  bound?: Readonly<Record<string, BoundValue>>;
   /**
    * Render one of this block's slots, optionally under a different context.
    *
@@ -715,6 +749,21 @@ export interface BlockSeoContribution {
  * broken image while a wrong media lookup silently drops the picture.
  */
 export type BlockSeoImage = string | { media: string } | { url: string };
+
+/**
+ * What an author calls one of a select's options: its `optionLabels` entry,
+ * or the option itself.
+ *
+ * One rule for every surface that names a choice, the block's inspector and a
+ * component field a placement edits, so the two never offer one choice in two
+ * spellings.
+ */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
 
 /**
  * Declare a block type. Returns the definition unchanged — its job is to bind

@@ -25,6 +25,7 @@ import type {
   ComponentDocument,
   ComponentExposure,
   PlanWarning,
+  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
@@ -352,6 +353,8 @@ export interface SavePatternRequest {
   /** The nodes to lift out of it, in the editor's own vocabulary. */
   readonly selectedIds: readonly string[];
   readonly fields: SavePatternFields;
+  /** Answer the pattern the save would store, and store nothing. */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -374,6 +377,25 @@ export interface SavePatternResponse {
   readonly item: { readonly id: string } & Record<string, unknown>;
   /** Side effects that failed after the row committed, when any did. */
   readonly warnings?: readonly HookWarning[];
+}
+
+/**
+ * What a save asked as a dry run answers, inside the envelope's `item`: the
+ * pattern it would store, and why the site would refuse it, empty when it
+ * would not. Nothing was stored, so there is no id.
+ *
+ * @experimental Settles when the composition API ships.
+ */
+export interface SavePatternDryRun {
+  readonly dryRun: true;
+  readonly pattern: Readonly<Record<string, unknown>>;
+  readonly refusals: readonly string[];
+}
+
+/** What a dry-run save answers: the envelope around {@link SavePatternDryRun}. */
+export interface SavePatternDryRunResponse {
+  readonly message: string;
+  readonly item: SavePatternDryRun;
 }
 
 /**
@@ -565,6 +587,13 @@ export const SITE_BREAKPOINTS_ROUTE_PATH = "/site/breakpoints";
  */
 export interface SiteBreakpointsRequest {
   readonly breakpoints: BreakpointSet | null;
+  /**
+   * Save nothing, and answer with what saving this set would drop: every
+   * style and hide stored under each breakpoint it removes.
+   *
+   * @experimental
+   */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -593,6 +622,24 @@ export interface StoredSiteStyle {
   readonly fonts: unknown;
   readonly classes: unknown;
   readonly breakpoints: unknown;
+  /**
+   * The site's recorded spacing model, `classic` or `gaps`, or `null` when
+   * none is recorded and the engine's default applies. Kept in the plugin's own
+   * table rather than the Single; optional so a record without it reads as
+   * nothing recorded.
+   */
+  readonly spacingMode?: unknown;
+}
+
+/**
+ * Where the owner chooses the site's spacing model: `POST` with
+ * `{ mode: "classic" | "gaps" }`, answered with `{ message, item: { spacingMode } }`.
+ */
+export const SPACING_MODE_ROUTE_PATH = "/site/style/spacing-mode";
+
+/** What the spacing-model route answers inside its mutation envelope's `item`. */
+export interface SpacingModeResult {
+  readonly spacingMode: SpacingMode;
 }
 
 /** Where Settings' Site tab reads what it shows and what this caller may change. */
@@ -792,6 +839,12 @@ export interface SharedStylesUsageResponse {
   readonly counting: boolean;
   /** Whether this caller may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: whoever may change Design, the
+   * people a whole count lets remove a style.
+   */
+  readonly mayCount: boolean;
   /** Each style asked about, by id. */
   readonly styles: Readonly<Record<string, SharedStyleUsage>>;
 }
@@ -854,6 +907,26 @@ export interface SharedStyleUseItem {
  * @experimental Settles when the Shared styles tab ships.
  */
 export const SHARED_STYLE_REMOVE_ROUTE_PATH = "/shared-styles/remove";
+
+/**
+ * Where the Design panel asks for the site's pages to be counted now, rather
+ * than waiting for a scheduler to run the usage backfill: it runs that job
+ * for a bounded time and answers how far the counting got.
+ *
+ * @experimental Settles when the Shared styles tab ships.
+ */
+export const SHARED_STYLE_COUNT_ROUTE_PATH = "/shared-styles/count";
+
+/**
+ * What the count route answers, as its mutation's `item`: whether it ran the
+ * counting (false when something else was already running it), and the
+ * index's health read after, in the usage read's terms.
+ */
+export interface SharedStylesCountResponse {
+  readonly ran: boolean;
+  readonly whole: boolean;
+  readonly counting: boolean;
+}
 
 /** What the remove route is sent: the shared styles to remove, by id. */
 export interface SharedStyleRemoveRequest {

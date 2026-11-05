@@ -670,7 +670,9 @@ export type {
  *   language) of fields of a plugin field type stored as JSON, judged by the
  *   person's read access. `updateIfUnchanged` makes the ordinary update as
  *   that person, refused with a `CONFLICT` error when the field no longer
- *   hashes, under the write's own row lock, to what was read.
+ *   hashes, under the write's own row lock, to what was read. Either may be
+ *   made as the system (`{ overrideAccess: true }`), judged as the Direct
+ *   API's own `overrideAccess: true` call is, by no access rule.
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
@@ -679,6 +681,8 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
 
@@ -838,7 +842,9 @@ export type {
  * @experimental Background jobs.
  *
  * A plugin declares a job type with `defineJob` and asks for one to happen with
- * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * `nextly.jobs.queue`. `ctx.services.jobs.runSweepNow(slug)` runs one of the
+ * plugin's OWN sweeps from a request, for a site no scheduler drains
+ * (`PluginJobsNamespace`). Held experimental per D55 until a first-party plugin
  * ships one — the release drain is core's, not a plugin's, so nothing has yet
  * exercised this from the outside.
  */
@@ -851,6 +857,7 @@ export type {
   JobInputFor,
   JobRetryPolicy,
   JobSlug,
+  PluginJobsNamespace,
   QueueJobArgs,
   QueueJobResult,
 } from "nextly";

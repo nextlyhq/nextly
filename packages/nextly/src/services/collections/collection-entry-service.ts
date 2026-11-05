@@ -63,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -314,9 +315,9 @@ export class CollectionEntryService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       /** A grant waiving the collection's read hooks, honoured by the query service. */
       hookExemptRead?: HookExemptRead;
-    } /** The sort and offset, as the query service reads them. */ & Pick<
+    } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort"
+      "sort" | "offset" | "unknownSort" | "hiddenFields"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -360,6 +361,8 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /** Fields the read leaves out, refused in its filter; see the query service. */
+    hiddenFields?: HiddenFieldPaths;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -871,6 +874,17 @@ export class CollectionEntryService extends BaseService {
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
+  }
+
+  /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(params: EveryLanguageLifecycleParams) {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.previewPublishAllLocales(params)
+    );
   }
 
   /**

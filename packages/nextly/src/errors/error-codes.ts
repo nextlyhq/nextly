@@ -52,6 +52,12 @@ export const NEXTLY_ERROR_STATUS = {
   // size so the client can ask again for a span that exists.
   RANGE_NOT_SATISFIABLE: 416,
   CONFLICT: 409,
+  // An update made from a version of the document that is no longer its
+  // current one: someone else's save came in between. Its own code rather
+  // than CONFLICT, which the edit lock's claim and content history's version
+  // allocation already answer and which a retry keys on: this one must never
+  // be retried, since the same version stays out of date.
+  STALE_VERSION: 409,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,

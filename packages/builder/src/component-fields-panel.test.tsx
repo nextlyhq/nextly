@@ -264,6 +264,102 @@ describe("a prop row in a component's view", () => {
   });
 });
 
+describe("a prop the inspector leaves out, in a component's view", () => {
+  it("can still be exposed, since a page may clear what hides it", () => {
+    // A linked button offers no "Acts as", but a placement can clear the link
+    // and make it a button, so the component may still expose it.
+    registerBlocks(
+      [
+        {
+          name: "acme/link-button",
+          version: 1,
+          description: "A button.",
+          example: { props: {} },
+          render: () => null,
+          props: {
+            href: { type: "url" },
+            kind: {
+              label: "Acts as",
+              type: "select",
+              options: ["button", "submit"],
+              onlyWithout: ["href"],
+            },
+          },
+        },
+      ] as never,
+      { source: "component-fields-panel-test-link" }
+    );
+    mount(
+      component({
+        nodes: [
+          {
+            id: "l1",
+            type: "acme/link-button",
+            version: 1,
+            props: { href: "/pricing" },
+          },
+        ],
+      }),
+      "l1"
+    );
+    const row = exposeRow("kind");
+    // Named as the block names it, not by its prop name.
+    expect(row.parentElement?.textContent).toContain("Acts as");
+    expect(row.parentElement?.textContent).not.toContain("Kind");
+    // Its control is still left out: only the expose icon is offered.
+    expect(screen.queryByRole("combobox", { name: /Kind/ })).toBeNull();
+  });
+});
+
+describe("props drawn inside a group, in a component's view", () => {
+  it("keeps an expose icon for each, the group's lead and the rest", () => {
+    // An image's source and alt text are one control each, but every prop
+    // under them stays one a placement may set: a direct address included.
+    registerBlocks(
+      [
+        {
+          name: "acme/picture",
+          version: 1,
+          description: "A picture.",
+          example: { props: {} },
+          render: () => null,
+          props: {
+            mediaId: { label: "Image", role: "content", type: "media" },
+            src: { label: "Image address", role: "content", type: "url" },
+            alt: { label: "Alt text", role: "content", type: "text" },
+            decorative: { label: "Decorative", type: "checkbox" },
+          },
+        },
+      ] as never,
+      { source: "component-fields-panel-test-picture" }
+    );
+    mount(
+      component({
+        nodes: [
+          {
+            id: "p1",
+            type: "acme/picture",
+            version: 1,
+            props: { src: "/a.jpg" },
+          },
+        ],
+      }),
+      "p1"
+    );
+    for (const prop of ["mediaId", "src", "alt", "decorative"]) {
+      expect(exposeButton(prop)).toBeDefined();
+    }
+    // Named as the block names it, beside its icon.
+    expect(exposeRow("src").parentElement?.textContent).toContain(
+      "Image address"
+    );
+    // The grouped control is still drawn once, where its lead sits.
+    expect(screen.getAllByRole("radiogroup", { name: "Source" })).toHaveLength(
+      1
+    );
+  });
+});
+
 describe("the icon's words, in plain terms", () => {
   it("names a property's icon for pages, and says in one line what turning it on does", () => {
     mount(component(), "c1");

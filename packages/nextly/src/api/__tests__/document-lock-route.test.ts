@@ -51,6 +51,12 @@ vi.mock("../versions-access", () => ({
     assertDocumentUpdatable(...args) as unknown,
 }));
 
+// The one lookup that names a person, by id: the key maker's name here.
+const peopleById = vi.fn();
+vi.mock("../../domains/versions/author-hydration", () => ({
+  peopleById: (ids: readonly string[]) => peopleById(ids) as unknown,
+}));
+
 vi.mock("../authenticated-read", () => ({
   readCaller: (auth: unknown) => Promise.resolve({ user: auth }),
   PRIVATE_NO_STORE_HEADERS: {
@@ -80,6 +86,7 @@ beforeEach(() => {
   );
   callerHoldsPermission.mockResolvedValue(true);
   assertDocumentUpdatable.mockResolvedValue(undefined);
+  peopleById.mockResolvedValue(new Map());
 });
 
 describe("document lock route", () => {
@@ -137,6 +144,109 @@ describe("document lock route", () => {
         actor: { type: "user", id: "u3" },
         personName: null,
       }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    [
+      "a person by name",
+      { userId: "u1", userName: "Ada", userEmail: "ada@example.com" },
+      "Ada",
+    ],
+    [
+      "a person with no name by email",
+      { userId: "u3", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    [
+      "a person with an empty name by email",
+      { userId: "u3", userName: "", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    [
+      "a person whose name is only spaces by email",
+      { userId: "u3", userName: "   ", userEmail: "noname@example.com" },
+      "noname@example.com",
+    ],
+    ["a caller nothing names as someone", { userId: "u4" }, "Someone"],
+  ])("labels %s", async (_, caller, label) => {
+    // The label is what the next editor reads: "<label> is editing this
+    // document". Null or empty there reads as "null is editing".
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    requireAuthentication.mockResolvedValueOnce(caller);
+
+    await acquireLock(post(ref));
+
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: label }),
+      expect.anything()
+    );
+  });
+
+  it("labels an API key as one, by its maker's name, and never by their email", async () => {
+    // A script holding a document is not its maker sitting at it: the person
+    // waiting should know it is a key they are waiting on.
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    const key = {
+      userId: "maker",
+      userEmail: "maker@example.com",
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+    };
+
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: "Ana" }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(peopleById).toHaveBeenLastCalledWith(["maker"]);
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "Ana's API key" }),
+      expect.anything()
+    );
+
+    // A maker whose name is as long as a name may be: the label still fits
+    // the 255-character column the claim is stored in, whole characters only.
+    peopleById.mockResolvedValueOnce(
+      new Map([
+        [
+          "maker",
+          { kind: "person", id: "maker", name: `${"N".repeat(244)}😀😀` },
+        ],
+      ])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    const long = (service.acquire.mock.lastCall?.[1] as { ownerLabel: string })
+      .ownerLabel;
+    expect(Array.from(long)).toHaveLength(255);
+    expect(long).toBe(`${"N".repeat(244)}😀's API key`);
+
+    // A maker whose name is only spaces is a maker with no name, not a label
+    // that reads "'s API key".
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: "   " }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "An API key" }),
+      expect.anything()
+    );
+
+    // A maker with no name, or whose name could not be read.
+    peopleById.mockResolvedValueOnce(
+      new Map([["maker", { kind: "person", id: "maker", name: null }]])
+    );
+    requireAuthentication.mockResolvedValueOnce(key);
+    await acquireLock(post(ref));
+    expect(service.acquire).toHaveBeenLastCalledWith(
+      ref,
+      expect.objectContaining({ ownerLabel: "An API key" }),
       expect.anything()
     );
   });

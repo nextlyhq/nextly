@@ -47,6 +47,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
+import type { SpacingMode } from "@nextlyhq/blocks-engine";
 import {
   apiErrorMessage,
   readPluginRoute,
@@ -67,7 +68,9 @@ import {
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
+  SPACING_MODE_ROUTE_PATH,
   type SiteBreakpointsRequest,
+  type SpacingModeResult,
 } from "../library-contract";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
@@ -85,8 +88,12 @@ import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 import { useStoredSiteStyle } from "./site-style-read";
 
-/** The four sections of the document, each one studio's to own. */
-export type SiteStyleSection = keyof SiteStyleData;
+/**
+ * The four sections of the document, each one studio's to own. The spacing
+ * model is not one: it is kept beside the document and saved through its own
+ * route (see `useSaveSpacingMode`).
+ */
+export type SiteStyleSection = Exclude<keyof SiteStyleData, "spacingMode">;
 
 /**
  * The site style as the editor should draw it: the host's code-stated defaults
@@ -128,6 +135,8 @@ export interface SiteStyleRead {
   readonly pending: boolean;
   /** Why the read failed, when it did. */
   readonly error: Error | null;
+  /** Whether the stored tier is the site as it is now, as the read reports. */
+  readonly current: boolean;
 }
 
 /**
@@ -139,7 +148,7 @@ export interface SiteStyleRead {
  * does not fetch them twice.
  */
 export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
-  const { data, isPending, error } = useStoredSiteStyle();
+  const { data, isPending, error, current } = useStoredSiteStyle();
   const preview = useContext(SiteStylePreviewContext);
 
   // Narrowed and merged in one memo over one source. A stored row predates its
@@ -177,6 +186,7 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
     unreadableFonts,
     pending: isPending,
     error: error ?? null,
+    current,
   };
 }
 
@@ -232,6 +242,64 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
  */
 export function refusalWords(reason: unknown, fallback: string): string {
   return apiErrorMessage(reason, fallback);
+}
+
+/**
+ * What one save of the site's spacing model came to: stored and read back,
+ * stored but not read back (the editor still holds the earlier style), or
+ * refused, with the words to show for the last two.
+ */
+export type SpacingModeSaveResult =
+  | { readonly saved: true; readonly refreshed: true }
+  | { readonly saved: true; readonly refreshed: false; readonly issue: string }
+  | { readonly saved: false; readonly issue: string };
+
+/** What a stored choice whose read-back failed is told. */
+const SPACING_MODE_NOT_REFRESHED =
+  "The space between blocks was saved, but the editor could not read it back. Reload to see it on the canvas.";
+
+/** What saving the site's spacing model answers. */
+export interface SpacingModeSave {
+  readonly save: (mode: SpacingMode) => Promise<SpacingModeSaveResult>;
+}
+
+/**
+ * Save the site's spacing model through its route, then read the style again.
+ *
+ * The model lives beside the Single rather than in it, so the Single's own
+ * write path cannot carry it; the editor's style read answers it, and reading
+ * that again is what moves the canvas onto the new model.
+ */
+export function useSaveSpacingMode(): SpacingModeSave {
+  const { refetch } = useStoredSiteStyle();
+  const save = useCallback<SpacingModeSave["save"]>(
+    async mode => {
+      try {
+        await writePluginRoute<SpacingModeResult>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SPACING_MODE_ROUTE_PATH,
+          body: { mode },
+        });
+      } catch (reason) {
+        return {
+          saved: false,
+          issue: refusalWords(
+            reason,
+            "The space between blocks was not changed."
+          ),
+        };
+      }
+      // Stored; the canvas moves only once the style is read again. A failed
+      // read answers rather than rejects, so its verdict is what tells a
+      // refreshed editor from one still drawing the earlier model.
+      const read = await refetch().catch(() => ({ isError: true }));
+      return read.isError
+        ? { saved: true, refreshed: false, issue: SPACING_MODE_NOT_REFRESHED }
+        : { saved: true, refreshed: true };
+    },
+    [refetch]
+  );
+  return { save };
 }
 
 /**
@@ -447,6 +515,40 @@ export interface SiteStyleSaveOptions {
 }
 
 /** Saving one section, and what the last attempt said. */
+/** A place taken in the editor's history for a change whose value comes later. */
+/**
+ * What a step's undo or redo writes, composed against the section as it
+ * stands when the step is replayed: the value to write, nothing to write, or
+ * nothing it can do (what it changed is gone), which it says.
+ */
+export type SiteStyleReplayed =
+  | { readonly kind: "write"; readonly value: unknown }
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "gone" };
+
+/**
+ * How a step is taken back and put forward against the section as it stands
+ * then, rather than by writing back a whole earlier value: an edit to one
+ * entry is undone at that entry, so a change made to another since is kept.
+ */
+export interface SiteStyleInverse {
+  readonly undo: (held: unknown) => SiteStyleReplayed;
+  readonly redo: (held: unknown) => SiteStyleReplayed;
+}
+
+export interface SiteStyleSlot {
+  /**
+   * Save the change's value into the place taken. With `inverse`, the step's
+   * undo and redo compose against the section as it stands when replayed.
+   */
+  readonly save: (
+    value: unknown,
+    inverse?: SiteStyleInverse
+  ) => Promise<SiteStyleSaveResult>;
+  /** Give the place up: nothing is saved. */
+  readonly cancel: () => void;
+}
+
 export interface SiteStyleWrite {
   /** Save ONE section. Every other section is left exactly as it was. */
   readonly save: (
@@ -454,6 +556,11 @@ export interface SiteStyleWrite {
     value: unknown,
     options?: SiteStyleSaveOptions
   ) => Promise<SiteStyleSaveResult>;
+  /**
+   * Take a place in the editor's history for a change to one section now,
+   * and save its value into it later.
+   */
+  readonly reserve: (section: SiteStyleSection) => SiteStyleSlot;
   /** Whether a save is in flight. */
   readonly saving: boolean;
 }
@@ -600,6 +707,25 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   /**
+   * A save that leaves the section as it stands: no step to take back, but
+   * still a write in turn, tracked by the form's storing gate like any other.
+   * The gate may hold the refusal of the save before it, and this is what
+   * corrects it; written directly, the gate kept the refusal and Save stayed
+   * refused.
+   */
+  const writeWithoutStep = useCallback(
+    async (
+      chain: SectionChain,
+      section: SiteStyleSection,
+      value: unknown
+    ): Promise<SiteStyleSaveResult> => {
+      const { done } = inTurn(chain, section, () => value);
+      return (await done).result;
+    },
+    [inTurn]
+  );
+
+  /**
    * The section's chain, begun again from the stored read when nothing of
    * this editor's is in flight and the read has moved on since it settled.
    */
@@ -632,10 +758,86 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   );
 
   /*
+   * A place in the editor's history, taken when the author makes a change
+   * whose value is only known later: the shared-style edits compose their
+   * section inside a queue, after the writes before them. The step is recorded
+   * now, so a page edit made meanwhile comes after it as it was made; its undo
+   * and redo wait until the value is known. Withdrawn when nothing is saved.
+   */
+  const reserve = useCallback(
+    (section: SiteStyleSection): SiteStyleSlot => {
+      if (history === null) {
+        return { save: value => write(section, value), cancel: () => {} };
+      }
+      const { settled } = history;
+      type Filled = {
+        before: unknown;
+        value: unknown;
+        inverse: SiteStyleInverse | undefined;
+      };
+      let fill: (filled: Filled | null) => void = () => {};
+      const filled = new Promise<Filled | null>(resolve => {
+        fill = resolve;
+      });
+      // Set once the change is dropped or refused: an undo or redo of it
+      // queued in the meantime then writes nothing.
+      let withdrawn = false;
+      const replay =
+        (pick: (known: Filled, held: unknown) => unknown) =>
+        async (): Promise<SiteStyleReplay> => {
+          const known = await filled;
+          const { result, holds } = await inTurn(
+            chainOf(settled, section),
+            section,
+            held => (withdrawn || known === null ? SKIP : pick(known, held))
+          ).done;
+          return { stored: result.saved, section, value: holds };
+        };
+      const withdraw = history.record({
+        undo: replay((known, held) =>
+          known.inverse === undefined
+            ? known.before
+            : replayedValue(known.inverse.undo(held))
+        ),
+        redo: replay((known, held) =>
+          known.inverse === undefined
+            ? known.value
+            : replayedValue(known.inverse.redo(held))
+        ),
+      });
+      const drop = (): void => {
+        withdrawn = true;
+        fill(null);
+        withdraw();
+      };
+      return {
+        cancel: drop,
+        save: async (value, inverse) => {
+          const chain = chainOf(settled, section);
+          // A save that leaves the section as it stands is no step to take
+          // back.
+          if (chain.pending === 0 && sameSection(chain.held, value)) {
+            drop();
+            return writeWithoutStep(chain, section, value);
+          }
+          const { before, done } = inTurn(chain, section, () => value);
+          fill({ before, value, inverse });
+          const { result } = await done;
+          // A refused save changed nothing, so its step is withdrawn.
+          if (!result.saved) drop();
+          return result;
+        },
+      };
+    },
+    [write, writeWithoutStep, history, inTurn, chainOf]
+  );
+
+  /*
    * A save inside the editor is also a step of its history, recorded when the
    * author makes the change rather than when it is stored: the studios save
-   * without waiting, and a page edit made meanwhile comes after it. A refused
-   * save changed nothing, so its step is withdrawn.
+   * without waiting, and a page edit made meanwhile comes after it. One that
+   * leaves the section as it stands is no step at all, and must not end the
+   * redo branch, so it is not given a place.
    */
   const save = useCallback(
     async (
@@ -658,7 +860,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       // A save that leaves the section as it stands is no step to take back,
       // and must not end the redo branch.
       if (chain.pending === 0 && sameSection(chain.held, value)) {
-        return write(section, value);
+        return writeWithoutStep(chain, section, value);
       }
       const held = options?.hold === true ? holdFor(chain, value) : undefined;
       const { before, done, turn } = inTurn(chain, section, prior =>
@@ -737,10 +939,20 @@ export function useSaveSiteStyle(): SiteStyleWrite {
       }
       return result;
     },
-    [write, history, inTurn, chainOf]
+    [write, writeWithoutStep, history, inTurn, chainOf]
   );
 
-  return { save, saving: mutation.isPending };
+  return { save, reserve, saving: mutation.isPending };
+}
+
+/**
+ * A composed replay as the section chain takes it: the value, nothing to
+ * write, or nothing it can do, which stores nothing and is refused (so the
+ * history says the change could not be undone or redone).
+ */
+function replayedValue(replayed: SiteStyleReplayed): unknown {
+  if (replayed.kind === "write") return replayed.value;
+  return replayed.kind === "unchanged" ? UNCHANGED : SKIP;
 }
 
 /**

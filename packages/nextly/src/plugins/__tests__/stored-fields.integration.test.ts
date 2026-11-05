@@ -49,7 +49,10 @@ import type { PluginRouteIdentity } from "../routes/route-types";
 import {
   readStoredFields,
   updateIfUnchanged,
+  type PluginConditionalUpdate,
   type PluginStoredDocument,
+  type PluginStoredFieldsRequest,
+  type PluginStoredIdentity,
 } from "../stored-fields";
 import {
   createTestNextly,
@@ -85,7 +88,17 @@ const releases: (() => void)[] = [];
  * writer, whether its first transaction took a row lock: the content write's
  * transaction does, so the seam is shown to sit in the write itself.
  */
-function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
+/** Whether a transaction's options make it a read-only snapshot. */
+function isSnapshot(rest: readonly unknown[]): boolean {
+  return (rest[0] as { readOnly?: boolean } | undefined)?.readOnly === true;
+}
+
+function raceSeam(
+  t: TestNextly,
+  pausing: Writer,
+  releasing: Writer,
+  dialect: TestDialect
+) {
   const adapter = t.adapter as unknown as {
     transaction<T>(
       work: (tx: {
@@ -106,32 +119,55 @@ function raceSeam(t: TestNextly, pausing: Writer, releasing: Writer) {
     signalPaused = resolve;
   });
   const state = { paused: false, released: false };
-  vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+  const release = () => {
+    state.released = true;
+    letCommit();
+  };
+  /** The writer whose first write transaction this is, now claimed; else none. */
+  const firstWriteOf = (): Writer | undefined => {
     const who = writerOf.getStore();
-    const first = who !== undefined && !locked.has(who);
-    if (who !== undefined && first) locked.set(who, false);
+    if (who === undefined || locked.has(who)) return undefined;
+    locked.set(who, false);
+    return who;
+  };
+  /** Records that `who`'s first write transaction took a row lock. */
+  const watchLock = (
+    who: Writer,
+    tx: { lockRow(table: string, id: string): Promise<void> }
+  ) => {
+    const lockRow = tx.lockRow.bind(tx);
+    tx.lockRow = async (table, id) => {
+      locked.set(who, true);
+      return lockRow(table, id);
+    };
+  };
+  /** Holds the pausing writer's transaction open, after its work, until released. */
+  const pauseAfter = async <T>(who: Writer, out: T): Promise<T> => {
+    if (who === pausing) {
+      state.paused = true;
+      signalPaused();
+      await mayCommit;
+    }
+    return out;
+  };
+  vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+    // A read-only transaction (a stored read's snapshot) is not the write the
+    // seam is about, and passes through. On SQLite it still waits behind the
+    // paused writer, which holds the database's one writer, so there the
+    // releasing writer's snapshot is the earliest it can go on: it releases.
+    if (isSnapshot(rest)) {
+      if (dialect === "sqlite" && writerOf.getStore() === releasing) release();
+      return original(work, ...rest);
+    }
+    const who = firstWriteOf();
+    if (who === undefined) return original(work, ...rest);
     // Released on entry, before queueing: SQLite runs one transaction at a
     // time, so the released writer must commit for this one to start.
-    if (first && who === releasing) {
-      state.released = true;
-      letCommit();
-    }
+    if (who === releasing) release();
     return original(
       async tx => {
-        if (first && who !== undefined) {
-          const lockRow = tx.lockRow.bind(tx);
-          tx.lockRow = async (table, id) => {
-            locked.set(who, true);
-            return lockRow(table, id);
-          };
-        }
-        const out = await work(tx);
-        if (first && who === pausing) {
-          state.paused = true;
-          signalPaused();
-          await mayCommit;
-        }
-        return out;
+        watchLock(who, tx);
+        return pauseAfter(who, await work(tx));
       },
       ...rest
     );
@@ -222,7 +258,46 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             fields: [
               { ...hiddenBody, localized: true },
+              { name: "note", type: "doc", localized: true },
               { name: "extra", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A read rule closing German alone, as a site with a language
+            // its translators have not released might write one.
+            slug: "germanless",
+            localized: true,
+            access: {
+              read: ({ locales }: { locales: readonly string[] }) =>
+                !locales.includes("de"),
+            },
+            fields: [{ name: "body", type: "doc", localized: true }],
+          } as unknown as CollectionConfig,
+          {
+            // A lifecycle with no working drafts: an entry is draft until it
+            // is published, and its live row is that draft.
+            slug: "staged",
+            status: true,
+            fields: [{ name: "body", type: "doc" }],
+          } as unknown as CollectionConfig,
+          {
+            // A lifecycle kept per language: a translation has its own state.
+            slug: "stagedwords",
+            localized: true,
+            status: true,
+            fields: [{ name: "body", type: "doc", localized: true }],
+          } as unknown as CollectionConfig,
+          {
+            slug: "grouped",
+            fields: [
+              {
+                name: "hero",
+                type: "group",
+                fields: [
+                  { name: "body", type: "doc" },
+                  { name: "aside", type: "doc" },
+                ],
+              },
             ],
           } as unknown as CollectionConfig,
         ],
@@ -231,6 +306,17 @@ describe.each(getConfiguredTestDialects())(
             slug: "site",
             fields: [{ name: "body", type: "doc" }],
           } as never,
+          // Never stored before the test that writes each: a first write
+          // inserts the row, with the field's default, in its own transaction.
+          ...["firstwrite", "firstrace"].map(
+            slug =>
+              ({
+                slug,
+                fields: [
+                  { name: "body", type: "doc", defaultValue: { v: "default" } },
+                ],
+              }) as never
+          ),
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
@@ -254,7 +340,16 @@ describe.each(getConfiguredTestDialects())(
       // The install's first account holds super-admin; the others are judged
       // by what they are granted.
       owner = { user: { id: await person("owner") } };
-      const content = ["pages", "drafted", "hooked", "worded"];
+      const content = [
+        "pages",
+        "drafted",
+        "hooked",
+        "worded",
+        "germanless",
+        "grouped",
+        "staged",
+        "stagedwords",
+      ];
       const editorId = await person("editor");
       for (const action of ["read", "update", "publish"]) {
         await grantTo(t, editorId, action, content);
@@ -340,7 +435,7 @@ describe.each(getConfiguredTestDialects())(
         const page = { collection: "pages", id };
         const hash = await hashOf(page, "body", "published");
 
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("pages", id, { body: { v: "author" } });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
@@ -370,7 +465,7 @@ describe.each(getConfiguredTestDialects())(
         const page = { collection: "pages", id };
         const hash = await hashOf(page, "body", "published");
 
-        const seam = raceSeam(t, "plugin", "author");
+        const seam = raceSeam(t, "plugin", "author", dialect);
         const plugin = writerOf.run("plugin", () =>
           updateIfUnchanged(editor, {
             ...page,
@@ -426,7 +521,7 @@ describe.each(getConfiguredTestDialects())(
         });
         const hash = await hashOf(entry, "body", "draft");
 
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("drafted", id, { body: { v: "author" } });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
@@ -458,7 +553,7 @@ describe.each(getConfiguredTestDialects())(
         const entry = { collection: "drafted", id };
         const hash = await hashOf(entry, "body", "draft");
 
-        const seam = raceSeam(t, "plugin", "author");
+        const seam = raceSeam(t, "plugin", "author", dialect);
         const plugin = writerOf.run("plugin", () =>
           updateIfUnchanged(editor, {
             ...entry,
@@ -500,7 +595,7 @@ describe.each(getConfiguredTestDialects())(
         const hash = await hashOf(entry, "body", "published");
 
         // The author's draft leaves `body` alone, so the live hash still holds.
-        const seam = raceSeam(t, "author", "plugin");
+        const seam = raceSeam(t, "author", "plugin", dialect);
         const author = authorSaves("drafted", id, { title: "draft title" });
         await Promise.race([seam.paused, author.catch(() => undefined)]);
         const refusal = await rejectionOf(
@@ -615,6 +710,60 @@ describe.each(getConfiguredTestDialects())(
         expect(after).toEqual({
           kind: "found",
           values: { body: { kind: "value", value: { v: "plugin" } } },
+        });
+      });
+    });
+
+    describe("a Single never stored", () => {
+      /** The Single's body as the stored read returns it, read as the owner. */
+      const bodyOf = (single: string) =>
+        readStoredFields(owner, {
+          single,
+          fields: ["body"],
+          form: "published",
+        });
+
+      it("lands a first conditional write expecting absent, though the write inserts the field's default first", async () => {
+        expect(await bodyOf("firstwrite")).toEqual({ kind: "absent" });
+
+        await updateIfUnchanged(owner, {
+          single: "firstwrite",
+          data: { body: { v: "plugin" } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash({ kind: "absent" }),
+          },
+        });
+        expect(await bodyOf("firstwrite")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "plugin" } } },
+        });
+      });
+
+      it("refuses one expecting absent once another first write has committed since the read", async () => {
+        expect(await bodyOf("firstrace")).toEqual({ kind: "absent" });
+        await t.nextly.updateSingle({
+          slug: "firstrace",
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(owner, {
+            single: "firstrace",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({ kind: "absent" }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await bodyOf("firstrace")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "author" } } },
         });
       });
     });
@@ -743,6 +892,656 @@ describe.each(getConfiguredTestDialects())(
           );
           expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
         }
+      });
+    });
+
+    describe("languages and groups", () => {
+      it("judges the stored read in the language it reads, refusing one a read rule closes", async () => {
+        const id = await created("germanless", { body: { v: "en" } });
+        await t.nextly.update({
+          collection: "germanless",
+          id,
+          locale: "de",
+          data: { body: { v: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "germanless", id };
+        const asked = {
+          ...entry,
+          fields: ["body"],
+          form: "published",
+        } as const;
+
+        // The control: the same person reads the language the rule leaves open.
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "en" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(
+              readStoredFields(editor, { ...asked, locale: "de" })
+            )
+          )
+        ).toBe(true);
+        // A conditional write in the closed language reads it first, so it is
+        // refused too, and the German value stays as it was.
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            locale: "de",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "de" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isForbidden(refusal)).toBe(true);
+        const german = (await t.nextly.findByID({
+          collection: "germanless",
+          id,
+          locale: "de",
+          fallbackLocale: false,
+          overrideAccess: true,
+        } as never)) as { body?: unknown };
+        expect(german.body).toEqual({ v: "de" });
+      });
+
+      it("refuses an expectation on a field inside a group, and writes nothing", async () => {
+        const id = await created("grouped", {
+          hero: { body: { v: 0 }, aside: { a: "author" } },
+        });
+        const entry = { collection: "grouped", id };
+        // The stored read reaches the field; only the write refuses it.
+        const read = await readStoredFields(editor, {
+          ...entry,
+          fields: ["hero.body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+        const hash = await storedValueHash(
+          read.values["hero.body"] ?? { kind: "absent" }
+        );
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            data: { hero: { body: { v: "plugin" } } },
+            expect: { field: "hero.body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+        expect(
+          await readStoredFields(editor, {
+            ...entry,
+            fields: ["hero.body", "hero.aside"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: {
+            "hero.body": { kind: "value", value: { v: 0 } },
+            "hero.aside": { kind: "value", value: { a: "author" } },
+          },
+        });
+      });
+
+      it("reads every field kept per language from one query of its language row", async () => {
+        const id = await created("worded", {
+          body: { v: "en" },
+          note: { n: "en" },
+          extra: { e: "shared" },
+        });
+        await t.nextly.update({
+          collection: "worded",
+          id,
+          locale: "de",
+          data: { body: { v: "de" }, note: { n: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "worded", id };
+        // Every select on a Drizzle executor the read is handed: the pool's,
+        // and the one its snapshot transaction hands it.
+        let selects = 0;
+        const counted = (db: object) =>
+          new Proxy(db, {
+            get(target, property, receiver) {
+              const value: unknown = Reflect.get(target, property, receiver);
+              if (property !== "select" || typeof value !== "function") {
+                return value;
+              }
+              return (...args: unknown[]) => {
+                selects += 1;
+                return (value as (...a: unknown[]) => unknown).apply(
+                  target,
+                  args
+                );
+              };
+            },
+          });
+        const adapter = t.adapter as unknown as {
+          getDrizzle(...a: unknown[]): object;
+          transaction<T>(
+            work: (tx: { getDrizzle(...a: unknown[]): object }) => Promise<T>,
+            ...rest: unknown[]
+          ): Promise<T>;
+        };
+        const getDrizzle = adapter.getDrizzle.bind(adapter);
+        vi.spyOn(adapter, "getDrizzle").mockImplementation((...a) =>
+          counted(getDrizzle(...a))
+        );
+        const transaction = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) =>
+          transaction(
+            tx => {
+              const txDrizzle = tx.getDrizzle.bind(tx);
+              tx.getDrizzle = (...a) => counted(txDrizzle(...a));
+              return work(tx);
+            },
+            ...rest
+          )
+        );
+        const countFor = async (fields: string[]) => {
+          selects = 0;
+          const read = await readStoredFields(editor, {
+            ...entry,
+            fields,
+            form: "published",
+            locale: "de",
+          });
+          return { read, count: selects };
+        };
+        // Once to settle what a first read resolves and remembers.
+        await countFor(["body", "note", "extra"]);
+
+        const shared = await countFor(["extra"]);
+        const one = await countFor(["body", "extra"]);
+        const two = await countFor(["body", "note", "extra"]);
+        // A field kept per language costs one query of the language row, and a
+        // second such field costs nothing more.
+        expect(one.count).toBe(shared.count + 1);
+        expect(two.count).toBe(one.count);
+        expect(two.read).toEqual({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: "de" } },
+            note: { kind: "value", value: { n: "de" } },
+            extra: { kind: "value", value: { e: "shared" } },
+          },
+        });
+      });
+    });
+
+    describe("lifecycle", () => {
+      it("answers a live row an ordinary read would not show its reader as absent", async () => {
+        const draftOnly = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const published = await created("staged", {
+          body: { v: "released" },
+          status: "published",
+        });
+        const ask = (id: string) =>
+          ({
+            collection: "staged",
+            id,
+            fields: ["body"],
+            form: "published",
+          }) as const;
+
+        // A reader who may not update sees the published entry and not the
+        // draft, as their ordinary read would; an editor sees both.
+        expect(await readStoredFields(reader, ask(published))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "released" } } },
+        });
+        expect(await readStoredFields(reader, ask(draftOnly))).toEqual({
+          kind: "absent",
+        });
+        expect(await readStoredFields(editor, ask(draftOnly))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "unreleased" } } },
+        });
+      });
+
+      it("judges a translation by its own state, not the live row's", async () => {
+        const id = await created("stagedwords", {
+          body: { v: "en" },
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: "stagedwords",
+          id,
+          locale: "de",
+          data: { body: { v: "de" }, status: "draft" },
+          overrideAccess: true,
+        } as never);
+        const ask = (locale: string) =>
+          ({
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+            locale,
+          }) as const;
+
+        expect(await readStoredFields(reader, ask("en"))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(await readStoredFields(reader, ask("de"))).toEqual({
+          kind: "absent",
+        });
+        expect(await readStoredFields(editor, ask("de"))).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "de" } } },
+        });
+      });
+    });
+
+    describe("one snapshot, one language", () => {
+      it("never shows a reader a value committed as a draft between its row's state and its language row", async () => {
+        const id = await created("stagedwords", {
+          body: { v: "published" },
+          status: "published",
+        });
+        const adapter = t.adapter as unknown as {
+          select(table: string, ...rest: unknown[]): Promise<unknown>;
+          transaction<T>(
+            work: (tx: {
+              select(table: string, ...rest: unknown[]): Promise<unknown>;
+            }) => Promise<T>,
+            ...rest: unknown[]
+          ): Promise<T>;
+        };
+        // The author's save of a new value as a draft, made once the reader
+        // has read the main row's state and before it reads the language row.
+        // On SQLite the reader's transaction holds the one writer, so the
+        // save can only begin there, and commits after the read.
+        let interleaved = false;
+        let save: Promise<unknown> = Promise.resolve();
+        // Captured here, before the read begins, so the save runs as its own
+        // flow rather than inside the reader's transaction.
+        const outside = AsyncLocalStorage.snapshot();
+        let letEnter = (): void => undefined;
+        const saveEntered = new Promise<void>(resolve => {
+          letEnter = resolve;
+        });
+        const interleave = async () => {
+          if (interleaved) return;
+          interleaved = true;
+          save = outside(() =>
+            writerOf.run("author", () =>
+              t.nextly.update({
+                collection: "stagedwords",
+                id,
+                data: { body: { v: "draft" }, status: "draft" },
+                overrideAccess: true,
+              } as never)
+            )
+          );
+          await (dialect === "sqlite"
+            ? Promise.race([saveEntered, save])
+            : save);
+        };
+        const mainRow = (table: string) =>
+          table.endsWith("stagedwords") && !table.includes("locales");
+        const select = adapter.select.bind(adapter);
+        vi.spyOn(adapter, "select").mockImplementation(
+          async (table, ...rest) => {
+            const out = await select(table, ...rest);
+            if (writerOf.getStore() === "plugin" && mainRow(table)) {
+              await interleave();
+            }
+            return out;
+          }
+        );
+        const transaction = adapter.transaction.bind(adapter);
+        vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+          const who = writerOf.getStore();
+          if (who === "author") letEnter();
+          return transaction(
+            async tx => {
+              if (who === "plugin") {
+                const txSelect = tx.select.bind(tx);
+                tx.select = async (table, ...more) => {
+                  const out = await txSelect(table, ...more);
+                  if (mainRow(table)) await interleave();
+                  return out;
+                };
+              }
+              return work(tx);
+            },
+            ...rest
+          );
+        });
+
+        const read = await writerOf.run("plugin", () =>
+          readStoredFields(reader, {
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        letEnter();
+        await save;
+        vi.restoreAllMocks();
+
+        expect(interleaved).toBe(true);
+        expect(read).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "published" } } },
+        });
+        // The control: the save did land, and its draft is hidden from them.
+        expect(
+          await readStoredFields(reader, {
+            collection: "stagedwords",
+            id,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({ kind: "absent" });
+      });
+
+      it("reads the language an unknown code resolves to, and refuses a selector", async () => {
+        const id = await created("worded", { body: { v: "en" } });
+        await t.nextly.update({
+          collection: "worded",
+          id,
+          locale: "de",
+          data: { body: { v: "de" } },
+          overrideAccess: true,
+        } as never);
+        const entry = { collection: "worded", id };
+        const asked = {
+          ...entry,
+          fields: ["body"],
+          form: "published",
+        } as const;
+
+        // A language the site does not configure resolves to its default, as
+        // an ordinary read resolves it, and that language's value is read.
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "xx" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "en" } } },
+        });
+        expect(
+          await readStoredFields(editor, { ...asked, locale: "de" })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "de" } } },
+        });
+        for (const locale of ["all", "*"]) {
+          expect(
+            NextlyError.isCode(
+              await rejectionOf(readStoredFields(editor, { ...asked, locale })),
+              "INVALID_INPUT"
+            )
+          ).toBe(true);
+        }
+        const refusal = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            locale: "all",
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "en" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+      });
+    });
+
+    describe("the document named", () => {
+      it("refuses a request naming both an entry and a Single, and writes neither", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: "site" } },
+          overrideAccess: true,
+        } as never);
+        // Plain JavaScript, or an object passed on unchecked, can name both.
+        const both = {
+          collection: "pages",
+          id,
+          single: "site",
+        } as unknown as PluginStoredDocument;
+
+        const read = await rejectionOf(
+          readStoredFields(owner, {
+            ...both,
+            fields: ["body"],
+            form: "published",
+          })
+        );
+        expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+        // The expectation matches the Single, so a write that chose it would land.
+        const write = await rejectionOf(
+          updateIfUnchanged(owner, {
+            ...both,
+            data: { body: { v: "plugin" } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({
+                kind: "value",
+                value: { v: "site" },
+              }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        expect(
+          await readStoredFields(owner, {
+            single: "site",
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "site" } } },
+        });
+        expect(
+          await stored({ collection: "pages", id }, "body", "published")
+        ).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+    });
+
+    describe("the form named", () => {
+      it("refuses a stored read or a conditional write naming no form or one it does not know, and shows or writes nothing", async () => {
+        const id = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const entry = { collection: "staged", id };
+        // Never published: a reader who may not update is not shown it.
+        expect(
+          await readStoredFields(reader, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toEqual({ kind: "absent" });
+        const hash = await storedValueHash({
+          kind: "value",
+          value: { v: "unreleased" },
+        });
+
+        // Plain JavaScript, or an object passed on unchecked, can name any
+        // form, or none.
+        for (const form of [{ form: "anything" }, {}]) {
+          const read = await rejectionOf(
+            readStoredFields(reader, {
+              ...entry,
+              fields: ["body"],
+              ...form,
+            } as unknown as PluginStoredFieldsRequest)
+          );
+          expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+          expect((read as Error).message).toMatch(/^A stored read names/);
+
+          // Refused by the write's own boundary, not only by the read it makes.
+          const write = await rejectionOf(
+            updateIfUnchanged(editor, {
+              ...entry,
+              data: { body: { v: "plugin" } },
+              expect: { field: "body", hash, ...form },
+            } as unknown as PluginConditionalUpdate)
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+          expect((write as Error).message).toMatch(
+            /^A conditional write names/
+          );
+        }
+        expect(await stored(entry, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "unreleased" },
+        });
+      });
+    });
+
+    describe("the system", () => {
+      /** The system: trusted server code, judged as `overrideAccess: true`. */
+      const SYSTEM = { overrideAccess: true } as const;
+
+      it("shows the system a never-published entry and its draft form, which a read-only person is not shown", async () => {
+        const id = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const asked = {
+          collection: "staged",
+          id,
+          fields: ["body"],
+        } as const;
+        const found = {
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "unreleased" } } },
+        };
+
+        expect(
+          await readStoredFields(reader, { ...asked, form: "published" })
+        ).toEqual({ kind: "absent" });
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(
+              readStoredFields(reader, { ...asked, form: "draft" })
+            )
+          )
+        ).toBe(true);
+        expect(
+          await readStoredFields(SYSTEM, { ...asked, form: "published" })
+        ).toEqual(found);
+        expect(
+          await readStoredFields(SYSTEM, { ...asked, form: "draft" })
+        ).toEqual(found);
+      });
+
+      it("lands a system conditional write whose field is unchanged", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const read = await readStoredFields(SYSTEM, {
+          ...page,
+          fields: ["body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+
+        await updateIfUnchanged(SYSTEM, {
+          ...page,
+          data: { body: { v: "system" } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash(read.values.body ?? { kind: "absent" }),
+          },
+        });
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "system" },
+        });
+      });
+
+      it("refuses a stale system conditional write with a conflict, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        await t.nextly.update({
+          collection: "pages",
+          id,
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(SYSTEM, {
+            ...page,
+            data: { body: { v: "system" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+      });
+
+      it("refuses an identity that is neither a route's caller nor the system, and writes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        // Plain JavaScript, or an object passed on unchecked, can carry any.
+        const junk: unknown[] = [
+          { overrideAccess: false },
+          { overrideAccess: true, user: owner.user },
+          { ...owner, overrideAccess: false },
+          { ...owner, overrideAccess: true },
+          {},
+          "system",
+        ];
+        for (const identity of junk) {
+          const read = await rejectionOf(
+            readStoredFields(identity as PluginStoredIdentity, {
+              ...page,
+              fields: ["body"],
+              form: "published",
+            })
+          );
+          expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+          const write = await rejectionOf(
+            updateIfUnchanged(identity as PluginStoredIdentity, {
+              ...page,
+              data: { body: { v: "junk" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        }
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
       });
     });
 

@@ -46,6 +46,7 @@ export type CardVerbs = SharedBlockVerbs;
 /** The verbs from the shared set that the card's menu offers, in order. */
 const CARD_VERBS: readonly ToolbarActionId[] = [
   "duplicate",
+  "save-as-shared-style",
   "turn-into-component",
   "detach-component",
   "duplicate-component",
@@ -382,7 +383,7 @@ function OwnLockLine({
       <span id={reasonId}>
         <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
       </span>
-      {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
+      {layersLockChangeable(lock) ? " Unlock it from the block's menu." : null}
     </li>
   );
 }

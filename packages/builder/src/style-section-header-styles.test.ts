@@ -210,15 +210,19 @@ describe("an inherited colour's swatch", () => {
 });
 
 describe("an inherited value's source", () => {
-  it("sits muted at the end of the label's row, cut short rather than wrapped", () => {
+  it("sits muted at the end of the label's row, wrapping to two lines before it is cut", () => {
     // Always shown, unlike the dot: it is half of what the greyed value in
-    // the control means.
+    // the control means. One line in the 7rem label column cut "From section
+    // · Tablet" to "From se…"; two hold it, and a longer one ends in an
+    // ellipsis with the whole sentence in its tooltip.
     const source = ruleBody(".nx-style-inspector__provenance-source");
     expect(source).toContain("margin-inline-start: auto");
     expect(source).toContain("color: var(--nx-builder-text-muted)");
     expect(source).toContain("font-size: var(--text-xs)");
     expect(source).toContain("text-overflow: ellipsis");
-    expect(source).toContain("white-space: nowrap");
+    expect(source).toContain("-webkit-line-clamp: 2");
+    expect(source).toContain("overflow-wrap: anywhere");
+    expect(source).not.toContain("white-space: nowrap");
     expect(source).not.toContain("opacity: 0");
   });
 

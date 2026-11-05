@@ -30,6 +30,33 @@ describe("isStatusOnlyWrite", () => {
     ).toBe(true);
   });
 
+  it("holds beside the version and the overwrite choice, which a write never stores", () => {
+    // A client re-saving what it read, or choosing to overwrite, sends these
+    // beside the status; neither makes the write an edit.
+    for (const entity of ["collection", "single"] as const) {
+      expect(
+        isStatusOnlyWrite(
+          { status: "published", _rev: "3", _overwrite: true },
+          entity
+        )
+      ).toBe(true);
+      // Whatever its value: the key is never content, so `false` is no edit
+      // either.
+      for (const choice of [true, false]) {
+        expect(
+          isStatusOnlyWrite({ status: "draft", _overwrite: choice }, entity)
+        ).toBe(true);
+      }
+      // Still an edit when a field is named beside them.
+      expect(
+        isStatusOnlyWrite(
+          { status: "published", title: "t", _overwrite: true },
+          entity
+        )
+      ).toBe(false);
+    }
+  });
+
   it("fails for a body naming any field a write stores, whatever its value", () => {
     expect(
       isStatusOnlyWrite({ status: "published", title: "same" }, "collection")

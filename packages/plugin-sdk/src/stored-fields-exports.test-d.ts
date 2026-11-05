@@ -2,7 +2,8 @@
  * The stored read and the conditional write as a plugin author imports them
  * from the SDK.
  *
- * Both are made as a person, named by the identity a plugin route resolves;
+ * Both are made as a person, named by the identity a plugin route resolves,
+ * or as the system, `{ overrideAccess: true }`;
  * a request names exactly one document, an entry or a Single, never both; the
  * read answers a discriminated result per field, so an absent value is never
  * confused with a stored one; and the expectation carries the hash the SDK's
@@ -20,7 +21,9 @@ import type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
   PluginStoredValue,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "@nextlyhq/plugin-sdk";
 import {
@@ -29,13 +32,23 @@ import {
   updateIfUnchanged,
 } from "@nextlyhq/plugin-sdk";
 
-// Made as the person a route resolved, and nobody else.
+// Made as the person a route resolved, or as the system, and nobody else.
 expectTypeOf(readStoredFields)
   .parameter(0)
-  .toEqualTypeOf<PluginRouteIdentity>();
+  .toEqualTypeOf<PluginStoredIdentity>();
 expectTypeOf(updateIfUnchanged)
   .parameter(0)
-  .toEqualTypeOf<PluginRouteIdentity>();
+  .toEqualTypeOf<PluginStoredIdentity>();
+expectTypeOf<PluginStoredIdentity>().toEqualTypeOf<
+  PluginRouteIdentity | PluginSystemIdentity
+>();
+expectTypeOf<PluginRouteIdentity>().toMatchTypeOf<PluginStoredIdentity>();
+expectTypeOf({
+  overrideAccess: true as const,
+}).toMatchTypeOf<PluginStoredIdentity>();
+expectTypeOf({
+  overrideAccess: false as const,
+}).not.toMatchTypeOf<PluginStoredIdentity>();
 expectTypeOf(readStoredFields)
   .parameter(1)
   .toEqualTypeOf<PluginStoredFieldsRequest>();

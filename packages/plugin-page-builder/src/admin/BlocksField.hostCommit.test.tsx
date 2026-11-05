@@ -96,6 +96,12 @@ function store(): void {
  */
 const heldAtExit: unknown[] = [];
 
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
+
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
   const nothing = (): null => null;
@@ -195,6 +201,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     }),
   };
 });
+
+// The question before a publish registers a before-action of its own, which
+// this harness would take for the host commit's; it has its own tests.
+vi.mock("./publish-offer", () => ({
+  usePublishOffer: () => null,
+  useFormPublishOffer: () => null,
+}));
 
 /** Asking the stored style again, as the editor does after a save. */
 const refetchStoredStyle = async () => ({ isError: false });

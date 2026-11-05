@@ -35,6 +35,8 @@
  *
  * @module domains/collections/services/stored-field-read
  */
+import { createHash } from "node:crypto";
+
 import { and, eq } from "drizzle-orm";
 
 import type {
@@ -211,6 +213,14 @@ export interface StoredFieldsRead {
    * only of a `draft` read, or of one made with `askDraft`; `false` otherwise.
    */
   readonly workingDraft: boolean;
+  /**
+   * The live row's lifecycle state in the language read, asked only with
+   * `askState`: the main row's `status`, or the language row's own `_status`
+   * for a language other than the default where translations keep one.
+   * `undefined` where not asked or the entity has no lifecycle; `null` where
+   * it has one and the row stores no state.
+   */
+  readonly liveState?: string | null;
 }
 
 /**
@@ -265,83 +275,219 @@ export async function readStoredFieldsOn(
   connection: StoredFieldConnection,
   scope: FieldScope,
   target: StoredFieldsTarget,
-  options: { records?: RegistryRecords; askDraft?: boolean } = {}
+  options: {
+    records?: RegistryRecords;
+    askDraft?: boolean;
+    askState?: boolean;
+  } = {}
 ): Promise<StoredFieldsRead> {
   const records = options.records ?? registryRecords(connection);
   const fields = [...new Set(target.fields)];
   const entity = await storedEntity(connection, records, target, scope);
-  const paths = fields.map(field => ({
-    field,
-    path: storedFieldPath(entity, { ...target, field }, scope),
-  }));
+  const placed = placedFields(entity, target, scope, fields);
   const locale = target.locale ?? connection.defaultLocale ?? null;
-  // Only a top-level field can be kept per language on its own: a field
-  // inside a group is stored in the group's value, and a group kept per
-  // language is refused by the path above.
-  const placed = paths.map(({ field, path }) => ({
-    field,
-    path,
-    perLanguage:
-      path.within.length === 0
-        ? companionFieldOf(entity, path.column)
-        : undefined,
-  }));
-
+  const state =
+    options.askState === true
+      ? stateSource(entity, locale, connection.defaultLocale)
+      : undefined;
   const row = await storedRow(
     connection,
     entity,
     target,
-    placed
-      .filter(({ perLanguage }) => perLanguage === undefined)
-      .map(({ path }) => path.column)
+    rowColumns(placed, state)
   );
-  if (row === undefined) {
-    return {
-      found: false,
-      values: new Map(fields.map(field => [field, { kind: "absent" }])),
-      workingDraft: false,
-    };
-  }
+  if (row === undefined) return notStored(fields);
   const id = String(row.id);
   const draft =
-    target.form === "draft" || options.askDraft === true
+    showsUnpublished(target.form) || options.askDraft === true
       ? await pendingWorkingDraft(connection, entity, id, locale)
       : undefined;
+  // The working draft a `draft` read shows, and the one language row every
+  // field kept per language that it does not carry is read from, in one query
+  // however many such fields are asked for.
+  const shownDraft = showsUnpublished(target.form) ? draft : undefined;
+  const language = await languageRow(
+    connection,
+    {
+      fields: fromLanguageRow(placed, shownDraft),
+      state: state === "language" ? companionOf(entity) : null,
+    },
+    { id, locale, target }
+  );
+  return {
+    found: true,
+    values: shownValues(placed, row, language.values, shownDraft),
+    workingDraft: draft !== undefined,
+    ...liveStateOf(state, row, language),
+  };
+}
 
+/**
+ * Settle on `connection`, a pooled one, what a read inside a transaction can
+ * only remember: whether the entity's language store is ready. Inside a
+ * transaction the read consults the remembered verdict and never resolves
+ * it, since resolving queries and on PostgreSQL a query against a missing
+ * relation aborts the transaction; so a read about to run in one asks here
+ * first. Refuses what the read itself would refuse about the entity.
+ */
+export async function prepareStoredRead(
+  connection: StoredFieldConnection,
+  scope: FieldScope,
+  target: StoredFieldsTarget
+): Promise<void> {
+  const entity = await storedEntity(
+    connection,
+    registryRecords(connection),
+    target,
+    scope
+  );
+  const companion = companionOf(entity);
+  if (companion !== null) {
+    await resolveCompanionSchemaReadiness(getService("adapter"), companion);
+  }
+}
+
+/** One field a read is asked for, with where it is stored. */
+interface PlacedField {
+  readonly field: string;
+  readonly path: StoredFieldPath;
+  /** The field's language-row column, for a field kept per language. */
+  readonly perLanguage: CompanionField | undefined;
+}
+
+/**
+ * Each field with where it is stored. Only a top-level field can be kept per
+ * language on its own: a field inside a group is stored in the group's value,
+ * and a group kept per language is refused by the path rule.
+ */
+function placedFields(
+  entity: StoredEntity,
+  target: StoredFieldsTarget,
+  scope: FieldScope,
+  fields: readonly string[]
+): PlacedField[] {
+  return fields.map(field => {
+    const path = storedFieldPath(entity, { ...target, field }, scope);
+    return {
+      field,
+      path,
+      perLanguage:
+        path.within.length === 0
+          ? companionFieldOf(entity, path.column)
+          : undefined,
+    };
+  });
+}
+
+/** The main row's columns a read needs: its fields' own, and its state's. */
+function rowColumns(
+  placed: readonly PlacedField[],
+  state: "row" | "language" | undefined
+): string[] {
+  return [
+    ...placed
+      .filter(({ perLanguage }) => perLanguage === undefined)
+      .map(({ path }) => path.column),
+    ...(state === "row" ? ["status"] : []),
+  ];
+}
+
+/** A read of a document that is not stored: every field absent. */
+function notStored(fields: readonly string[]): StoredFieldsRead {
+  return {
+    found: false,
+    values: new Map(fields.map(field => [field, { kind: "absent" }])),
+    workingDraft: false,
+  };
+}
+
+/** The fields kept per language whose value the shown draft does not carry. */
+function fromLanguageRow(
+  placed: readonly PlacedField[],
+  draft: PendingDraft | undefined
+): LanguageRowAsk["fields"] {
+  return placed.flatMap(({ field, path, perLanguage }) =>
+    perLanguage === undefined || draftCarries(draft, path.column)
+      ? []
+      : [{ field, kept: perLanguage }]
+  );
+}
+
+/** Each field's value as the read shows it, by the name it was asked by. */
+function shownValues(
+  placed: readonly PlacedField[],
+  row: Record<string, unknown>,
+  translated: ReadonlyMap<string, unknown>,
+  draft: PendingDraft | undefined
+): Map<string, PluginStoredValue> {
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
-    const shown = await shownValue(
-      connection,
-      entity,
-      { ...target, field },
-      {
-        id,
-        column: path.column,
-        stored: row[path.column],
-        perLanguage,
-        locale,
-        draft: target.form === "draft" ? draft : undefined,
-      }
-    );
+    const shown = shownValue({
+      column: path.column,
+      stored: row[path.column],
+      perLanguage,
+      translated,
+      draft,
+    });
     const reached =
       shown === undefined ? undefined : valueWithin(shown.value, path.within);
-    // Only a column's own value is stored encoded. A value reached inside a
-    // group was decoded with the group, and decoding it again would turn a
-    // string holding JSON text ("123", "null") into what that text says.
-    values.set(
-      field,
-      reached === undefined
-        ? { kind: "absent" }
-        : {
-            kind: "value",
-            value:
-              path.within.length === 0
-                ? decoded(reached.value, path.type)
-                : reached.value,
-          }
-    );
+    values.set(field, storedValueOf(reached, path));
   }
-  return { found: true, values, workingDraft: draft !== undefined };
+  return values;
+}
+
+/**
+ * A reached value as a stored value. Only a column's own value is stored
+ * encoded: a value reached inside a group was decoded with the group, and
+ * decoding it again would turn a string holding JSON text ("123", "null")
+ * into what that text says.
+ */
+function storedValueOf(
+  reached: { value: unknown } | undefined,
+  path: StoredFieldPath
+): PluginStoredValue {
+  if (reached === undefined) return { kind: "absent" };
+  return {
+    kind: "value",
+    value:
+      path.within.length === 0
+        ? decoded(reached.value, path.type)
+        : reached.value,
+  };
+}
+
+/** The live state a read reports, where it was asked for one. */
+function liveStateOf(
+  state: "row" | "language" | undefined,
+  row: Record<string, unknown>,
+  language: LanguageRow
+): { liveState?: string | null } {
+  if (state === undefined) return {};
+  return { liveState: state === "row" ? stateOf(row.status) : language.state };
+}
+
+/**
+ * Where the live state of a read's language is stored: the main row, or the
+ * language row for a language other than the default where translations keep
+ * a state of their own, as every write path stamps it. `undefined` for an
+ * entity with no lifecycle.
+ */
+function stateSource(
+  entity: StoredEntity,
+  locale: string | null,
+  defaultLocale: string | null
+): "row" | "language" | undefined {
+  if (!entity.status) return undefined;
+  const ownLanguage =
+    entity.localized && locale !== null && locale !== defaultLocale;
+  return ownLanguage && companionOf(entity)?.hasStatus === true
+    ? "language"
+    : "row";
+}
+
+/** A stored state as a string, or `null` where nothing names one. */
+function stateOf(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 /**
@@ -475,33 +621,40 @@ function valueWithin(
  * per language and from the main row for any other.
  *
  * A draft that does not carry the column leaves the stored value standing,
- * which is what promoting it would do.
+ * which is what promoting it would do. A language row that holds nothing for
+ * a field kept per language leaves it with no value.
  */
-async function shownValue(
-  connection: StoredFieldConnection,
-  entity: StoredEntity,
-  target: StoredFieldTarget,
-  at: {
-    readonly id: string;
-    /** The column read: the field's own, or the top-level group holding it. */
-    readonly column: string;
-    readonly stored: unknown;
-    readonly perLanguage: CompanionField | undefined;
-    readonly locale: string | null;
-    readonly draft: PendingDraft | undefined;
-  }
-): Promise<{ value: unknown } | undefined> {
+function shownValue(at: {
+  /** The column read: the field's own, or the top-level group holding it. */
+  readonly column: string;
+  readonly stored: unknown;
+  readonly perLanguage: CompanionField | undefined;
+  /** The language row's values, by field name, as {@link languageValues} read them. */
+  readonly translated: ReadonlyMap<string, unknown>;
+  readonly draft: PendingDraft | undefined;
+}): { value: unknown } | undefined {
   const snapshot = at.draft?.snapshot;
-  if (
-    typeof snapshot === "object" &&
-    snapshot !== null &&
-    Object.hasOwn(snapshot, at.column)
-  ) {
-    return { value: (snapshot as Record<string, unknown>)[at.column] };
+  if (draftCarries(at.draft, at.column) && isRecord(snapshot)) {
+    return { value: snapshot[at.column] };
   }
-  return at.perLanguage === undefined
-    ? { value: at.stored }
-    : languageValue(connection, at.perLanguage, at.id, at.locale, target);
+  if (at.perLanguage === undefined) return { value: at.stored };
+  return at.translated.has(at.perLanguage.field.name)
+    ? { value: at.translated.get(at.perLanguage.field.name) }
+    : undefined;
+}
+
+/** Whether `draft`'s snapshot holds a value for `column`. */
+function draftCarries(
+  draft: PendingDraft | undefined,
+  column: string
+): boolean {
+  const snapshot = draft?.snapshot;
+  return isRecord(snapshot) && Object.hasOwn(snapshot, column);
+}
+
+/** Whether `value` is an object whose keys can be read as a record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /** What a read needs to know about the entity it reads from. */
@@ -573,7 +726,7 @@ interface CompanionSelect {
   select(projection: Record<string, unknown>): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<{ value?: unknown }[]>;
+        limit(count: number): Promise<Record<string, unknown>[]>;
       };
     };
   };
@@ -598,18 +751,26 @@ function companionFieldOf(
   entity: StoredEntity,
   name: string
 ): CompanionField | undefined {
-  if (!entity.localized) return undefined;
-  const companion = buildCompanionSchema({
+  const companion = companionOf(entity);
+  const field = companion?.localizedFields.find(entry => entry.name === name);
+  return companion === null || field === undefined
+    ? undefined
+    : { companion, field };
+}
+
+/**
+ * The entity's companion schema, built as every localized write splits by;
+ * `null` for an entity that keeps nothing per language.
+ */
+function companionOf(entity: StoredEntity): CompanionSchema | null {
+  if (!entity.localized) return null;
+  return buildCompanionSchema({
     slug: entity.slug,
     tableName: entity.tableName,
     fields: entity.fields as unknown as { name: string; type: string }[],
     dialect: getService("adapter").dialect,
     status: entity.status,
   });
-  const field = companion?.localizedFields.find(entry => entry.name === name);
-  return companion === null || field === undefined
-    ? undefined
-    : { companion, field };
 }
 
 /**
@@ -638,9 +799,78 @@ async function storedRow(
   return rows[0];
 }
 
+/** What one read of a language row is asked for. */
+interface LanguageRowAsk {
+  /** The fields kept per language to read from it. */
+  readonly fields: readonly {
+    readonly field: string;
+    readonly kept: CompanionField;
+  }[];
+  /** The companion whose `_status` is the language's state, where it is asked. */
+  readonly state: CompanionSchema | null;
+}
+
+/** What one read of a language row found. */
+interface LanguageRow {
+  /** The fields that language stores a value for, by field name. */
+  readonly values: ReadonlyMap<string, unknown>;
+  /** The language's own state, where asked; `null` where none is stored. */
+  readonly state: string | null;
+}
+
+const NO_LANGUAGE_ROW: LanguageRow = { values: new Map(), state: null };
+
 /**
- * The field's value in one language, as its companion row holds it, with no
- * fallback to another language; `undefined` where that language stores none.
+ * One language's row of the companion table, read once: the values of the
+ * fields kept per language asked for, with no fallback to another language,
+ * and the language's own state where it is asked. None is read where neither
+ * is asked for.
+ *
+ * Every field read here belongs to one entity, so to one companion table and
+ * one row of it for this entry and language.
+ */
+async function languageRow(
+  connection: StoredFieldConnection,
+  ask: LanguageRowAsk,
+  at: {
+    readonly id: string;
+    readonly locale: string | null;
+    readonly target: StoredFieldsTarget;
+  }
+): Promise<LanguageRow> {
+  const companion = ask.fields[0]?.kept.companion ?? ask.state;
+  if (companion === null || companion === undefined) return NO_LANGUAGE_ROW;
+  const locale = await readableLanguage(connection, companion, ask, at);
+  // Only the columns asked for, of the one row for this entry and language: a
+  // translation row can hold every other large value of the page, and a save
+  // reads this for each stored form. Read as stored, whatever the language's
+  // status, as the main row is for a field kept there. Each column is selected
+  // under its position, so no field name can collide with another's key.
+  const table = companion.table as Record<string, unknown>;
+  const projection = {
+    ...Object.fromEntries(
+      ask.fields.map(({ kept }, index) => [
+        `c${index}`,
+        table[kept.field.column],
+      ])
+    ),
+    ...(ask.state === null ? {} : { s: table._status }),
+  };
+  const rows = await (
+    (connection.executor ??
+      getService("adapter").getDrizzle()) as CompanionSelect
+  )
+    .select(projection)
+    .from(companion.table)
+    .where(
+      and(eq(table._parent as never, at.id), eq(table._locale as never, locale))
+    )
+    .limit(1);
+  return { values: languageValuesOf(ask, rows[0]), state: stateOf(rows[0]?.s) };
+}
+
+/**
+ * The language a row is read in, once its store can answer.
  *
  * Inside a write's transaction the remembered readiness verdict is read and
  * never resolved: resolving queries, and on PostgreSQL a query against a
@@ -648,15 +878,19 @@ async function storedRow(
  * is refused rather than answered as empty, which a caller could not tell from
  * a language that stores nothing.
  */
-async function languageValue(
+async function readableLanguage(
   connection: StoredFieldConnection,
-  { companion, field }: CompanionField,
-  id: string,
-  locale: string | null,
-  target: StoredFieldTarget
-): Promise<{ value: unknown } | undefined> {
-  if (locale === null) {
-    throw refused(target, "", "is kept per language, and no language is set");
+  companion: CompanionSchema,
+  ask: LanguageRowAsk,
+  at: { readonly locale: string | null; readonly target: StoredFieldsTarget }
+): Promise<string> {
+  const field = ask.fields[0]?.field ?? "status";
+  if (at.locale === null) {
+    throw refused(
+      { ...at.target, field },
+      "",
+      "is kept per language, and no language is set"
+    );
   }
   const adapter = getService("adapter");
   const readiness =
@@ -664,31 +898,35 @@ async function languageValue(
       ? await resolveCompanionSchemaReadiness(adapter, companion)
       : cachedCompanionReadiness(adapter, companion.companionTableName);
   if (readiness !== "ready") {
+    const document =
+      "single" in at.target ? at.target.single : at.target.collection;
     throw NextlyError.serviceUnavailable({
       // Not a refusal of the caller's request: the language store is still
       // being set up, so a reader can tell "cannot read yet" from an error.
       publicMessage: "This language's content can't be read yet.",
-      logMessage: `"${"single" in target ? target.single : target.collection}.${target.field}" is kept per language, and that store is not ready.`,
+      logMessage: `"${document}.${field}" is kept per language, and that store is not ready.`,
     });
   }
-  // Only the field asked for, of the one row for this entry and language: a
-  // translation row can hold every other large value of the page, and a save
-  // reads this for each stored form. Read as stored, whatever the language's
-  // status, as the main row is for a field kept there.
-  const table = companion.table as Record<string, unknown>;
-  const rows = await (
-    (connection.executor ?? adapter.getDrizzle()) as CompanionSelect
-  )
-    .select({ value: table[field.column] })
-    .from(companion.table)
-    .where(
-      and(eq(table._parent as never, id), eq(table._locale as never, locale))
-    )
-    .limit(1);
-  // No row, or a row holding nothing for the field: either way the language
-  // stores nothing.
-  const value = rows[0]?.value;
-  return value === null || value === undefined ? undefined : { value };
+  return at.locale;
+}
+
+/**
+ * The values a language row holds for the fields asked, by field name. No row,
+ * or a row holding nothing for a field: either way the language stores
+ * nothing for it.
+ */
+function languageValuesOf(
+  ask: LanguageRowAsk,
+  row: Record<string, unknown> | undefined
+): ReadonlyMap<string, unknown> {
+  const values = new Map<string, unknown>();
+  ask.fields.forEach(({ kept }, index) => {
+    const value = row?.[`c${index}`];
+    if (value !== null && value !== undefined) {
+      values.set(kept.field.name, value);
+    }
+  });
+  return values;
 }
 
 /** A pending working draft a preview would show, as its version row holds it. */
@@ -819,36 +1057,46 @@ const ABSENT_HASH_INPUT = "\u0000absent";
  * hashes what it read, and the write path hashes what it reads again under
  * the row lock ({@link storedExpectationRefusal}).
  */
-export async function storedValueHash(
-  stored: PluginStoredValue
-): Promise<string> {
+export function storedValueHash(stored: PluginStoredValue): Promise<string> {
   const text =
-    stored.kind === "absent" ||
-    stored.value === null ||
-    stored.value === undefined
-      ? ABSENT_HASH_INPUT
-      : canonicalJson(stored.value);
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text)
-  );
-  return Array.from(new Uint8Array(digest), byte =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
+    stored.kind === "value" &&
+    stored.value !== null &&
+    stored.value !== undefined
+      ? (canonicalJson(stored.value) ?? "null")
+      : ABSENT_HASH_INPUT;
+  return Promise.resolve(createHash("sha256").update(text).digest("hex"));
 }
 
-/** `value` as JSON with every object's keys sorted. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) => {
-    if (inner === null || typeof inner !== "object" || Array.isArray(inner)) {
-      return inner;
-    }
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(inner).sort()) {
-      sorted[key] = (inner as Record<string, unknown>)[key];
-    }
-    return sorted;
-  });
+/**
+ * `value` as JSON with every object's keys sorted, written from its entries
+ * rather than by assigning them to a new object: an own key spelt
+ * `__proto__` is then kept as the key it is, where assigning it to an
+ * ordinary object would set that object's prototype instead and drop it.
+ * Otherwise as `JSON.stringify` writes it: a value with `toJSON` as that
+ * answers, an `undefined` member left out and an `undefined` item as `null`.
+ */
+function canonicalJson(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  const own = jsonOf(value);
+  if (own !== value) return canonicalJson(own);
+  if (Array.isArray(value)) {
+    return `[${value.map(item => canonicalJson(item) ?? "null").join(",")}]`;
+  }
+  const members = Object.keys(value)
+    .sort()
+    .flatMap(key => {
+      const text = canonicalJson((value as Record<string, unknown>)[key]);
+      return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+    });
+  return `{${members.join(",")}}`;
+}
+
+/** What an object's own `toJSON` answers, or the object where it has none. */
+function jsonOf(value: object): unknown {
+  const toJson = (value as { toJSON?: unknown }).toJSON;
+  return typeof toJson === "function"
+    ? (toJson as () => unknown).call(value)
+    : value;
 }
 
 /** What a conditional write expects to find stored when it takes the row lock. */
@@ -869,6 +1117,16 @@ export interface ExpectedDocument {
   readonly slug: string;
   /** The entry, for a collection document; a Single has one document per slug. */
   readonly id?: string;
+}
+
+/** The document a write path is writing, as it holds the row lock. */
+export interface WrittenDocument extends ExpectedDocument {
+  /**
+   * Whether this very transaction inserted the document's row, as a Single's
+   * first write inserts its defaults. The document was absent until then, and
+   * what the row holds is the write's own, so it is judged as absent.
+   */
+  readonly createdHere?: boolean;
 }
 
 /** One conditional write's expectation, and whether its write path judged it. */
@@ -909,7 +1167,7 @@ export function expectStoredValue(
  */
 export async function holdStoredExpectation(
   context: Record<string, unknown> | undefined,
-  document: ExpectedDocument,
+  document: WrittenDocument,
   on: {
     readonly tx: VersionsDbApi & { getDrizzle(): unknown };
     readonly localization: { readonly defaultLocale: string } | undefined;
@@ -926,7 +1184,8 @@ export async function holdStoredExpectation(
       executor: on.tx.getDrizzle(),
       defaultLocale: on.localization?.defaultLocale ?? null,
     },
-    on.locale
+    on.locale,
+    document.createdHere === true
   );
   if (refused.refusal !== undefined) throw refused.refusal;
 }
@@ -962,41 +1221,75 @@ function sameDocument(
 async function storedExpectationRefusal(
   pin: PinnedExpectation,
   connection: StoredFieldConnection,
-  locale: string | undefined
+  locale: string | undefined,
+  createdHere: boolean
 ): Promise<NextlyError | undefined> {
-  const { document, expect } = pin;
-  const read = await readStoredFieldsOn(
-    connection,
-    EVERY_FIELD,
-    {
-      ...(document.kind === "single"
-        ? { single: document.slug }
-        : { collection: document.slug, id: document.id ?? "" }),
-      fields: [expect.field],
-      form: expect.form,
-      ...(locale === undefined ? {} : { locale }),
-    },
-    { askDraft: expect.noPendingDraft === true }
-  );
-  const now = await storedValueHash(
-    read.values.get(expect.field) ?? { kind: "absent" }
-  );
-  const changed =
-    now !== expect.hash
-      ? "stored-value-changed"
-      : expect.noPendingDraft === true && read.workingDraft
-        ? "working-draft-pending"
-        : undefined;
-  if (changed === undefined) {
+  // A row this transaction inserted is judged as the document stood before
+  // it: not stored, as a read made then answered. Read back, its generated
+  // defaults would never match the absence the writer read.
+  const read = createdHere
+    ? notStored([pin.expect.field])
+    : await readStoredFieldsOn(
+        connection,
+        EVERY_FIELD,
+        expectedRead(pin, locale),
+        { askDraft: pin.expect.noPendingDraft === true }
+      );
+  const cause = await stalenessOf(pin.expect, read);
+  if (cause === undefined) {
     pin.checked = true;
     return undefined;
   }
+  return staleConflict(pin, cause, locale);
+}
+
+/** Why a write's writer read something other than what is stored now. */
+type StaleCause = "stored-value-changed" | "working-draft-pending";
+
+/** The read an expectation is judged by: its one field, form and language. */
+function expectedRead(
+  { document, expect }: PinnedExpectation,
+  locale: string | undefined
+): StoredFieldsTarget {
+  return {
+    ...(document.kind === "single"
+      ? { single: document.slug }
+      : { collection: document.slug, id: document.id ?? "" }),
+    fields: [expect.field],
+    form: expect.form,
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/**
+ * Whether what is stored now still answers the expectation: the field's
+ * hash, then, where it was asked, the absence of a pending working draft.
+ */
+async function stalenessOf(
+  expect: StoredExpectation,
+  read: StoredFieldsRead
+): Promise<StaleCause | undefined> {
+  const now = await storedValueHash(
+    read.values.get(expect.field) ?? { kind: "absent" }
+  );
+  if (now !== expect.hash) return "stored-value-changed";
+  return expect.noPendingDraft === true && read.workingDraft
+    ? "working-draft-pending"
+    : undefined;
+}
+
+/** The conflict a stale write is refused with, naming what it expected. */
+function staleConflict(
+  { document, expect }: PinnedExpectation,
+  cause: StaleCause,
+  locale: string | undefined
+): NextlyError {
   return NextlyError.conflict({
     reason: "state",
     message:
       "This content changed after it was read, so the write was not made. Read it again and decide again.",
     logContext: {
-      cause: changed,
+      cause,
       kind: document.kind,
       slug: document.slug,
       ...(document.id === undefined ? {} : { id: document.id }),
@@ -1004,5 +1297,43 @@ async function storedExpectationRefusal(
       form: expect.form,
       ...(locale === undefined ? {} : { locale }),
     },
+  });
+}
+
+/**
+ * The forms a stored read is made in. `published` reads the live row; `draft`
+ * reads what an editor's preview shows, the pending working draft where there
+ * is one. A request's form is parsed against these where it arrives, and every
+ * branch on a form asks {@link showsUnpublished}, so no third value can slip
+ * between two comparisons that each assumed the other form.
+ */
+export const STORED_FORMS = ["published", "draft"] as const;
+
+/** A form a stored read is made in. */
+export type StoredForm = (typeof STORED_FORMS)[number];
+
+/**
+ * Whether `form` shows unpublished work: the pending working draft, which only
+ * a person who may update the document is shown, as a preview is.
+ *
+ * Exhaustive, and failing closed: a value naming neither form is refused
+ * rather than read as either, because a form no branch recognises is one no
+ * gate was asked about.
+ */
+export function showsUnpublished(form: StoredForm): boolean {
+  switch (form) {
+    case "draft":
+      return true;
+    case "published":
+      return false;
+    default:
+      return unknownForm(form);
+  }
+}
+
+/** Refuses a form no branch names; `never` holds every form to a branch. */
+function unknownForm(form: never): never {
+  throw NextlyError.internal({
+    logContext: { reason: "stored-form-unknown", form: String(form) },
   });
 }

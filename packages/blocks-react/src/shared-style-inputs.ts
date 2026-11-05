@@ -56,7 +56,7 @@
  * @module shared-style-inputs
  */
 import {
-  MAX_NAMED_CLASSES,
+  namedClassesRead,
   MAX_NAMED_CLASS_NAME_LENGTH,
   MAX_SCANNED_KEYS,
   MAX_VALUE_LENGTH,
@@ -111,6 +111,10 @@ export type SharedStyleInputs = Pick<
   // its `childGap` changes the rules `compilePageCss` writes for every page
   // holding one, so it has to move the stamp as `blockBases` does.
   | "childGaps"
+  // The spacing model decides which element and block defaults compile and
+  // whether any gap is written, so a sheet compiled under one model must not
+  // be served under the other.
+  | "spacingMode"
 >;
 
 /**
@@ -531,6 +535,12 @@ function classParts(entry: unknown, reading: Reading): unknown {
     boundedName(entry.slug, reading),
     structural(entry.orderIndex, reading),
     styleEnvelope(entry.styles, reading),
+    // The block type a look is bound to decides its cascade tier and which
+    // nodes take its class, so it is part of the identity. Spread, so a
+    // class with no binding stamps exactly as before.
+    ...(entry.blockType === undefined
+      ? []
+      : [["look", boundedName(entry.blockType, reading)]]),
   ] as unknown;
 }
 
@@ -617,7 +627,8 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // Imported rather than restated: a comparator copied here would drift from
     // the one that decides the output, and the drift would be silent in both
     // directions.
-    orderedNamedClasses(library.slice(0, MAX_NAMED_CLASSES)).map(entry =>
+    // The slice the compiler reads, looks under their own cap included.
+    orderedNamedClasses(namedClassesRead(library)).map(entry =>
       classParts(entry, reading)
     ),
     // The block-type defaults, which the renderer resolves beside the other
@@ -663,6 +674,13 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // A fixed slot would have invalidated every page on the site to record a
     // field that is unset on all of them.
     ...(inputs.previewStates === true ? ["preview-states"] : []),
+    // The classic spacing model, SPREAD for the same reason: absent and `gaps`
+    // compile exactly as before the model existed, so every artifact stored
+    // under them keeps its stamp, and only a classic compile moves it. The
+    // defaults the model swaps in are in the block and element tiers above
+    // already; this slot is what tells apart two compiles those tiers agree
+    // on, since the classic model also drops every child gap.
+    ...(inputs.spacingMode === "classic" ? ["spacing-classic"] : []),
   ]);
 }
 

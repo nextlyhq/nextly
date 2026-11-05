@@ -54,12 +54,13 @@ import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
-  namedClassName,
   namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  classNameOf,
+  isLook,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
@@ -72,6 +73,7 @@ import {
 } from "./node-class";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
+import type { SpacingMode } from "./spacing-mode";
 import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
@@ -208,6 +210,17 @@ export interface StyleCompileContext {
    * (a node value or a named class, both `0-3-0`).
    */
   childGaps?: Readonly<Record<string, StyleValue>>;
+
+  /**
+   * The site's spacing model. Under `classic` no container gap is written,
+   * whatever {@link childGaps} holds, and no container wears the gap marker;
+   * absent or `gaps`, the gaps are written as described there.
+   *
+   * The block library that supplies the element and block defaults reads the
+   * same flag to swap in the defaults of the classic model, so the one flag
+   * decides the whole spacing model of a compile. See `style/spacing-mode`.
+   */
+  spacingMode?: SpacingMode;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -404,7 +417,7 @@ export interface CompiledPageCss {
  * specificity are separated by source order, so the order they are emitted in
  * is part of the contract rather than an artifact of iteration.
  */
-export const TYPOGRAPHIC_ELEMENTS = [
+const TYPOGRAPHIC_ELEMENTS = [
   "h1",
   "h2",
   "h3",
@@ -2117,7 +2130,9 @@ export function compilePageCss(
   // the gap at equal weight; before the named classes and the nodes, so an
   // author's spacing on a child always wins.
   const flowGaps = new Map<string, readonly Declaration[]>();
-  const gaps = ctx.childGaps ?? {};
+  // The classic model writes no container gap at all: its blocks space
+  // themselves with their own margins.
+  const gaps = ctx.spacingMode === "classic" ? {} : (ctx.childGaps ?? {});
   for (const type of [...usedTypes].sort()) {
     if (!Object.hasOwn(gaps, type)) continue;
     const path = pointer("/childGaps", type);
@@ -2323,7 +2338,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         cls.styles,
-        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        `${pageRoot} .${escapeIdentifier(classNameOf(cls))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
         pointer(pointer("/classes", String(position)), "styles"),
@@ -2338,7 +2353,14 @@ export function compilePageCss(
         newStyleIssueBudget(),
         warningAllowance,
         {
-          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          origin: {
+            kind: "class",
+            id: cls.id,
+            slug: cls.slug,
+            // A look reaches only its own block type, so a reader of the
+            // trace can refuse it on any other, as the compiler does.
+            ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+          },
           previewStates,
           trace,
           mayFetchUrl,
@@ -2348,7 +2370,7 @@ export function compilePageCss(
     // A class that makes a container flex or grid swaps the flow margin for
     // `gap` on each container type that wears it here, exactly as a node's
     // own display does below.
-    const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
+    const classSelector = `.${escapeIdentifier(classNameOf(cls))}`;
     for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
       const flow = flowGaps.get(type);
       if (flow === undefined) continue;
@@ -2586,7 +2608,19 @@ export function compilePageCss(
           )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
-        names.push(namedClassName(cls.slug));
+        // A look is bound to one block type: on any other block it is not applied, and said
+        // so, as a class the library does not define is.
+        if (isLook(cls) && cls.blockType !== node.type) {
+          pushBoundedWarning(warningAllowance, warnings, {
+            path: pointer(path, "classes"),
+            code: "look-for-another-block",
+            severity: "warning",
+            message: `This node lists the look ${describeValue(cls.id)}, which belongs to ${describeValue(cls.blockType)} blocks, so it was not applied.`,
+            suggestion: "Pick one of this block's own looks instead.",
+          });
+          continue;
+        }
+        names.push(classNameOf(cls));
       }
     }
     attributeClasses.set(node.id, names.join(" "));

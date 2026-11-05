@@ -856,6 +856,8 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
@@ -1047,6 +1049,9 @@ export type {
   QueueJobArgs,
   QueueJobResult,
 } from "./direct-api/types/jobs";
+// A plugin's `ctx.services.jobs`: the queue, and running one of its own
+// sweeps now. Named so a plugin can annotate what it hands that service to.
+export type { PluginJobsNamespace } from "./plugins/jobs/plugin-jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it

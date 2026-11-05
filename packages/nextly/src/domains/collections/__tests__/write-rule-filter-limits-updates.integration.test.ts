@@ -18,6 +18,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MIGRATE_STEP_COLUMN_NAMES } from "../../../lib/system-columns";
+
 import {
   grantTo,
   userWhoMay,
@@ -658,7 +660,16 @@ describe("a publish or unpublish rule that answers a filter", () => {
 
     await update(t, DRAFTED, own, { title: "edited" });
 
-    expect(await stored(t, DRAFTED, own)).toEqual(live);
+    // The live content is as it was. Only the version and its changer moved:
+    // a held edit is a change another editor must not overwrite unseen.
+    const content = (row: Record<string, unknown> | undefined) =>
+      row &&
+      Object.fromEntries(
+        Object.entries(row).filter(
+          ([key]) => !MIGRATE_STEP_COLUMN_NAMES.includes(key)
+        )
+      );
+    expect(content(await stored(t, DRAFTED, own))).toEqual(content(live));
     expect((await readWithDraft(t, DRAFTED, own))?.title).toBe("edited");
   });
 

@@ -208,6 +208,25 @@ function useStoredLayout<T extends FieldValues>(
   );
 }
 
+/**
+ * What a publish of the page puts it inside, as a readiness request names it:
+ * the Layout its form names; the site's default when it names none and still
+ * draws a header and footer; or neither, for "No header or footer" or a form
+ * that is not a page's.
+ */
+export function usePageLayoutAsk<T extends FieldValues>(
+  control: Control<T>
+): { layout: string | null; siteDefault: boolean } {
+  const stored = useStoredLayout(control);
+  return useMemo(() => {
+    if (stored === undefined || stored.noHeaderFooter) {
+      return { layout: null, siteDefault: false };
+    }
+    const layout = selectedOf(stored);
+    return { layout, siteDefault: layout === null };
+  }, [stored]);
+}
+
 /** The id the stored values select, which the choices are asked about. */
 function selectedOf(
   stored: { layout: unknown; noHeaderFooter: boolean } | undefined

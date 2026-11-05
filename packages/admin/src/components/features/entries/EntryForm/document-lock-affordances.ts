@@ -129,6 +129,24 @@ const AWAITED: DocumentLockAffordances = {
 };
 
 /**
+ * What a lock message calls the holder: the label the server gave their claim,
+ * or "Someone" when it gave none.
+ *
+ * 🔴 The one place a holder is named, so no message can print "null is
+ * editing this document". The server labels every claim it takes now, but a
+ * lease taken before it did, or a label that is only spaces, still reaches
+ * here, and each sentence spelling its own fallback is how one of them forgot.
+ */
+function holderName(holder: DocumentLockHolder): string {
+  return holderLabel(holder) ?? "Someone";
+}
+
+/** The label the server gave the holder's claim, or null when it gave none. */
+function holderLabel(holder: DocumentLockHolder): string | null {
+  return holder.ownerLabel?.trim() || null;
+}
+
+/**
  * A user who may read the document but not change it.
  *
  * Read-only for the same reason a colleague's claim makes it so, and said in
@@ -183,10 +201,7 @@ export function readerAffordances(
             tone: "reader",
             // Named when the server named them, and promising nothing: a
             // reader may hold no publish to make once they are done.
-            message:
-              holder.ownerLabel === null
-                ? "Someone is editing this document right now."
-                : `${holder.ownerLabel} is editing this document right now.`,
+            message: `${holderName(holder)} is editing this document right now.`,
             takeOverLabel: null,
             accessRequest: null,
           },
@@ -220,9 +235,9 @@ function accessRequestFor(
         // is that a PERSON was told. Honest when it could not: a claim carries
         // no label when the account had no name to record.
         message:
-          holder.ownerLabel === null
+          holderLabel(holder) === null
             ? "We have let them know you are waiting."
-            : `We have let ${holder.ownerLabel} know you are waiting.`,
+            : `We have let ${holderLabel(holder)} know you are waiting.`,
       }
     : { kind: "offer", label: "Request edit access" };
 }
@@ -292,6 +307,10 @@ export const READER_LATEST_UNLOADED: DocumentLockNotice = {
  * `latest` says whether the document on screen is the latest one; it matters
  * only where the editor could otherwise type.
  *
+ * `me` is the signed-in user's id, null while it is not known. A claim is
+ * held per person, so a holder with this id is this person in another tab,
+ * and is told as such rather than as a colleague.
+ *
  * Decisions here that are not the obvious one:
  *
  * 🔴 **`acquiring` does not block editing.** Every document open would otherwise
@@ -330,13 +349,21 @@ export const READER_LATEST_UNLOADED: DocumentLockNotice = {
  * ousted author's work nowhere precisely BECAUSE that per-author row is written
  * on an interval of its own, including when the ousted client is asleep, offline
  * or gone.
+ *
+ * 🔴 **One person's other tab is not a colleague.** A claim is held per
+ * person, so opening the document in a second tab moves the claim there, and
+ * this tab reads as taken over by its own user. Saying "Ada took over" to Ada
+ * describes something that did not happen; she is told she opened it in
+ * another tab, and offered to continue here, which claims it back with her
+ * unsaved edits still on screen.
  */
 export function documentLockAffordances(
   state: DocumentLockState,
   lastKnownHolder: DocumentLockHolder | null = null,
-  latest: LatestDocumentLoad = "current"
+  latest: LatestDocumentLoad = "current",
+  me: string | null = null
 ): DocumentLockAffordances {
-  const claimed = claimAffordances(state, lastKnownHolder);
+  const claimed = claimAffordances(state, lastKnownHolder, me);
   // 🔴 Over every notice that lets the editor type, the courtesy and unchecked
   // ones included: those withhold nothing, and a copy that may be out of date
   // withholds everything. A notice that already withholds the form keeps its
@@ -348,8 +375,11 @@ export function documentLockAffordances(
 /** What the claim alone allows, before the document's freshness is asked. */
 function claimAffordances(
   state: DocumentLockState,
-  lastKnownHolder: DocumentLockHolder | null
+  lastKnownHolder: DocumentLockHolder | null,
+  me: string | null
 ): DocumentLockAffordances {
+  const isMine = (holder: DocumentLockHolder) =>
+    me !== null && holder.ownerId === me;
   switch (state.status) {
     case "idle":
     case "acquiring":
@@ -359,21 +389,38 @@ function claimAffordances(
       return state.someoneWaiting ? AWAITED : UNLOCKED;
 
     case "held-by-other":
+      // The server hands a person's own claim back to them rather than refusing
+      // it, so this is not expected; were it to happen, asking oneself for
+      // access would be the silent control `sent` exists to avoid.
+      if (isMine(state.holder)) {
+        return withheld(
+          "held",
+          "You have this document open in another tab. You can read it here, or continue editing here.",
+          "Continue editing here"
+        );
+      }
       return withheld(
         "held",
-        `${state.holder.ownerLabel} is editing this document. You can read it, or take over.`,
+        `${holderName(state.holder)} is editing this document. You can read it, or take over.`,
         "Take over",
         accessRequestFor(state.holder, state.requestSent)
       );
 
     case "taken-over":
+      if (state.holder && isMine(state.holder)) {
+        return withheld(
+          "surrendered",
+          "You opened this document in another tab. Your unsaved changes are still here, but cannot be saved until you continue editing here.",
+          "Continue editing here"
+        );
+      }
       return withheld(
         "surrendered",
         // Named when the server knew who, and honest when it did not: a claim
         // that simply lapsed has nobody to name, and inventing one would be a
         // claim about a colleague.
         state.holder
-          ? `${state.holder.ownerLabel} took over this document. Your unsaved changes are still here, but cannot be saved until you take it back.`
+          ? `${holderName(state.holder)} took over this document. Your unsaved changes are still here, but cannot be saved until you take it back.`
           : "Your claim on this document ended. Your unsaved changes are still here, but cannot be saved until you take it back.",
         "Take it back"
       );
@@ -402,7 +449,7 @@ function claimAffordances(
           }
         : withheld(
             "held",
-            `${lastKnownHolder.ownerLabel} was editing this document, and we could not re-check. You can read it, or take over.`,
+            `${holderName(lastKnownHolder)} was editing this document, and we could not re-check. You can read it, or take over.`,
             "Take over"
           );
   }

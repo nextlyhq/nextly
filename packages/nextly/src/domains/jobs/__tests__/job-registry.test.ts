@@ -75,3 +75,22 @@ describe("JobRegistry", () => {
     expect(registry.slugs()).toEqual(["a", "b"]);
   });
 });
+
+describe("who registered a job", () => {
+  it("keeps the plugin that declared a job, and none for one core or the app declared", () => {
+    const registry = new JobRegistry();
+    registry.register(
+      defineJob({ slug: "acme:sweep", sweep: true, handler: async () => {} }),
+      { plugin: "acme" }
+    );
+    registry.register(
+      defineJob({ slug: "core:thing", handler: async () => {} })
+    );
+
+    expect(registry.pluginOf("acme:sweep")).toBe("acme");
+    expect(registry.pluginOf("core:thing")).toBeUndefined();
+    expect(registry.pluginOf("never:registered")).toBeUndefined();
+    // Asked as the registry keys it, trimmed.
+    expect(registry.pluginOf(" acme:sweep ")).toBe("acme");
+  });
+});

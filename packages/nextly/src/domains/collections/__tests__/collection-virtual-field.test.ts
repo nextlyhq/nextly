@@ -25,6 +25,7 @@ import {
   createMockRelationshipService,
   createMockSchema,
   silentLogger,
+  revisionReadingSelect,
 } from "./collection-test-helpers";
 import { loadDialectTables } from "../../../database/dialect-tables";
 
@@ -116,6 +117,7 @@ describe("a virtual field in a collection write", () => {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: txUpdate,
           delete: vi.fn().mockResolvedValue(undefined),
@@ -186,6 +188,7 @@ describe("a virtual field in a collection write", () => {
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: txUpdate,
           delete: vi.fn().mockResolvedValue(undefined),

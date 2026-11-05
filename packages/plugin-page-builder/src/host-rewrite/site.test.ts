@@ -30,7 +30,7 @@ function siteWith(
     layouts: "layouts",
     hints: async () => [],
     componentId: "card",
-    identity: async () => ({ user: { id: "u1" } }) as never,
+    identity: async () => ({ user: { id: "u1" } }),
   };
 }
 
@@ -48,6 +48,59 @@ async function hostsOf(
   }
   return found;
 }
+
+/** Every host the walk yields, as `path@locale`, marked `~` where it may be one stored value. */
+async function sharedness(
+  declaration: unknown,
+  singles: readonly SingleToWalk[] = []
+): Promise<string[]> {
+  const found: string[] = [];
+  const source = siteHostSource(siteWith(declaration, singles));
+  for await (const document of source.documents(null)) {
+    for (const { host, maybeShared } of document.hosts) {
+      found.push(
+        `${host.path.join(".") || "*"}@${host.locale ?? "-"}${maybeShared === true ? "~" : ""}`
+      );
+    }
+  }
+  return found;
+}
+
+describe("which hosts may read one stored value in every language", () => {
+  it("knows a translated top-level field is stored per language", async () => {
+    const hosts = await sharedness({
+      localized: true,
+      fields: [{ type: "blocks", name: "content", localized: true }],
+    });
+    expect(hosts).toEqual(["content@en", "content@de"]);
+  });
+
+  it("marks what is read per language only because it is unknown", async () => {
+    // A Single made in the admin: its fields' own flags are unknown.
+    const home = singleToWalk(
+      { slug: "home", fields: [{ type: "blocks", name: "content" }] },
+      undefined,
+      true
+    );
+    expect(await sharedness({ fields: [] }, [home])).toEqual([
+      "content@en~",
+      "content@de~",
+    ]);
+    // A field under a named group, and a scan of the row.
+    expect(
+      await sharedness({
+        fields: [
+          {
+            type: "group",
+            name: "hero",
+            fields: [{ type: "blocks", name: "body" }],
+          },
+          { type: "fieldGroup", name: "more", group: "more-group" },
+        ],
+      })
+    ).toEqual(["hero.body@en~", "hero.body@de~", "*@en~", "*@de~"]);
+  });
+});
 
 describe("the languages each host is read in", () => {
   it("reads a field behind a field group in every language of an untranslated parent", async () => {
