@@ -1003,7 +1003,7 @@ function FilterRow({
           disabled={disabled}
           onClick={onRemove}
         >
-          <X aria-hidden="true" />
+          <X aria-hidden="true" size={14} />
         </Button>
         {problem === undefined ? null : (
           <FieldError id={errorId}>{problem}</FieldError>
@@ -1058,7 +1058,7 @@ function FilterRow({
           aria-label={`Close filter: ${line}`}
           onClick={closeAndFocus}
         >
-          <ChevronDown aria-hidden="true" />
+          <ChevronDown aria-hidden="true" size={14} />
         </Button>
         <LoopPicker
           id={fieldId}
@@ -1104,7 +1104,7 @@ function FilterRow({
           disabled={disabled}
           onClick={onRemove}
         >
-          <X aria-hidden="true" />
+          <X aria-hidden="true" size={14} />
         </Button>
       </div>
       {field === undefined ? null : (
@@ -1316,7 +1316,7 @@ function FiltersGroup({
           setOpenKey(key);
         }}
       >
-        <Plus aria-hidden="true" />
+        <Plus aria-hidden="true" size={14} />
         Add filter
       </Button>
     </section>
@@ -1459,7 +1459,7 @@ function SortRow({
             aria-label={`More for sort by ${name}`}
             disabled={disabled}
           >
-            <MoreHorizontal aria-hidden="true" />
+            <MoreHorizontal aria-hidden="true" size={14} />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
@@ -1513,7 +1513,7 @@ function AddSortButton({
           className="nx-list-query__add"
           disabled={disabled || fields.length === 0}
         >
-          <Plus aria-hidden="true" />
+          <Plus aria-hidden="true" size={14} />
           Add sort
         </Button>
       </PopoverTrigger>

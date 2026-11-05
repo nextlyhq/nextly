@@ -9489,7 +9489,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
  */
 .nx-list-sort {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 6.25rem auto;
+  grid-template-columns: auto minmax(0, 1fr) 7.25rem auto;
   align-items: center;
   column-gap: 0.25rem;
   row-gap: 0.25rem;
@@ -9514,6 +9514,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-list-sort__direction {
   width: 100%;
+  white-space: nowrap;
+}
+
+/* The group's icon buttons, at the inspector's icon size. */
+.nx-list-query button > svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* The window: a number with what it counts after it, inside the field. */
