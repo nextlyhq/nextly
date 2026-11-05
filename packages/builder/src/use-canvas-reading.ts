@@ -97,12 +97,14 @@ export interface CanvasReading {
  */
 function pictureOf(element: Element | undefined | null): string | undefined {
   if (element == null) return undefined;
+  // Its own, past any image a block inside it draws first.
   const image =
-    element.tagName === "IMG" ? element : element.querySelector("img");
-  if (image === null) return undefined;
-  if (image !== element && image.closest("[data-nx-node]") !== element) {
-    return undefined;
-  }
+    element.tagName === "IMG"
+      ? element
+      : [...element.querySelectorAll("img")].find(
+          candidate => candidate.closest("[data-nx-node]") === element
+        );
+  if (image === undefined) return undefined;
   const shown =
     (image as HTMLImageElement).currentSrc || image.getAttribute("src");
   return shown === null || shown === "" ? undefined : shown;

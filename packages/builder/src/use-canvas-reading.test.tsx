@@ -74,6 +74,13 @@ describe("reading the picture a node draws", () => {
       '<div data-nx-node="n1"><img data-nx-node="n2" src="/child.png" alt=""></div>';
     view.rerender(<Reader root={card} />);
     expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // Its own picture is found past a child block's image that comes first.
+    const both = document.createElement("div");
+    both.innerHTML =
+      '<figure data-nx-node="n1"><div data-nx-node="n2"><img src="/child.png" alt=""></div><img src="/own.png" alt=""></figure>';
+    view.rerender(<Reader root={both} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
   });
 });
 

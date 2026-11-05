@@ -227,6 +227,19 @@ export interface LinkAttributes {
  * failure means "no destination" rather than a lost page. Either address must
  * be one `url` follows, so a `javascript:` link draws no link at all.
  */
+/**
+ * Whether props name a destination `linkFor` could follow: an address it
+ * would draw, or an entry. Synchronous, for a content model, which cannot
+ * wait for an entry's path; an entry that then fails to resolve draws no link
+ * where interactive content was allowed, which refuses nothing it should not.
+ */
+export function canLink(props: LinkProps): boolean {
+  return (
+    url(props.href) !== undefined ||
+    (text(props.entryCollection) !== "" && text(props.entryId) !== "")
+  );
+}
+
 export async function linkFor(
   props: LinkProps,
   resolveEntryPath: (collection: string, id: string) => Promise<string | null>

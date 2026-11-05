@@ -14,6 +14,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { pngBuffer } from "./support/media-files";
 import { canvasFrame } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
 import { test } from "./support/test";
@@ -61,6 +62,46 @@ async function createPage(
   const id = ((await created.json()) as { item?: { id?: string } }).item?.id;
   if (typeof id !== "string") throw new Error("the new page has no id");
   return id;
+}
+
+/**
+ * Serve the picture the page names, wider and taller than the block's box,
+ * so the picture really has to be cropped or fitted into it.
+ */
+async function servePicture(page: Page): Promise<void> {
+  const picture = pngBuffer(180, 0, { width: 960, height: 640 });
+  await page.route("**/example.jpg", async route => {
+    try {
+      await route.fulfill({ contentType: "image/png", body: picture });
+    } catch {
+      // The page closed before the picture was asked for; nothing to answer.
+    }
+  });
+}
+
+/**
+ * How far the canvas picture misses its figure's box, once it has loaded:
+ * drawn past its bottom, or short of its width. 0 or less when it fills the
+ * width the block gives it and stays inside its height.
+ */
+async function pictureOverflow(page: Page): Promise<number> {
+  const picture = canvasFrame(page)
+    .locator(`.nx-canvas [data-nx-node="${IMAGE}"] img`)
+    .first();
+  await expect
+    .poll(() =>
+      picture.evaluate(element => (element as HTMLImageElement).naturalWidth)
+    )
+    .toBeGreaterThan(0);
+  return picture.evaluate(element => {
+    const figure = element.closest("figure");
+    if (figure === null) return Number.NaN;
+    const drawn = element.getBoundingClientRect();
+    const box = figure.getBoundingClientRect();
+    // Past the bottom, or short of the width the block gives it: either way
+    // the fit has no box to crop to.
+    return Math.max(drawn.bottom - box.bottom, box.width - drawn.width);
+  });
 }
 
 async function openImage(page: Page, id: string): Promise<void> {
@@ -121,8 +162,15 @@ test.describe("an image's settings", () => {
   test("the focal point moves with the arrow keys, and the picture follows it", async ({
     page,
   }) => {
-    const id = await createPage(page.request, { objectFit: "cover" });
+    const id = await createPage(page.request, {
+      objectFit: "cover",
+      height: "120px",
+    });
+    await servePicture(page);
     await openImage(page, id);
+    // Drawn inside the block's box: a captioned picture is cropped to the
+    // room its figure leaves it, not drawn past the figure's edge.
+    expect(await pictureOverflow(page)).toBeLessThanOrEqual(0.5);
     await page.getByRole("tab", { name: "Style" }).click();
     // The section the fit and focal point sit in, opened as an author does.
     const size = page.locator('.nx-style-inspector [data-section="size"]');
@@ -151,6 +199,9 @@ test.describe("an image's settings", () => {
     const picture = canvasFrame(page)
       .locator(`.nx-canvas [data-nx-node="${IMAGE}"] img`)
       .first();
+    // And it is drawn inside the block's box: a captioned picture is cropped
+    // to the room its figure leaves it, not drawn past the figure's edge.
+    expect(await pictureOverflow(page)).toBeLessThanOrEqual(0.5);
     await expect
       .poll(() =>
         picture.evaluate(element => getComputedStyle(element).objectPosition)

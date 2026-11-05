@@ -25,6 +25,7 @@ import { MEDIA } from "./categories";
 import {
   fetchableUrl,
   flag,
+  canLink,
   isAuthoredText,
   LINK_PROPS,
   linkFor,
@@ -146,7 +147,15 @@ export async function renderImage({
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
-  return wrapPicture(image, { className, caption, link, partClass });
+  return wrapPicture(image, {
+    className,
+    caption,
+    link,
+    partClass,
+    // A picture with no alt text names no link; its caption, then where it
+    // goes, does instead, so the link is never unnamed.
+    linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
+  });
 }
 
 /**
@@ -186,11 +195,13 @@ function wrapPicture(
     caption,
     link,
     partClass,
+    linkName,
   }: {
     className: string;
     caption: string;
     link: LinkAttributes | undefined;
     partClass: (part: string) => string;
+    linkName: string | undefined;
   }
 ): ReactElement {
   const rootClass = caption === "" ? className : "";
@@ -201,13 +212,16 @@ function wrapPicture(
       <a
         {...link}
         className={[rootClass, partClass("link")].filter(Boolean).join(" ")}
+        {...(linkName === undefined ? {} : { "aria-label": linkName })}
       >
         {image}
       </a>
     );
   if (caption === "") return linked;
   return (
-    <figure className={className}>
+    <figure
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+    >
       {linked}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
     </figure>
@@ -261,11 +275,38 @@ const IMAGE_BASE_STYLES = {
  * the two things that make it read as a caption instead.
  */
 const IMAGE_PARTS = {
+  // A captioned picture's figure: the picture and its caption in a column,
+  // so a height set on the block is shared between them rather than
+  // overflowed.
+  frame: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          // As wide as its picture unless the block says otherwise, so the
+          // picture can fill the figure without stretching past its size.
+          width: "fit-content",
+        },
+      },
+    },
+  },
   // The picture inside a wrapper (a figure, a link) takes the fit and focal
-  // point the node's Style values set on the root.
+  // point the node's Style values set on the root, and may shrink to the room
+  // the wrapper leaves it, where the fit then crops or fits it.
   picture: {
     baseStyles: {
-      base: { base: { objectFit: "inherit", objectPosition: "inherit" } },
+      base: {
+        base: {
+          objectFit: "inherit",
+          objectPosition: "inherit",
+          // The wrapper's width, which the block's width sets: the box the fit
+          // crops or fits the picture to.
+          width: "100%",
+          minHeight: "0",
+        },
+      },
     },
   },
   // Inside a link, the picture fills the link's box, so a size set on the
@@ -275,10 +316,19 @@ const IMAGE_PARTS = {
       base: { base: { display: "block", width: "100%", height: "100%" } },
     },
   },
-  // A link wrapping a captioned picture: as wide as what it holds.
+  // A link wrapping a captioned picture: as wide as what it holds, and free
+  // to shrink to the room the figure leaves it, as the picture is.
   link: {
     baseStyles: {
-      base: { base: { display: "inline-block", maxWidth: "100%" } },
+      base: {
+        base: {
+          display: "inline-block",
+          maxWidth: "100%",
+          minHeight: "0",
+          // Clipped, so a radius set on the block rounds the picture inside.
+          overflow: "hidden",
+        },
+      },
     },
   },
   caption: {
@@ -363,6 +413,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Interactive content while it links, so a link (a linked box or card)
+  // cannot hold it, which would nest one link in another.
+  contentModel: (props: ImageProps) => ({
+    is: canLink(props) ? ["flow", "interactive"] : ["flow"],
+  }),
   render: renderImage,
   // A media id may still resolve to nothing, and that is settled by a call to
   // the host — so only the case decidable from the props alone is claimed here:

@@ -49,8 +49,9 @@ export type InspectorSectionKey =
  * - `flex`, `grid`, `flex-or-grid`: while the block is that kind of container.
  * - `media`: on a replaced element (an image, a video, an embed).
  * - `framed-media`: on a replaced element whose fit leaves a choice of where
- *   it sits: Cover (which part stays in view), Contain or None (where it sits
- *   in its box). Fill stretches it to the box, so there is nothing to place.
+ *   it sits: Cover (which part stays in view), Contain, None or Scale down
+ *   (where it sits in its box). Fill stretches it to the box, so there is
+ *   nothing to place.
  * - `state`: while a state other than Normal is being edited.
  */
 export type PropertyTier =
@@ -239,7 +240,13 @@ export function placementOf(
 }
 
 /** The fits that leave a choice of where the content sits. */
-const FRAMED_FITS: ReadonlySet<string> = new Set(["cover", "contain", "none"]);
+const FRAMED_FITS: ReadonlySet<string> = new Set([
+  "cover",
+  "contain",
+  "none",
+  // None or Contain, whichever is smaller: either way it sits in its box.
+  "scale-down",
+]);
 
 /** What the block is, as far as a tier needs to know. */
 export interface TierContext {

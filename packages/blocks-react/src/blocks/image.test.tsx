@@ -15,7 +15,9 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { renderImage } from "./image";
+import { resolveContentModel } from "@nextlyhq/blocks-engine";
+
+import { image, renderImage } from "./image";
 
 const TYPE_CLASS = "nx-bt-core--image";
 
@@ -138,5 +140,37 @@ describe("core/image with a link", () => {
     // does nothing; the picture inherits them through its part.
     const container = await drawWith({ caption: "Our team" });
     expect(container.querySelector("img")?.className).toContain("part-picture");
+  });
+});
+
+describe("core/image as content", () => {
+  it("is interactive content while it links, so a link cannot hold it", () => {
+    // A linked image inside a linked card would nest one link in another,
+    // which HTML parsing breaks apart.
+    const model = (props: Record<string, unknown>) =>
+      resolveContentModel(image.contentModel as never, props).is;
+    expect(model({ href: "/about" })).toContain("interactive");
+    expect(model({ entryCollection: "pages", entryId: "p1" })).toContain(
+      "interactive"
+    );
+    expect(model({})).not.toContain("interactive");
+    expect(model({ href: "javascript:alert(1)" })).not.toContain("interactive");
+  });
+
+  it("names a link whose picture has no alt text by its caption, else its address", async () => {
+    // A link holding only a decorative picture would have no name at all.
+    const captioned = await drawWith({
+      href: "/about",
+      alt: "",
+      caption: "Our team",
+    });
+    expect(captioned.querySelector("a")?.getAttribute("aria-label")).toBe(
+      "Our team"
+    );
+    const bare = await drawWith({ href: "/about", decorative: true });
+    expect(bare.querySelector("a")?.getAttribute("aria-label")).toBe("/about");
+    // With alt text the picture names it, and the link says nothing over it.
+    const named = await drawWith({ href: "/about" });
+    expect(named.querySelector("a")?.hasAttribute("aria-label")).toBe(false);
   });
 });

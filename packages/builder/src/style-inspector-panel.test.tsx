@@ -5303,7 +5303,8 @@ describe("an image's focal point", () => {
   }
 
   it("shows beside a fit that leaves a choice of where the picture sits", () => {
-    for (const fit of ["cover", "contain", "none"]) {
+    // Scale down is None or Contain, whichever is smaller: it sits too.
+    for (const fit of ["cover", "contain", "none", "scale-down"]) {
       mountImage(fit);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
