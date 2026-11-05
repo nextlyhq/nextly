@@ -943,6 +943,7 @@ export {
 } from "./style/node-class";
 export {
   compileStyleValues,
+  scaledTokenText,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
   // The prefix tokens are actually written under, which is not the one that was

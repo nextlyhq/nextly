@@ -20,6 +20,7 @@ import {
 
 import { chainedStyleOp } from "./columns-layout";
 import type { BuilderOp } from "./op-vocabulary";
+import type { StyleProvenance } from "./style-provenance";
 import { readStyleValue } from "./style-values";
 
 /** The core blocks these shortcuts belong to. */
@@ -34,12 +35,39 @@ export interface ShortcutAt {
 
 /**
  * What reaches the edited address from elsewhere (a wider device, a shared
- * style, another state) for a CSS property, as the cascade writes it; none
- * where nothing does. Read only while nothing is set here.
+ * style, another state) for a CSS property, as the cascade writes it, beneath
+ * any value set here; none where nothing does.
  */
 export type Reaching = (cssProperty: string) => string | undefined;
 
 const NOTHING_REACHES: Reaching = () => undefined;
+
+/** One CSS property's answer from the panel's trace: the winner, and beneath. */
+export interface ReachingAnswer {
+  readonly provenance: StyleProvenance;
+  readonly beneath: StyleProvenance;
+}
+
+/**
+ * What reaches the edited address from elsewhere, read from the trace: the
+ * winner when it comes from elsewhere, and, when the winner is set here, the
+ * value beneath it, which is what clearing it would leave in force. So Medium
+ * over a local Small with a Large beneath writes the button's own size rather
+ * than clearing back to Large.
+ */
+export function reachingBeneath(
+  answerOf: (cssProperty: string) => ReachingAnswer | undefined
+): Reaching {
+  return cssProperty => {
+    const answer = answerOf(cssProperty);
+    if (answer === undefined) return undefined;
+    const under =
+      answer.provenance.kind === "authored"
+        ? answer.beneath
+        : answer.provenance;
+    return under.kind === "inherited" ? under.entry.value : undefined;
+  };
+}
 
 /** A value stored at the edited address, for one top-level property. */
 function storedAt(

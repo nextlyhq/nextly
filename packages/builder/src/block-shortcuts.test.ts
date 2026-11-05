@@ -18,9 +18,11 @@ import {
   planFullWidth,
   planHeight,
   planSize,
+  reachingBeneath,
   sizeOf,
 } from "./block-shortcuts";
 import { applyOp } from "./ops";
+import type { StyleProvenance } from "./style-provenance";
 
 const padding = {
   blockStart: { $token: "button.padding-y" },
@@ -238,5 +240,68 @@ describe("a shortcut over a value reaching from a wider device", () => {
     expect(
       applied(button, planFullWidth(button, false, mobile, wide)).styles
     ).toEqual({ base: { sm: { width: "auto" } } });
+  });
+});
+
+describe("what reaches beneath a shortcut set here", () => {
+  /** A trace entry, as much of one as the reader looks at. */
+  const entry = (value: string) => ({ value }) as never;
+  const answers =
+    (
+      byProperty: Record<
+        string,
+        { provenance: StyleProvenance; beneath: StyleProvenance }
+      >
+    ) =>
+    (cssProperty: string) =>
+      byProperty[cssProperty];
+
+  it("is the value under a local one, so Medium overrides a Large beneath a local Small", () => {
+    const button = node("core/button");
+    // Small set at Mobile over Large from Desktop: the trace's winner is the
+    // local Small, and Large is what a clear would leave in force.
+    const large = (value: string) => ({
+      provenance: { kind: "authored" as const, entry: entry("local") },
+      beneath: {
+        kind: "inherited" as const,
+        entry: entry(value),
+        from: { kind: "node", id: "b" } as never,
+      },
+    });
+    const reaching = reachingBeneath(
+      answers({
+        "font-size": large("1.125em"),
+        "padding-block-start": large(
+          "calc(var(--site-button-padding-y) * 1.25)"
+        ),
+      })
+    );
+    const medium = applied(
+      button,
+      planSize(button, "medium", mobile, reaching)
+    );
+    expect(medium.styles?.base?.sm).toEqual({ padding, fontSize: "inherit" });
+  });
+
+  it("is the value reaching while nothing is set here, and none with nothing beneath", () => {
+    const reaching = reachingBeneath(
+      answers({
+        width: {
+          provenance: {
+            kind: "inherited",
+            entry: entry("100%"),
+            from: { kind: "node", id: "b" } as never,
+          },
+          beneath: { kind: "unset" },
+        },
+        "min-height": {
+          provenance: { kind: "authored", entry: entry("100svh") },
+          beneath: { kind: "unset" },
+        },
+      })
+    );
+    expect(reaching("width")).toBe("100%");
+    expect(reaching("min-height")).toBeUndefined();
+    expect(reaching("font-size")).toBeUndefined();
   });
 });

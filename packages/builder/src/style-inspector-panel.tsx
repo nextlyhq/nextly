@@ -85,6 +85,7 @@ import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
+import { reachingBeneath } from "./block-shortcuts";
 import {
   BlockShortcutsControl,
   MinHeightPresets,
@@ -1362,16 +1363,13 @@ function shortcutWhere(surroundings: StyleFieldSurroundings) {
     nodeId: surroundings.nodeId,
     state: surroundings.state,
     breakpoint: surroundings.breakpoint,
-    reaching: (cssProperty: string) => {
-      const answer = surroundings.provenanceOf({
+    reaching: reachingBeneath(cssProperty =>
+      surroundings.provenanceOf({
         kind: "cssValue",
         cssProperty,
         tokenKinds: [],
-      });
-      return answer?.provenance.kind === "inherited"
-        ? answer.provenance.entry.value
-        : undefined;
-    },
+      })
+    ),
   };
 }
 

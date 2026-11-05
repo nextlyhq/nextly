@@ -260,6 +260,19 @@ export function tokenCustomProperty(name: string, prefix: string): string {
   return prefix + name.replace(/\./g, "-");
 }
 
+/**
+ * A token's text at a reference's factor: `calc(<text> * <times>)`, or the
+ * text alone when the reference is not scaled. The one spelling of a scaled
+ * token, for the compiler's `var()` and for an editor preview that resolves
+ * the token to its value. A factor is validated before it reaches here, so it
+ * is a finite number in range, and `String` writes it without a locale.
+ *
+ * @experimental
+ */
+export function scaledTokenText(text: string, times: unknown): string {
+  return typeof times === "number" ? `calc(${text} * ${String(times)})` : text;
+}
+
 /** A declaration with the pointer it came from, so a verdict can be applied. */
 interface PlacedDeclaration extends Declaration {
   path: string;
@@ -313,13 +326,10 @@ function scalarText(
       );
       return undefined;
     }
-    const property = `var(${tokenCustomProperty(name, walk.prefix)})`;
-    // Scaled where it says so: validated before this, so a factor here is a
-    // finite number in range, and `String` writes it without a locale.
-    const reference =
-      typeof value.times === "number"
-        ? `calc(${property} * ${String(value.times)})`
-        : property;
+    const reference = scaledTokenText(
+      `var(${tokenCustomProperty(name, walk.prefix)})`,
+      value.times
+    );
     // A token names an image, never a keyword, so an overlaid leaf's always
     // carries the overlay's layer.
     return paintsOverlaid(leaf) ? overlaid(reference) : reference;
