@@ -13,7 +13,12 @@
 //
 // @module style/site-sheet
 
-import type { BlockDocument, BreakpointSet, NodeStyles } from "../document";
+import type {
+  BlockDocument,
+  BlockPart,
+  BreakpointSet,
+  NodeStyles,
+} from "../document";
 import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
@@ -40,6 +45,15 @@ export interface SiteSheetInput {
   classes?: readonly NamedClass[];
   /** Each block type's default look, keyed by type. */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * The parts of the block types the page draws, keyed by type. Read only for
+   * the root properties a part takes from a wrapping root, so the classes
+   * written here route them as the page's own sheet does; no part's defaults
+   * are written here.
+   *
+   * @experimental
+   */
+  blockParts?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>;
   /** The site's breakpoints, which decide the at-rules every tier is emitted under. */
   breakpoints: BreakpointSet;
   /** The custom-property prefix tokens are written under. */
@@ -413,6 +427,10 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     breakpoints: input.breakpoints,
     blockBases,
     namedClasses: input.classes ?? [],
+    // A class here styles a node's root as the page's own sheet does, so it
+    // routes what a part takes from a wrapping root the same way. The parts'
+    // own defaults stay in the page sheet: this document draws none of them.
+    ...(input.blockParts === undefined ? {} : { blockParts: input.blockParts }),
     ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
     ...(input.mayFetchUrl === undefined
       ? {}

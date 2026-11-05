@@ -19,6 +19,7 @@ import { compilePageCss } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import type { NamedClass } from "./named-class";
 import { blockPartClassName } from "./node-class";
+import { compileSiteSheet } from "./site-sheet";
 
 const TYPE = "core/image";
 const part = (name: string) => `.${blockPartClassName(TYPE, name)}`;
@@ -225,5 +226,25 @@ describe("a part that takes properties from a wrapping root", () => {
     expect(
       (trace ?? []).filter(entry => entry.property === "border-radius")
     ).toHaveLength(1);
+  });
+
+  it("routes the classes in the sheet every page shares, writing no part's defaults", () => {
+    // The site sheet compiles the classes apart from any page; handed the
+    // parts, it routes them as the page sheet does.
+    const parts = {
+      [TYPE]: {
+        ...(PARTS?.[TYPE] ?? {}),
+        frame: { baseStyles: values({ display: "flex" }) },
+      },
+    } as unknown as StyleCompileContext["blockParts"];
+    const { css } = compileSiteSheet({
+      breakpoints: FIXTURE_BREAKPOINTS,
+      classes: [framed],
+      blockParts: parts,
+    });
+    const { off, onto } = routedPair(".nx-pb-page.nx-pb-page .nx-c-framed");
+    expect(css).toContain(`${off} { border-radius: 4px }`);
+    expect(css).toContain(`${onto} { border-radius: 4px }`);
+    expect(css).not.toContain("display: flex");
   });
 });

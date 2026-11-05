@@ -59,8 +59,16 @@ const framed: NamedClass = {
   } as never,
 };
 
+const BREAKPOINTS = {
+  viewport: [{ id: "base", label: "Desktop" }],
+  container: [],
+};
+
 /** The page drawn with one image wearing Circle and Framed, its own corner 0. */
-async function page(props: Record<string, unknown>): Promise<Document> {
+async function page(
+  props: Record<string, unknown>,
+  via: "styleContext" | "siteStyles" = "styleContext"
+): Promise<Document> {
   const document = {
     formatVersion: 1,
     kind: "page",
@@ -83,10 +91,22 @@ async function page(props: Record<string, unknown>): Promise<Document> {
     <PageRenderer
       document={document}
       blocks={resolver}
-      styleContext={{
-        breakpoints: { viewport: [{ id: "base", label: "Desktop" }] },
-        namedClasses: [circle, framed],
-      }}
+      // The site's classes reach a page two ways: in the compile context, or
+      // in the site sheet every page shares, as the canvas and the published
+      // routes pass them. Both must route.
+      {...(via === "styleContext"
+        ? {
+            styleContext: {
+              breakpoints: BREAKPOINTS,
+              namedClasses: [circle, framed],
+            },
+          }
+        : {
+            siteStyles: {
+              breakpoints: BREAKPOINTS,
+              classes: [circle, framed],
+            },
+          })}
     />
   );
   return new DOMParser().parseFromString(html, "text/html");
@@ -118,47 +138,58 @@ function tiersSetting(
   property: RegExp
 ): string[] {
   if (element === null) throw new Error("no element");
-  return rulesIn(doc)
-    .filter(rule => property.test(rule.body))
-    .filter(rule => {
-      try {
-        return element.matches(rule.selector);
-      } catch {
-        return false;
-      }
-    })
-    .map(rule => tierOf(rule.selector));
+  return (
+    rulesIn(doc)
+      .filter(rule => property.test(rule.body))
+      .filter(rule => {
+        try {
+          return element.matches(rule.selector);
+        } catch {
+          return false;
+        }
+      })
+      .map(rule => tierOf(rule.selector))
+      // Each tier by its LAST matching rule, the one the cascade keeps: the
+      // site's classes can be written in the shared sheet and again in the
+      // page's, with the same values, and only the later copy decides.
+      .filter((tier, index, all) => all.lastIndexOf(tier) === index)
+  );
 }
 
 const RADIUS = /border(-[a-z]+)*-radius/;
 const RATIO = /aspect-ratio/;
 
 describe("a wrapped image's corners and proportion", () => {
-  for (const [name, props, wrapper] of [
-    ["captioned", { caption: "Our team" }, "figure"],
-    ["linked", { href: "/about" }, "a"],
-    ["captioned and linked", { caption: "Our team", href: "/about" }, "figure"],
-  ] as const) {
-    it(`land on the picture from every tier, in the tiers' order, when ${name}`, async () => {
-      const doc = await page(props);
-      const picture = doc.querySelector("img");
-      expect(tiersSetting(doc, picture, RADIUS)).toEqual([
-        "look",
-        "shared",
-        "own",
-      ]);
-      expect(tiersSetting(doc, picture, RATIO)).toEqual(["look"]);
-    });
+  for (const via of ["styleContext", "siteStyles"] as const)
+    for (const [name, props, wrapper] of [
+      ["captioned", { caption: "Our team" }, "figure"],
+      ["linked", { href: "/about" }, "a"],
+      [
+        "captioned and linked",
+        { caption: "Our team", href: "/about" },
+        "figure",
+      ],
+    ] as const) {
+      it(`land on the picture from every tier, in the tiers' order, when ${name} (classes in ${via})`, async () => {
+        const doc = await page(props, via);
+        const picture = doc.querySelector("img");
+        expect(tiersSetting(doc, picture, RADIUS)).toEqual([
+          "look",
+          "shared",
+          "own",
+        ]);
+        expect(tiersSetting(doc, picture, RATIO)).toEqual(["look"]);
+      });
 
-    it(`never land on the ${wrapper} around the picture, when ${name}`, async () => {
-      const doc = await page(props);
-      const root = doc.querySelector(`.nx-pb-page ${wrapper}`);
-      expect(tiersSetting(doc, root, RADIUS)).toEqual([]);
-      expect(tiersSetting(doc, root, RATIO)).toEqual([]);
-      // What no part takes stays on the root: the framing background.
-      expect(tiersSetting(doc, root, /background-color/)).toEqual(["shared"]);
-    });
-  }
+      it(`never land on the ${wrapper} around the picture, when ${name} (classes in ${via})`, async () => {
+        const doc = await page(props, via);
+        const root = doc.querySelector(`.nx-pb-page ${wrapper}`);
+        expect(tiersSetting(doc, root, RADIUS)).toEqual([]);
+        expect(tiersSetting(doc, root, RATIO)).toEqual([]);
+        // What no part takes stays on the root: the framing background.
+        expect(tiersSetting(doc, root, /background-color/)).toEqual(["shared"]);
+      });
+    }
 
   it("land on the picture itself when it is the root", async () => {
     const doc = await page({});
