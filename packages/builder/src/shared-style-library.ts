@@ -10,9 +10,9 @@
  * @module shared-style-library
  */
 import {
+  classNameOf,
   isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
@@ -161,7 +161,8 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${namedClassName(entry.slug)}`,
+    // A look's class is written under its own prefix.
+    className: `.${classNameOf(entry)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     styles: entry.styles,

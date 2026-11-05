@@ -55,13 +55,18 @@ describe("core/image, whichever branch it renders", () => {
   it("puts the image's look on the IMG when there IS a caption, a shared style on the figure", async () => {
     // Rounded and Circle style the picture itself: on the figure, the corners
     // and the fit would miss the image and catch the caption instead.
-    const container = await draw("a caption", " nx-c-image-rounded nx-c-card");
+    // A shared style named like a look keeps its `nx-c-` name, and the figure.
+    const container = await draw(
+      "a caption",
+      " nx-l-image-rounded nx-c-image-circle nx-c-card"
+    );
     expect(container.querySelector("img")?.className).toContain(
-      "nx-c-image-rounded"
+      "nx-l-image-rounded"
     );
     const figure = container.querySelector("figure")?.className ?? "";
-    expect(figure).not.toContain("nx-c-image-rounded");
+    expect(figure).not.toContain("nx-l-image-rounded");
     expect(figure).toContain("nx-c-card");
+    expect(figure).toContain("nx-c-image-circle");
   });
 
   it("leaves the node's own classes on the figure, which is the root", async () => {

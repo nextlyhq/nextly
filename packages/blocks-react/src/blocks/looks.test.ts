@@ -5,6 +5,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
+import { sharedStyleInputsId } from "../shared-style-inputs";
+
 import { button } from "./button";
 import { image } from "./image";
 import { section } from "./section";
@@ -58,7 +60,18 @@ describe("the looks the core blocks ship with", () => {
       });
       expect(warnings).toEqual([]);
       // The population: the look's rule is written.
-      expect(css).toContain(`.nx-c-${look.slug} {`);
+      expect(css).toContain(`.nx-l-${look.slug} {`);
     }
   );
+});
+
+describe("a look's binding in a stored sheet's stamp", () => {
+  it("moves the stamp, and a class with no binding stamps as before", () => {
+    const base = { breakpoints: BREAKPOINTS };
+    const plain = { id: "c-x", slug: "x", orderIndex: 0, styles: {} };
+    const bound = { ...plain, blockType: "core/button" };
+    expect(sharedStyleInputsId({ ...base, namedClasses: [bound] })).not.toBe(
+      sharedStyleInputsId({ ...base, namedClasses: [plain] })
+    );
+  });
 });

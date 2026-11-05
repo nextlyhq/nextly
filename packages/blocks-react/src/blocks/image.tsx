@@ -16,8 +16,8 @@ import {
   type BlockDefinition,
   blockLooks,
   blockTypeClassName,
+  classNameOf,
   defineBlock,
-  namedClassName,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
@@ -186,7 +186,7 @@ const IMAGE_BLOCK = "core/image";
  */
 const IMAGE_LOOK_CLASSES: ReadonlySet<string> = new Set(
   blockLooks([{ name: IMAGE_BLOCK, editor: { variations: imageLooks() } }]).map(
-    look => namedClassName(look.slug)
+    look => classNameOf(look)
   )
 );
 

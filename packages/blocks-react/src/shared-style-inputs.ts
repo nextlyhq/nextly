@@ -535,6 +535,12 @@ function classParts(entry: unknown, reading: Reading): unknown {
     boundedName(entry.slug, reading),
     structural(entry.orderIndex, reading),
     styleEnvelope(entry.styles, reading),
+    // The block type a look is bound to decides its cascade tier and which
+    // nodes take its class, so it is part of the identity. Spread, so a
+    // class with no binding stamps exactly as before.
+    ...(entry.blockType === undefined
+      ? []
+      : [["look", boundedName(entry.blockType, reading)]]),
   ] as unknown;
 }
 

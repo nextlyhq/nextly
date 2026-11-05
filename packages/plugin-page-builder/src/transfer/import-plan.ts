@@ -390,7 +390,13 @@ function planClasses(
       entry.orderIndex,
       maps
     );
-    if (named !== undefined && sameJsonValue(named.styles, written.styles)) {
+    // The same look binding too: a box's shared style and a button's look
+    // with one name and one look are not one class.
+    if (
+      named !== undefined &&
+      named.blockType === written.blockType &&
+      sameJsonValue(named.styles, written.styles)
+    ) {
       map.set(entry.id, named.id);
       ledger.reused.push({
         kind: "class",

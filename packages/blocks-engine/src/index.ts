@@ -981,8 +981,10 @@ export type {
 // Named classes: reusable style presets a node applies by id.
 export type { NamedClass } from "./style/named-class";
 export {
+  classNameOf,
   isLook,
   isUsableNamedClass,
+  LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
   // How long a class id or slug may be before the compiler discards the class.

@@ -16,7 +16,7 @@
 // complaint most often made about combo classes elsewhere. The order is data the author controls,
 // and it is the documented way one class overrides another.
 
-import { MAX_NAMED_CLASSES, type NodeStyles } from "../document";
+import { isBlockType, MAX_NAMED_CLASSES, type NodeStyles } from "../document";
 import { isPlainRecord } from "../plain-record";
 
 /** The prefix every named class carries in the emitted CSS. */
@@ -92,7 +92,7 @@ export interface NamedClass {
  * A `blockType` that is not a string is read as absent, as persisted data may carry one.
  */
 export function isLook(cls: NamedClass): boolean {
-  return typeof (cls as { blockType?: unknown } | null)?.blockType === "string";
+  return isBlockType((cls as { blockType?: unknown } | null)?.blockType);
 }
 
 /**
@@ -120,7 +120,10 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
     // to "is an object". An array passes the looser test and then produces no declarations, so
     // the class reserved its slug and wrote nothing — and a later, valid class wanting that name
     // was dropped as a duplicate, taking the styling of every node referencing it.
-    isPlainRecord(candidate.styles)
+    isPlainRecord(candidate.styles) &&
+    // A binding is a block type, or absent: a look bound to nothing a block
+    // can be would sit in the look tier and apply to no node.
+    (candidate.blockType === undefined || isBlockType(candidate.blockType))
   );
 }
 
@@ -136,16 +139,28 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
 export function namedClassesRead(
   library: readonly NamedClass[]
 ): readonly NamedClass[] {
-  if (library.length <= MAX_NAMED_CLASSES) return library;
   // Looks are counted apart, under a cap of their own, so the looks a site's
   // blocks supply never take a shared style's place under the cap: a site at
-  // the cap keeps every style it had. Relative order is kept.
+  // the cap keeps every style it had. Read in library order, and no further
+  // than both quotas allow, so an oversized stored library is never scanned
+  // past them.
+  const read: NamedClass[] = [];
   let shared = 0;
   let looks = 0;
-  return library.filter(entry => {
-    if (isLook(entry)) return (looks += 1) <= MAX_LOOKS;
-    return (shared += 1) <= MAX_NAMED_CLASSES;
-  });
+  const scan = Math.min(library.length, MAX_NAMED_CLASSES + MAX_LOOKS);
+  for (let at = 0; at < scan; at += 1) {
+    const entry = library[at];
+    if (isLook(entry)) {
+      if (looks < MAX_LOOKS) read.push(entry);
+      looks += 1;
+    } else {
+      if (shared < MAX_NAMED_CLASSES) read.push(entry);
+      shared += 1;
+    }
+  }
+  // The library itself when nothing was left out, so a caller comparing
+  // identities sees the same library.
+  return read.length === library.length ? library : read;
 }
 
 /**
@@ -217,6 +232,22 @@ export function usableNamedClassPositions(
 /** The emitted class name for a slug. */
 export function namedClassName(slug: string): string {
   return `${NAMED_CLASS_PREFIX}${slug}`;
+}
+
+/** The prefix a look's class is written under, apart from shared styles'. */
+export const LOOK_CLASS_PREFIX = "nx-l-";
+
+/**
+ * The emitted class name for one class: a look's under its own prefix, so a
+ * look and a shared style can never be told apart by name alone, nor one
+ * mistaken for the other where a renderer reads the class string.
+ */
+export function classNameOf(
+  cls: Pick<NamedClass, "slug" | "blockType">
+): string {
+  return isLook(cls as NamedClass)
+    ? `${LOOK_CLASS_PREFIX}${cls.slug}`
+    : namedClassName(cls.slug);
 }
 
 /**
