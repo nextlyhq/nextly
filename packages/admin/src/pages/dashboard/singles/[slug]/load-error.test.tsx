@@ -45,11 +45,8 @@ vi.mock("@admin/hooks/queries/useSingleEditorDocument", () => ({
 vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
   ScheduledReleaseBanner: () => null,
 }));
-vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
-  useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
-}));
-vi.mock("@admin/components/features/releases/SchedulePublishAction", () => ({
-  useSchedulePublishAction: () => ({ dialog: null, contributed: null }),
+vi.mock("@admin/components/features/releases/ScheduleDocumentAction", () => ({
+  useScheduleDocumentAction: () => ({ dialog: null, contributed: null }),
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),

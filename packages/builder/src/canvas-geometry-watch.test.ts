@@ -13,11 +13,12 @@
  * @module canvas-geometry-watch.test
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -44,6 +45,83 @@ async function delivered(): Promise<void> {
 
 afterEach(() => {
   document.body.replaceChildren();
+});
+
+describe("a block that moves without resizing", () => {
+  it("re-measures when a block's keyframe animation ends or is cancelled", () => {
+    // An entrance animation or a site's @keyframes moves a block by
+    // transform: nothing resizes, mutates or finishes a transition, so the
+    // marks stay at the starting geometry unless the animation's own end is
+    // heard. The events bubble, so a block's reaches the root.
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("animationcancel", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    // Released with the rest: nothing is heard after the watch stops.
+    block.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(moved).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a block an authored state rule moves", () => {
+  it("re-measures when the input modality changes, which can turn :focus-visible on alone", () => {
+    // A block a pointer focused starts matching :focus-visible once the
+    // keyboard is used, with no focus event: the key press is the signal, as
+    // a pointer press is for the change back.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    block.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    block.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(2);
+    // And when a press ends, which ends an authored :active state with no
+    // pointer leaving and no focus changing.
+    // Space releases a keyboard-activated :active state on keyup.
+    for (const type of ["pointerup", "pointercancel", "keyup"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+      for (const run of frames.splice(0)) run(0);
+    }
+    expect(moved).toHaveBeenCalledTimes(5);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-measures on the frame after the pointer or focus enters or leaves a block", () => {
+    // An authored :hover or :focus-visible rule can move a block (a
+    // transform, a margin) with no transition: nothing resizes or mutates,
+    // so the change of state itself is the only signal. Measured on the next
+    // frame, once the browser has applied the state's styles.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    for (const type of ["pointerover", "pointerout", "focusin", "focusout"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+    // Nothing yet: the state's styles apply before the next frame.
+    expect(moved).not.toHaveBeenCalled();
+    // One measurement for the frame, however many changes arrived in it.
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("a batch that changed nothing", () => {
@@ -266,5 +344,73 @@ describe("a block rendered after the watch began", () => {
       false
     );
     stop?.();
+  });
+});
+
+describe("what moves the part of a canvas on screen", () => {
+  /** A canvas in a frame, the frame in the host's document. */
+  function framed(): { frame: HTMLIFrameElement; root: HTMLElement } {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    inner.body.append(root);
+    return { frame, root };
+  }
+
+  afterEach(() => {
+    document.documentElement.style.overflowY = "";
+    vi.unstubAllGlobals();
+  });
+
+  it("hears the host page scrolling at its document, where a viewport's scroll is told", () => {
+    // The host's own page is the scroller around the frame: its scroll is
+    // dispatched at the document, never at <html>.
+    document.documentElement.style.overflowY = "auto";
+    Object.defineProperty(document, "scrollingElement", {
+      configurable: true,
+      value: document.documentElement,
+    });
+    const { frame, root } = framed();
+    const moved = vi.fn();
+    const stop = watchScreenBand(root, frame, moved);
+    document.dispatchEvent(new Event("scroll"));
+    expect(moved).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("hears the host's scroller resize, which no scroll or frame reading reports", () => {
+    // A side panel resized at a fixed zoom: the host's region changes size
+    // and nothing inside the frame does.
+    const observed: Element[] = [];
+    let report: (() => void) | undefined;
+    class Sizes {
+      constructor(callback: () => void) {
+        report = callback;
+      }
+      observe(element: Element): void {
+        observed.push(element);
+      }
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", Sizes);
+    const region = document.createElement("div");
+    region.style.overflowY = "auto";
+    document.body.append(region);
+    const frame = document.createElement("iframe");
+    region.append(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("no frame document");
+    const root = inner.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    inner.body.append(root);
+    const moved = vi.fn();
+    const stop = watchScreenBand(root, frame, moved);
+    expect(observed).toContain(region);
+    report?.();
+    expect(moved).toHaveBeenCalled();
+    stop();
   });
 });

@@ -131,6 +131,12 @@ export interface Release {
    */
   memberAction?: ReleaseMemberAction;
   /**
+   * The membership's own id, on the same `containing` read as `memberAction`,
+   * so the document's screen can take the document out of this release without
+   * matching it to a member itself.
+   */
+  memberId?: string;
+  /**
    * What stands between this release and its instant, per member.
    *
    * Sent only on a detail read of a BLOCKED release, and derived there rather
@@ -211,28 +217,45 @@ export interface ScheduleReleasePayload {
   timezone: string;
 }
 
-export interface AddReleaseMemberPayload {
-  scopeKind: "collection" | "single";
-  scopeSlug: string;
-  entryId: string;
-  action: ReleaseMemberAction;
-}
-
 /**
- * One document scheduled to go live on its own, in one all-or-nothing step:
- * the server creates a single-document release named `title`, puts the
- * document in it and schedules it at `at` in `timezone`, or does none of it.
+ * One document put into a release in one all-or-nothing step, going live or
+ * coming down at the release's moment. Mirrors the server's strict body: a key
+ * it does not read is refused.
+ *
+ * - `own`: the server creates a single-document release named `title`, puts
+ *   the document in it and schedules it at `at` in `timezone`, or does none of
+ *   it.
+ * - `existing`: the document joins the ordinary release `releaseId`.
+ * - `new`: the server creates a draft release named `title`, with an optional
+ *   `description`, holding the document; it is scheduled from its own page.
  */
-export interface ScheduleDocumentPayload {
-  into: "own";
-  document: ReleaseDocumentRef & { action: "publish" };
-  /** The release's name. */
-  title: string;
-  /** ISO 8601 with an explicit offset or `Z`; the route refuses anything else. */
-  at: string;
-  /** An IANA zone name. The route validates it through `Intl`. */
-  timezone: string;
-}
+export type ScheduleDocumentPayload =
+  | {
+      into: "own";
+      document: ScheduledDocumentRef;
+      /** The release's name. */
+      title: string;
+      /** ISO 8601 with an explicit offset or `Z`; the route refuses anything else. */
+      at: string;
+      /** An IANA zone name. The route validates it through `Intl`. */
+      timezone: string;
+    }
+  | {
+      into: "existing";
+      document: ScheduledDocumentRef;
+      releaseId: string;
+    }
+  | {
+      into: "new";
+      document: ScheduledDocumentRef;
+      title: string;
+      description?: string | null;
+    };
+
+/** The document a schedule puts in a release, and what the release does to it. */
+export type ScheduledDocumentRef = ReleaseDocumentRef & {
+  action: ReleaseMemberAction;
+};
 
 /** A document, as the release list's `containing` filter names it. */
 export interface ReleaseDocumentRef {

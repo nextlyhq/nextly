@@ -111,6 +111,10 @@ export type SharedStyleInputs = Pick<
   // its `childGap` changes the rules `compilePageCss` writes for every page
   // holding one, so it has to move the stamp as `blockBases` does.
   | "childGaps"
+  // The spacing model decides which element and block defaults compile and
+  // whether any gap is written, so a sheet compiled under one model must not
+  // be served under the other.
+  | "spacingMode"
 >;
 
 /**
@@ -663,6 +667,13 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // A fixed slot would have invalidated every page on the site to record a
     // field that is unset on all of them.
     ...(inputs.previewStates === true ? ["preview-states"] : []),
+    // The classic spacing model, SPREAD for the same reason: absent and `gaps`
+    // compile exactly as before the model existed, so every artifact stored
+    // under them keeps its stamp, and only a classic compile moves it. The
+    // defaults the model swaps in are in the block and element tiers above
+    // already; this slot is what tells apart two compiles those tiers agree
+    // on, since the classic model also drops every child gap.
+    ...(inputs.spacingMode === "classic" ? ["spacing-classic"] : []),
   ]);
 }
 

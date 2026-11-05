@@ -72,6 +72,7 @@ import {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FocalFrame } from "./focal-frame";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -95,6 +96,8 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { commitLinkChanges } from "./link-control";
+import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -759,6 +762,7 @@ function SelectionInspector({
             editor={editor}
             styleNode={styleNode}
             renderedTag={canvas.tag}
+            renderedPicture={canvas.picture}
             sideOrientation={canvas.orientation}
             styleState={styleState}
             breakpoint={breakpoint}
@@ -932,6 +936,7 @@ function StyleTab({
   editor,
   styleNode,
   renderedTag,
+  renderedPicture,
   sideOrientation,
   styleState,
   policy,
@@ -965,11 +970,12 @@ function StyleTab({
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
+  renderedPicture: string | undefined;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
   // ONE holder of what an edit changes, read by the bar and the controls.
-  const { target, choose } = useStyleTarget(
+  const { target, choose, held } = useStyleTarget(
     editor,
     shared.classLibrary,
     shared.sharedStyles
@@ -986,6 +992,7 @@ function StyleTab({
         editor={editor}
         target={target}
         onChoose={choose}
+        held={held}
         library={shared.classLibrary}
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
@@ -1000,22 +1007,27 @@ function StyleTab({
           breakpoints
         )}
       />
-      <StyleInspectorPanel
-        editor={editor}
-        renderedTag={renderedTag}
-        sideOrientation={sideOrientation}
-        policy={policy}
-        state={state}
-        breakpoint={breakpoint}
-        cascade={cascade}
-        breakpoints={breakpoints}
-        previewContainer={previewContainer}
-        liveBreakpoints={liveBreakpoints}
-        onJumpToBreakpoint={onJumpToBreakpoint}
-        tokens={tokens}
-        target={target}
-        fonts={fonts}
-      />
+      {/* The picture the canvas draws, for the focal point aimed over it. */}
+      <FocalFrame.Provider value={{ picture: renderedPicture }}>
+        <StyleInspectorPanel
+          editor={editor}
+          // The block card above says why a held block can't be changed.
+          showReadOnlyReason={false}
+          renderedTag={renderedTag}
+          sideOrientation={sideOrientation}
+          policy={policy}
+          state={state}
+          breakpoint={breakpoint}
+          cascade={cascade}
+          breakpoints={breakpoints}
+          previewContainer={previewContainer}
+          liveBreakpoints={liveBreakpoints}
+          onJumpToBreakpoint={onJumpToBreakpoint}
+          tokens={tokens}
+          target={target}
+          fonts={fonts}
+        />
+      </FocalFrame.Provider>
     </>
   );
 }
@@ -1090,6 +1102,9 @@ function ContentSurface({
           name,
           lockViewOf(editor)
         )
+      }
+      onCommitMany={changes =>
+        commitLinkChanges(editor, inspection.nodeId, changes)
       }
     />
   );
@@ -1263,9 +1278,14 @@ function ContentFields({
   reasonId,
   fields,
   writable,
+  onCommitMany,
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
+  /** Several props written as one edit, for a block's prop groups. */
+  onCommitMany: (
+    changes: Readonly<Record<string, unknown>>
+  ) => BlockDocument | null | void;
   services: ContentServices | undefined;
   /** The id of the lock reason a held field points to. */
   reasonId: string;
@@ -1291,30 +1311,80 @@ function ContentFields({
       </p>
     );
   }
+  // What the block holds, for a control whose choices depend on another of
+  // its props: a loop's sort offers its collection's fields.
+  const values = Object.fromEntries(
+    inspection.props.map(prop => [prop.name, prop.value])
+  );
+  // Props an author reads as one thing (a link and what qualifies it, an
+  // image's source, its alt text) are drawn as one group, where the group's
+  // lead prop sits; the others it draws get no row of their own. Built from
+  // the props the block offers, so a sibling its own `onlyWithout` hides is
+  // neither drawn nor written by a group.
+  const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
+  const leads = new Map(groups.map(group => [group.lead, group]));
+  const grouped = new Set(groups.flatMap(group => [...group.drawn]));
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
+        const group = leads.get(prop.name);
+        if (group === undefined && grouped.has(prop.name)) {
+          // Drawn inside its group, but in a component's view still a prop of
+          // its own to expose: named, with its icon, as a prop the inspector
+          // leaves out is, so a placement may still set it.
+          return fields === undefined ? null : (
+            <div
+              key={`${inspection.nodeId}:${prop.name}`}
+              className="nx-inspector__prop"
+            >
+              <p className="nx-inspector__note">
+                {propLabel(prop.name, prop.schema)}
+              </p>
+              <PropExposeControl
+                binding={fields}
+                nodeId={inspection.nodeId}
+                prop={prop}
+              />
+            </div>
+          );
+        }
+        const groupField =
+          group === undefined ? undefined : (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {group.render({
+                props: inspection.props,
+                writable,
+                reasonId,
+                services,
+                placedWith: inspection.placedWith,
+                onCommitMany,
+              })}
+            </React.Fragment>
+          );
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
             {propLabel(prop.name, prop.schema)}
           </p>
         ) : (
-          <HeldByLock
-            // Keyed by node AND prop: a bare prop name would let React reuse
-            // one block's field for the next block's same-named prop, so the
-            // input would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${prop.name}`}
-            // A held field points at the reason in the card.
-            reasonId={writable(prop.name) ? undefined : reasonId}
-          >
-            <PropField
-              prop={prop}
-              disabled={!writable(prop.name)}
-              onCommit={onCommit}
-              services={services}
-            />
-          </HeldByLock>
+          (groupField ?? (
+            <HeldByLock
+              // Keyed by node AND prop: a bare prop name would let React reuse
+              // one block's field for the next block's same-named prop, so the
+              // input would keep the previous block's uncommitted text.
+              key={`${inspection.nodeId}:${prop.name}`}
+              // A held field points at the reason in the card.
+              reasonId={writable(prop.name) ? undefined : reasonId}
+            >
+              <PropField
+                prop={prop}
+                disabled={!writable(prop.name)}
+                onCommit={onCommit}
+                services={services}
+                values={values}
+              />
+            </HeldByLock>
+          ))
         );
         if (fields === undefined) return field;
         // The switch sits OUTSIDE the lock's fieldset: a prop a lock holds is
@@ -1343,11 +1413,14 @@ function PropField({
   disabled,
   onCommit,
   services,
+  values,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
+  /** The block's props as stored, for a control that reads another of them. */
+  values: Readonly<Record<string, unknown>>;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -1365,6 +1438,7 @@ function PropField({
       disabled={disabled}
       onCommit={onCommit}
       services={services}
+      values={values}
     />
   );
 }

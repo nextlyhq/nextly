@@ -22,12 +22,24 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
-import { fetchableUrl, flag, isAuthoredText, oneOf, text, url } from "./props";
+import {
+  fetchableUrl,
+  flag,
+  canLink,
+  isAuthoredText,
+  LINK_PROPS,
+  linkFor,
+  oneOf,
+  text,
+  url,
+  type LinkAttributes,
+  type LinkProps,
+} from "./props";
 
 /** How the browser should schedule the image. */
 export const IMAGE_LOADING = ["lazy", "eager"] as const;
 
-export interface ImageProps {
+export interface ImageProps extends LinkProps {
   /** The media record's id, resolved through the host. */
   mediaId?: string;
   /** A direct URL, for a host with no media library. */
@@ -105,12 +117,17 @@ export async function renderImage({
       ? text(props.alt)
       : (usable?.alt ?? "");
   const caption = text(props.caption);
+  // Where the picture links, read as the button reads it; the alt text is
+  // what names the link.
+  const link = await linkFor(props, (collection, id) =>
+    ctx.resolveEntryPath(collection, id)
+  );
 
   const image = (
     <img
       /*
-       * The block-type class rides the `<img>` in BOTH branches, and only the
-       * node's own classes move to the figure below.
+       * The block-type class rides the `<img>` in EVERY branch, and only the
+       * node's own classes move to a figure or a link around it.
        *
        * The type class is where this block's default sizing lands, and that
        * sizing has to reach the IMAGE: a figure held to its column still
@@ -119,7 +136,7 @@ export async function renderImage({
        * the wrapper around it looks correct. Handing the figure the whole
        * class string put the rule one element above the thing it constrains.
        */
-      className={caption === "" ? className : blockTypeClassName(IMAGE_BLOCK)}
+      className={pictureClass(className, caption, link, partClass)}
       src={src}
       alt={alt}
       loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
@@ -130,13 +147,82 @@ export async function renderImage({
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
+  return wrapPicture(image, {
+    className,
+    caption,
+    link,
+    partClass,
+    // A picture with no alt text names no link; its caption, then where it
+    // goes, does instead, so the link is never unnamed.
+    linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
+  });
+}
 
-  // A caption belongs to the image, and `figure`/`figcaption` is what says so.
-  // The block's own class moves to the figure, because that is then the root.
-  if (caption === "") return image;
+/**
+ * The picture's classes: the node's own where it is the root, else the type
+ * class and the part that takes the fit and focal point from the root (where
+ * the node's Style values land, and `object-fit` does nothing), plus the part
+ * that fills a link's box when it is linked.
+ */
+function pictureClass(
+  className: string,
+  caption: string,
+  link: LinkAttributes | undefined,
+  partClass: (part: string) => string
+): string {
+  if (caption === "" && link === undefined) return className;
+  return [
+    blockTypeClassName(IMAGE_BLOCK),
+    partClass("picture"),
+    ...(link === undefined ? [] : [partClass("linked")]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * The picture in its link and its figure, as it has them.
+ *
+ * Only the picture is linked: a caption inside the link would be read as part
+ * of its name, and is text a visitor may want to select. A caption belongs to
+ * the image, and `figure`/`figcaption` is what says so; the block's own class
+ * moves to whichever is the root.
+ */
+function wrapPicture(
+  image: ReactElement,
+  {
+    className,
+    caption,
+    link,
+    partClass,
+    linkName,
+  }: {
+    className: string;
+    caption: string;
+    link: LinkAttributes | undefined;
+    partClass: (part: string) => string;
+    linkName: string | undefined;
+  }
+): ReactElement {
+  const rootClass = caption === "" ? className : "";
+  const linked =
+    link === undefined ? (
+      image
+    ) : (
+      <a
+        {...link}
+        className={[rootClass, partClass("link")].filter(Boolean).join(" ")}
+        {...(linkName === undefined ? {} : { "aria-label": linkName })}
+      >
+        {image}
+      </a>
+    );
+  if (caption === "") return linked;
   return (
-    <figure className={className}>
-      {image}
+    <figure
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+    >
+      {linked}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
     </figure>
   );
@@ -189,12 +275,73 @@ const IMAGE_BASE_STYLES = {
  * the two things that make it read as a caption instead.
  */
 const IMAGE_PARTS = {
+  // A captioned picture's figure: the picture and its caption in a column,
+  // so a height set on the block is shared between them rather than
+  // overflowed.
+  frame: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          // As wide as its picture unless the block says otherwise, so the
+          // picture can fill the figure without stretching past its size.
+          width: "fit-content",
+        },
+      },
+    },
+  },
+  // The picture inside a wrapper (a figure, a link) takes the fit and focal
+  // point the node's Style values set on the root, and may shrink to the room
+  // the wrapper leaves it, where the fit then crops or fits it.
+  picture: {
+    baseStyles: {
+      base: {
+        base: {
+          objectFit: "inherit",
+          objectPosition: "inherit",
+          // The wrapper's width, which the block's width sets: the box the fit
+          // crops or fits the picture to.
+          width: "100%",
+          minHeight: "0",
+        },
+      },
+    },
+  },
+  // Inside a link, the picture fills the link's box, so a size set on the
+  // block sizes the picture; as a block, so no line gap sits under it.
+  linked: {
+    baseStyles: {
+      base: { base: { display: "block", width: "100%", height: "100%" } },
+    },
+  },
+  // A link wrapping a captioned picture: as wide as what it holds, and free
+  // to shrink to the room the figure leaves it, as the picture is.
+  link: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "inline-block",
+          maxWidth: "100%",
+          minHeight: "0",
+          // Clipped, so a radius set on the block rounds the picture inside.
+          overflow: "hidden",
+        },
+      },
+    },
+  },
   caption: {
     baseStyles: {
       base: {
         base: {
           fontSize: "0.875em",
           margin: { blockStart: "0.5em" },
+          // As wide as the figure, which is as wide as its picture: no width
+          // of its own to give, so a long caption wraps under a small picture
+          // rather than widening the figure and the picture with it.
+          width: "0",
+          minWidth: "100%",
         },
       },
     },
@@ -236,12 +383,25 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
         lazy: "Load when near the screen",
         eager: "Load immediately",
       },
+      // Drawn as one switch named by `eager`'s words: two states with a safe
+      // default are a yes-or-no question. The stored values stay as they are.
+      display: "switch",
+      switchOn: "eager",
+      hint: "Turn on for images at the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
     },
     caption: { label: "Caption", role: "content", type: "text" },
+    // The button's link props, by the same names, so the inspector draws the
+    // one link control for both and the renderer follows both the same way.
+    ...LINK_PROPS,
   },
-  defaultProps: { alt: "", loading: "lazy" },
+  // No `alt`: an image placed with none takes its library file's alt text,
+  // which is what an author picking a described file expects. A stored `""`
+  // would say "decorative" instead and silence that description, so it is
+  // left to an author to choose. Only what new blocks are placed with
+  // changes; a stored alt, empty or not, reads exactly as before.
+  defaultProps: { loading: "lazy" },
   // Both candidates, in the order the render prefers them: the resolved media
   // first, the directly-typed URL as the fallback the render itself falls back
   // to when the record is missing.
@@ -260,7 +420,10 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
       ],
     };
   },
-  example: { props: { src: "/example.jpg", alt: "An example image" } },
+  // The address only, for the same reason: blocks are placed with their
+  // example, and an example alt would be stored as the page's own words in
+  // place of the library's.
+  example: { props: { src: "/example.jpg" } },
   supports: {
     spacing: true,
     dimensions: true,
@@ -268,6 +431,11 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Interactive content while it links, so a link (a linked box or card)
+  // cannot hold it, which would nest one link in another.
+  contentModel: (props: ImageProps) => ({
+    is: canLink(props) ? ["flow", "interactive"] : ["flow"],
+  }),
   render: renderImage,
   // A media id may still resolve to nothing, and that is settled by a call to
   // the host — so only the case decidable from the props alone is claimed here:

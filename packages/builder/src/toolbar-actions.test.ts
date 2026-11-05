@@ -96,6 +96,78 @@ describe("toolbarActions", () => {
     }
   });
 
+  describe("a greyed item says why", () => {
+    // Every item the bar or the menu shows dimmed carries its reason, the
+    // edges of a container included: "nothing happens" is not an answer an
+    // author can act on.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+
+    it("says a top-level block has no parent to select", () => {
+      const action = actionOf(toolbarActions(document, "a"), "select-parent");
+      expect(action.enabled).toBe(false);
+      expect(action.reason).toBe("Already at the top level of the page");
+    });
+
+    it("says the first block cannot move up, and the last cannot move down", () => {
+      const first = actionOf(toolbarActions(document, "a"), "move-up");
+      expect(first.enabled).toBe(false);
+      expect(first.reason).toBe("Already at the top here");
+      const last = actionOf(toolbarActions(document, "c"), "move-down");
+      expect(last.enabled).toBe(false);
+      expect(last.reason).toBe("Already at the bottom here");
+    });
+
+    it("says the same for several blocks at the edge, which the set moves as one", () => {
+      const top = toolbarActions(document, "a", ["a", "b"]);
+      expect(actionOf(top, "move-up").enabled).toBe(false);
+      expect(actionOf(top, "move-up").reason).toBe("Already at the top here");
+      const bottom = toolbarActions(document, "b", ["b", "c"]);
+      expect(actionOf(bottom, "move-down").enabled).toBe(false);
+      expect(actionOf(bottom, "move-down").reason).toBe(
+        "Already at the bottom here"
+      );
+      // The control: a set away from the edge moves, and says nothing.
+      expect(actionOf(top, "move-down").reason).toBe(undefined);
+    });
+
+    it("says the same thing for a top-level block's parent and its outdent", () => {
+      // One fact, "this is the top level", asked by two verbs: one sentence.
+      const parent = actionOf(toolbarActions(document, "a"), "select-parent");
+      const outdent = depthMoveActions(document, "a").find(
+        move => move.direction === "outdent"
+      );
+      expect(outdent?.enabled).toBe(false);
+      expect(parent.reason).toBe(outdent?.reason);
+    });
+
+    it("words a refused indent so it is true when the block above has several regions", () => {
+      // A block above with two regions and neither the default: the
+      // keyboard move cannot name one and answers `null`, though there IS a
+      // block above. The position stands in for that answer, since which
+      // regions a block declares is its definition's, not this document's.
+      const regions = node("cols", "acme/columns", {
+        slots: { left: [], right: [] },
+      });
+      const nested = documentOf([regions, node("x")]);
+      const noSlotToName = () => null;
+      const indent = depthMoveActions(
+        nested,
+        "x",
+        undefined,
+        undefined,
+        noSlotToName
+      ).find(move => move.direction === "indent");
+      expect(indent?.enabled).toBe(false);
+      expect(indent?.reason).toBe("No block just above that it can go into");
+    });
+
+    it("says nothing for an item that can be pressed", () => {
+      expect(actionOf(toolbarActions(document, "b"), "move-up").reason).toBe(
+        undefined
+      );
+    });
+  });
+
   describe("saving a selection to the pattern library", () => {
     // A rule source of its own rather than the registry, so these assert the
     // toolbar's reading of a refusal and not which blocks happen to be
@@ -217,17 +289,6 @@ describe("toolbarActions", () => {
     expect(actionOf(toolbarActions(document, "c"), "move-down").enabled).toBe(
       false
     );
-  });
-
-  it("says nothing about a move that is merely at the end of its container", () => {
-    // A fact about the page the author can see. Explaining it on every
-    // selection is noise, and it would train them to ignore the one reason that
-    // does need reading.
-    const document = documentOf([node("a"), node("b")]);
-
-    expect(
-      actionOf(toolbarActions(document, "a"), "move-up").reason
-    ).toBeUndefined();
   });
 
   it("a lock stops the move and the delete, and says why", () => {
@@ -816,6 +877,67 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
   });
 
+  it("goes below a short block whose top is just above the screen, where that fits", () => {
+    // 20px of the block is on screen: too little to pin the bar over, and
+    // above it is off screen. Below it there is room.
+    const screen = { top: 600, bottom: 1400 };
+    const at = toolbarPlacement(
+      { x: 0, y: 580, width: 500, height: 40 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.side).toBe("below");
+    expect(at.y).toBe(580 + 40 + TOOLBAR_GAP_PX);
+  });
+
+  it("keeps to the screen's left and right edges in a canvas scrolled sideways", () => {
+    // The block starts 300px left of what is shown, and is still on screen.
+    const screen = { top: 0, bottom: 900, left: 300, right: 1100 };
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 1000, height: 100 },
+      bar,
+      { width: 2000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.x).toBe(300);
+  });
+
+  it("stays with a block scrolled wholly off the side, rather than at the screen's edge", () => {
+    // The block is left of what is shown: a bar clamped to the screen would
+    // sit at its edge, away from the block and over another one.
+    const screen = { top: 0, bottom: 900, left: 1100, right: 1900 };
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 500, height: 100 },
+      bar,
+      { width: 2000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen
+    );
+    expect(at.x).toBe(0);
+  });
+
+  it("judges a set of blocks off both sides by each block, not by their union", () => {
+    // 0..100 and 2000..2100 with the screen at 500..1500: their union crosses
+    // the screen through the gap between them, though neither block does.
+    const screen = { top: 0, bottom: 900, left: 500, right: 1500 };
+    const parts = [
+      { x: 0, y: 200, width: 100, height: 50 },
+      { x: 2000, y: 200, width: 100, height: 50 },
+    ];
+    const at = toolbarPlacement(
+      { x: 0, y: 200, width: 2100, height: 50 },
+      bar,
+      { width: 3000, height: 3000 },
+      TOOLBAR_GAP_PX,
+      screen,
+      parts
+    );
+    expect(at.x).toBe(0);
+  });
+
   it("is left where it is for a block scrolled wholly out of view", () => {
     const screen = { top: 600, bottom: 1400 };
     expect(
@@ -929,15 +1051,15 @@ describe("toolbarActions for MORE than one block", () => {
     const actions = toolbarActions(document, "a", ["a", "b"]);
 
     expect(actionOf(actions, "move-down").enabled).toBe(true);
-    // Dimmed WITHOUT a reason at the edge, exactly as one block at the end of
-    // its list is: a step with nowhere to go needs no explaining.
+    // Dimmed at the edge with the reason one block at the end of its list
+    // gives: every dimmed item says why.
     expect(actionOf(actions, "move-up").enabled).toBe(false);
-    expect(actionOf(actions, "move-up").reason).toBeUndefined();
+    expect(actionOf(actions, "move-up").reason).toBe("Already at the top here");
   });
 
   it("explains a move refused because the set straddles two containers", () => {
-    // Unlike an edge, nothing on the page shows that the selection spans a
-    // boundary, so this refusal carries a reason.
+    // Nothing on the page shows that the selection spans a boundary, so
+    // this refusal names it rather than an edge.
     const document = documentOf([node("a"), node("b"), node("c")]);
     const withChild = {
       ...document,

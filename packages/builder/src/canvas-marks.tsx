@@ -40,6 +40,7 @@ import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
   watchCanvasFor,
+  watchScreenBand,
 } from "./canvas-geometry-watch";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import type { Rect } from "./geometry";
@@ -97,6 +98,11 @@ interface Mark {
   readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /**
+   * Around a block its own `clip-path` shapes: no halo band, the ring still
+   * outside the box.
+   */
+  readonly shaped?: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
   /**
@@ -188,6 +194,7 @@ function markKey(mark: Mark): string {
     tagEdge,
     tagInset,
     clipped,
+    shaped,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -206,6 +213,7 @@ function markKey(mark: Mark): string {
     tagInset.bottom,
     tagInset.side,
     clipped,
+    shaped === true,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -239,6 +247,13 @@ function markStyle(mark: Mark): React.CSSProperties {
     height: mark.rect.height,
     borderRadius: mark.radius,
   };
+  if (mark.kind === "hovered") {
+    // The hovered block's name tag moves in from the side the screen cuts.
+    return {
+      ...box,
+      "--nx-tag-inset-side": `${String(mark.tagInset.side)}px`,
+    } as React.CSSProperties;
+  }
   if (!mark.hidden) return box;
   return {
     ...box,
@@ -268,6 +283,8 @@ interface Outline {
   readonly radius: string;
   readonly radii: CornerRadii;
   readonly clipped: boolean;
+  /** Shaped by the block's own `clip-path`: no halo band, ring outside. */
+  readonly shaped?: boolean;
 }
 
 /**
@@ -313,6 +330,24 @@ function outlineOf(
       clipped: true,
     };
   }
+  /*
+   * A block its OWN `clip-path` shapes — a circle cut from a square box —
+   * draws nothing of the box outside that shape. A halo band hugging the box
+   * would frame corners that show the page behind, so the ring is drawn
+   * square around the box with no band. Unlike an ancestor's clip, the
+   * block's own shape does not cut the overlay, so the ring stays OUTSIDE
+   * the box, where it covers nothing the shape shows.
+   */
+  const shape = style?.clipPath;
+  if (shape !== undefined && shape !== "" && shape !== "none") {
+    return {
+      rect: space.place(own),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
+      clipped: false,
+      shaped: true,
+    };
+  }
   const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
   return {
     rect: space.place(own),
@@ -345,6 +380,7 @@ function ringOf(outline: Outline): Outline {
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
+    ...(outline.shaped === true ? { shaped: true } : {}),
   };
 }
 
@@ -370,6 +406,7 @@ function placementOutline(parts: readonly Outline[]): Outline {
     radius: borderRadiusOf(SQUARE_CORNERS),
     radii: SQUARE_CORNERS,
     clipped: parts.some(part => part.clipped),
+    ...(parts.some(part => part.shaped === true) ? { shaped: true } : {}),
   };
 }
 
@@ -407,6 +444,7 @@ function selectedMark(
     rect: ring.rect,
     radius: ring.radius,
     clipped: ring.clipped,
+    ...(ring.shaped === true ? { shaped: true } : {}),
     kind: "selected",
     component: placement !== undefined,
     ...look,
@@ -625,8 +663,17 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         locked: false,
         hidden: false,
         tag: "below",
-        tagEdge: "right",
-        tagInset: NO_INSET,
+        tagEdge: "left",
+        // In from the screen's left edge as far as the outline runs past it,
+        // so a block scrolled partly off the side keeps its name in view. Not
+        // for one wholly off it: there is nothing on screen to tag.
+        tagInset: {
+          bottom: 0,
+          side:
+            outline.rect.x + outline.rect.width > onScreen.x
+              ? Math.max(0, onScreen.x - outline.rect.x)
+              : 0,
+        },
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.
         hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
@@ -687,6 +734,17 @@ export function CanvasMarks({
     [measure, canvasFrame]
   );
 
+  // And the scrolls that move what of the canvas is on screen, which the tags
+  // keep to: the host's scroller around a zoomed frame among them, which no
+  // listener in the frame hears.
+  React.useEffect(() => {
+    const element = layer.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, canvasFrame]);
+
   return (
     // Hidden from assistive technology: the selection is announced by the
     // editor's live region and named in the inspector, and a box says nothing.
@@ -715,6 +773,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          data-shaped={mark.shaped === true ? "" : undefined}
           // The tag a placement's frame carries, drawn by the stylesheet from
           // this attribute: the layer is hidden from assistive technology,
           // and the inspector names the placement in words.

@@ -60,19 +60,30 @@ export interface SaveSharedStyleDialogProps {
 }
 
 /**
+ * How long a saved style is waited for in the library the canvas draws from
+ * before the block is moved onto it anyway: it is stored, and the canvas
+ * draws it on its next read.
+ */
+export const SAVE_AS_DRAWN_WAIT_MS = 10_000;
+
+/**
  * Store the new style, then move the block onto it: the refusal in words, or
- * `undefined` once both are done. The block's half is built from the block
- * as it stands once the style is stored, so a value it gained meanwhile is
- * kept, where the plan's ops would drop it.
+ * `undefined` once both are done. The block keeps its own look until the
+ * style is in the library the canvas draws from, since the library is read
+ * again only after the save: moved sooner, the block is drawn for a moment
+ * with neither. The block's half is built from the block as it stands then,
+ * so a value it gained meanwhile is kept, where the plan's ops would drop it.
  */
 async function storeAndApply(
   entry: NamedClass,
   onAdd: (entry: NamedClass) => Promise<string | undefined>,
+  drawn: (id: string) => Promise<void>,
   live: () => EditorState,
   nodeId: string
 ): Promise<string | undefined> {
   const refused = await onAdd(entry);
   if (refused !== undefined) return refused;
+  await drawn(entry.id);
   const now = live();
   const block = findNode(now.document.nodes, nodeId);
   const ops = block === undefined ? null : saveAsSharedStyleOps(block, entry);
@@ -80,6 +91,39 @@ async function storeAndApply(
     return `${entry.label ?? entry.slug} was saved, but this block could not be changed to use it.`;
   }
   return undefined;
+}
+
+/**
+ * A wait for a style to be in `library`, the library the canvas draws from as
+ * the host hands it, answered as each new library arrives, and at most
+ * {@link SAVE_AS_DRAWN_WAIT_MS}.
+ */
+function useDrawnIn(
+  library: readonly NamedClass[] | undefined
+): (id: string) => Promise<void> {
+  const latest = React.useRef(library);
+  latest.current = library;
+  const waiting = React.useRef(new Set<() => void>());
+  React.useEffect(() => {
+    for (const check of [...waiting.current]) check();
+  }, [library]);
+  return React.useCallback(
+    (id: string) =>
+      new Promise<void>(resolve => {
+        const done = (): void => {
+          clearTimeout(timer);
+          waiting.current.delete(check);
+          resolve();
+        };
+        const check = (): void => {
+          if (latest.current?.some(entry => entry.id === id) === true) done();
+        };
+        const timer = setTimeout(done, SAVE_AS_DRAWN_WAIT_MS);
+        waiting.current.add(check);
+        check();
+      }),
+    []
+  );
 }
 
 /** The dialog that saves a block's look as a new shared style. */
@@ -98,6 +142,7 @@ export function SaveSharedStyleDialog({
   // edit that follows it.
   const live = React.useRef(editor);
   live.current = editor;
+  const drawn = useDrawnIn(offer.library);
   const nameId = React.useId();
   const hintId = `${nameId}-hint`;
   const node = findNode(editor.document.nodes, nodeId);
@@ -130,6 +175,7 @@ export function SaveSharedStyleDialog({
       const refused = await storeAndApply(
         plan.entry,
         onAdd,
+        drawn,
         () => live.current,
         nodeId
       );
