@@ -15,8 +15,10 @@ import type { PluginOverride } from "../shared/types/config";
 import type {
   HeaderButtonId,
   PluginAdminPage,
+  PluginListFilterDeclaration,
   PluginMenuItem,
 } from "./admin-contributions";
+import { contributedListFilters } from "./admin-filters";
 import type { FieldSurface } from "./contributions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
@@ -134,6 +136,12 @@ export interface PluginAdminMeta {
    * routes it under or on a field type — present only for enabled plugins.
    */
   documentViews?: PublishedDocumentView[];
+  /**
+   * @experimental Filters for the entry list's toolbar, as they passed the
+   * boot check — present only for enabled plugins. Sent only through the
+   * signed-in workspace meta, like the rest of this record.
+   */
+  listFilters?: PluginListFilterDeclaration[];
   /**
    * Custom field types — `type` → admin editor component path (so the admin
    * renders fields of these types) plus the picker presentation (label, hint,
@@ -441,6 +449,12 @@ export function buildPluginAdminMeta(
         ({ plugin: _owner, ...view }) => view
       );
       if (documentViews.length > 0) meta.documentViews = documentViews;
+      // From the reduction the boot check runs, so the admin is offered
+      // exactly the filters that passed it.
+      const listFilters = contributedListFilters([plugin]).map(
+        ({ plugin: _owner, ...filter }) => filter
+      );
+      if (listFilters.length > 0) meta.listFilters = listFilters;
     }
 
     // Routes move to `whenEnabled` when the plugin is disabled, because
