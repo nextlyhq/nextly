@@ -22,12 +22,17 @@
 import type { JSX, ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
+import {
+  autosaveEnabledFor,
+  autosaveIntervalFrom,
+} from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
+import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -135,6 +140,7 @@ import {
   quickEditSave,
 } from "./useRefusedForm";
 import { useResetOnReload } from "./useResetOnReload";
+import { VersionConflictDialog } from "./VersionConflictDialog";
 
 // ============================================================================
 // Types
@@ -402,6 +408,9 @@ export function EntryForm({
     isSubmitting: savePending,
     recovering,
     isDirty,
+    versionConflict,
+    saveAnyway,
+    loadCurrentVersion,
   } = useEntryForm({
     collection,
     entry,
@@ -1039,6 +1048,30 @@ export function EntryForm({
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
 
+  // A save refused because the entry changed since: who changed it and when,
+  // and the author's choices, over the edits it keeps. The comparison is of
+  // the change that made the save stale, where the entry keeps history.
+  const staleHistory = versionConflict?.stale.historyVersion;
+  const conflictDialog = (
+    <VersionConflictDialog
+      conflict={versionConflict}
+      keepsRecoveryPoints={
+        autosaveScope !== null && autosaveEnabledFor(collection)
+      }
+      compareHref={
+        staleHistory && autosaveScope
+          ? versionsHref(
+              autosaveScope,
+              { from: PREVIOUS_VERSION, to: staleHistory.version },
+              staleHistory.locale
+            )
+          : null
+      }
+      onLoadCurrent={loadCurrentVersion}
+      onSaveAnyway={saveAnyway}
+    />
+  );
+
   // Embedded mode: simplified single-column layout for modals
   // Note: Preview is typically not shown in embedded mode (modals)
   if (embedded) {
@@ -1125,6 +1158,7 @@ export function EntryForm({
               canSave={canSave}
             />
           </div>
+          {conflictDialog}
         </EntryFormProvider>
       </EntryFormContextProvider>
     );
@@ -1546,6 +1580,7 @@ export function EntryForm({
             </PreviewPanes>
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
+        {conflictDialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

@@ -94,6 +94,8 @@ import {
   useRefusedForm,
 } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { useResetOnReload } from "@admin/components/features/entries/EntryForm/useResetOnReload";
+import { useVersionConflict } from "@admin/components/features/entries/EntryForm/useVersionConflict";
+import { VersionConflictDialog } from "@admin/components/features/entries/EntryForm/VersionConflictDialog";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -101,12 +103,17 @@ import { isRemovedFromCode } from "@admin/components/features/entries/removed-fr
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
-import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
+import {
+  autosaveEnabledFor,
+  autosaveIntervalFrom,
+} from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
+import { versionsHref } from "@admin/components/features/versions/VersionComparePage";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -129,6 +136,7 @@ import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
+import { versionOf } from "@admin/lib/document-version";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import {
@@ -707,6 +715,22 @@ export function SingleForm({
   const ownSave = useRef<{ inFlight: boolean; storedKey?: string }>({
     inFlight: false,
   });
+  // The version the copy on screen started from, sent with every write, and
+  // the conflict a write refused because the Single changed since opens; the
+  // same rules as the entry editor's.
+  const version = useVersionConflict();
+  const {
+    pinned: versionPinned,
+    refusedFrom,
+    release: releaseConflict,
+    adoptRead,
+  } = version;
+  // Set when the author chose to load the current version before the read
+  // that brings it arrived.
+  const awaitingCurrent = useRef(false);
+  // The document as last handed over, for loading it on the author's choice.
+  const latestDocument = useRef(document);
+  latestDocument.current = document;
 
   // The write gate and a refused publish's way out, declared once.
   const {
@@ -731,24 +755,59 @@ export function SingleForm({
   useEffect(() => {
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
+    const place = JSON.stringify([document.id, locale ?? null]);
+    if (awaitingCurrent.current) {
+      // The read the author asked for: newer than the version the refused
+      // edits began from, which are kept as a recovery point.
+      if (versionOf(document) === refusedFrom()) return;
+      awaitingCurrent.current = false;
+      releaseConflict();
+      lastResetKeyRef.current = resetKey;
+      lastResetPlaceRef.current = place;
+      adoptRead(document);
+      form.reset(defaultValuesRef.current);
+      return;
+    }
+    if (versionPinned()) {
+      // A refused save holds the form: the newer version that follows the
+      // refusal must not reset the edits before the author chooses. Noted,
+      // so it is not taken for a newer one once they have.
+      lastResetKeyRef.current = resetKey;
+      lastResetPlaceRef.current = place;
+      return;
+    }
     if (lastResetKeyRef.current === resetKey) {
       // The same key can carry newer content: a pending-change save, or the
       // live values a refused publish's recovery takes, keep it. A form
       // holding nothing unsaved has nothing to lose, so it takes that content.
       // Not while a field holds work the form's values lack, such as an open
       // page builder: starting afresh would re-seed the field under it.
-      if (!hasUnsavedWorkNow.current) form.reset(defaultValuesRef.current);
+      if (!hasUnsavedWorkNow.current) {
+        adoptRead(document);
+        form.reset(defaultValuesRef.current);
+      }
       return;
     }
-    const place = JSON.stringify([document.id, locale ?? null]);
     const sameDocument = lastResetPlaceRef.current === place;
     lastResetKeyRef.current = resetKey;
     lastResetPlaceRef.current = place;
     const echoOfOwnSave =
       sameDocument &&
       (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
+    // A read replaces the copy: its version is what the copy starts from. An
+    // echo of this author's own save keeps the version that save answered.
+    if (!echoOfOwnSave) adoptRead(document);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
-  }, [document, locale, form, hasUnsavedWorkNow]);
+  }, [
+    document,
+    locale,
+    form,
+    hasUnsavedWorkNow,
+    versionPinned,
+    refusedFrom,
+    releaseConflict,
+    adoptRead,
+  ]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -918,10 +977,16 @@ export function SingleForm({
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
       try {
-        const stored = await onSubmit({ status });
+        const stored = await onSubmit(version.withVersion({ status })).catch(
+          (error: unknown) => {
+            version.refused(error, { status });
+            throw error;
+          }
+        );
         setSavedCount(n => n + 1);
         if (stored) {
           ownSave.current.storedKey = singleResetKey(stored, locale);
+          version.adoptAnswered(stored);
         }
         return { ok: true, item: { id: document.id } };
       } catch (error) {
@@ -930,7 +995,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [busy, onSubmit, locale, document.id, submissionLatch]
+    [busy, onSubmit, locale, document.id, submissionLatch, version]
   );
 
   // Recovery points for this author, the same mechanism the entry editor uses.
@@ -999,12 +1064,21 @@ export function SingleForm({
             // A link the editor cannot see is held in the form as a
             // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
+            const payload = withoutPlaceholders(schema.fields, data);
             const stored = await onSubmit(
-              withoutPlaceholders(schema.fields, data),
+              version.withVersion(payload),
               refusedForm
-            ).finally(() => {
-              ownSave.current.inFlight = false;
-            });
+            )
+              .catch((error: unknown) => {
+                // A save made from an older version holds the edits on
+                // screen and opens the conflict; the failure is still told.
+                version.refused(error, payload);
+                throw error;
+              })
+              .finally(() => {
+                ownSave.current.inFlight = false;
+              });
+            if (stored) version.adoptAnswered(stored);
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -1049,8 +1123,67 @@ export function SingleForm({
       submissionLatch,
       scopeNow,
       recordingsFor,
+      version,
     ]
   );
+
+  // The author's choices on a save refused because the Single changed since,
+  // as the entry editor's. Save anyway: the refused write again, saving over
+  // the newer version on purpose, after the dialog that says whose changes it
+  // replaces.
+  const saveAnyway = useCallback(async (): Promise<void> => {
+    const payload = version.overwrite();
+    if (!payload || submissionLatch.current) return;
+    submissionLatch.current = true;
+    ownSave.current.inFlight = true;
+    try {
+      const stored = await onSubmit(payload, refusedForm);
+      setSavedCount(n => n + 1);
+      if (stored) {
+        ownSave.current.storedKey = singleResetKey(stored, locale);
+        version.adoptAnswered(stored);
+      }
+      version.release();
+      form.reset(
+        stored ? singleFormDefaults(schema, stored) : form.getValues()
+      );
+    } catch (error) {
+      version.failed(
+        error instanceof Error ? error.message : "The save did not go through."
+      );
+      throw error;
+    } finally {
+      ownSave.current.inFlight = false;
+      submissionLatch.current = false;
+    }
+  }, [version, submissionLatch, onSubmit, refusedForm, locale, form, schema]);
+
+  // Load the current version: the edits are first kept as a recovery point
+  // that remembers the version they began from; only then does the form take
+  // the current version. When the point cannot be written, nothing is
+  // replaced and the conflict stays open.
+  const loadCurrentVersion = useCallback(async (): Promise<void> => {
+    if (!version.pinned()) return;
+    try {
+      await version.keepEdits(autosaveScope, form.getValues(), locale ?? null);
+    } catch (error) {
+      version.failed(
+        "Your edits could not be kept, so nothing was replaced. Try again."
+      );
+      throw error;
+    }
+    const current = latestDocument.current;
+    if (current && versionOf(current) !== version.refusedFrom()) {
+      lastResetKeyRef.current = singleResetKey(current, locale);
+      lastResetPlaceRef.current = JSON.stringify([current.id, locale ?? null]);
+      version.release();
+      version.adoptRead(current);
+      form.reset(defaultValuesRef.current);
+      return;
+    }
+    // The read that brings the current version is still on its way.
+    awaitingCurrent.current = true;
+  }, [version, autosaveScope, form, locale]);
 
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -1641,6 +1774,28 @@ export function SingleForm({
             </DocumentHistoryContext.Provider>
           </EntryLocaleProvider>
         </EntryFormContextProvider>
+        {/* A save refused because the Single changed since: who changed it
+            and when, and the author's choices, over the edits it keeps. */}
+        <VersionConflictDialog
+          conflict={version.conflict}
+          keepsRecoveryPoints={
+            autosaveScope !== null && autosaveEnabledFor(schema)
+          }
+          compareHref={
+            version.conflict?.stale.historyVersion && autosaveScope
+              ? versionsHref(
+                  autosaveScope,
+                  {
+                    from: PREVIOUS_VERSION,
+                    to: version.conflict.stale.historyVersion.version,
+                  },
+                  version.conflict.stale.historyVersion.locale
+                )
+              : null
+          }
+          onLoadCurrent={loadCurrentVersion}
+          onSaveAnyway={saveAnyway}
+        />
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );
