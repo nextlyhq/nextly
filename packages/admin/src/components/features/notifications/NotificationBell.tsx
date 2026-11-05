@@ -22,7 +22,9 @@ import { JOURNAL_PAGE_SIZE, useJournal } from "@admin/hooks/queries/useJournal";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
+import { ForYouSection } from "./ForYouSection";
 import { NotificationDropdown } from "./NotificationDropdown";
+import { useUnreadNoticeCount } from "./useNotices";
 import { useUnreadCount } from "./useUnreadCount";
 
 export interface NotificationBellProps {
@@ -41,13 +43,17 @@ export function NotificationBell({
   // lazily-once via React Query's stale-time; cheap.
   const { data } = useJournal({ limit: JOURNAL_PAGE_SIZE });
   const rows = data?.rows ?? [];
-  const { unread, markAllSeen } = useUnreadCount(rows);
+  const { unread: journalUnread, markAllSeen } = useUnreadCount(rows);
+  // Every admin user has notices of their own; the schema-change journal stays
+  // a super-admin's, so its unread rows count only for one.
+  const noticeUnread = useUnreadNoticeCount().data ?? 0;
 
-  if (permissionsLoading || !isSuperAdmin) return null;
+  if (permissionsLoading) return null;
 
+  const unread = noticeUnread + (isSuperAdmin ? journalUnread : 0);
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
-    if (next) {
+    if (next && isSuperAdmin) {
       // Open → mark everything currently visible as seen.
       markAllSeen();
     }
@@ -59,9 +65,7 @@ export function NotificationBell({
         <button
           type="button"
           aria-label={
-            unread > 0
-              ? `Recent schema changes (${unread} unread)`
-              : "Recent schema changes"
+            unread > 0 ? `Notifications (${unread} unread)` : "Notifications"
           }
           data-testid="notification-bell"
           className={cn(
@@ -88,7 +92,11 @@ export function NotificationBell({
         className="p-0 w-auto"
         data-testid="notification-bell-popover"
       >
-        <NotificationDropdown />
+        {/* Your own notices first; the schema changes below, a super-admin's alone. */}
+        <div className="w-96 max-h-[480px] overflow-y-auto">
+          <ForYouSection />
+          {isSuperAdmin ? <NotificationDropdown /> : null}
+        </div>
       </PopoverContent>
     </Popover>
   );

@@ -51,6 +51,8 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
       }
       if (route === "/me/capabilities") return EVERYTHING;
       if (route === "/schema/journal") return { rows: [], hasMore: false };
+      // The bell counts the reader's own unread notices.
+      if (route === "/notices/count") return { total: 0 };
       throw new Error(`unexpected request ${path}`);
     },
   },
@@ -109,7 +111,7 @@ describe("DashboardHeader on a cold load", () => {
 
     // The bell is the reader's (a super-admin), so it shows once the answer is in.
     expect(
-      await screen.findByRole("button", { name: "Recent schema changes" })
+      await screen.findByRole("button", { name: "Notifications" })
     ).toBeInTheDocument();
     await waitFor(() => expect(client.isFetching()).toBe(0));
 
