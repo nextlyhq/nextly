@@ -1512,6 +1512,10 @@
 
 /* A worn look's line, while the block is the target. */
 .nx-editing-bar__look-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
   margin: 0;
   font-size: var(--text-xs);
   color: var(--nx-foreground);

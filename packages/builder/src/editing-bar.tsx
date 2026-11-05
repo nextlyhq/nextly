@@ -544,17 +544,16 @@ function LookLine({
   return (
     <p className="nx-editing-bar__look-line">
       <span>{look.here}</span>
+      {/* On a line of its own: the action reads apart from the statement
+          rather than wrapping onto it after a separator. */}
       {onEdit === undefined ? null : (
-        <>
-          <span aria-hidden="true"> · </span>
-          <button
-            type="button"
-            className="nx-editing-bar__leave"
-            onClick={onEdit}
-          >
-            {look.everywhere}
-          </button>
-        </>
+        <button
+          type="button"
+          className="nx-editing-bar__leave"
+          onClick={onEdit}
+        >
+          {look.everywhere}
+        </button>
       )}
     </p>
   );
