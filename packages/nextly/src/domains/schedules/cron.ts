@@ -410,12 +410,12 @@ export function latestFireAtOrBefore(
   }
   // Searched backwards by wall clock, a time repeated by a fall-back can be
   // met before a later fire of its first pass: walk forward to the last fire
-  // at or before `at`.
-  for (;;) {
+  // at or before `at`. A change repeats at most a few hours, so a day of
+  // minutes bounds the walk.
+  for (let step = 0; step < DAY / MINUTE; step += 1) {
     const later = nextFireAfter(cron, new Date(latest), timeZone);
-    if (later === null || later.getTime() > at.getTime()) {
-      return new Date(latest);
-    }
+    if (later === null || later.getTime() > at.getTime()) break;
     latest = later.getTime();
   }
+  return new Date(latest);
 }
