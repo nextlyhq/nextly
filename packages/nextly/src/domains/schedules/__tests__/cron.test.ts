@@ -48,6 +48,13 @@ describe("reading a cron expression", () => {
     // With both day fields restricted, either one matching fires (Friday the
     // 2nd comes before the 13th).
     ["0 0 13 * FRI", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"],
+    // ... and the date alone fires too: Friday 13 March before Monday the 16th.
+    ["0 0 13 * MON", "2026-03-10T00:00:00.000Z", "2026-03-13T00:00:00.000Z"],
+    // A day field stepped from `*` still names its days, and a day must then
+    // match both fields: odd dates, every other weekday, odd-dated Mondays.
+    ["0 0 */2 * *", "2026-01-01T12:00:00.000Z", "2026-01-03T00:00:00.000Z"],
+    ["0 0 * * */2", "2026-01-06T12:00:00.000Z", "2026-01-08T00:00:00.000Z"],
+    ["0 0 */2 * 1", "2026-01-06T00:00:00.000Z", "2026-01-19T00:00:00.000Z"],
     // The 29th of February, three years on.
     ["0 0 29 2 *", "2026-03-01T00:00:00.000Z", "2028-02-29T00:00:00.000Z"],
     // The aliases.
@@ -80,8 +87,20 @@ describe("reading a cron expression", () => {
     );
   });
 
-  it("says an expression that can never fire has no next fire", () => {
+  it("says an expression that can never fire has no next or latest fire", () => {
     expect(next("0 0 30 2 *", "2026-01-01T00:00:00.000Z")).toBeUndefined();
+    expect(latest("0 0 30 2 *", "2026-01-01T00:00:00.000Z")).toBeUndefined();
+    expect(
+      latest("0 0 30 2 *", "2026-01-01T00:00:00.000Z", "Europe/Berlin")
+    ).toBeUndefined();
+  });
+
+  it("answers no time for a moment that is not one, in any zone", () => {
+    const cron = parseCron("@hourly");
+    for (const zone of ["UTC", "Europe/Berlin"]) {
+      expect(nextFireAfter(cron, new Date(Number.NaN), zone)).toBeNull();
+      expect(latestFireAtOrBefore(cron, new Date(Number.NaN), zone)).toBeNull();
+    }
   });
 
   it.each([
@@ -135,6 +154,18 @@ describe("reading a cron expression", () => {
 });
 
 describe("daylight saving", () => {
+  it("fires a time repeated by a half-hour change once (Australia/Lord_Howe)", () => {
+    // 5 April 2026: 02:00 LHDT (UTC+11) falls back to 01:30 LHST (UTC+10:30),
+    // so 01:45 happens at 14:45 UTC and again at 15:15 UTC on the 4th.
+    const zone = "Australia/Lord_Howe";
+    expect(next("45 1 * * *", "2026-04-04T14:00:00.000Z", zone)).toBe(
+      "2026-04-04T14:45:00.000Z"
+    );
+    expect(next("45 1 * * *", "2026-04-04T14:45:00.000Z", zone)).toBe(
+      "2026-04-05T15:15:00.000Z"
+    );
+  });
+
   describe("Europe/Berlin", () => {
     const zone = "Europe/Berlin";
 
@@ -148,6 +179,10 @@ describe("daylight saving", () => {
       // Hourly that morning: 01:00 CET (00:00 UTC), then 03:00 CEST (01:00 UTC).
       expect(next("0 * * * *", "2026-03-29T00:00:00.000Z", zone)).toBe(
         "2026-03-29T01:00:00.000Z"
+      );
+      // Looking back from later that day, the latest 02:30 is the 28th's.
+      expect(latest("30 2 * * *", "2026-03-29T05:00:00.000Z", zone)).toBe(
+        "2026-03-28T01:30:00.000Z"
       );
     });
 
