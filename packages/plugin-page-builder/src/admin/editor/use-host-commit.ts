@@ -36,7 +36,7 @@ import {
   type Path,
 } from "react-hook-form";
 
-import { usePageLayoutId } from "../page-layout";
+import { usePageLayoutAsk } from "../page-layout";
 import { usePublishOffer } from "../publish-offer";
 import { withValueAtPath } from "../snapshot-merge";
 
@@ -382,7 +382,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    */
   const publishOffer = usePublishOffer({
     documents: () => [storing()],
-    layout: usePageLayoutId(control),
+    ...usePageLayoutAsk(control),
     subject: editor.document.kind === "component" ? "component" : "page",
   });
 
