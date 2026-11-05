@@ -43,10 +43,7 @@ import {
   type ManifestRequest,
 } from "./composition-manifest";
 import type { ActionAnswer } from "./composition-route-kit";
-import {
-  definitionActionRequestOf,
-  runDefinitionAction,
-} from "./definition-actions-route";
+import { runDefinitionAction } from "./definition-actions-route";
 import type { ComponentStore } from "./library-route";
 import { pageActionRequestOf, runPageAction } from "./page-actions-route";
 
@@ -136,7 +133,7 @@ export function compositionService(
       runDefinitionAction(
         asRoute(caller),
         componentId,
-        definitionActionRequestOf(request),
+        request,
         setup,
         "ask-update"
       ),

@@ -430,4 +430,19 @@ export function requestJsonSchema(
 export interface ActionAnswer<T> {
   readonly message: string;
   readonly item: T;
+  /**
+   * What the committed write reported beyond its row: a side effect that
+   * failed after the commit, or a notice. Present only when there is one. A
+   * route's `respondMutation` reads the same warnings from the request, so a
+   * caller of the service is told what a caller of the route is told, and
+   * does not retry a write that is already durable.
+   */
+  readonly warnings?: WriteWarnings;
 }
+
+/** The warnings a committed write through the collection service reports. */
+export type WriteWarnings = NonNullable<
+  Awaited<
+    ReturnType<PluginRouteContext["services"]["collections"]["updateEntry"]>
+  >["warnings"]
+>;

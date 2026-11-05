@@ -26,8 +26,10 @@ import {
   type BlockDocument,
   type ComponentDocument,
   type DocumentLimits,
+  type ExposureEdit,
   type ExposureEditRefusal,
   type RetiredExposures,
+  type VariantEdit,
   type VariantEditRefusal,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -46,6 +48,7 @@ import {
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
+import type { ActionBy } from "./component-actions-contract";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   type DefinitionActionRequest,
@@ -98,9 +101,7 @@ export function definitionActionRequestJsonSchema(): Record<string, unknown> {
  * A definition action request read from outside input: a route body, or what
  * a caller of the service passed. Refused with the path of each problem.
  */
-export function definitionActionRequestOf(
-  raw: unknown
-): DefinitionActionRequest {
+function definitionActionRequestOf(raw: unknown): DefinitionActionRequest {
   const { action, dryRun, expect, publish } = parsedWith(
     raw,
     DefinitionActionEnvelope
@@ -142,40 +143,25 @@ const VERSION_KEY = "_rev";
 export async function runDefinitionAction(
   ctx: PluginRouteContext,
   rawComponentId: string,
-  body: DefinitionActionRequest,
+  rawRequest: unknown,
   setup: DefinitionActionsSetup,
   admitted: "update-admitted" | "ask-update"
 ): Promise<ActionAnswer<DefinitionActionResult>> {
-  // Read here, where every caller passes, so the route's path and the
-  // service's argument are held to one bound.
-  const componentId = parsedWith(rawComponentId, ComponentId, "id");
-  const store = storeOf(ctx, setup);
-  // Asked exactly as the route declares it, of the collection rather than of
-  // any entry, so the service admits no caller the route would refuse.
-  if (admitted === "ask-update") {
-    await actingCaller(ctx, [["update", store.collection]]);
-  }
-  // Publish is asked of any entry, and the write, made as the caller, decides
-  // this one. A store that holds no working draft saves onto the live
-  // component, so an edit there is a publish whether or not it says so.
-  const publishes =
-    body.publish === true ||
-    (await savesLive(ctx.services.collections, store.collection));
-  const by = await actingCaller(
+  const { store, componentId, body, by } = await admittedEdit(
     ctx,
-    publishes ? [["publish", store.collection]] : [],
-    { anyEntry: true }
+    rawComponentId,
+    rawRequest,
+    setup,
+    admitted
   );
   const read = await readForEdit(ctx, store, componentId, body.expect);
-
-  const retired = (await setup.readRetired?.(ctx)(componentId)) ?? undefined;
-  const limits = setup.limits?.();
-  const plan = planDefinitionAction(read.definition, body.action, {
-    definitions: registryBlockSource(),
-    ...(retired === undefined ? {} : { retired }),
-    ...(limits === undefined ? {} : { limits }),
-  });
-  if ("problem" in plan) throw refusedEdit(plan.problem, refusalDetail(plan));
+  const plan = await plannedEdit(
+    ctx,
+    setup,
+    componentId,
+    read.definition,
+    body
+  );
 
   const data = {
     [store.field]: plan.document,
@@ -237,7 +223,71 @@ export async function runDefinitionAction(
   return {
     message: "The component was changed.",
     item: result(false, applied.item),
+    ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
   };
+}
+
+/**
+ * The caller admitted to the edit, and the edit read: the route's declared
+ * `update` right where the route did not ask it, then the request, then
+ * `publish` where the edit publishes. Each right comes before the request is
+ * read, as the route's dispatch has it.
+ */
+async function admittedEdit(
+  ctx: PluginRouteContext,
+  rawComponentId: string,
+  rawRequest: unknown,
+  setup: DefinitionActionsSetup,
+  admitted: "update-admitted" | "ask-update"
+): Promise<{
+  store: { collection: string; field: string };
+  componentId: string;
+  body: DefinitionActionRequest;
+  by: ActionBy;
+}> {
+  const store = storeOf(ctx, setup);
+  // Asked exactly as the route declares it, of the collection rather than of
+  // any entry, and before the request is read, so the service admits no
+  // caller the route would refuse and tells such a caller nothing the route
+  // would not.
+  if (admitted === "ask-update") {
+    await actingCaller(ctx, [["update", store.collection]]);
+  }
+  // Read here, where every caller passes, so the route's path and body and
+  // the service's arguments are held to one parse.
+  const componentId = parsedWith(rawComponentId, ComponentId, "id");
+  const body = definitionActionRequestOf(rawRequest);
+  // Publish is asked of any entry, and the write, made as the caller, decides
+  // this one. A store that holds no working draft saves onto the live
+  // component, so an edit there is a publish whether or not it says so.
+  const publishes =
+    body.publish === true ||
+    (await savesLive(ctx.services.collections, store.collection));
+  const by = await actingCaller(
+    ctx,
+    publishes ? [["publish", store.collection]] : [],
+    { anyEntry: true }
+  );
+  return { store, componentId, body, by };
+}
+
+/** The editor's own planner run over the definition, or its refusal thrown. */
+async function plannedEdit(
+  ctx: PluginRouteContext,
+  setup: DefinitionActionsSetup,
+  componentId: string,
+  definition: BlockDocument,
+  body: DefinitionActionRequest
+): Promise<ExposureEdit | VariantEdit> {
+  const retired = (await setup.readRetired?.(ctx)(componentId)) ?? undefined;
+  const limits = setup.limits?.();
+  const plan = planDefinitionAction(definition, body.action, {
+    definitions: registryBlockSource(),
+    ...(retired === undefined ? {} : { retired }),
+    ...(limits === undefined ? {} : { limits }),
+  });
+  if ("problem" in plan) throw refusedEdit(plan.problem, refusalDetail(plan));
+  return plan;
 }
 
 /**
@@ -349,13 +399,10 @@ export function definitionActionsRoute(setup: DefinitionActionsSetup = {}): {
         ? collection(COMPONENTS_SLUG, "update")
         : `update-${setup.store.collection}`,
     handler: async (req, ctx) => {
-      const request = definitionActionRequestOf(
-        await readJsonBody(req, "definition action")
-      );
       const answered = await runDefinitionAction(
         ctx,
         ctx.params.id ?? "",
-        request,
+        await readJsonBody(req, "definition action"),
         setup,
         "update-admitted"
       );

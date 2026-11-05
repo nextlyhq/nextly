@@ -59,6 +59,9 @@ const AUTHOR = [
   "read-layouts",
 ];
 
+/** The title marker of a page whose saves a failing side effect follows. */
+const FAILING_MARK = "mailed";
+
 /** The plugin standing in for another plugin's route, the MCP endpoint's say. */
 const COMPOSER = "@t/composer";
 
@@ -70,6 +73,19 @@ const composer = definePlugin({
   name: COMPOSER,
   version: "1.0.0",
   nextly: ">=0.0.0",
+  init(ctx) {
+    // A side effect after the commit that fails, as a mailer or a webhook
+    // might, on a page whose title carries the marker: the save stands, and
+    // the failure is reported beside it.
+    ctx.hooks.on("afterUpdate", "pages", hook => {
+      const { data, originalData } = hook as {
+        data?: { title?: unknown };
+        originalData?: { title?: unknown };
+      };
+      const title = String(data?.title ?? originalData?.title ?? "");
+      if (title.includes(FAILING_MARK)) throw new Error("the mailer is down");
+    });
+  },
   contributes: {
     routes: [
       {
@@ -465,6 +481,25 @@ describe.each(getConfiguredTestDialects())(
         ).status
       ).toBe(400);
 
+      // The route's right is asked before the request is read, by the route
+      // and the service alike: a refused caller learns nothing of the parse.
+      const unreadable = { action: { kind: "no-such-edit" } };
+      expect(
+        (
+          await call("POST", cookie, ["components", card, "definition"], {
+            body: unreadable,
+          })
+        ).status
+      ).toBe(403);
+      expect(
+        (
+          await call("POST", cookie, ["definition", card], {
+            plugin: COMPOSER,
+            body: unreadable,
+          })
+        ).status
+      ).toBe(403);
+
       // A request the route's schema refuses is refused by the service too.
       const malformed = await call("POST", cookie, ["page"], {
         plugin: COMPOSER,
@@ -474,6 +509,47 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(malformed.status).toBe(400);
+    });
+
+    it("tells a caller of the service of a side effect that failed after the commit", async () => {
+      const t = await boot();
+      const { card } = await site(t);
+      const page = await created(t, "pages", {
+        title: `Home, ${FAILING_MARK}`,
+        slug: unique("mailed"),
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [heading("lead", "Lead")],
+        },
+      });
+      const { cookie } = await holding(t, AUTHOR);
+
+      const placed = await call("POST", cookie, ["page"], {
+        plugin: COMPOSER,
+        body: {
+          page: { collection: "pages", id: page },
+          action: { kind: "place-component", componentId: card },
+        },
+      });
+
+      // The write is durable, so it is a success, with the failure beside it
+      // rather than lost: a caller told only "changed" would not know a mail
+      // never went, and one told "failed" would place the card twice.
+      expect(placed.status, JSON.stringify(placed.body)).toBe(200);
+      expect(placed.body.warnings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            severity: "failure",
+            phase: "afterUpdate",
+            collection: "pages",
+          }),
+        ])
+      );
+      expect(
+        ((await stored(t, "pages", page)).content as { nodes: BlockNode[] })
+          .nodes
+      ).toHaveLength(2);
     });
 
     it("edits a definition through the service and reports an API key as the key", async () => {

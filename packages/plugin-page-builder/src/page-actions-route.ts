@@ -266,6 +266,7 @@ export async function runPageAction(
   return {
     message: "The page was changed.",
     item: result(false, applied.item, []),
+    ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
   };
 }
 
