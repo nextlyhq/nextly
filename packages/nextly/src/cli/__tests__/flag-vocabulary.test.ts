@@ -222,7 +222,7 @@ describe("--dry-run and --apply by what a command does", () => {
     expect(worded).toEqual([]);
   });
 
-  it("refuses --dry-run together with --check wherever a command has both", () => {
+  it("refuses --dry-run together with --check wherever a command has both", async () => {
     // `--check` exits non-zero on drift and `--dry-run` exits 0 with the plan,
     // so the two together would have one silently override the other.
     const both = paths.filter(name => {
@@ -230,13 +230,29 @@ describe("--dry-run and --apply by what a command does", () => {
       return flags.includes("--dry-run") && flags.includes("--check");
     });
     expect(both.length).toBeGreaterThan(0);
-    const unrefused = both.filter(
-      name =>
-        !(
-          named(name).options.find(option => option.long === "--dry-run")
-            ?.conflictsWith ?? []
-        ).includes("check")
-    );
+    const unrefused: string[] = [];
+    for (const name of both) {
+      const run = createProgram();
+      const command = commandAt(run, name.split(" "));
+      // Its action is replaced and its output kept, so nothing it does runs.
+      command
+        .exitOverride()
+        .configureOutput({ writeErr: () => {} })
+        .action(() => {});
+      const code = await run
+        .parseAsync([
+          "node",
+          "nextly",
+          ...name.split(" "),
+          "--check",
+          "--dry-run",
+        ])
+        .then(
+          () => undefined,
+          (error: { code?: string }) => error.code
+        );
+      if (code !== "commander.conflictingOption") unrefused.push(name);
+    }
     expect(unrefused).toEqual([]);
   });
 

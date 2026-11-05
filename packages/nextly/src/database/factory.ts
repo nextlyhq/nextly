@@ -59,6 +59,14 @@ export interface AdapterConfig extends BaseAdapterConfig {
    * or DATABASE_URL protocol.
    */
   type?: AdapterType;
+
+  /**
+   * Connect without creating anything, for a run that must change nothing:
+   * SQLite opens its file read-only and makes no folder or file, PostgreSQL
+   * checks for its schema instead of creating it. MySQL creates nothing on
+   * connect either way.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -132,7 +140,10 @@ async function loadAdapter(
   try {
     if (type === "postgresql") {
       const mod = await import("@nextlyhq/adapter-postgres");
-      return mod.createPostgresAdapter(adapterConfig);
+      return mod.createPostgresAdapter({
+        ...adapterConfig,
+        readOnly: adapterConfig.readOnly === true,
+      });
     } else if (type === "mysql") {
       const mod = await import("@nextlyhq/adapter-mysql");
       return mod.createMySqlAdapter(adapterConfig);
@@ -141,6 +152,8 @@ async function loadAdapter(
       const sqliteConfig = {
         ...adapterConfig,
         url: url ?? "file:./data/nextly.db",
+        // The SQLite adapter's own spelling: no folder made, file opened read-only.
+        readonly: adapterConfig.readOnly === true,
       };
       return mod.createSqliteAdapter(sqliteConfig);
     }
@@ -271,11 +284,12 @@ export async function createAdapterFromEnv(
    * `db.postgres.schema` is the first: it comes from `nextly.config.ts`, not
    * from an env var, and the adapter is the thing that has to apply it.
    */
-  options?: { schema?: string }
+  options?: { schema?: string; readOnly?: boolean }
 ): Promise<DrizzleAdapter> {
-  return createAdapter(
-    options?.schema !== undefined ? { schema: options.schema } : undefined
-  );
+  return createAdapter({
+    ...(options?.schema !== undefined ? { schema: options.schema } : {}),
+    ...(options?.readOnly === true ? { readOnly: true } : {}),
+  });
 }
 
 /**

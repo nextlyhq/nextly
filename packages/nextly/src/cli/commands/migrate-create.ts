@@ -133,6 +133,8 @@ import {
   type CLIDatabaseAdapter,
   createCliAdapter,
   getDialectDisplayName,
+  type MissingDatabase,
+  openDryRunAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
 import {
@@ -222,27 +224,33 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
  * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
  * other run, which stays offline.
  */
-function recordModeReader(recording: boolean | undefined): {
+function recordModeReader(
+  recording: boolean | undefined,
+  dryRun: boolean | undefined
+): {
   read?: (tableName: string) => Promise<readonly string[]>;
   close: () => Promise<void>;
 } {
   if (recording !== true) return { close: () => Promise.resolve() };
-  let adapter: Promise<CLIDatabaseAdapter> | undefined;
+  // A dry run opens the database read-only; one that is not there has no
+  // translation tables, which is what a real run would find in the one it makes.
+  let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
   return {
     read: async tableName => {
-      adapter ??= createCliAdapter();
+      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      const opened = await adapter;
+      if ("missing" in opened) return [];
       const { companionColumnNames } = await import(
         "../../domains/i18n/runtime/companion-io"
       );
       return companionColumnNames(
-        (await adapter) as unknown as Parameters<
-          typeof companionColumnNames
-        >[0],
+        opened as unknown as Parameters<typeof companionColumnNames>[0],
         tableName
       );
     },
     close: async () => {
-      if (adapter) await (await adapter).disconnect();
+      const opened = adapter ? await adapter : undefined;
+      if (opened && !("missing" in opened)) await opened.disconnect();
     },
   };
 }
@@ -686,7 +694,7 @@ export async function runMigrateCreate(
 
   // `--record-snapshot` records which fields are translated as the database holds them, so it reads
   // the translations tables, connecting only once it has one to check. Every other run stays offline.
-  const live = recordModeReader(options.recordSnapshot);
+  const live = recordModeReader(options.recordSnapshot, options.dryRun);
   let result;
   try {
     result = await generateMigration({

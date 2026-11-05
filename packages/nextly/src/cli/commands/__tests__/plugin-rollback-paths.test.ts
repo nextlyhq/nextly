@@ -101,53 +101,58 @@ vi.mock("../../utils/config-loader", () => ({
   }),
 }));
 
-vi.mock("../../utils/adapter", () => ({
-  validateDatabaseEnv: () => ({
-    valid: true,
-    dialect: "sqlite",
-    databaseUrl: ":memory:",
-  }),
-  // The real adapter, with `disconnect` held back so each test can read the
-  // database after the command has finished with it, and `transaction`
-  // counted so a test can see the work went through the adapter's own
-  // single-connection transaction. The schema lock's own bookkeeping is not
-  // counted: every one of its transactions starts by locking a lock table's
-  // row (or seeding the field-group one), which no transaction of the work does.
-  createCliAdapter: async () =>
-    Object.assign(Object.create(state.adapter) as object, {
-      disconnect: async () => {},
-      transaction: (
-        work: (ctx: Record<string, unknown>) => Promise<unknown>,
-        ...rest: never[]
-      ) =>
-        state.adapter.transaction(
-          ((ctx: Record<string, unknown>) => {
-            let first = true;
-            const watched = new Proxy(ctx, {
-              get(target, prop) {
-                const value = Reflect.get(target, prop);
-                if (typeof value !== "function") return value;
-                return (...callArgs: unknown[]) => {
-                  if (first) {
-                    first = false;
-                    const lockBookkeeping =
-                      (prop === "lockRow" || prop === "insert") &&
-                      LOCK_TABLES.has(String(callArgs[0]));
-                    if (!lockBookkeeping) state.transactions += 1;
-                  }
-                  return (value as (...a: unknown[]) => unknown).apply(
-                    target,
-                    callArgs
-                  );
-                };
-              },
-            });
-            return work(watched);
-          }) as never,
-          ...rest
-        ),
+vi.mock("../../utils/adapter", () => {
+  const mocked = {
+    validateDatabaseEnv: () => ({
+      valid: true,
+      dialect: "sqlite",
+      databaseUrl: ":memory:",
     }),
-}));
+    // The real adapter, with `disconnect` held back so each test can read the
+    // database after the command has finished with it, and `transaction`
+    // counted so a test can see the work went through the adapter's own
+    // single-connection transaction. The schema lock's own bookkeeping is not
+    // counted: every one of its transactions starts by locking a lock table's
+    // row (or seeding the field-group one), which no transaction of the work does.
+    createCliAdapter: async () =>
+      Object.assign(Object.create(state.adapter) as object, {
+        disconnect: async () => {},
+        transaction: (
+          work: (ctx: Record<string, unknown>) => Promise<unknown>,
+          ...rest: never[]
+        ) =>
+          state.adapter.transaction(
+            ((ctx: Record<string, unknown>) => {
+              let first = true;
+              const watched = new Proxy(ctx, {
+                get(target, prop) {
+                  const value = Reflect.get(target, prop);
+                  if (typeof value !== "function") return value;
+                  return (...callArgs: unknown[]) => {
+                    if (first) {
+                      first = false;
+                      const lockBookkeeping =
+                        (prop === "lockRow" || prop === "insert") &&
+                        LOCK_TABLES.has(String(callArgs[0]));
+                      if (!lockBookkeeping) state.transactions += 1;
+                    }
+                    return (value as (...a: unknown[]) => unknown).apply(
+                      target,
+                      callArgs
+                    );
+                  };
+                },
+              });
+              return work(watched);
+            }) as never,
+            ...rest
+          ),
+      }),
+  };
+  // Commands open the database through this, for a real run and a dry run
+  // alike; the database here is always there.
+  return { ...mocked, openCommandAdapter: () => mocked.createCliAdapter() };
+});
 
 /** The tables the schema lock and the earlier field-group lock it holds keep their rows in. */
 const LOCK_TABLES = new Set(["nextly_schema_lock", "nextly_field_group_lock"]);

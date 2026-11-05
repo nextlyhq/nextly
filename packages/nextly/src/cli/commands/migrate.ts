@@ -142,7 +142,7 @@ import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import {
-  createCliAdapter,
+  openCommandAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -321,11 +321,18 @@ export async function runMigrate(
 
   let adapter: CLIDatabaseAdapter;
   try {
-    adapter = await createCliAdapter({
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-    });
+    const opened = await openCommandAdapter(
+      {
+        dialect: dbValidation.dialect,
+        databaseUrl: dbValidation.databaseUrl,
+        logger: options.verbose ? logger : undefined,
+        dryRun: options.dryRun,
+      },
+      logger
+    );
+    // A dry run whose database is not there has said so, and ends here.
+    if (opened === undefined) return;
+    adapter = opened;
     logger.success("Database connected");
   } catch (error) {
     exitWithError(logger, error);

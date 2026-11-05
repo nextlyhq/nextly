@@ -79,7 +79,7 @@ const posts = { slug: "posts", fields: [{ name: "title", type: "text" }] };
 /** The process exit, thrown so the test keeps running past it. */
 function stubExit() {
   return vi.spyOn(process, "exit").mockImplementation(code => {
-    throw NextlyError.internal(`process.exit(${String(code)})`);
+    throw NextlyError.internal({ logContext: { exitCode: code } });
   });
 }
 

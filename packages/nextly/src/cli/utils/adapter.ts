@@ -8,11 +8,17 @@
  * @since 1.0.0
  */
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   activePostgresSchema,
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { reportDryRun } from "../dry-run";
 import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
@@ -173,6 +179,57 @@ export interface CLIDatabaseAdapter {
 export async function createCliAdapter(
   options: CreateCliAdapterOptions = {}
 ): Promise<CLIDatabaseAdapter> {
+  const opened = await connectCliAdapter(options, false);
+  // Only a read-only open reports a missing database; this one creates it.
+  if ("missing" in opened) {
+    throw connectionFailure(options.dialect ?? "sqlite", opened.missing);
+  }
+  return opened;
+}
+
+/** What a read-only open finds where the database it names is not there. */
+export interface MissingDatabase {
+  /** The sentence a dry run reports as the real run's refusal. */
+  missing: string;
+}
+
+/**
+ * Opens the database a dry run reads, changing nothing: SQLite's file is
+ * opened read-only and neither it nor its folder is made, PostgreSQL's schema
+ * is looked for and not created, and MySQL creates nothing on connect anyway.
+ * A database that is not there comes back as `missing` instead of being made.
+ */
+export function openDryRunAdapter(
+  options: CreateCliAdapterOptions = {}
+): Promise<CLIDatabaseAdapter | MissingDatabase> {
+  return connectCliAdapter(options, true);
+}
+
+/**
+ * The database a command opens: as `createCliAdapter` opens it for a real run,
+ * read-only for a dry run. A dry run whose database is not there reports that
+ * as the real run's refusal and answers undefined, and the command then ends
+ * with exit 0 having made nothing.
+ */
+export async function openCommandAdapter(
+  options: CreateCliAdapterOptions & { dryRun?: boolean },
+  logger: Logger
+): Promise<CLIDatabaseAdapter | undefined> {
+  if (options.dryRun !== true) return createCliAdapter(options);
+  const opened = await openDryRunAdapter(options);
+  if (!("missing" in opened)) return opened;
+  reportDryRun(logger, { changes: [], refusals: [opened.missing] });
+  return undefined;
+}
+
+/** PostgreSQL's code for a schema that does not exist. */
+const INVALID_SCHEMA_NAME = "3F000";
+
+/** The one connect behind `createCliAdapter` and `openDryRunAdapter`. */
+async function connectCliAdapter(
+  options: CreateCliAdapterOptions,
+  readOnly: boolean
+): Promise<CLIDatabaseAdapter | MissingDatabase> {
   const { logger } = options;
   // A command may connect without the settings check first, as
   // `plugins install` does; it names its mode here instead (once a run).
@@ -207,6 +264,15 @@ export async function createCliAdapter(
 
   logger?.debug(`Creating ${dialect} adapter...`);
 
+  // The file the SQLite adapter would open, by its own rule; a read-only open
+  // must not make it.
+  if (readOnly && dialect === "sqlite") {
+    const file = databaseUrl.replace(/^file:/, "");
+    if (file !== ":memory:" && !existsSync(resolve(file))) {
+      return { missing: `The database does not exist: ${file}.` };
+    }
+  }
+
   const { createAdapterFromEnv } = await import("../../database/factory");
 
   const originalDialect = process.env.DB_DIALECT;
@@ -220,9 +286,23 @@ export async function createCliAdapter(
     // `public` while the application it is migrating runs in `cms` splits the
     // lock and the ledger and leaves the tables where nothing reads them.
     const schema = options.schema ?? activePostgresSchema();
-    const adapter = await createAdapterFromEnv(
-      schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
-    );
+    let adapter: DrizzleAdapter;
+    try {
+      adapter = await createAdapterFromEnv({
+        ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
+        ...(readOnly ? { readOnly: true } : {}),
+      });
+    } catch (error) {
+      if (
+        readOnly &&
+        (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
+      ) {
+        return {
+          missing: `The database does not exist: PostgreSQL has no schema "${schema}".`,
+        };
+      }
+      throw error;
+    }
     // The static system tables, resolvable by name from the moment the adapter exists. The
     // adapter writes only to a table its resolver holds, and several commands install no resolver
     // of their own before they write one: the schema lock seeds its field-group row through a

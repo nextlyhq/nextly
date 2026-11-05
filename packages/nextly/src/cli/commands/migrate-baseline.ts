@@ -76,7 +76,7 @@ import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { openCommandAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
@@ -757,11 +757,17 @@ export async function runMigrateBaseline(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  const adapter: CLIDatabaseAdapter = await createCliAdapter({
-    dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
+  const adapter = await openCommandAdapter(
+    {
+      dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+      dryRun: options.dryRun,
+    },
+    logger
+  );
+  // A dry run whose database is not there has said so, and ends here.
+  if (adapter === undefined) return;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
