@@ -108,7 +108,6 @@ import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
-  recordOverwriteEvent,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -191,7 +190,7 @@ import {
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
-import { overwriteRecordOf } from "../../versions/overwrite-record";
+import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
@@ -1508,24 +1507,17 @@ export class SingleMutationService extends BaseService {
       locale: string | undefined;
     }
   ): Promise<void> {
-    if (check.kind !== "overwrite") return;
-    await recordOverwriteEvent(
+    await recordOverwriteIfAsked(
       tx,
       { adapter: this.adapter },
+      check,
       {
         subject: { kind: "single", slug: target.slug, id: target.id },
         actor: actorForWrite(target.options.actor ?? null, target.options.user),
         personName: target.options.user?.name ?? null,
         locale: before.locale ?? null,
-        ...overwriteRecordOf(check, {
-          main: before.main?.main,
-          language: before.language,
-          // Every language a write over all of them judged, as the main row's
-          // read under the lock carries them, where none are given apart.
-          languages:
-            before.languages ?? Object.values(before.main?.languages ?? {}),
-        }),
-      }
+      },
+      before
     );
   }
 
