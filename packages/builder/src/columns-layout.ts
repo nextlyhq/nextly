@@ -18,6 +18,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { offeredTiers } from "./canvas-width";
 import type { BuilderOp } from "./ops";
 import {
   readStyleValue,
@@ -105,40 +106,6 @@ export function defaultTemplate(row: BlockNode): string | undefined {
 }
 
 /**
- * The template a row inherits at a device from the nearest wider one that
- * sets one, the base last; `undefined` at the base, or where none does.
- */
-export function inheritedTemplate(
-  row: BlockNode,
-  breakpoint: string,
-  breakpoints: BreakpointSet | undefined,
-  state: StyleState
-): string | undefined {
-  if (breakpoint === "base") return undefined;
-  const tiers = breakpoints?.viewport ?? [];
-  const width = tiers.find(tier => tier.id === breakpoint)?.maxWidth;
-  const wider = tiers
-    .filter(
-      tier =>
-        tier.maxWidth !== undefined &&
-        width !== undefined &&
-        tier.maxWidth > width
-    )
-    .sort((a, b) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0))
-    .map(tier => tier.id);
-  for (const id of [...wider, "base"]) {
-    const value = readStyleValue(row.styles, {
-      state,
-      breakpoint: id,
-      property: "gridTemplateColumns",
-      path: [],
-    });
-    if (typeof value === "string") return value;
-  }
-  return undefined;
-}
-
-/**
  * The tile a template is: `auto` for none or the block's own default,
  * `custom` for one no tile writes.
  */
@@ -218,9 +185,28 @@ function columnShape(
 }
 
 /**
+ * Whether a column's props are only what its block gives every new one.
+ *
+ * Every column is made with its definition's defaults, so a prop is the
+ * author's only where it differs from them: a key the defaults lack, or a
+ * value other than the default's.
+ */
+function propsAreDefaults(column: BlockNode): boolean {
+  const defaults = (getBlock(column.type)?.defaultProps ?? {}) as Record<
+    string,
+    unknown
+  >;
+  return Object.entries(column.props ?? {}).every(
+    ([key, value]) =>
+      key in defaults && JSON.stringify(value) === JSON.stringify(defaults[key])
+  );
+}
+
+/**
  * Whether a column is blank, so removing it loses nothing: no blocks in it,
- * and nothing an author set on it, no props, styles, classes, id or
- * attributes. A styled column with nothing in it is still the author's.
+ * and nothing an author set on it, no props but its defaults, no styles,
+ * classes, id or attributes. A styled column with nothing in it is still the
+ * author's.
  */
 function isEmpty(column: BlockNode): boolean {
   const node = column as BlockNode & {
@@ -230,7 +216,7 @@ function isEmpty(column: BlockNode): boolean {
   };
   return (
     Object.values(node.slots ?? {}).every(children => children.length === 0) &&
-    Object.keys(node.props ?? {}).length === 0 &&
+    propsAreDefaults(column) &&
     node.styles === undefined &&
     (node.classes?.length ?? 0) === 0 &&
     node.cssId === undefined &&
@@ -334,10 +320,12 @@ export interface StackTiers {
 }
 
 export function stackTiers(breakpoints: BreakpointSet | undefined): StackTiers {
+  // Chosen from the tiers the device switcher offers: of two at one width
+  // the later wins in the browser, and a stack written at the other would be
+  // overridden by it. Every stored tier is still managed, so a stack written
+  // at either is found and cleared.
   const widest = (fits: (width: number) => boolean) =>
-    (breakpoints?.viewport ?? [])
-      .filter(tier => tier.maxWidth !== undefined && fits(tier.maxWidth))
-      .sort((a, b) => (b.maxWidth ?? 0) - (a.maxWidth ?? 0))[0]?.id;
+    offeredTiers(breakpoints).find(tier => fits(tier.maxWidth))?.id;
   const tablet = widest(width => width > 640 && width <= 1024);
   const mobile = widest(width => width <= 640);
   const managed = (breakpoints?.viewport ?? [])

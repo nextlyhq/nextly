@@ -1208,8 +1208,30 @@ function ColumnsLayoutFields({
       state={surroundings.state}
       breakpoint={surroundings.breakpoint}
       breakpoints={surroundings.breakpoints}
+      inherited={reachingLayout(surroundings.provenanceOf)}
     />
   );
+}
+
+/** The catalog's leaf for a row's column template, which the trace records. */
+const TEMPLATE_LEAF: StyleLeaf | undefined = (() => {
+  const shape = STYLE_CATALOG.find(
+    entry => entry.property === "gridTemplateColumns"
+  )?.shape;
+  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
+})();
+
+/**
+ * The column template reaching the row from elsewhere (a wider device, a
+ * shared style it wears, another state), as the cascade the dots read
+ * answers it: one reading of the cascade, never a second walk of it.
+ */
+function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
+  const answer =
+    TEMPLATE_LEAF === undefined ? undefined : provenanceOf(TEMPLATE_LEAF);
+  return answer?.provenance.kind === "inherited"
+    ? answer.provenance.entry.value
+    : undefined;
 }
 
 /** Margin and padding drawn as one box, and what the section shows besides. */

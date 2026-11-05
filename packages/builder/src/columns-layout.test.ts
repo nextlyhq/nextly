@@ -13,7 +13,6 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
-  inheritedTemplate,
   layoutOf,
   planLayout,
   planStack,
@@ -50,6 +49,11 @@ beforeAll(() => {
         },
       },
       block("core/column", {}),
+      // A column as production declares one: every new one carries these.
+      {
+        ...block("acme/column", {}),
+        defaultProps: { as: "div", contained: false },
+      },
       { ...block("core/text", {}), slots: undefined },
     ] as never,
     { source: "columns-layout-test" }
@@ -289,27 +293,75 @@ describe("round one: what counts, what is kept", () => {
   });
 });
 
+describe("round two: defaults and the devices offered", () => {
+  const defaulted = (
+    id: string,
+    props: Record<string, unknown>
+  ): BlockNode => ({
+    id,
+    type: "acme/column",
+    version: 1,
+    props,
+    slots: { children: [] },
+  });
+
+  it("removes a column whose props are only its block's defaults", () => {
+    const plan = planLayout(
+      row([
+        column("a", [text]),
+        column("b", [text]),
+        defaulted("c", { as: "div", contained: false }),
+      ]),
+      "50-50",
+      at
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(
+      plan.ops
+        .filter(op => op.kind === "remove")
+        .map(op => op.kind === "remove" && op.id)
+    ).toEqual(["c"]);
+  });
+
+  it("keeps a column whose props differ from its defaults", () => {
+    const plan = planLayout(
+      row([
+        column("a", [text]),
+        column("b", [text]),
+        defaulted("c", { as: "section", contained: false }),
+      ]),
+      "50-50",
+      at
+    );
+    expect(plan.ok).toBe(false);
+  });
+
+  it("stacks at the tier the device switcher offers when two share a width", () => {
+    // The later of two equal widths wins in the browser, and is the one the
+    // switcher offers: a stack written at the earlier would be overridden.
+    const devices: BreakpointSet = {
+      viewport: [
+        { id: "tab-a", label: "Tablet A", maxWidth: 1024 },
+        { id: "tab-b", label: "Tablet B", maxWidth: 1024 },
+        { id: "sm", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    };
+    const tiers = stackTiers(devices);
+    expect(tiers.tablet).toBe("tab-b");
+    // Both stay managed, so a stack written at either is still found.
+    expect(tiers.managed?.map(tier => tier.id)).toEqual(
+      expect.arrayContaining(["tab-a", "tab-b", "sm"])
+    );
+  });
+});
+
 describe("an inherited layout", () => {
   const wide = row([column("a"), column("b")], {
     base: { base: { gridTemplateColumns: "1fr 2fr" } },
   });
   const mobile = { state: "base", breakpoint: "sm" } as const;
-
-  it("is read from the nearest wider device that sets one", () => {
-    expect(inheritedTemplate(wide, "sm", BREAKPOINTS, "base")).toBe("1fr 2fr");
-    const tablet = row([column("a"), column("b")], {
-      base: {
-        base: { gridTemplateColumns: "1fr 2fr" },
-        md: { gridTemplateColumns: "1fr 1fr" },
-      },
-    });
-    expect(inheritedTemplate(tablet, "sm", BREAKPOINTS, "base")).toBe(
-      "1fr 1fr"
-    );
-    expect(
-      inheritedTemplate(wide, "base", BREAKPOINTS, "base")
-    ).toBeUndefined();
-  });
 
   it("is overridden by Auto with the block's own template, not by clearing nothing", () => {
     const plan = planLayout(wide, "auto", mobile, "1fr 2fr");

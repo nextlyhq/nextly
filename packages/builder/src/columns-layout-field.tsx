@@ -22,7 +22,6 @@ import * as React from "react";
 import {
   COLUMNS_LAYOUTS,
   defaultTemplate,
-  inheritedTemplate,
   layoutOf,
   planLayout,
   planStack,
@@ -253,12 +252,15 @@ export function ColumnsLayoutControl({
   state,
   breakpoint,
   breakpoints,
+  inherited: reaching,
 }: {
   editor: EditorState;
   nodeId: string;
   state: StyleState;
   breakpoint: BreakpointId;
   breakpoints: BreakpointSet | undefined;
+  /** The template reaching the row from elsewhere, as the cascade answers it. */
+  inherited?: string | undefined;
 }): React.JSX.Element | null {
   const labelId = React.useId();
   const stackId = React.useId();
@@ -273,10 +275,8 @@ export function ColumnsLayoutControl({
     property: "gridTemplateColumns",
     path: [],
   });
-  const inherited =
-    stored === undefined
-      ? inheritedTemplate(row, breakpoint, breakpoints, state)
-      : undefined;
+  // Only while nothing is set here: a value set here is the one in force.
+  const inherited = stored === undefined ? reaching : undefined;
   const current = layoutOf(stored ?? inherited, defaultTemplate(row));
   const tiers = stackTiers(breakpoints);
   const stack = stackOf(row, tiers, state);

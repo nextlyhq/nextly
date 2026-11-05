@@ -66,6 +66,15 @@ function register(): void {
       block("core/columns", {
         supports: { layout: true },
         slots: { children: { allow: ["core/column"] } },
+        baseStyles: {
+          base: {
+            base: {
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
+            },
+          },
+        },
       }),
       block("core/column", { slots: { children: {} } }),
       block("core/text", { props: { text: { type: "text" } } }),
@@ -88,7 +97,14 @@ const words: BlockNode = {
   props: { text: "Words" },
 };
 
-function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
+function mount(
+  columns: BlockNode[],
+  styles?: BlockNode["styles"],
+  around: {
+    classes?: string[];
+    panel?: Partial<React.ComponentProps<typeof StyleInspectorPanel>>;
+  } = {}
+) {
   register();
   const document = {
     formatVersion: 1,
@@ -101,6 +117,7 @@ function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
         props: {},
         slots: { children: columns },
         ...(styles === undefined ? {} : { styles }),
+        ...(around.classes === undefined ? {} : { classes: around.classes }),
       },
     ],
   } as unknown as BlockDocument;
@@ -122,7 +139,19 @@ function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
     applyAll: ReturnType<typeof vi.fn>;
     apply: ReturnType<typeof vi.fn>;
   };
-  render(<StyleInspectorPanel editor={editor} breakpoints={BREAKPOINTS} />);
+  // A cascade given is compiled over this document's own tree.
+  const cascade =
+    around.panel?.cascade === undefined
+      ? {}
+      : { cascade: { ...around.panel.cascade, nodes: document.nodes } };
+  render(
+    <StyleInspectorPanel
+      editor={editor}
+      breakpoints={BREAKPOINTS}
+      {...around.panel}
+      {...cascade}
+    />
+  );
   return editor;
 }
 
@@ -250,5 +279,88 @@ describe("a Columns row's layout", () => {
       />
     );
     expect(screen.queryByRole("radiogroup", { name: "Widths" })).toBeNull();
+  });
+});
+
+describe("a layout reaching the row from elsewhere", () => {
+  /** The row wearing a shared style whose base layout is `template`. */
+  function mountWearing(template: string) {
+    const card = {
+      origin: { kind: "class", id: "cls-1", slug: "card" },
+      property: "grid-template-columns",
+      value: template,
+      state: "base",
+      breakpoint: BASE_BREAKPOINT,
+    };
+    return mount([column("a"), column("b")], undefined, {
+      classes: ["cls-1"],
+      panel: {
+        target: {
+          kind: "block",
+          worn: [
+            {
+              id: "cls-1",
+              name: "Card",
+              styles: {
+                base: { [BASE_BREAKPOINT]: { gridTemplateColumns: template } },
+              },
+            } as never,
+          ],
+        },
+        liveBreakpoints: [BASE_BREAKPOINT] as never,
+        cascade: { nodes: [], entries: [card] } as never,
+      },
+    });
+  }
+
+  it("shows a shared style's layout as the one in force", () => {
+    mountWearing("1fr 1fr");
+    expect(
+      screen
+        .getByRole("radio", { name: "50 / 50" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("restores the block's own wrapping columns over it with Auto", () => {
+    // Clearing the row writes nothing while the style still sets a layout,
+    // so Auto writes the block's own template at the row instead.
+    const editor = mountWearing("1fr 1fr");
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"gridTemplateColumns":"repeat(auto-fit'
+    );
+  });
+
+  it("shows a wider device's layout at a narrower one, from the cascade", () => {
+    // Set at the base only; edited at Mobile, where every wider query matches.
+    mount(
+      [column("a"), column("b")],
+      { base: { [BASE_BREAKPOINT]: { gridTemplateColumns: "1fr 1fr" } } },
+      {
+        panel: {
+          breakpoint: "sm" as never,
+          liveBreakpoints: [BASE_BREAKPOINT, "md", "sm"] as never,
+          cascade: {
+            nodes: [],
+            entries: [
+              {
+                origin: { kind: "node", id: "row" },
+                property: "grid-template-columns",
+                value: "1fr 1fr",
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+          } as never,
+        },
+      }
+    );
+    expect(
+      screen
+        .getByRole("radio", { name: "50 / 50" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
   });
 });
