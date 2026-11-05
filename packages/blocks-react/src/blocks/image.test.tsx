@@ -174,3 +174,45 @@ describe("core/image as content", () => {
     expect(named.querySelector("a")?.hasAttribute("aria-label")).toBe(false);
   });
 });
+
+describe("core/image's link inside a figure", () => {
+  it("passes the fit and focal point on to the picture it holds", async () => {
+    // figure > a > img: neither property is inherited, so the link between
+    // the figure and the picture has to take them for the picture to. Drawn,
+    // so the link part is on the very element that stands between the two.
+    const container = await drawWith({ href: "/about", caption: "Our team" });
+    const between = container.querySelector("figure > a");
+    expect(between?.classList.contains("part-relay")).toBe(true);
+    expect(between?.querySelector(":scope > img")).not.toBeNull();
+    // And that part asks for both from the figure above it.
+    const link = (
+      image.parts as Record<string, { baseStyles?: unknown }> | undefined
+    )?.relay?.baseStyles as { base?: { base?: Record<string, unknown> } };
+    expect(link?.base?.base).toMatchObject({
+      objectFit: "inherit",
+      objectPosition: "inherit",
+    });
+  });
+});
+
+describe("core/image's link with no caption", () => {
+  it("takes no fit or focal point from above the block", async () => {
+    // The link is the root here and holds the node's own values; asked to
+    // inherit, an unset fit would come from whatever ancestor sets one.
+    const container = await drawWith({ href: "/about" });
+    const root = container.querySelector("a");
+    const parts = (image.parts ?? {}) as Record<
+      string,
+      { baseStyles?: { base?: { base?: Record<string, unknown> } } }
+    >;
+    const worn = [...(root?.classList ?? [])]
+      .filter(name => name.startsWith("part-"))
+      .map(name => name.slice("part-".length));
+    expect(worn.length).toBeGreaterThan(0);
+    for (const part of worn) {
+      const declared = parts[part]?.baseStyles?.base?.base ?? {};
+      expect(declared).not.toHaveProperty("objectFit");
+      expect(declared).not.toHaveProperty("objectPosition");
+    }
+  });
+});
