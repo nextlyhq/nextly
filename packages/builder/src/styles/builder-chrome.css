@@ -2783,7 +2783,8 @@
  * background in dark, under 3:1.
  */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
-.nx-style-inspector__toggle > button[aria-checked="true"] {
+.nx-style-inspector__toggle > button[aria-checked="true"],
+.nx-segment__option[aria-checked="true"] {
   background: var(--nx-accent);
   color: var(--nx-foreground);
   font-weight: 600;
@@ -2791,7 +2792,8 @@
 
 /* A step lighter in dark, so its fill is told from the panel's black too. */
 .dark .nx-style-inspector__toggle > button[aria-pressed="true"],
-.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
+.dark .nx-style-inspector__toggle > button[aria-checked="true"],
+.dark .nx-segment__option[aria-checked="true"] {
   background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
@@ -8697,11 +8699,6 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-segment__option:last-child {
   border-inline-end: 0;
-}
-
-.nx-segment__option[aria-checked="true"] {
-  background: var(--nx-muted);
-  font-weight: 600;
 }
 
 .nx-segment__option:focus-visible {
