@@ -17,6 +17,7 @@
 import {
   DEFAULT_LIMITS,
   isPlainRecord,
+  MAX_SCANNED_KEYS,
   selectNodes,
   STYLE_STATES,
   type DocumentLimits,
@@ -57,14 +58,71 @@ function entryFor(uses: BreakpointUses, id: string): BreakpointUse {
   return use;
 }
 
+/** The breakpoints asked about: some, by id, or every one a value holds. */
+export type AskedBreakpoints = ReadonlySet<string> | "every";
+
 /**
- * Count a style envelope's values under each of `ids`, in the states the
- * compiler writes: anything under a state it does not know is written at no
- * breakpoint, so no breakpoint's removal drops it.
+ * The keys of a stored record whose values `holds` accepts, read no further
+ * than `bound`: as far as the engine reads the same record, so a count here
+ * covers exactly the keys the engine acts on. Read with an early break rather
+ * than `Object.keys`, which builds every key before anything can stop it.
+ */
+function* keysHolding(
+  record: Record<string, unknown>,
+  holds: (value: unknown) => boolean,
+  bound: number
+): Generator<string> {
+  let read = 0;
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    read += 1;
+    if (read > bound) return;
+    if (holds(record[key])) yield key;
+  }
+}
+
+/** The keys of `record` asked about whose values `holds` accepts. */
+function* askedKeys(
+  record: Record<string, unknown>,
+  asked: AskedBreakpoints,
+  holds: (value: unknown) => boolean,
+  bound: number
+): Generator<string> {
+  if (asked === "every") {
+    yield* keysHolding(record, holds, bound);
+    return;
+  }
+  for (const id of asked) {
+    if (Object.hasOwn(record, id) && holds(record[id])) yield id;
+  }
+}
+
+/** How many style values one breakpoint's entry holds; none for an empty one. */
+function valueCount(values: unknown): number {
+  if (!isPlainRecord(values)) return 0;
+  return [...keysHolding(values, () => true, MAX_SCANNED_KEYS)].length;
+}
+
+/** Whether a breakpoint's entry holds a value the compiler would emit. */
+function holdsValues(values: unknown): boolean {
+  return valueCount(values) > 0;
+}
+
+/** Whether a stored per-device setting is one: anything else applies nothing. */
+function isSetting(value: unknown): boolean {
+  return typeof value === "boolean";
+}
+
+/**
+ * Count a style envelope's values under the breakpoints asked about, in the
+ * states the compiler writes: anything under a state it does not know is
+ * written at no breakpoint, so no breakpoint's removal drops it. A state's map
+ * is read no further than the compiler reads one: a map wider than that is
+ * corrupt, and the keys past it are never read.
  */
 function countEnvelope(
   styles: unknown,
-  ids: ReadonlySet<string>,
+  asked: AskedBreakpoints,
   uses: BreakpointUses,
   locked: boolean
 ): void {
@@ -72,34 +130,36 @@ function countEnvelope(
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const id of ids) {
-      const values = byBreakpoint[id];
-      if (!isPlainRecord(values)) continue;
-      const count = Object.keys(values).length;
-      if (count === 0) continue;
+    for (const id of askedKeys(
+      byBreakpoint,
+      asked,
+      holdsValues,
+      MAX_SCANNED_KEYS
+    )) {
       const use = entryFor(uses, id);
-      use.styles += count;
+      use.styles += valueCount(byBreakpoint[id]);
       use.locked ||= locked;
     }
   }
 }
 
 /**
- * What a stored blocks value keeps under each of `ids`: each block's styles
- * and own visibility, and the page's own styles.
+ * What a stored blocks value keeps under the breakpoints asked about: each
+ * block's styles and own visibility, and the page's own styles.
  *
  * The blocks are the ones the compiler reads, by the engine's own walk within
  * `limits`, slot content included. A block inside a locked one is held by
- * that lock too. An unreadable value keeps nothing.
+ * that lock too. Visibility is read whole, as validation and the compiler
+ * both read it. An unreadable value keeps nothing.
  */
 export function breakpointUsesIn(
   stored: unknown,
-  ids: ReadonlySet<string>,
+  asked: AskedBreakpoints,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): ValueUses {
   const uses: BreakpointUses = new Map();
   const document = readStoredJson(stored);
-  if (ids.size === 0 || !isPlainRecord(document)) {
+  if ((asked !== "every" && asked.size === 0) || !isPlainRecord(document)) {
     return { uses, complete: true };
   }
   const selection = selectNodes(document, limits);
@@ -113,20 +173,21 @@ export function breakpointUsesIn(
     };
     const locked = read.locked === true || (lockedAt[parent] ?? false);
     lockedAt[index] = locked;
-    countEnvelope(read.styles, ids, uses, locked);
+    countEnvelope(read.styles, asked, uses, locked);
     const devices = isPlainRecord(read.visibility)
       ? read.visibility.devices
       : undefined;
     if (!isPlainRecord(devices)) return;
-    for (const id of ids) {
-      if (typeof devices[id] !== "boolean") continue;
+    for (const id of askedKeys(devices, asked, isSetting, Infinity)) {
       const use = entryFor(uses, id);
       use.hides += 1;
       use.locked ||= locked;
     }
   });
   const settings = document.settings;
-  if (isPlainRecord(settings)) countEnvelope(settings.styles, ids, uses, false);
+  if (isPlainRecord(settings)) {
+    countEnvelope(settings.styles, asked, uses, false);
+  }
   return { uses, complete: selection.stopped === undefined };
 }
 
