@@ -62,12 +62,15 @@ export function IconInput<TFieldValues extends FieldValues = FieldValues>({
 }: IconInputProps<TFieldValues>): JSX.Element {
   const elementId = useFieldElementId(name);
   const {
-    field: { value, onChange, onBlur },
+    field: { value, onChange, onBlur, ref },
     fieldState: { invalid },
   } = useController({ name, control });
 
   return (
     <IconField
+      // The picker button, so React Hook Form focuses it on a rejected submit
+      // and on `setFocus`, as it focuses a text input.
+      ref={ref}
       id={elementId}
       value={typeof value === "string" && value !== "" ? value : null}
       // Cleared to "", the empty value every text-like field holds, so a
