@@ -18,7 +18,6 @@
  * @module breakpoint-removal/service
  * @experimental
  */
-import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
@@ -34,7 +33,11 @@ import {
 } from "../host-rewrite/site";
 import type { SiteStyleData } from "../site-style";
 
-import { removalRunStore, type BreakpointRun } from "./run-store";
+import {
+  removalRunStore,
+  type BreakpointRun,
+  type HoldingRun,
+} from "./run-store";
 import { removalOf, stripBreakpointsStep, type Removal } from "./strip";
 
 /** The name the service is contributed under. */
@@ -69,9 +72,16 @@ export interface BreakpointRemovalService {
   abandon(runId: string): Promise<void>;
   /**
    * Strip the site for a removal, resuming where it stopped, within `budget`.
-   * A removal that is done answers finished, with nothing done.
+   * A removal that is done is opened again for the documents it left, which
+   * may since have been resolved (a draft published or discarded), and
+   * answers finished, with nothing done, when it left none.
    */
   walk(runId: string, budget: WalkBudget): Promise<RewriteReport>;
+  /**
+   * The removals still holding the breakpoints they removed: the open one,
+   * and each done one with documents it left.
+   */
+  holding(): Promise<HoldingRun[]>;
   /**
    * The open removal as a lock judges a write against it, or `null` when none
    * is open. Throws when the runs cannot be read: a caller accepting a write
@@ -86,7 +96,6 @@ export interface RemovalInstall {
   readonly dialect: Parameters<typeof removalRunStore>[1];
   /** The site, as every walk of its documents reads it. */
   readonly site: DocumentSite & Pick<RewriteSite, "defaultLocale">;
-  readonly limits: () => DocumentLimits;
   /** The configured site style, which a stored `null` breakpoint set gives back. */
   readonly defaults: SiteStyleData | undefined;
 }
@@ -111,6 +120,7 @@ export function breakpointRemovalService(
     begin: (removedIds, before, startedBy) =>
       runs().open(removedIds, before, startedBy),
     abandon: runId => runs().abandon(runId),
+    holding: () => runs().holding(),
     openRemoval: async () => {
       const run = await runs().openRun();
       return run === null ? null : removalOf(run, install().defaults);
@@ -123,9 +133,11 @@ export function breakpointRemovalService(
           logContext: { reason: "breakpoint-removal-no-run", runId },
         });
       }
-      // A done run is closed: walking it again could only find values a
-      // breakpoint added since has put back, which are the site's own.
-      if (!run.open) return NOTHING_LEFT;
+      // A done run is walked again only for the documents it left, which
+      // keep its ids from being defined again until they are stripped; with
+      // none left it is closed, and values a breakpoint added since put back
+      // are the site's own.
+      if (!run.open && !(await store.reopen(runId))) return NOTHING_LEFT;
       const installed = install();
       return rewriteHosts(
         {
@@ -137,10 +149,7 @@ export function breakpointRemovalService(
         },
         {
           runId,
-          step: stripBreakpointsStep(
-            removalOf(run, installed.defaults),
-            installed.limits()
-          ),
+          step: stripBreakpointsStep(removalOf(run, installed.defaults)),
           ...(budget.maxDocuments === undefined
             ? {}
             : { maxDocuments: budget.maxDocuments }),

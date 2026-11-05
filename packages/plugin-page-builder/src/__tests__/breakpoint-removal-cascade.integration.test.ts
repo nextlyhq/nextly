@@ -351,6 +351,39 @@ describe.each(getConfiguredTestDialects())(
       throw new Error("the walk did not finish");
     }
 
+    /**
+     * Write Mobile's values back into a page inside a transaction, which the
+     * save check skips, as a write validated before a removal and committed
+     * after it would.
+     */
+    async function writeBackInATransaction(
+      t: TestNextly,
+      id: string
+    ): Promise<void> {
+      const service = t.getService("collectionService") as unknown as {
+        updateMany: (
+          slug: string,
+          entries: Array<{ id: string; data: Record<string, unknown> }>,
+          ctx: Record<string, unknown>
+        ) => Promise<{ successful: number; failed: number }>;
+      };
+      const result = await service.updateMany(
+        "pages",
+        [
+          {
+            id,
+            data: { content: doc("page", [heading("a", styledAtMobile)]) },
+          },
+        ],
+        { overrideAccess: true }
+      );
+      expect(result.successful).toBe(1);
+    }
+
+    /** Carry a removal on through its route, as the person managing the site. */
+    const carryOn = (cookie: string, runId: string) =>
+      post(cookie, ["site", "breakpoints", "removal"], { runId });
+
     /** The removal's audit rows. */
     async function auditRows(
       t: TestNextly
@@ -642,7 +675,7 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("strips a page a transaction's write put the removed values back into, in the final walk", async () => {
+    it("strips a page a write with no hooks put the removed values back into, in the final walk", async () => {
       const { t, svc } = await boot();
       const id = await create(t, "pages", {
         title: "Home",
@@ -666,37 +699,163 @@ describe.each(getConfiguredTestDialects())(
         heading("a", styledAfter)
       );
 
-      // A write inside a transaction, which the save check skips: it brings
-      // the removed values back after the walk passed the page.
-      const service = t.getService("collectionService") as unknown as {
-        updateMany: (
-          slug: string,
-          entries: Array<{ id: string; data: Record<string, unknown> }>,
-          ctx: Record<string, unknown>
-        ) => Promise<{ successful: number; failed: number }>;
-      };
-      const result = await service.updateMany(
-        "pages",
-        [
-          {
-            id,
-            data: { content: doc("page", [heading("a", styledAtMobile)]) },
-          },
-        ],
-        { overrideAccess: true }
-      );
-      expect(result.successful).toBe(1);
+      // A write whose hooks did not run (as a bulk import's may not) brings
+      // the removed values back after the walk passed the page: nothing
+      // re-queues it, and its progress row still says it was stripped.
+      await plant(t, id, doc("page", [heading("a", styledAtMobile)]));
       // CONTROL: the page holds them again.
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
         heading("a", styledAtMobile)
       );
 
-      await walkToTheEnd(svc, run.id);
+      const reports = await walkToTheEnd(svc, run.id);
 
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
         heading("a", styledAfter)
       );
+      expect(
+        reports.flatMap(report => report.caughtByFinalWalk)
+      ).toContainEqual(expect.objectContaining({ slug: "pages", id }));
       expect(await svc.openRun()).toBeNull();
+    });
+
+    it("keeps a breakpoint a left draft still holds from being added again until it is carried on", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Pending",
+        slug: "pending",
+        status: "published",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      // An edit saved without publishing: a pending draft over the live row.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+        },
+        overrideAccess: true,
+      });
+      const saved = await save(cookie, [TABLET]);
+      expect(saved.body.item).toMatchObject({
+        removal: { finished: true, left: 1 },
+      });
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      // CONTROL: done, with the live row under the draft still holding Mobile.
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+
+      const refused = await save(cookie, [TABLET, MOBILE]);
+      expect(refused.status).toBe(409);
+      expect(JSON.stringify(refused.body)).toContain(
+        "Some pages still hold styles for that breakpoint (a draft is waiting to be published). Publish or discard those drafts, then add it again."
+      );
+
+      // The author publishes the draft, which the removal had stripped.
+      const draft = await nodesOf(t, "pages", id, true);
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { content: doc("page", draft), status: "published" },
+        overrideAccess: true,
+      });
+      const carried = await carryOn(cookie, runId);
+      expect(carried.status).toBe(200);
+      expect(carried.body.item).toMatchObject({ finished: true, left: 0 });
+
+      const readded = await save(cookie, [TABLET, MOBILE]);
+      expect(readded.status).toBe(200);
+      // Defined again, Mobile starts empty on the live row.
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+    });
+
+    it("opens a done removal again for a write that brings its values back, and strips it when carried on", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+
+      await writeBackInATransaction(t, id);
+      // CONTROL: the page holds Mobile's values again.
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+      // The done run is open again, back on its converting walk.
+      expect(await svc.runById(runId)).toMatchObject({
+        open: true,
+        phase: "converting",
+      });
+
+      const carried = await carryOn(cookie, runId);
+      expect(carried.body.item).toMatchObject({ finished: true });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+    });
+
+    it("leaves a done removal closed for values under a breakpoint the site defines again", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a")]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+
+      // Styles at Mobile, which the site defines again: the site's own.
+      await writeBackInATransaction(t, id);
+
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      expect(await svc.holding()).toEqual([]);
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+    });
+
+    it("records a write brought back while another removal is open as left, which keeps the breakpoint out", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      const other = await svc.begin(["wide"], null, "user:someone");
+
+      await writeBackInATransaction(t, id);
+
+      // The open slot is taken, so the done run records the page as left.
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      await svc.abandon(other.id);
+      const refused = await save(cookie, [TABLET, MOBILE]);
+      expect(refused.status).toBe(409);
+      expect(JSON.stringify(refused.body)).toContain(
+        "Some content still holds styles for that breakpoint"
+      );
+
+      const carried = await carryOn(cookie, runId);
+      expect(carried.body.item).toMatchObject({ finished: true, left: 0 });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
     });
   }
 );

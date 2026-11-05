@@ -23,14 +23,13 @@
  */
 import {
   carryDeviceVisibility,
-  DEFAULT_LIMITS,
+  documentRefusal,
   isPlainRecord,
   mapForest,
   STYLE_STATES,
   type BlockDocument,
   type BlockNode,
   type BreakpointSet,
-  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 
 import type { HostStep } from "../host-rewrite/contract";
@@ -43,7 +42,6 @@ import { checkStoredBreakpoints } from "../site-style-record";
 import { readStoredJson } from "../stored-json";
 
 import type { BreakpointRun } from "./run-store";
-import { breakpointUsesIn } from "./usage";
 
 /** One removal, as stripping needs it. */
 export interface Removal {
@@ -220,26 +218,66 @@ function isDocument(value: unknown): value is BlockDocument {
   return isPlainRecord(value) && Array.isArray(value.nodes);
 }
 
-/** Why a value the strip cannot read whole is left as it is. */
+/**
+ * The removed ids a stored value keeps anything under, read structurally: any
+ * own key equal to one, under a block's styles in a state the engine knows,
+ * its `visibility.devices`, or the page's own `settings.styles`, whatever the
+ * value there and wherever the block sits. Not the removal's count, which
+ * counts only what the compiler would write: a value it skips is still one a
+ * breakpoint defined again would find, so it is stripped too.
+ */
+export function removedIdsIn(
+  stored: unknown,
+  ids: ReadonlySet<string>
+): ReadonlySet<string> {
+  const found = new Set<string>();
+  const document = readStoredJson(stored);
+  if (ids.size === 0 || !isDocument(document)) return found;
+  const envelope = (styles: unknown) => {
+    if (!isPlainRecord(styles)) return;
+    for (const state of STYLE_STATES) {
+      const byBreakpoint = styles[state];
+      if (!isPlainRecord(byBreakpoint)) continue;
+      for (const id of ids) if (Object.hasOwn(byBreakpoint, id)) found.add(id);
+    }
+  };
+  // The tree as the strip rebuilds it, so the two read the same blocks.
+  mapForest(document.nodes, node => {
+    envelope(node.styles);
+    const visibility: unknown = node.visibility;
+    if (isPlainRecord(visibility) && isPlainRecord(visibility.devices)) {
+      const devices = visibility.devices;
+      for (const id of ids) if (Object.hasOwn(devices, id)) found.add(id);
+    }
+    return node;
+  });
+  const settings: unknown = document.settings;
+  if (isPlainRecord(settings)) envelope(settings.styles);
+  return found;
+}
+
+/** Why a value this version cannot interpret is left as it is. */
 const UNREADABLE_VALUE =
-  "This content could not be read to the end, so the styles under the removed breakpoints were left in it. Open it in the editor and save it again.";
+  "This content was saved by a different version of the page builder, so the styles under the removed breakpoints were left in it. Open it in the editor and save it again.";
 
 /**
  * The step a removal's walk rewrites every host with: the stored value
  * stripped, `unchanged` when it keeps nothing under the removed breakpoints,
- * which makes it idempotent. A value that cannot be read to the end, or that
- * this version cannot interpret, is refused and left, never stripped in part.
+ * which makes it idempotent. Decided structurally, every block and every value
+ * under a removed id included, so nothing is left under one. A value this
+ * version cannot interpret (an unknown format or kind, a broken envelope) is
+ * refused and left when it keeps anything there, never stripped in part.
  */
-export function stripBreakpointsStep(
-  removal: Removal,
-  limits: DocumentLimits = DEFAULT_LIMITS
-): HostStep {
+export function stripBreakpointsStep(removal: Removal): HostStep {
   return doc => {
     const document = readStoredJson(doc);
-    const { uses, complete } = breakpointUsesIn(document, removal.ids, limits);
-    if (!complete) return { kind: "refuse", reason: UNREADABLE_VALUE };
-    // A value holding uses was read as a document by the engine's own walk.
-    if (uses.size === 0 || !isDocument(document)) return { kind: "unchanged" };
+    if (!isDocument(document)) return { kind: "unchanged" };
+    if (removedIdsIn(document, removal.ids).size === 0) {
+      return { kind: "unchanged" };
+    }
+    if (documentRefusal(document) !== undefined) {
+      return { kind: "refuse", reason: UNREADABLE_VALUE };
+    }
     const stripped = stripDocument(document, removal);
     return stripped === document
       ? { kind: "unchanged" }

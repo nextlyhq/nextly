@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   removalOf,
+  removedIdsIn,
   stripBreakpointsStep,
   stripClasses,
   stripDocument,
@@ -251,6 +252,45 @@ describe("stripBreakpointsStep", () => {
       FORM
     );
     expect(outcome).toEqual({ kind: "rewritten", value: page([heading("a")]) });
+  });
+
+  it("strips a value the compiler would not write, and every block sharing an id", async () => {
+    const outcome = await step(
+      page([
+        // Nothing the compiler writes: an empty entry, and one not a record.
+        heading("a", {
+          styles: { base: { mobile: {} }, hover: { mobile: "red" } },
+        }),
+        heading("twin", { styles: { base: { mobile: { color: "#222" } } } }),
+        heading("twin", { visibility: { devices: { mobile: false } } }),
+      ]),
+      FORM
+    );
+    expect(outcome).toEqual({
+      kind: "rewritten",
+      // The hide is carried to Small, the next narrower device.
+      value: page([
+        heading("a"),
+        heading("twin"),
+        heading("twin", { visibility: { devices: { small: false } } }),
+      ]),
+    });
+    const value = outcome.kind === "rewritten" ? outcome.value : undefined;
+    expect(removedIdsIn(value, removingMobile.ids).size).toBe(0);
+
+    // A document holding nothing else under Mobile is rewritten on its own.
+    const onlyInvalid = await step(
+      page([
+        heading("a", {
+          styles: { base: { mobile: {} }, hover: { mobile: "red" } },
+        }),
+      ]),
+      FORM
+    );
+    expect(onlyInvalid).toEqual({
+      kind: "rewritten",
+      value: page([heading("a")]),
+    });
   });
 
   it("answers unchanged for its own output", async () => {

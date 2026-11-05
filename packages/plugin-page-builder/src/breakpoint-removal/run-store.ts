@@ -14,14 +14,15 @@
  * @experimental
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { and, eq, isNotNull } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray, isNotNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
+  type PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
 import type { RunPhase } from "../host-rewrite/fence";
-import { markPending } from "../host-rewrite/progress";
+import { leftToPending, markLeft, markPending } from "../host-rewrite/progress";
 import type { RunStore, WalkedRun } from "../host-rewrite/rewrite";
 import { breakpointRemovals, componentDeletionHosts } from "../schema/tables";
 
@@ -70,7 +71,39 @@ export interface RemovalRunStore extends RunStore {
   requeue(runId: string, documentKey: string): Promise<void>;
   /** Remove a run that wrote nothing, with its progress, closing it. */
   abandon(runId: string): Promise<void>;
+  /** Every run, open or done: the record of every removal. */
+  runs(): Promise<BreakpointRun[]>;
+  /**
+   * The runs still holding the breakpoints they removed: the open one, and
+   * each done one with documents it left, with why it left them. While a run
+   * holds an id, some document may still keep values under it.
+   */
+  holding(): Promise<HoldingRun[]>;
+  /**
+   * Open a done run again to retry the documents it left: they are marked
+   * pending and the run goes back to its converting walk, in one transaction.
+   * Answers false, changing nothing, when it left none; refused with a
+   * conflict while another run is open.
+   */
+  reopen(runId: string): Promise<boolean>;
+  /**
+   * A document written after its run was done holds that run's removed
+   * values again: open the run for it (pending, converting) when no other
+   * run is open, or else record it as left on the run, which keeps the run
+   * holding its ids until it is carried on.
+   */
+  reopenFor(runId: string, documentKey: string): Promise<"reopened" | "left">;
 }
+
+/** A run that still holds what it removed, and why. */
+export interface HoldingRun {
+  readonly run: BreakpointRun;
+  /** Why each document it left was left; empty for the open run. */
+  readonly leftReasons: readonly string[];
+}
+
+/** Why a document written back with removed values waits on a done run. */
+const WRITTEN_BACK = "written-back";
 
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
@@ -138,6 +171,33 @@ function both(
   return and(first, second) ?? first;
 }
 
+/** The table operations a run is moved through: `ctx.db`, or a transaction. */
+type RunHandle = Pick<PluginTransaction, "table" | "update">;
+
+/**
+ * Put a done run back on its converting walk, holding the one open slot
+ * again: a unique violation when another run holds it.
+ */
+async function reopenDone(handle: RunHandle, runId: string): Promise<void> {
+  const t = handle.table(breakpointRemovals);
+  await handle
+    .update(breakpointRemovals, {
+      phase: "converting",
+      cursor: null,
+      openKey: OPEN,
+    })
+    .where(both(eq(t.id, runId), eq(t.phase, "done")));
+}
+
+/** The refusal for a run opened while another is open. */
+function anotherRunning(): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: ANOTHER_REMOVAL_RUNNING,
+    logContext: { reason: "breakpoint-removal-already-open" },
+  });
+}
+
 /** The removal run store over the plugin's own `ctx.db`. */
 export function removalRunStore(
   db: Pick<
@@ -164,11 +224,7 @@ export function removalRunStore(
       } catch (error) {
         // The unique key refused a second open run.
         if (!isUniqueViolation(dialect, error)) throw error;
-        throw NextlyError.conflict({
-          reason: "state",
-          message: ANOTHER_REMOVAL_RUNNING,
-          logContext: { reason: "breakpoint-removal-already-open" },
-        });
+        throw anotherRunning();
       }
     },
     runById: async runId => {
@@ -223,5 +279,70 @@ export function removalRunStore(
         const t = tx.table(breakpointRemovals);
         await tx.delete(breakpointRemovals).where(eq(t.id, runId));
       }),
+    runs,
+    holding: async () => {
+      const all = await runs();
+      const reasons = await leftReasonsOf(all.filter(run => !run.open));
+      return all
+        .filter(run => run.open || reasons.has(run.id))
+        .map(run => ({ run, leftReasons: reasons.get(run.id) ?? [] }));
+    },
+    reopen: async runId => {
+      try {
+        return await db.transaction(async tx => {
+          if (!(await leftToPending(tx, runId))) return false;
+          await reopenDone(tx, runId);
+          return true;
+        });
+      } catch (error) {
+        if (!isUniqueViolation(dialect, error)) throw error;
+        throw anotherRunning();
+      }
+    },
+    reopenFor: async (runId, documentKey) => {
+      try {
+        await db.transaction(async tx => {
+          await reopenDone(tx, runId);
+          await markPending(tx, runId, documentKey);
+        });
+        return "reopened";
+      } catch (error) {
+        // Another run holds the open slot: the document waits on this run,
+        // recorded as left, until it is carried on.
+        if (!isUniqueViolation(dialect, error)) throw error;
+        await markLeft(db, runId, documentKey, WRITTEN_BACK);
+        return "left";
+      }
+    },
   };
+
+  /** Every run. One row per removal ever saved, so a short table. */
+  async function runs(): Promise<BreakpointRun[]> {
+    const rows = await db.select(breakpointRemovals).all();
+    return rows.map(runOf);
+  }
+
+  /** Why each of these runs left each document it left, by run id. */
+  async function leftReasonsOf(
+    done: readonly BreakpointRun[]
+  ): Promise<Map<string, string[]>> {
+    const reasons = new Map<string, string[]>();
+    if (done.length === 0) return reasons;
+    const h = db.table(componentDeletionHosts);
+    const where = and(
+      inArray(
+        h.deletionId,
+        done.map(run => run.id)
+      ),
+      eq(h.state, "left")
+    );
+    if (where === undefined) return reasons;
+    const rows = await db.select(componentDeletionHosts).where(where).all();
+    for (const row of rows) {
+      const list = reasons.get(row.deletionId) ?? [];
+      list.push(row.reason ?? "");
+      reasons.set(row.deletionId, list);
+    }
+    return reasons;
+  }
 }

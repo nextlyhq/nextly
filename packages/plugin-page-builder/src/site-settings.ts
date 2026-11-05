@@ -34,7 +34,7 @@ import {
   type RemovalPlace,
   type RemovedBreakpoint,
 } from "./breakpoint-removal/dry-run";
-import type { BreakpointRun } from "./breakpoint-removal/run-store";
+import type { BreakpointRun, HoldingRun } from "./breakpoint-removal/run-store";
 import type { BreakpointRemovalService } from "./breakpoint-removal/service";
 import { stripClasses } from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
@@ -43,7 +43,11 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
-import { documentKeyOf, type RewriteReport } from "./host-rewrite/contract";
+import {
+  documentKeyOf,
+  type LeftReason,
+  type RewriteReport,
+} from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import {
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
@@ -181,7 +185,9 @@ export interface BreakpointRemoval {
   readonly count: (
     removed: ReadonlyMap<string, string>,
     classes: readonly NamedClass[],
-    ctx: BreakpointsRouteContext
+    ctx: BreakpointsRouteContext,
+    /** When the count stops and answers what it has (`complete: false`). */
+    deadline?: Date
   ) => Promise<RemovalDryRun>;
   /**
    * Carrying a removal out: its run, and the walk stripping the site. Absent,
@@ -195,6 +201,11 @@ export interface BreakpointCascade {
   readonly service: () => BreakpointRemovalService;
   /** How long one request walks the site before answering with the run. */
   readonly walkMs: number;
+  /**
+   * How long a save counts what its removal drops, for the audit, before it
+   * records what it has counted (`complete: false`) and goes on.
+   */
+  readonly countMs: number;
 }
 
 /**
@@ -279,25 +290,53 @@ async function writeSiteStyle(
 const READDED_WHILE_REMOVING =
   "A breakpoint in this set is still being removed. Try again when its removal has finished.";
 
+/** What a save defining a breakpoint a draft still holds values under is told. */
+const READDED_UNDER_A_DRAFT =
+  "Some pages still hold styles for that breakpoint (a draft is waiting to be published). Publish or discard those drafts, then add it again.";
+
+/** What a save defining a breakpoint other left content still holds is told. */
+const READDED_UNDER_LEFT_CONTENT =
+  "Some content still holds styles for that breakpoint that could not be removed yet. Once that content can be saved, finish the breakpoint's removal, then add it again.";
+
+/** The left reason a published page with a pending draft is recorded with. */
+const PENDING_DRAFT: LeftReason = "pending-draft";
+
+/** What a run still holding `readded` tells the person saving. */
+function readdedMessage(held: HoldingRun): string {
+  if (held.run.open) return READDED_WHILE_REMOVING;
+  return held.leftReasons.includes(PENDING_DRAFT)
+    ? READDED_UNDER_A_DRAFT
+    : READDED_UNDER_LEFT_CONTENT;
+}
+
 /**
- * Refuse a set that defines a breakpoint the open removal is stripping: the
- * walk would go on stripping values the site now emits again.
+ * Refuse a set that defines a breakpoint a removal still holds: the open one
+ * is stripping its values, and a done one left documents still keeping them.
+ * Defining it again would bring those values back instead of starting empty.
  */
 function refuseReadding(
-  open: BreakpointRun | null,
+  holding: readonly HoldingRun[],
   after: BreakpointSet | undefined
 ): void {
-  if (open === null) return;
-  const removing = new Set(open.removedIds);
-  const readded = breakpointContexts(after)
-    .map(context => context.id)
-    .filter(id => removing.has(id));
-  if (readded.length === 0) return;
-  throw NextlyError.conflict({
-    reason: "state",
-    message: READDED_WHILE_REMOVING,
-    logContext: { reason: "breakpoint-readded-while-removing", readded },
-  });
+  const defined = new Set(breakpointContexts(after).map(context => context.id));
+  // The open run first: its refusal says to wait, which comes before any
+  // document an earlier removal left.
+  const ordered = [...holding].sort(
+    (a, b) => Number(b.run.open) - Number(a.run.open)
+  );
+  for (const held of ordered) {
+    const readded = held.run.removedIds.filter(id => defined.has(id));
+    if (readded.length === 0) continue;
+    throw NextlyError.conflict({
+      reason: "state",
+      message: readdedMessage(held),
+      logContext: {
+        reason: "breakpoint-readded-while-held",
+        runId: held.run.id,
+        readded,
+      },
+    });
+  }
 }
 
 /**
@@ -442,7 +481,7 @@ async function beginRemoval(args: {
   breakpoints: SiteBreakpointsRequest["breakpoints"];
   ctx: BreakpointsRouteContext;
   nextly: SiteSettingsDirectApi;
-  removal: BreakpointRemoval;
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade };
   service: BreakpointRemovalService;
   stored: StoredSiteStyle;
   removed: ReadonlyMap<string, string>;
@@ -458,7 +497,8 @@ async function beginRemoval(args: {
     const counted = await removal.count(
       removed,
       currentStyle(removal, stored).classes ?? [],
-      ctx
+      ctx,
+      new Date(Date.now() + removal.cascade.countMs)
     );
     const classes = strippedStoredClasses(
       stored.classes,
@@ -499,7 +539,7 @@ async function saveBreakpoints(
   const service = removal.cascade.service();
   const stored = await removal.stored(ctx);
   const after = breakpointsAfter(removal, breakpoints);
-  refuseReadding(await service.openRun(), after);
+  refuseReadding(await service.holding(), after);
   const removed = removedBreakpoints(
     siteBreakpoints(currentStyle(removal, stored)),
     after
@@ -639,8 +679,10 @@ async function carryOnRemoval(
       siteBreakpoints(currentStyle(removal, await removal.stored(ctx)))
     ).map(context => context.id)
   );
-  if (run.open && run.removedIds.some(id => defined.has(id))) {
-    await service.abandon(run.id);
+  if (run.removedIds.some(id => defined.has(id))) {
+    // A done run's documents are left alone too: their values are under a
+    // breakpoint the site emits again, so they are the site's own now.
+    if (run.open) await service.abandon(run.id);
     return respondMutation<SiteBreakpointRemoval>(
       "Nothing was removed: the site still has these breakpoints.",
       { runId, finished: true, left: 0 }

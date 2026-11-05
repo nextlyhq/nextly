@@ -9,6 +9,7 @@ import {
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
+  NextlyError,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
@@ -832,7 +833,14 @@ const REGISTRY_PAGE_SIZE = 100;
  * the run to carry on: short enough to answer well inside a request's time,
  * long enough that a small site finishes in the save itself.
  */
-const REMOVAL_WALK_MS = 10_000;
+const REMOVAL_WALK_MS = 9_000;
+
+/**
+ * How long a save removing breakpoints counts what they held, for the audit
+ * trail, before it records what it has: with the walk, a save answers within
+ * about fifteen seconds.
+ */
+const REMOVAL_COUNT_MS = 5_000;
 
 /**
  * What the font catalogue adds to the plugin: the two hosts its server may
@@ -1336,7 +1344,8 @@ export const pageBuilder = (
     count: (
       removed: ReadonlyMap<string, string>,
       classes: readonly NamedClass[],
-      routeCtx: BreakpointsRouteContext
+      routeCtx: BreakpointsRouteContext,
+      deadline?: Date
     ) =>
       countRemovalOnSite(
         {
@@ -1350,10 +1359,16 @@ export const pageBuilder = (
         },
         routeCtx,
         removed,
-        classes
+        classes,
+        ...(deadline === undefined ? [] : [deadline])
       ),
-    // A save walks this long before answering with the run to carry on.
-    cascade: { service: removalService, walkMs: REMOVAL_WALK_MS },
+    // A save counts for the audit, then walks, this long at most before it
+    // answers with the run to carry on.
+    cascade: {
+      service: removalService,
+      walkMs: REMOVAL_WALK_MS,
+      countMs: REMOVAL_COUNT_MS,
+    },
   };
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
@@ -1700,16 +1715,25 @@ export const pageBuilder = (
         db: ctx.db,
         dialect: ctx.dialect,
         site: rewriteInstall.site,
-        limits: () => opts.limits ?? DEFAULT_LIMITS,
         defaults: configStyle,
       };
       // A write holding a removed breakpoint's values, committed after the
       // removal's walk stripped that document, sends it back to be stripped
-      // again from what was saved.
+      // again from what was saved, the removal done or not.
+      const definitions = composition.siteDefinitions;
       registerRemovalWriteReport({
         ctx,
         runs: () => removalRunStore(ctx.db, ctx.dialect),
-        limits: () => opts.limits ?? DEFAULT_LIMITS,
+        // The breakpoints the write path judges a save against: one read of
+        // the site's style, the same answer the blocks field gets.
+        definedBreakpoints: async () => {
+          if (definitions === undefined) {
+            throw NextlyError.internal({
+              logContext: { reason: "breakpoint-removal-no-site-definitions" },
+            });
+          }
+          return (await definitions()).breakpointIds;
+        },
       });
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in

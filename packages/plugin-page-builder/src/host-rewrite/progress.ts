@@ -116,6 +116,44 @@ export async function markPending(
   });
 }
 
+/**
+ * Record one document as left in a run's progress, through `handle`, with
+ * why: a document the run's walk did not strip and still owes.
+ */
+export async function markLeft(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string,
+  reason: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, { state: "left", reason });
+}
+
+/**
+ * Mark every document a run left as pending again, through `handle` (a
+ * transaction that also moves the run back to its converting walk). Answers
+ * false, changing nothing, when the run left none.
+ */
+export async function leftToPending(
+  handle: ProgressHandle,
+  runId: string
+): Promise<boolean> {
+  const h = handle.table(componentDeletionHosts);
+  const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
+  if (left === undefined) return false;
+  if (
+    (await handle.select(componentDeletionHosts).where(left).first()) === null
+  ) {
+    return false;
+  }
+  // Moves a value (left to pending), so no dialect reads it as matching
+  // nothing.
+  await handle
+    .update(componentDeletionHosts, { state: "pending", reason: null })
+    .where(left);
+  return true;
+}
+
 /** The progress store over the plugin's own `ctx.db`. */
 export function progressStore(
   db: Pick<
@@ -180,19 +218,9 @@ export function progressStore(
     },
     reopenLeft: runId =>
       db.transaction(async tx => {
-        const h = tx.table(componentDeletionHosts);
-        const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
-        if (left === undefined) return false;
-        if (
-          (await tx.select(componentDeletionHosts).where(left).first()) === null
-        ) {
-          return false;
-        }
-        // Each statement moves a value (left to pending, done to
-        // converting), so no dialect reads it as matching nothing.
-        await tx
-          .update(componentDeletionHosts, { state: "pending", reason: null })
-          .where(left);
+        if (!(await leftToPending(tx, runId))) return false;
+        // Moves a value (done to converting), so no dialect reads it as
+        // matching nothing.
         const t = tx.table(componentDeletions);
         const done = and(eq(t.id, runId), eq(t.phase, "done"));
         if (done !== undefined) {

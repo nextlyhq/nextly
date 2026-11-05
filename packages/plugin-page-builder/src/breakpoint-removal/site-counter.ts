@@ -128,7 +128,9 @@ export async function countRemovalOnSite(
     readonly self: { collections: Record<string, string | undefined> };
   },
   removed: ReadonlyMap<string, string>,
-  classes: readonly NamedClass[]
+  classes: readonly NamedClass[],
+  /** When the walk stops and answers what it has; a dry run's own by default. */
+  deadline: Date = new Date(Date.now() + WALK_MS)
 ): Promise<RemovalDryRun> {
   const site = install.site();
   if (site === null) {
@@ -156,6 +158,6 @@ export async function countRemovalOnSite(
         : entryNameAsCaller(site, ctx, host),
     limits: install.limits(),
     classes,
-    deadline: new Date(Date.now() + WALK_MS),
+    deadline,
   });
 }
