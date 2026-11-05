@@ -14,12 +14,18 @@
  * there.
  *
  * The same write can commit after the removal is done. A document holding a
- * value under a breakpoint a done run removed, which the site does not define
- * now, opens that run again for it: pending, on its converting walk, which the
- * removal route then carries on. Where another removal holds the one open
- * slot, the document is recorded as left on the done run instead, which keeps
- * the breakpoint from being defined again until that run is carried on. The
- * hook writes no document itself.
+ * value under a breakpoint a done run removed opens that run again for it:
+ * pending, on its converting walk, which the removal job carries on. Where
+ * another removal holds the one open slot, the document is recorded as left on
+ * the done run instead, which keeps the breakpoint from being defined again
+ * until that run is carried on. Whether the run is open or done is decided by
+ * the run store at the moment it acts (`requeueDocument`), never from an
+ * earlier read, so a run that closes in between is opened again rather than
+ * missed. The hook writes no document itself.
+ *
+ * Only values under a breakpoint the site does not define now count: one
+ * defined again is the site's own, and the walk strips only the ids still
+ * removed (`service`).
  *
  * After commit, because only then is the stored value the one a later read
  * sees. A failure here is logged, never thrown: the write has committed, and
@@ -39,7 +45,7 @@ import { removedIdsIn } from "./strip";
 /** What the report is wired with. */
 export interface RemovalWriteReportArgs {
   readonly ctx: FencedWriteReportContext;
-  readonly runs: () => Pick<RemovalRunStore, "runs" | "requeue" | "reopenFor">;
+  readonly runs: () => Pick<RemovalRunStore, "runs" | "requeueDocument">;
   /** The breakpoint ids the site's stylesheet is emitted under now. */
   readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
 }
@@ -51,7 +57,7 @@ export function registerRemovalWriteReport(args: RemovalWriteReportArgs): void {
   }
 }
 
-/** Re-queue the written document when it holds a removal's values. */
+/** Re-queue the written document on each run whose removed values it holds. */
 async function reportWrite(
   args: RemovalWriteReportArgs,
   context: unknown
@@ -60,13 +66,20 @@ async function reportWrite(
   if (written === undefined || written.at === undefined) return;
   try {
     // The runs first: a short table, and with no removal recorded, or none
-    // whose ids the write holds, nothing else is read.
+    // whose ids the write holds, nothing else is read. A run's removed ids
+    // never change, so this read only picks the runs to ask; each one's state
+    // is the store's to read when it acts.
     const runs = await args.runs().runs();
     if (runs.length === 0) return;
-    const key = documentKeyOf(written.at);
     const held = heldIds(written.documents, runs);
-    await requeueOnOpenRun(args, runs, held, key);
-    await reopenDoneRuns(args, runs, held, key);
+    if (held.size === 0) return;
+    const defined = await args.definedBreakpoints();
+    const key = documentKeyOf(written.at);
+    for (const run of runs) {
+      if (run.removedIds.some(id => held.has(id) && !defined.has(id))) {
+        await args.runs().requeueDocument(run.id, key);
+      }
+    }
   } catch (error) {
     args.ctx.logger.error(
       `[page-builder] a write to "${written.collection}" holding styles under ` +
@@ -74,40 +87,6 @@ async function reportWrite(
         "final check, or carrying it on, reads it again.",
       { collection: written.collection, error }
     );
-  }
-}
-
-/** Re-queue the written document on the open run, when it holds that run's ids. */
-async function requeueOnOpenRun(
-  args: RemovalWriteReportArgs,
-  runs: readonly BreakpointRun[],
-  held: ReadonlySet<string>,
-  documentKey: string
-): Promise<void> {
-  const open = runs.find(run => run.open);
-  if (open !== undefined && holdsAny(open, held)) {
-    await args.runs().requeue(open.id, documentKey);
-  }
-}
-
-/**
- * Open each done run whose removed ids the write holds again, for the
- * written document. Only for a breakpoint the site does not define now: one
- * defined again is the site's own, and its values stay.
- */
-async function reopenDoneRuns(
-  args: RemovalWriteReportArgs,
-  runs: readonly BreakpointRun[],
-  held: ReadonlySet<string>,
-  documentKey: string
-): Promise<void> {
-  const done = runs.filter(run => !run.open && holdsAny(run, held));
-  if (done.length === 0) return;
-  const defined = await args.definedBreakpoints();
-  for (const run of done) {
-    if (run.removedIds.some(id => held.has(id) && !defined.has(id))) {
-      await args.runs().reopenFor(run.id, documentKey);
-    }
   }
 }
 
@@ -122,9 +101,4 @@ function heldIds(
     for (const id of removedIdsIn(document, asked)) ids.add(id);
   }
   return ids;
-}
-
-/** Whether a run's removed ids are among those held. */
-function holdsAny(run: BreakpointRun, held: ReadonlySet<string>): boolean {
-  return run.removedIds.some(id => held.has(id));
 }

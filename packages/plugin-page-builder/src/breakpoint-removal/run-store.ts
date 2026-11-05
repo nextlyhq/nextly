@@ -64,11 +64,19 @@ export interface RemovalRunStore extends RunStore {
   /** The open run, or `null` when none is. */
   openRun(): Promise<BreakpointRun | null>;
   /**
-   * A document holding a removed breakpoint's value was written while its
-   * run was open: mark it pending and send the run back to its converting
-   * walk, in one transaction. Does nothing once the run is done.
+   * A document was written holding values under breakpoints this run removed,
+   * which the site does not define now: send it back to be stripped, deciding
+   * on the run as it is at that moment, in one transaction. An open run marks
+   * it pending and goes back to its converting walk (`requeued`). A done run
+   * is opened again for it, the same way (`reopened`), unless another run
+   * holds the one open slot; then the document is recorded as left on this
+   * run (`left`), which keeps the run holding its ids until it is carried on.
+   * `none` when there is no such run.
    */
-  requeue(runId: string, documentKey: string): Promise<void>;
+  requeueDocument(
+    runId: string,
+    documentKey: string
+  ): Promise<"requeued" | "reopened" | "left" | "none">;
   /** Remove a run that wrote nothing, with its progress, closing it. */
   abandon(runId: string): Promise<void>;
   /** Every run, open or done: the record of every removal. */
@@ -86,13 +94,6 @@ export interface RemovalRunStore extends RunStore {
    * conflict while another run is open.
    */
   reopen(runId: string): Promise<boolean>;
-  /**
-   * A document written after its run was done holds that run's removed
-   * values again: open the run for it (pending, converting) when no other
-   * run is open, or else record it as left on the run, which keeps the run
-   * holding its ids until it is carried on.
-   */
-  reopenFor(runId: string, documentKey: string): Promise<"reopened" | "left">;
 }
 
 /** A run that still holds what it removed, and why. */
@@ -103,7 +104,7 @@ export interface HoldingRun {
 }
 
 /** Why a document written back with removed values waits on a done run. */
-const WRITTEN_BACK = "written-back";
+export const WRITTEN_BACK = "written-back";
 
 /** The dialect, as `ctx.dialect` names it. */
 type Dialect = Parameters<typeof isUniqueViolation>[0];
@@ -256,22 +257,52 @@ export function removalRunStore(
         .where(both(eq(r.id, runId), eq(r.phase, from)));
       return moved > 0;
     },
-    requeue: async (runId, documentKey) =>
-      db.transaction(async tx => {
-        const t = tx.table(breakpointRemovals);
-        const open = both(eq(t.id, runId), isNotNull(t.openKey));
-        if (
-          (await tx.select(breakpointRemovals).where(open).first()) === null
-        ) {
-          return;
-        }
-        // The pending row and the run's phase land together: a pending row
-        // with the run left in its final walk would never be visited again.
-        await markPending(tx, runId, documentKey);
-        await tx
-          .update(breakpointRemovals, { phase: "converting", cursor: null })
-          .where(open);
-      }),
+    requeueDocument: async (runId, documentKey) => {
+      try {
+        return await db.transaction(async tx => {
+          const t = tx.table(breakpointRemovals);
+          // The update comes first, and takes the run's row while it is open:
+          // the walk's own move to `done` then waits for this transaction and
+          // finds the run back on its converting walk, so the pending row
+          // below is never written for a run that has just closed. A run
+          // already done matches nothing here and is opened again below.
+          await tx
+            .update(breakpointRemovals, { phase: "converting", cursor: null })
+            .where(both(eq(t.id, runId), isNotNull(t.openKey)));
+          const run = await tx
+            .select(breakpointRemovals)
+            .where(eq(t.id, runId))
+            .first();
+          if (run === null) return "none";
+          if (run.openKey !== null) {
+            await markPending(tx, runId, documentKey);
+            return "requeued";
+          }
+          // Asked first rather than left to the unique index: this runs from
+          // a hook, whose writes may join the writer's own transaction, and on
+          // MySQL a refused statement there fails that whole transaction. The
+          // index still decides a race between this read and the reopen.
+          const holder = await tx
+            .select(breakpointRemovals)
+            .where(eq(t.openKey, OPEN))
+            .first();
+          if (holder !== null) {
+            await markLeft(tx, runId, documentKey, WRITTEN_BACK);
+            return "left";
+          }
+          await reopenDone(tx, runId);
+          await markPending(tx, runId, documentKey);
+          return "reopened";
+        });
+      } catch (error) {
+        // Another run took the open slot between the read and the reopen:
+        // the document waits on this run, recorded as left, until it is
+        // carried on.
+        if (!isUniqueViolation(dialect, error)) throw error;
+        await markLeft(db, runId, documentKey, WRITTEN_BACK);
+        return "left";
+      }
+    },
     abandon: async runId =>
       db.transaction(async tx => {
         const h = tx.table(componentDeletionHosts);
@@ -297,33 +328,6 @@ export function removalRunStore(
       } catch (error) {
         if (!isUniqueViolation(dialect, error)) throw error;
         throw anotherRunning();
-      }
-    },
-    reopenFor: async (runId, documentKey) => {
-      // Asked first rather than left to the unique index: this runs from a
-      // hook, whose writes may join the writer's own transaction, and on MySQL
-      // a refused statement there fails that whole transaction. The index
-      // still decides a race between the read and the write.
-      const held = await db
-        .select(breakpointRemovals)
-        .where(eq(columns().openKey, OPEN))
-        .first();
-      if (held !== null && held.id !== runId) {
-        await markLeft(db, runId, documentKey, WRITTEN_BACK);
-        return "left";
-      }
-      try {
-        await db.transaction(async tx => {
-          await reopenDone(tx, runId);
-          await markPending(tx, runId, documentKey);
-        });
-        return "reopened";
-      } catch (error) {
-        // Another run holds the open slot: the document waits on this run,
-        // recorded as left, until it is carried on.
-        if (!isUniqueViolation(dialect, error)) throw error;
-        await markLeft(db, runId, documentKey, WRITTEN_BACK);
-        return "left";
       }
     },
   };

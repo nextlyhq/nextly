@@ -34,6 +34,7 @@ import {
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
 import { registerRemovalWriteReport } from "./breakpoint-removal/after-commit";
+import { breakpointRemovalJob } from "./breakpoint-removal/job";
 import { removalRunStore } from "./breakpoint-removal/run-store";
 import {
   BREAKPOINT_REMOVAL_SERVICE,
@@ -197,6 +198,7 @@ import {
   siteBreakpointRemovalRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
+  versionOfDocument,
   type BreakpointsRouteContext,
   type SiteSettingsRouteContext,
 } from "./site-settings";
@@ -1362,6 +1364,11 @@ export const pageBuilder = (
    * and the routes are made before `init` runs and called long after it.
    */
   let removalInstall: RemovalInstall | null = null;
+  // Where a removal's save logs a walk that failed after its set was stored;
+  // published by `init` beside the install.
+  let removalLogger: {
+    error(message: string, meta?: Record<string, unknown>): void;
+  } | null = null;
   const removalService = (): BreakpointRemovalService =>
     breakpointRemovalService(() => {
       if (removalInstall === null) {
@@ -1379,14 +1386,24 @@ export const pageBuilder = (
     defaults: configStyle,
     // The site style's Single as stored, renamed or not, read past its own
     // read permission: the site permission the routes ask for admits it.
+    // With the version the read was of, which a save hands back so a write
+    // made since is not overwritten.
     stored: async (routeCtx: SiteSettingsRouteContext) => {
       const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
       const nextly = await getCachedNextly();
-      return readStoredSiteStyle({
-        nextly: { findSingle: args => nextly.findSingle(args) },
+      let version: unknown;
+      const style = await readStoredSiteStyle({
+        nextly: {
+          findSingle: async args => {
+            const doc: unknown = await nextly.findSingle(args);
+            version = versionOfDocument(doc);
+            return doc;
+          },
+        },
         slug: routeCtx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
         overrideAccess: true,
       });
+      return typeof version === "string" ? { ...style, version } : style;
     },
     // Walked with the rewrite's own view of the site, so a removal counts
     // exactly the documents its cascade reaches.
@@ -1417,6 +1434,8 @@ export const pageBuilder = (
       service: removalService,
       walkMs: REMOVAL_WALK_MS,
       countMs: REMOVAL_COUNT_MS,
+      logError: (message: string, meta: Record<string, unknown>) =>
+        removalLogger?.error(message, meta),
     },
   };
   return definePlugin({
@@ -1787,29 +1806,34 @@ export const pageBuilder = (
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      // The breakpoints the write path judges a save against: one read of
+      // the site's style, the same answer the blocks field gets. A removal's
+      // walk, its locks and the write report all ask it, so they agree on
+      // which removed ids the site defines again.
+      const definitions = composition.siteDefinitions;
+      const definedBreakpoints = async () => {
+        if (definitions === undefined) {
+          throw NextlyError.internal({
+            logContext: { reason: "breakpoint-removal-no-site-definitions" },
+          });
+        }
+        return (await definitions()).breakpointIds;
+      };
       removalInstall = {
         db: ctx.db,
         dialect: ctx.dialect,
         site: rewriteInstall.site,
         defaults: configStyle,
+        definedBreakpoints,
       };
+      removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the
       // removal's walk stripped that document, sends it back to be stripped
       // again from what was saved, the removal done or not.
-      const definitions = composition.siteDefinitions;
       registerRemovalWriteReport({
         ctx,
         runs: () => removalRunStore(ctx.db, ctx.dialect),
-        // The breakpoints the write path judges a save against: one read of
-        // the site's style, the same answer the blocks field gets.
-        definedBreakpoints: async () => {
-          if (definitions === undefined) {
-            throw NextlyError.internal({
-              logContext: { reason: "breakpoint-removal-no-site-definitions" },
-            });
-          }
-          return (await definitions()).breakpointIds;
-        },
+        definedBreakpoints,
       });
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
@@ -1921,6 +1945,9 @@ export const pageBuilder = (
         // retired ids hold more than its last walk was for. A pass with none
         // owed reads the retired table and each such component's run.
         retiredCleanupJob(requireRetiredCleanup),
+        // The breakpoint removal a write opened again, which nobody is
+        // waiting on: carried on each pass until it is done.
+        breakpointRemovalJob(removalService),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1983,8 +2010,10 @@ export const pageBuilder = (
             // looks.
             defaults: configStyle,
           },
-          // A locked shared style may be stripped by an open removal.
-          openBreakpointRemoval
+          // A locked shared style may be stripped by an open removal, in the
+          // settings write that stores its set: judged by every id it
+          // removed, which the site still defines while that write is judged.
+          () => removalService().openRemovalAsSaved()
         ),
         // Where the site's default Layout is recorded. Contributed whether or
         // not any Layout exists yet, because the repair writes it on a site

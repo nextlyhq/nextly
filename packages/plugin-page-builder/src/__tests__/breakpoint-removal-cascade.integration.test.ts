@@ -13,6 +13,11 @@
  * write whose hooks run (re-queued after commit) and one for a write inside a
  * transaction (caught by the final walk), and in both the document ends
  * stripped.
+ *
+ * And what a done removal is owed afterwards: a write bringing its values back
+ * opens it again whatever it was a moment before (the run store decides, at
+ * the moment it acts), the removal job carries a reopened run on with nobody
+ * asking, and a breakpoint defined again since keeps its values.
  */
 
 // Set before the harness boots: the routes verify the session with it.
@@ -30,6 +35,7 @@ import {
   registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -41,12 +47,17 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { BREAKPOINT_REMOVAL_JOB } from "../breakpoint-removal/job";
+import {
+  removalRunStore,
+  type RemovalRunStore,
+} from "../breakpoint-removal/run-store";
 import {
   BREAKPOINT_REMOVAL_SERVICE,
   type BreakpointRemovalService,
 } from "../breakpoint-removal/service";
 import { asDocument } from "../component-store-source";
-import type { RewriteReport } from "../host-rewrite/contract";
+import { documentKeyOf, type RewriteReport } from "../host-rewrite/contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { BREAKPOINT_REMOVED_AUDIT } from "../site-settings";
@@ -60,6 +71,7 @@ const CSRF = "c".repeat(64);
 
 type Node = Record<string, unknown>;
 
+const DESKTOP = { id: "desktop", label: "Desktop" };
 const TABLET = { id: "tablet", label: "Tablet", maxWidth: 900 };
 const MOBILE = { id: "mobile", label: "Mobile", maxWidth: 600 };
 
@@ -139,6 +151,41 @@ function sealedCard(): BlockNode {
   );
 }
 
+/**
+ * A plugin that depends on the page builder, which is what lets it reach the
+ * page builder's tables through its own `ctx.db`: the test's way to the run
+ * store, as the write report calls it.
+ */
+function probePlugin(holder: { runs?: RemovalRunStore }): PluginDefinition {
+  return definePlugin({
+    name: "@test/breakpoint-removal-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    init(ctx) {
+      holder.runs = removalRunStore(ctx.db, ctx.dialect);
+    },
+  });
+}
+
+/** The plugin's removal job, as a jobs pass runs it. */
+function removalJobPass(plugin: PluginDefinition): () => Promise<unknown> {
+  const job = plugin.contributes?.jobs?.find(
+    entry => entry.slug === BREAKPOINT_REMOVAL_JOB
+  );
+  if (job === undefined) throw new Error("the page builder has no removal job");
+  return async () =>
+    job.handler(
+      null as never,
+      {
+        user: null,
+        now: new Date(),
+        deadline: new Date(Date.now() + 60_000),
+        content: {},
+      } as never
+    );
+}
+
 describe.each(getConfiguredTestDialects())(
   "removing a breakpoint strips what it held (%s)",
   (dialect: TestDialect) => {
@@ -153,11 +200,14 @@ describe.each(getConfiguredTestDialects())(
       t: TestNextly;
       svc: BreakpointRemovalService;
       cookie: string;
+      runs: () => RemovalRunStore;
+      jobPass: () => Promise<unknown>;
     }> {
       const plugin = pageBuilder();
+      const probe: { runs?: RemovalRunStore } = {};
       current = await createTestNextly({
         dialect,
-        plugins: [plugin],
+        plugins: [plugin, probePlugin(probe)],
         seedPublic: true,
       });
       // After the boot, which starts the block registry afresh.
@@ -199,7 +249,16 @@ describe.each(getConfiguredTestDialects())(
       const svc = plugin.contributes?.services?.[
         BREAKPOINT_REMOVAL_SERVICE
       ]?.() as BreakpointRemovalService;
-      return { t, svc, cookie: await manager(t) };
+      return {
+        t,
+        svc,
+        cookie: await manager(t),
+        runs: () => {
+          if (probe.runs === undefined) throw new Error("no probe");
+          return probe.runs;
+        },
+        jobPass: removalJobPass(plugin),
+      };
     }
 
     /** A signed-in person who may manage the site and nothing else. */
@@ -358,7 +417,8 @@ describe.each(getConfiguredTestDialects())(
      */
     async function writeBackInATransaction(
       t: TestNextly,
-      id: string
+      id: string,
+      node: Node = heading("a", styledAtMobile)
     ): Promise<void> {
       const service = t.getService("collectionService") as unknown as {
         updateMany: (
@@ -372,7 +432,7 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id,
-            data: { content: doc("page", [heading("a", styledAtMobile)]) },
+            data: { content: doc("page", [node]) },
           },
         ],
         { overrideAccess: true }
@@ -605,7 +665,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await svc.openRun()).toBeNull();
     });
 
-    it("drops a removal whose set was never stored rather than walking it", async () => {
+    it("closes a removal whose set was never stored, stripping nothing the site still defines", async () => {
       const { t, svc, cookie } = await boot();
       const id = await create(t, "pages", {
         title: "Home",
@@ -619,7 +679,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(carried.status).toBe(200);
-      expect(await svc.runById(run.id)).toBeNull();
+      expect(carried.body.item).toMatchObject({ finished: true, left: 0 });
+      // Closed and kept as the record, so the open slot is free.
+      expect(await svc.runById(run.id)).toMatchObject({ open: false });
+      expect(await svc.openRun()).toBeNull();
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
         heading("a", styledAtMobile)
       );
@@ -632,9 +695,13 @@ describe.each(getConfiguredTestDialects())(
         slug: "home",
         content: doc("page", [heading("a", styledAtMobile)]),
       });
-      // The removal is open and its set not stored yet: a save validated
-      // now is judged against the set before the removal.
       const run = await svc.begin(["mobile"], null, "user:someone");
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        overrideAccess: true,
+        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+      });
       // Walked until the converting walk has passed the page.
       for (let call = 0; call < 50; call += 1) {
         await svc.walk(run.id, { maxDocuments: 1 });
@@ -645,13 +712,10 @@ describe.each(getConfiguredTestDialects())(
         heading("a", styledAfter)
       );
 
-      // The racing save commits, bringing the removed values back.
-      await t.nextly.update({
-        collection: "pages",
-        id,
-        data: { content: doc("page", [heading("a", styledAtMobile)]) },
-        overrideAccess: true,
-      });
+      // The racing save commits, bringing the removed values back: one
+      // validated before the set was stored, as a write inside a transaction
+      // is not judged against it, whose hooks still run after commit.
+      await writeBackInATransaction(t, id);
       // CONTROL: the page holds them again.
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
         heading("a", styledAtMobile)
@@ -659,12 +723,6 @@ describe.each(getConfiguredTestDialects())(
       // Re-queued after commit: the run is back on its converting walk.
       expect((await svc.runById(run.id))?.phase).toBe("converting");
 
-      await t.nextly.updateSingle({
-        slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
-        overrideAccess: true,
-        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
-      });
       const reports = await walkToTheEnd(svc, run.id);
 
       expect((await nodesOf(t, "pages", id))[0]).toEqual(
@@ -856,6 +914,132 @@ describe.each(getConfiguredTestDialects())(
         heading("a", styledAfter)
       );
       expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+    });
+
+    it("strips only the breakpoints still removed from a run opened again after one was defined again", async () => {
+      const { t, svc, cookie } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      // Tablet and Mobile removed together, then Tablet defined again.
+      const saved = await save(cookie, [DESKTOP]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      expect(await svc.runById(runId)).toMatchObject({
+        open: false,
+        removedIds: ["tablet", "mobile"],
+      });
+      expect((await save(cookie, [DESKTOP, TABLET])).status).toBe(200);
+
+      // A write validated before the removal brings both back.
+      await writeBackInATransaction(t, id);
+      // CONTROL: opened again, for Mobile, which the site does not define.
+      expect(await svc.runById(runId)).toMatchObject({ open: true });
+      // The set defining Tablet already is not taken for a re-add of it.
+      expect((await save(cookie, [DESKTOP, TABLET])).status).toBe(200);
+
+      const carried = await carryOn(cookie, runId);
+
+      expect(carried.body.item).toMatchObject({ finished: true });
+      // Mobile stripped; Tablet's value, under a breakpoint the site emits
+      // again, kept.
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+    });
+
+    it("opens a run again for a write committed after the run closed, deciding when it acts", async () => {
+      const { t, svc, cookie, runs } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const run = await svc.begin(["mobile"], null, "user:someone");
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        overrideAccess: true,
+        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+      });
+      const key = documentKeyOf({ kind: "collection", slug: "pages", id });
+      // Re-queued while the run is open.
+      expect(await runs().requeueDocument(run.id, key)).toBe("requeued");
+      // The run closes, as its final walk would between a write report's
+      // read of the runs and its act: the report still finds it open.
+      await walkToTheEnd(svc, run.id);
+      expect(await svc.runById(run.id)).toMatchObject({ open: false });
+      // A write the walk did not see brings the values back.
+      await plant(t, id, doc("page", [heading("a", styledAtMobile)]));
+
+      expect(await runs().requeueDocument(run.id, key)).toBe("reopened");
+
+      expect(await svc.runById(run.id)).toMatchObject({
+        open: true,
+        phase: "converting",
+      });
+      const carried = await carryOn(cookie, run.id);
+      expect(carried.body.item).toMatchObject({ finished: true });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+    });
+
+    it("carries a run a write opened again on in the removal job, with nobody asking", async () => {
+      const { t, svc, cookie, jobPass } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      await writeBackInATransaction(t, id);
+      // CONTROL: opened again, and the page holds Mobile's values.
+      expect(await svc.runById(runId)).toMatchObject({ open: true });
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+
+      await jobPass();
+
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      expect(await svc.openRun()).toBeNull();
+    });
+
+    it("refuses a save of the site style from a version another save replaced", async () => {
+      const { t } = await boot();
+      const read = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as { _rev?: unknown };
+      // The version a breakpoint save hands back, as this site gives it.
+      expect(typeof read._rev).toBe("string");
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        overrideAccess: true,
+        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+      });
+
+      await expect(
+        t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: {
+            breakpoints: { viewport: [TABLET, MOBILE], container: [] },
+            _rev: read._rev,
+          },
+          overrideAccess: true,
+          context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+        })
+      ).rejects.toMatchObject({ code: "STALE_VERSION" });
     });
   }
 );

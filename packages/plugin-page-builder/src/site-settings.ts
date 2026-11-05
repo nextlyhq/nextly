@@ -49,6 +49,7 @@ import {
   type RewriteReport,
 } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
+import { inCauses } from "./judged-writes";
 import {
   SITE_BREAKPOINT_REMOVAL_ROUTE_PATH,
   SITE_BREAKPOINTS_ROUTE_PATH,
@@ -73,6 +74,7 @@ import {
 } from "./site-style-record";
 import {
   loadSiteStyle,
+  sameStoredValue,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
@@ -178,7 +180,9 @@ export interface BreakpointRemoval {
    * replaced, and the shared styles it strips. The site's style as it is now
    * is derived from it ({@link currentStyle}).
    */
-  readonly stored: (ctx: SiteSettingsRouteContext) => Promise<StoredSiteStyle>;
+  readonly stored: (
+    ctx: SiteSettingsRouteContext
+  ) => Promise<VersionedSiteStyle>;
   /** The configured site style, which a stored `null` gives back. */
   readonly defaults?: SiteStyleData;
   /** Walk the site for what removing each of these would drop. */
@@ -206,6 +210,48 @@ export interface BreakpointCascade {
    * records what it has counted (`complete: false`) and goes on.
    */
   readonly countMs: number;
+  /**
+   * Log a removal's walk that failed after its set was stored. The save still
+   * answers with the run, which its route or the removal job carries on.
+   */
+  readonly logError?: (message: string, meta: Record<string, unknown>) => void;
+}
+
+/** The site style's Single as stored, and the version that read was of. */
+export interface VersionedSiteStyle extends StoredSiteStyle {
+  /**
+   * The Single's `_rev` when it was read. A save handing it back is refused
+   * (`STALE_VERSION`) once another save has replaced it, rather than
+   * overwriting what that save stored.
+   */
+  readonly version?: string;
+}
+
+/** The key a stored document carries its version under. */
+const VERSION_KEY = "_rev";
+
+/** A stored document's version, when it carries one. */
+export function versionOfDocument(doc: unknown): string | undefined {
+  if (typeof doc !== "object" || doc === null) return undefined;
+  const version: unknown = (doc as Record<string, unknown>)[VERSION_KEY];
+  return typeof version === "string" ? version : undefined;
+}
+
+/**
+ * The version a save made from `stored` hands back. A read without one is
+ * refused rather than written past: a write that cannot say what it was
+ * computed from could overwrite a removal or a re-add saved meanwhile.
+ */
+function versionToWrite(stored: VersionedSiteStyle): string {
+  if (stored.version !== undefined) return stored.version;
+  throw NextlyError.internal({
+    logContext: { reason: "site-style-read-without-version" },
+  });
+}
+
+/** Whether a write was refused because the Single changed since it was read. */
+function isStaleVersion(error: unknown): boolean {
+  return inCauses(error, NextlyError)?.code === "STALE_VERSION";
 }
 
 /**
@@ -275,11 +321,13 @@ async function dryRunBreakpoints(
 async function writeSiteStyle(
   nextly: SiteSettingsDirectApi,
   ctx: SiteSettingsRouteContext,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** The version the write was computed from; refused once replaced. */
+  version?: string
 ): Promise<void> {
   await nextly.updateSingle({
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    data,
+    data: version === undefined ? data : { ...data, [VERSION_KEY]: version },
     overrideAccess: true,
     context: { ...SITE_SETTINGS_WRITE_CONTEXT },
     ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
@@ -310,15 +358,23 @@ function readdedMessage(held: HoldingRun): string {
 }
 
 /**
- * Refuse a set that defines a breakpoint a removal still holds: the open one
- * is stripping its values, and a done one left documents still keeping them.
- * Defining it again would bring those values back instead of starting empty.
+ * Refuse a set that defines again a breakpoint a removal still holds: the
+ * open one is stripping its values, and a done one left documents still
+ * keeping them. Defining it again would bring those values back instead of
+ * starting empty. A held id the site defines already is not being added: a
+ * run strips only the ids the site does not define, so it is left alone.
  */
 function refuseReadding(
   holding: readonly HoldingRun[],
+  now: BreakpointSet | undefined,
   after: BreakpointSet | undefined
 ): void {
-  const defined = new Set(breakpointContexts(after).map(context => context.id));
+  const current = new Set(breakpointContexts(now).map(context => context.id));
+  const defined = new Set(
+    breakpointContexts(after)
+      .map(context => context.id)
+      .filter(id => !current.has(id))
+  );
   // The open run first: its refusal says to wait, which comes before any
   // document an earlier removal left.
   const ordered = [...holding].sort(
@@ -472,6 +528,60 @@ function removalAnswer<T>(
   );
 }
 
+/** How many times a removal's write is made again after another save. */
+const REMOVAL_WRITE_ATTEMPTS = 3;
+
+/** What a save is told when the breakpoints changed while it was made. */
+const BREAKPOINTS_CHANGED =
+  "The site's breakpoints were changed while this was being saved. Reload to see them, then save again.";
+
+/**
+ * Store a removal's set with the shared styles stripped, from the version read
+ * before the removal was opened. Another save of the Single in between
+ * (a shared style edited in Design, say) is not overwritten: the write is
+ * refused, the Single read again, its shared styles stripped again, and the
+ * write made from that version, a few times. A save in between that changed
+ * the breakpoints themselves is a removal planned from a set no longer stored,
+ * so it is refused for the person to reload.
+ */
+async function writeRemovalSet(args: {
+  breakpoints: SiteBreakpointsRequest["breakpoints"];
+  ctx: BreakpointsRouteContext;
+  nextly: SiteSettingsDirectApi;
+  removal: BreakpointRemoval;
+  stored: VersionedSiteStyle;
+  removedIds: ReadonlySet<string>;
+}): Promise<void> {
+  let read = args.stored;
+  for (let attempt = 1; ; attempt += 1) {
+    const classes = strippedStoredClasses(read.classes, args.removedIds);
+    try {
+      await writeSiteStyle(
+        args.nextly,
+        args.ctx,
+        {
+          breakpoints: args.breakpoints,
+          ...(classes === undefined ? {} : { classes }),
+        },
+        versionToWrite(read)
+      );
+      return;
+    } catch (error) {
+      if (!isStaleVersion(error) || attempt >= REMOVAL_WRITE_ATTEMPTS) {
+        throw error;
+      }
+    }
+    read = await args.removal.stored(args.ctx);
+    if (!sameStoredValue(read.breakpoints, args.stored.breakpoints)) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message: BREAKPOINTS_CHANGED,
+        logContext: { reason: "breakpoint-removal-set-changed" },
+      });
+    }
+  }
+}
+
 /**
  * Open a removal, count what it drops, and store the set with the shared
  * styles stripped in the same write. The removal is dropped again when either
@@ -483,7 +593,7 @@ async function beginRemoval(args: {
   nextly: SiteSettingsDirectApi;
   removal: BreakpointRemoval & { readonly cascade: BreakpointCascade };
   service: BreakpointRemovalService;
-  stored: StoredSiteStyle;
+  stored: VersionedSiteStyle;
   removed: ReadonlyMap<string, string>;
 }): Promise<{ run: BreakpointRun; counted: RemovalDryRun }> {
   const { ctx, removal, service, stored, removed } = args;
@@ -500,13 +610,13 @@ async function beginRemoval(args: {
       ctx,
       new Date(Date.now() + removal.cascade.countMs)
     );
-    const classes = strippedStoredClasses(
-      stored.classes,
-      new Set(removed.keys())
-    );
-    await writeSiteStyle(args.nextly, ctx, {
+    await writeRemovalSet({
       breakpoints: args.breakpoints,
-      ...(classes === undefined ? {} : { classes }),
+      ctx,
+      nextly: args.nextly,
+      removal,
+      stored,
+      removedIds: new Set(removed.keys()),
     });
     return { run, counted };
   } catch (error) {
@@ -537,15 +647,17 @@ async function saveBreakpoints(
   removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
 ): Promise<Response> {
   const service = removal.cascade.service();
+  // Read BEFORE the runs are asked, and every write below hands its version
+  // back: a removal opened, or a set stored, after this read makes the write
+  // stale and it is refused, so a check made against the runs and the set
+  // as read cannot be acted on once either has changed.
   const stored = await removal.stored(ctx);
+  const now = siteBreakpoints(currentStyle(removal, stored));
   const after = breakpointsAfter(removal, breakpoints);
-  refuseReadding(await service.holding(), after);
-  const removed = removedBreakpoints(
-    siteBreakpoints(currentStyle(removal, stored)),
-    after
-  );
+  refuseReadding(await service.holding(), now, after);
+  const removed = removedBreakpoints(now, after);
   if (removed.size === 0) {
-    await writeSiteStyle(nextly, ctx, { breakpoints });
+    await writeSiteStyle(nextly, ctx, { breakpoints }, versionToWrite(stored));
     return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
       breakpoints,
     });
@@ -560,9 +672,23 @@ async function saveBreakpoints(
     removed,
   });
   await auditRemoval(ctx, req, run.id, counted);
-  const report = await service.walk(run.id, {
-    deadline: new Date(Date.now() + removal.cascade.walkMs),
-  });
+  let report: RewriteReport;
+  try {
+    report = await service.walk(run.id, {
+      deadline: new Date(Date.now() + removal.cascade.walkMs),
+    });
+  } catch (error) {
+    // The set is stored and the run open: answered as a removal still going,
+    // with its id, so the caller carries it on through its route (and the
+    // removal job does if nobody does), rather than with an error that names
+    // no run while the run holds the one open slot.
+    removal.cascade.logError?.(
+      "[page-builder] a breakpoint removal's walk failed after its set was " +
+        "stored; it is carried on by its route or the removal job.",
+      { runId: run.id, error }
+    );
+    report = NOT_WALKED;
+  }
   return removalAnswer(
     SAVED,
     (removal): SiteBreakpointsSaved => ({ breakpoints, removal }),
@@ -570,6 +696,15 @@ async function saveBreakpoints(
     report
   );
 }
+
+/** A walk that did not run: nothing done, and not finished. */
+const NOT_WALKED: RewriteReport = {
+  rewritten: [],
+  unchanged: [],
+  left: [],
+  caughtByFinalWalk: [],
+  finished: false,
+};
 
 /**
  * Store the site's breakpoints: the one write that may change them.
@@ -639,9 +774,10 @@ const CARRIED = {
  * site manager may: the walk writes as the system, so whose request carries
  * it on changes nothing it does.
  *
- * A run whose breakpoints the site still defines is one whose set was never
- * stored (its save failed after opening it), so it is dropped rather than
- * walked: walking it would strip values the site still emits.
+ * Only the run's breakpoints the site does not define now are stripped: one
+ * defined again (or never removed, where its save failed after opening the
+ * run) holds values the site still emits, so they stay, and a run left with
+ * none is closed.
  */
 async function carryOnRemoval(
   req: Request,
@@ -674,20 +810,8 @@ async function carryOnRemoval(
       logContext: { reason: "breakpoint-removal-no-run", runId },
     });
   }
-  const defined = new Set(
-    breakpointContexts(
-      siteBreakpoints(currentStyle(removal, await removal.stored(ctx)))
-    ).map(context => context.id)
-  );
-  if (run.removedIds.some(id => defined.has(id))) {
-    // A done run's documents are left alone too: their values are under a
-    // breakpoint the site emits again, so they are the site's own now.
-    if (run.open) await service.abandon(run.id);
-    return respondMutation<SiteBreakpointRemoval>(
-      "Nothing was removed: the site still has these breakpoints.",
-      { runId, finished: true, left: 0 }
-    );
-  }
+  // The walk strips only the run's ids the site does not define now, and
+  // closes a run whose ids it defines again (`service`).
   const report = await service.walk(runId, {
     deadline: new Date(Date.now() + removal.cascade.walkMs),
   });

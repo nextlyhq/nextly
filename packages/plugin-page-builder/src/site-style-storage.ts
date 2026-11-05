@@ -96,7 +96,8 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+/** Whether two stored values hold the same thing, whatever their key order. */
+export function sameStoredValue(a: unknown, b: unknown): boolean {
   return (
     JSON.stringify(canonical(a ?? null)) ===
     JSON.stringify(canonical(b ?? null))
@@ -126,7 +127,7 @@ export function refuseBreakpointsOutsideSettings(hook: {
   if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "breakpoints")) return;
-  if (sameValue(data.breakpoints, hook.originalData?.breakpoints)) return;
+  if (sameStoredValue(data.breakpoints, hook.originalData?.breakpoints)) return;
   if (hook.user === undefined && hook.principal === undefined) return;
   throw new NextlyError({
     code: "FORBIDDEN",
@@ -200,8 +201,10 @@ function lockedEntryChanged(
   removed: ReadonlySet<string> | undefined
 ): boolean {
   if (now === undefined) return true;
-  if (now.locked !== true || sameValue(was, now)) return false;
-  return removed === undefined || !sameValue(stripClass(was, removed), now);
+  if (now.locked !== true || sameStoredValue(was, now)) return false;
+  return (
+    removed === undefined || !sameStoredValue(stripClass(was, removed), now)
+  );
 }
 
 /**

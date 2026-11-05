@@ -58,14 +58,22 @@ export interface Removal {
  * A run's removal: its ids, and the set it removed them from, resolved as the
  * site resolved it then (the stored set over the configured defaults, which
  * a stored `null` gives back).
+ *
+ * With `defined`, the breakpoint ids the site defines now, an id defined again
+ * since the run removed it is left out: its values are under a breakpoint the
+ * site emits again, so they are the site's own, and the run strips only the
+ * ids still removed.
  */
 export function removalOf(
   run: Pick<BreakpointRun, "removedIds" | "before">,
-  defaults: SiteStyleData | undefined
+  defaults: SiteStyleData | undefined,
+  defined?: ReadonlySet<string>
 ): Removal {
   const stored = checkStoredBreakpoints(run.before).value;
   return {
-    ids: new Set(run.removedIds),
+    ids: new Set(
+      run.removedIds.filter(id => defined === undefined || !defined.has(id))
+    ),
     before: siteBreakpoints(
       resolveSiteStyle(defaults, { breakpoints: stored ?? undefined })
     ),

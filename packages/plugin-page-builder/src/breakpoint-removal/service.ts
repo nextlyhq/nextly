@@ -35,6 +35,7 @@ import type { SiteStyleData } from "../site-style";
 
 import {
   removalRunStore,
+  WRITTEN_BACK,
   type BreakpointRun,
   type HoldingRun,
 } from "./run-store";
@@ -88,6 +89,20 @@ export interface BreakpointRemovalService {
    * on its answer accepts nothing then.
    */
   openRemoval(): Promise<Removal | null>;
+  /**
+   * The open removal with every id it removed, for the one write that stores
+   * the set without them: the site still defines them while that write is
+   * judged, since it is the write that removes them, so judging it by the
+   * ids defined now would leave nothing to accept. `null` when none is open;
+   * throws when the runs cannot be read.
+   */
+  openRemovalAsSaved(): Promise<Removal | null>;
+  /**
+   * Carry on whatever removal is owed a walk, within `budget`: the open one,
+   * or else a done one a write brought values back to while another was open
+   * (`WRITTEN_BACK`). Nothing when neither is.
+   */
+  carryOn(budget: WalkBudget): Promise<void>;
 }
 
 /** What the installed plugin hands the service. */
@@ -98,6 +113,11 @@ export interface RemovalInstall {
   readonly site: DocumentSite & Pick<RewriteSite, "defaultLocale">;
   /** The configured site style, which a stored `null` breakpoint set gives back. */
   readonly defaults: SiteStyleData | undefined;
+  /**
+   * The breakpoint ids the site defines now, read when asked: a run strips
+   * only those of its ids the site does not define again.
+   */
+  readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
 }
 
 /** What a call on a removal that is already done answers. */
@@ -109,11 +129,71 @@ const NOTHING_LEFT: RewriteReport = {
   finished: true,
 };
 
+/**
+ * A run's removal as it stands now: its ids less those the site defines
+ * again, which the walk and the locks both judge by, so a lock never accepts
+ * a strip the walk would not make.
+ */
+async function removalNow(
+  run: BreakpointRun,
+  installed: RemovalInstall
+): Promise<Removal> {
+  return removalOf(
+    run,
+    installed.defaults,
+    await installed.definedBreakpoints()
+  );
+}
+
 /** The service over the installed plugin, resolved per call. */
 export function breakpointRemovalService(
   install: () => RemovalInstall
 ): BreakpointRemovalService {
   const runs = () => removalRunStore(install().db, install().dialect);
+  const walk = async (
+    runId: string,
+    budget: WalkBudget
+  ): Promise<RewriteReport> => {
+    const store = runs();
+    const run = await store.runById(runId);
+    if (run === null) {
+      throw NextlyError.notFound({
+        logContext: { reason: "breakpoint-removal-no-run", runId },
+      });
+    }
+    const installed = install();
+    const removal = await removalNow(run, installed);
+    if (removal.ids.size === 0) {
+      // Every breakpoint it removed is defined again (or its set was never
+      // stored): what documents hold under them is the site's own, and there
+      // is nothing to strip. An open run is closed, keeping its row as the
+      // record, so the one open slot is not held for nothing.
+      if (run.open) await store.advance(run.id, run.phase, "done", null);
+      return NOTHING_LEFT;
+    }
+    // A done run is walked again only for the documents it left, which
+    // keep its ids from being defined again until they are stripped; with
+    // none left it is closed, and values a breakpoint added since put back
+    // are the site's own.
+    if (!run.open && !(await store.reopen(runId))) return NOTHING_LEFT;
+    return rewriteHosts(
+      {
+        fence: store,
+        progress: progressStore(installed.db, installed.dialect),
+        source: siteWalkSource(installed.site),
+        read: siteHostReader(installed.site),
+        write: systemHostWriter(installed.site),
+      },
+      {
+        runId,
+        step: stripBreakpointsStep(removal),
+        ...(budget.maxDocuments === undefined
+          ? {}
+          : { maxDocuments: budget.maxDocuments }),
+        ...(budget.deadline === undefined ? {} : { deadline: budget.deadline }),
+      }
+    );
+  };
   return {
     openRun: () => runs().openRun(),
     runById: runId => runs().runById(runId),
@@ -123,41 +203,24 @@ export function breakpointRemovalService(
     holding: () => runs().holding(),
     openRemoval: async () => {
       const run = await runs().openRun();
+      return run === null ? null : removalNow(run, install());
+    },
+    openRemovalAsSaved: async () => {
+      const run = await runs().openRun();
       return run === null ? null : removalOf(run, install().defaults);
     },
-    walk: async (runId, budget) => {
+    walk,
+    carryOn: async budget => {
       const store = runs();
-      const run = await store.runById(runId);
-      if (run === null) {
-        throw NextlyError.notFound({
-          logContext: { reason: "breakpoint-removal-no-run", runId },
-        });
-      }
-      // A done run is walked again only for the documents it left, which
-      // keep its ids from being defined again until they are stripped; with
-      // none left it is closed, and values a breakpoint added since put back
-      // are the site's own.
-      if (!run.open && !(await store.reopen(runId))) return NOTHING_LEFT;
-      const installed = install();
-      return rewriteHosts(
-        {
-          fence: store,
-          progress: progressStore(installed.db, installed.dialect),
-          source: siteWalkSource(installed.site),
-          read: siteHostReader(installed.site),
-          write: systemHostWriter(installed.site),
-        },
-        {
-          runId,
-          step: stripBreakpointsStep(removalOf(run, installed.defaults)),
-          ...(budget.maxDocuments === undefined
-            ? {}
-            : { maxDocuments: budget.maxDocuments }),
-          ...(budget.deadline === undefined
-            ? {}
-            : { deadline: budget.deadline }),
-        }
-      );
+      // The open run first: it holds the one open slot, and a done run
+      // cannot be opened again while it does.
+      const owed =
+        (await store.openRun()) ??
+        (await store.holding()).find(held =>
+          held.leftReasons.includes(WRITTEN_BACK)
+        )?.run;
+      if (owed === null || owed === undefined) return;
+      await walk(owed.id, budget);
     },
   };
 }
