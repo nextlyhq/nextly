@@ -57,6 +57,16 @@ vi.mock("../../domains/versions/author-hydration", () => ({
   peopleById: (ids: readonly string[]) => peopleById(ids) as unknown,
 }));
 
+// The change a holder is told of, read after a claim or renewal names `_rev`.
+// Its parser stays real; only the read is stood in for, to make it fail.
+const changeSinceHeldVersion = vi.fn();
+vi.mock("../../domains/document-lock/held-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/document-lock/held-version")
+  >()),
+  changeSinceHeldVersion: (...args: unknown[]) =>
+    changeSinceHeldVersion(...args),
+}));
 vi.mock("../authenticated-read", () => ({
   readCaller: (auth: unknown) => Promise.resolve({ user: auth }),
   PRIVATE_NO_STORE_HEADERS: {
@@ -353,6 +363,31 @@ describe("document lock route", () => {
       expect(response.status).toBe(400);
     }
     expect(service.acquire).not.toHaveBeenCalled();
+  });
+
+  it("keeps a claim and a renewal answered when reading what changed fails", async () => {
+    // Both have committed when the change is read. Answered as errors, the
+    // claim's token would never reach the editor, which could then neither
+    // renew nor release the lease it had just taken.
+    changeSinceHeldVersion.mockRejectedValue(new Error("history unreadable"));
+    service.acquire.mockResolvedValue({ status: "acquired", claimToken: "t" });
+    service.renew.mockResolvedValue({ status: "renewed" });
+
+    const claimed = await acquireLock(post({ ...ref, _rev: "3" }));
+    const renewed = await renewLock(
+      post({ ...ref, claimToken: "t", _rev: "3" }, "PATCH")
+    );
+
+    expect(changeSinceHeldVersion).toHaveBeenCalledTimes(2);
+    expect(claimed.status).toBe(200);
+    const claimItem = ((await claimed.json()) as { item: Record<string, unknown> })
+      .item;
+    expect(claimItem).toMatchObject({ status: "acquired", claimToken: "t" });
+    expect(claimItem).not.toHaveProperty("changed");
+    expect(renewed.status).toBe(200);
+    expect(
+      ((await renewed.json()) as { item: Record<string, unknown> }).item
+    ).toMatchObject({ status: "renewed" });
   });
 
   it("requires a claim token to renew or release", async () => {
