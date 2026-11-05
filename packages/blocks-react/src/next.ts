@@ -97,6 +97,7 @@ import type {
   QueryBudget,
   ResolvedMedia,
 } from "./context";
+import { resolveLucideIcon } from "./icons/lucide";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -2536,6 +2537,8 @@ function blocksRouteConfig(
         queries: budget,
         resolveMedia,
         resolveEntryPath,
+        // The published page draws the Lucide set, vendored with this package.
+        resolveIcon: resolveLucideIcon,
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(
