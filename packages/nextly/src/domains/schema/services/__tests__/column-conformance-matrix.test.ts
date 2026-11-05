@@ -137,6 +137,7 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
   email: [{ label: "plain", field: { type: "email" } }],
   password: [{ label: "plain", field: { type: "password" } }],
   code: [{ label: "plain", field: { type: "code" } }],
+  icon: [{ label: "plain", field: { type: "icon" } }],
   number: [
     { label: "integer", field: { type: "number" } },
     // `dbType` is how a number states it wants exact fixed-point storage, which is what a money
@@ -448,7 +449,7 @@ const ACCEPTED = byAspect([
     { origins: ["fieldGroup"], dialects: ["postgresql"] }
   ),
   ...everywhere(
-    ["email", "password"],
+    ["email", "icon", "password"],
     ["plain"],
     "type",
     "field-group generator bounds the column at varchar(255); descriptor leaves it unbounded text",
@@ -659,7 +660,7 @@ describe("column conformance: the generators against the descriptor", () => {
   it("measured every field type through both generators on every dialect", () => {
     const types = Object.keys(CASES).length;
     const variations = Object.values(CASES).reduce((n, c) => n + c.length, 0);
-    expect(types, "every DynamicFieldType has a row").toBe(19);
+    expect(types, "every DynamicFieldType has a row").toBe(20);
     // A Record satisfied by `newType: []` type-checks and measures nothing, and the aggregate below
     // would stay comfortably over its floor while the new type entered uncovered.
     expect(

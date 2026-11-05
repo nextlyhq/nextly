@@ -22,6 +22,7 @@ import {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -35,6 +36,7 @@ import {
   isChipsField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { ICON_ID_PATTERN } from "../../../collections/fields/types/icon";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
 import { fieldAdmitsNull } from "./field-nullability";
@@ -467,6 +469,11 @@ export class ZodGenerator {
     // Code fields
     else if (isCodeField(field)) {
       zodSchema = "z.string()";
+    }
+    // Icon fields: the id's shape only ("lucide:star"). Whether the set and
+    // the icon exist is a runtime question, so an unknown id still parses.
+    else if (isIconField(field)) {
+      zodSchema = `z.string().regex(${String(ICON_ID_PATTERN)})`;
     }
     // Number fields
     else if (isNumberField(field)) {

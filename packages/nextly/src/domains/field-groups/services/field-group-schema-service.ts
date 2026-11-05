@@ -41,6 +41,7 @@ import {
   isTextareaField,
   isRichTextField,
   isEmailField,
+  isIconField,
   isPasswordField,
   isCodeField,
   isNumberField,
@@ -817,7 +818,8 @@ export class FieldGroupSchemaService {
     ) {
       return types.text;
     }
-    if (isEmailField(field)) {
+    // An icon id ("lucide:star") is a short string, sized like an email.
+    if (isEmailField(field) || isIconField(field)) {
       return types.varchar(255);
     }
     if (isPasswordField(field)) {
@@ -867,7 +869,12 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+    if (
+      isTextField(field) ||
+      isEmailField(field) ||
+      isIconField(field) ||
+      isPasswordField(field)
+    ) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (
@@ -914,7 +921,12 @@ export class FieldGroupSchemaService {
     const isRequired = "required" in field && field.required === true;
     const colName = this.toSnakeCase(field.name);
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+    if (
+      isTextField(field) ||
+      isEmailField(field) ||
+      isIconField(field) ||
+      isPasswordField(field)
+    ) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
@@ -972,6 +984,7 @@ export class FieldGroupSchemaService {
     if (
       isTextField(field) ||
       isEmailField(field) ||
+      isIconField(field) ||
       isPasswordField(field) ||
       isTextareaField(field) ||
       isRichTextField(field) ||
