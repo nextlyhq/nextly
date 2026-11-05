@@ -43,6 +43,28 @@ import type {
   WebhookEventTypeEntry,
 } from "@admin/types/webhooks";
 
+/**
+ * The ticked types the server no longer lists, when the subscription is being
+ * changed; none when the events are left as they were, which keeps them.
+ */
+function unavailableToChange(
+  values: WebhookFormValues,
+  original: WebhookFormValues | undefined,
+  listed: readonly WebhookEventTypeEntry[] | undefined
+): WebhookEventType[] {
+  if (listed === undefined || values.allEvents) return [];
+  const before = original?.allEvents ? [] : (original?.eventTypes ?? []);
+  const unchanged =
+    original !== undefined &&
+    !original.allEvents &&
+    before.length === values.eventTypes.length &&
+    before.every(type => values.eventTypes.includes(type));
+  if (unchanged) return [];
+  return webhookEventChoices(listed, values.eventTypes)
+    .filter(choice => choice.unavailable)
+    .map(choice => choice.type);
+}
+
 const EMPTY_VALUES: WebhookFormValues = {
   name: "",
   url: "",
@@ -100,6 +122,20 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
   };
 
   const handleSubmit = (values: WebhookFormValues) => {
+    // A type the server no longer lists is kept while the events are left as
+    // they were, but a changed subscription is judged afresh on save, and the
+    // server refuses it. Said here, by name, rather than as a refused save.
+    const stillUnavailable = unavailableToChange(
+      values,
+      defaultValues,
+      eventTypes
+    );
+    if (stillUnavailable.length > 0) {
+      form.setError("eventTypes", {
+        message: `${stillUnavailable.join(", ")} can no longer be subscribed to. Untick ${stillUnavailable.length === 1 ? "it" : "them"} to change this endpoint's events, or leave the events as they were.`,
+      });
+      return;
+    }
     onSubmit(values);
   };
 

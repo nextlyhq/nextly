@@ -107,6 +107,46 @@ describe("WebhookForm", () => {
     ]);
   });
 
+  it("refuses to change the events while an unavailable type is still ticked, naming it", async () => {
+    const { onSubmit, user } = setup({
+      defaultValues: { ...seeded, eventTypes: ["acme-blog.comment.added"] },
+      submitLabel: "Save changes",
+      pendingLabel: "Saving…",
+    });
+
+    const listedRow = screen.getByText("entry.created").closest("label");
+    await user.click(within(listedRow as HTMLElement).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(
+      await screen.findByText(
+        /acme-blog\.comment\.added can no longer be subscribed to\. Untick it/
+      )
+    ).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("changes the events once the unavailable type is unticked", async () => {
+    const { onSubmit, user } = setup({
+      defaultValues: { ...seeded, eventTypes: ["acme-blog.comment.added"] },
+      submitLabel: "Save changes",
+      pendingLabel: "Saving…",
+    });
+
+    const unavailableRow = screen
+      .getByText("acme-blog.comment.added")
+      .closest("label");
+    await user.click(
+      within(unavailableRow as HTMLElement).getByRole("checkbox")
+    );
+    const listedRow = screen.getByText("entry.created").closest("label");
+    await user.click(within(listedRow as HTMLElement).getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].eventTypes).toEqual(["entry.created"]);
+  });
+
   it("offers no types, and says so, while they load", () => {
     setup({ eventTypes: undefined, defaultValues: seeded });
     expect(screen.getByText("Loading event types…")).toBeInTheDocument();
