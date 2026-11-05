@@ -43,7 +43,14 @@ const shared = {
 export default defineConfig([
   {
     ...shared,
-    entry: ["src/index.ts", "src/next.ts", "src/blocks/index.ts"],
+    // `icons/lucide` is the vendored icon set, an entry of its own so only a
+    // server render that asks for it carries it.
+    entry: [
+      "src/index.ts",
+      "src/next.ts",
+      "src/blocks/index.ts",
+      "src/icons/lucide.ts",
+    ],
     clean: true,
   },
   /*

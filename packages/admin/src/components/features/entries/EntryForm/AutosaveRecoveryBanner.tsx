@@ -118,7 +118,9 @@ export function LiveDocumentRecoveryOffer({
   return (
     <AutosaveRecoveryBanner
       savedAt={offer.savedAt}
-      onRestore={recovery.restore}
+      // Called with nothing: the recovery's restore takes an optional step of
+      // its own, and the click's event passed through would become that step.
+      onRestore={() => recovery.restore()}
       onDismiss={recovery.dismiss}
       olderVersion={offer.olderVersion}
       className={className}

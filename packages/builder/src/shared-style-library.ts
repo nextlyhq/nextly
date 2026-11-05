@@ -10,8 +10,9 @@
  * @module shared-style-library
  */
 import {
+  classNameOf,
+  isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
@@ -144,6 +145,8 @@ export interface SharedStyleRow {
   readonly locked: boolean;
   /** Supplied by the site's code: shown, never renamed, locked or removed. */
   readonly inCode: boolean;
+  /** A look, bound to one block type, rather than a shared style. */
+  readonly look?: boolean;
   readonly styles: NodeStyles;
 }
 
@@ -160,15 +163,29 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${namedClassName(entry.slug)}`,
+    // A look's class is written under its own prefix.
+    className: `.${classNameOf(entry)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
+    ...(isLook(entry) ? { look: true } : {}),
     styles: entry.styles,
   }));
 }
 
+/**
+ * The library without its looks: the shared styles an author applies to any
+ * block, as the Shared styles tab and the picker list them. A look is bound
+ * to one block type and is picked from that block's own tiles.
+ */
+export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
+  return library.filter(entry => !isLook(entry));
+}
+
 /** A style's name: its label, or its slug for a style made before labels. */
-function sharedStyleName(entry: Pick<NamedClass, "slug" | "label">): string {
+/** A class's name as the surfaces show it: its label, or its slug when blank. */
+export function sharedStyleName(
+  entry: Pick<NamedClass, "slug" | "label">
+): string {
   const label = entry.label?.trim();
   return label === undefined || label === "" ? entry.slug : label;
 }

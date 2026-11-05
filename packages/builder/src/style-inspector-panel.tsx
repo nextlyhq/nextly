@@ -84,17 +84,22 @@ import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import {
   breakpointQueries,
-  liveBreakpointsFor,
+  editedTierLive,
   matchedBreakpoints,
 } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { breakpointsAtWidth } from "./canvas-width";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { COLUMNS_ROW, type AppliedAt } from "./columns-layout";
+import { ColumnsLayoutControl } from "./columns-layout-field";
 import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
+import { FocalFrame } from "./focal-frame";
+import { FocalPointField } from "./focal-point-field";
 import {
   FontChoicesContext,
   FontFamilyField,
@@ -123,6 +128,7 @@ import {
 } from "./prefers-dark";
 import { radioGroupStep } from "./roving-radios";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
+import { SectionHeld } from "./section-held";
 import type { SharedStyleRow } from "./shared-style-library";
 import {
   moveToSharedStyleClear,
@@ -270,6 +276,11 @@ const BLOCK_TARGET: StyleTarget = { kind: "block", worn: [] };
 const StyleTargetContext = React.createContext<StyleTarget>(BLOCK_TARGET);
 
 export interface StyleInspectorPanelProps {
+  /**
+   * The mode the selected block is drawn in, when the caller already reads
+   * it for a sibling surface: one canvas subscription, not two.
+   */
+  tokenMode?: TokenMode;
   /**
    * The editor whose selected block this styles.
    *
@@ -533,9 +544,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      <StyleInspectorBody {...props} />
+      {props.tokenMode === undefined ? (
+        <StyleInspectorOwnMode {...props} />
+      ) : (
+        <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+      )}
     </FontChoicesContext.Provider>
   );
+}
+
+/** The panel reading its block's mode itself, where no caller hands it one. */
+function StyleInspectorOwnMode(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  const tokenMode = useCanvasTokenModeAt(props.editor.selectedId);
+  return <StyleInspectorBody {...props} tokenMode={tokenMode} />;
 }
 
 function StyleInspectorBody({
@@ -553,7 +576,8 @@ function StyleInspectorBody({
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
   showReadOnlyReason = true,
-}: StyleInspectorPanelProps): React.JSX.Element {
+  tokenMode,
+}: StyleInspectorPanelProps & { tokenMode: TokenMode }): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
   // two collapsed onto one value made the first section impossible to close,
@@ -567,8 +591,7 @@ function StyleInspectorBody({
     {}
   );
   // The mode the selected block is drawn in, its nearest theme marker first
-  // and the device after, read once here and handed to every control below.
-  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  // and the device after, read once above and handed to every control below.
   const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
@@ -602,13 +625,15 @@ function StyleInspectorBody({
    * both are only valid against the document they were read from, and an edit
    * anywhere changes the document and the values shown together.
    */
+  // The picture the canvas draws for the node, lent by the inspector.
+  const renderedPicture = React.useContext(FocalFrame).picture;
   const subject = selectedSubject(editor, cascade, renderedTag);
   const inspection = inspectStyle(editor.document, editor.selectedId, {
     ...policy,
     state,
     breakpoint,
     variantAt: (property, path) => chosenForms[formKey(property, path)],
-    media: rendersMedia(renderedTag),
+    media: rendersMedia(renderedTag, renderedPicture),
     breakpoints,
     cascade: targetCascade(target, cascadeFor(cascade, subject)),
     // A shared target's values are the style's own, so the controls show
@@ -715,37 +740,83 @@ function StyleInspectorBody({
     provenanceOf,
     editing,
     onChooseForm: chooseForm,
+    breakpoints,
   };
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <CanvasTokenModeProvider value={tokenMode}>
-        <div className="nx-style-inspector" data-style-target={target.kind}>
-          {showReadOnlyReason ? (
-            <ReadOnlyNote target={target} reason={readOnlyReason} />
-          ) : null}
-          <NoStyleProperties count={inspected.sections.length} />
-          <Accordion
-            type="single"
-            collapsible
-            value={open}
-            onValueChange={setOpenGroup}
-          >
-            {inspected.sections.map(section => (
-              <StyleSectionItem
-                // Keyed by node AND group: a bare group would let React reuse one
-                // block's inputs for the next block's same-named section, so a field
-                // would keep the previous block's uncommitted text.
-                key={`${inspected.nodeId}:${section.key}`}
-                section={section}
-                readOnlyReason={readOnlyReason}
-                {...surroundings}
-              />
-            ))}
-          </Accordion>
-        </div>
-      </CanvasTokenModeProvider>
+      <AppliedAtTier.Provider
+        value={appliedAtReader({
+          cascade,
+          subject,
+          state: inspected.state,
+          breakpoints,
+          nodeId: inspected.nodeId,
+        })}
+      >
+        <CanvasTokenModeProvider value={tokenMode}>
+          <div className="nx-style-inspector" data-style-target={target.kind}>
+            {showReadOnlyReason ? (
+              <ReadOnlyNote target={target} reason={readOnlyReason} />
+            ) : null}
+            <NoStyleProperties count={inspected.sections.length} />
+            <StyleSections
+              sections={inspected.sections}
+              nodeId={inspected.nodeId}
+              open={open}
+              onOpen={setOpenGroup}
+              readOnlyReason={readOnlyReason}
+              surroundings={surroundings}
+              fit={inspected.objectFit}
+            />
+          </div>
+        </CanvasTokenModeProvider>
+      </AppliedAtTier.Provider>
     </StyleTargetContext.Provider>
+  );
+}
+
+/**
+ * The panel's sections, one open at a time, with the block's picture and fit
+ * for the focal point drawn over it.
+ */
+function StyleSections({
+  sections,
+  nodeId,
+  open,
+  onOpen,
+  readOnlyReason,
+  surroundings,
+  fit,
+}: {
+  sections: readonly StyleSection[];
+  nodeId: string;
+  open: string;
+  onOpen: (group: string) => void;
+  readOnlyReason: React.ComponentProps<
+    typeof StyleSectionItem
+  >["readOnlyReason"];
+  surroundings: StyleFieldSurroundings;
+  fit: string | undefined;
+}): React.JSX.Element {
+  // The picture lent from above, with the fit in force here.
+  const { picture, position } = React.useContext(FocalFrame);
+  return (
+    <FocalFrame.Provider value={{ picture, position, fit }}>
+      <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
+        {sections.map(section => (
+          <StyleSectionItem
+            // Keyed by node AND group: a bare group would let React reuse one
+            // block's inputs for the next block's same-named section, so a
+            // field would keep the previous block's uncommitted text.
+            key={`${nodeId}:${section.key}`}
+            section={section}
+            readOnlyReason={readOnlyReason}
+            {...surroundings}
+          />
+        ))}
+      </Accordion>
+    </FocalFrame.Provider>
   );
 }
 
@@ -887,6 +958,8 @@ interface StyleFieldSurroundings {
   provenanceOf: ProvenanceOf;
   editing: EditedAddress;
   onChooseForm: ChooseForm;
+  /** The site's devices, for a control that writes at another one. */
+  breakpoints: BreakpointSet | undefined;
 }
 
 /**
@@ -968,7 +1041,13 @@ const REPLACED_ELEMENTS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether the block renders as one of {@link REPLACED_ELEMENTS}. */
-function rendersMedia(renderedTag: string | undefined): boolean {
+function rendersMedia(
+  renderedTag: string | undefined,
+  renderedPicture?: string
+): boolean {
+  // A replaced element, or a picture of the block's own inside a link or a
+  // figure: a captioned or linked image's root is not the image.
+  if (renderedPicture !== undefined) return true;
   return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
 }
 
@@ -994,6 +1073,7 @@ function StyleSectionItem({
   provenanceOf,
   editing,
   onChooseForm,
+  breakpoints,
 }: {
   section: StyleSection;
   /** Why every control is read-only, which also withholds "+ More". */
@@ -1030,6 +1110,7 @@ function StyleSectionItem({
     provenanceOf,
     editing,
     onChooseForm,
+    breakpoints,
   };
   return (
     <AccordionItem value={section.key} data-section={section.key}>
@@ -1103,6 +1184,9 @@ function SectionFields({
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
+        {sectionKey === "layout" ? (
+          <ColumnsLayoutFields surroundings={surroundings} />
+        ) : null}
         {rings === undefined ? null : (
           <SpacingBox
             margin={rings.margin}
@@ -1126,6 +1210,112 @@ function SectionFields({
       </SectionHeld.Provider>
     </fieldset>
   );
+}
+
+/**
+ * A Columns row's layout tiles and stacking, at the top of its Layout
+ * section. Only for the row itself: a shared style's values reach many rows,
+ * and its tiles would add or remove columns in none of them.
+ */
+function ColumnsLayoutFields({
+  surroundings,
+}: {
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
+  if (
+    target.kind !== "block" ||
+    surroundings.editing.blockType !== COLUMNS_ROW
+  ) {
+    return null;
+  }
+  return (
+    <ColumnsLayoutControl
+      editor={surroundings.editor}
+      nodeId={surroundings.nodeId}
+      state={surroundings.state}
+      breakpoint={surroundings.breakpoint}
+      breakpoints={surroundings.breakpoints}
+      inherited={reachingLayout(surroundings.provenanceOf)}
+      applied={applied}
+    />
+  );
+}
+
+/**
+ * What the cascade applies to the edited block at another tier, lent to a
+ * control that writes at tiers other than the one being edited (where a row
+ * stacks). Absent where the host compiles no cascade.
+ */
+const AppliedAtTier = React.createContext<AppliedAt | undefined>(undefined);
+
+/**
+ * The same provenance reading the dots use, asked at a tier: what a canvas at
+ * that tier's width applies, through the one ranking of the trace.
+ */
+function appliedAtReader({
+  cascade,
+  subject,
+  state,
+  breakpoints,
+  nodeId,
+}: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  state: StyleState;
+  breakpoints: BreakpointSet | undefined;
+  nodeId: string;
+}): AppliedAt | undefined {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return (tier, cssProperty) => {
+    const width = breakpoints?.viewport.find(
+      each => each.id === tier
+    )?.maxWidth;
+    const read = provenanceReader({
+      cascade,
+      subject,
+      live: breakpointsAtWidth(breakpoints, width),
+      state,
+      breakpoint: tier,
+      breakpoints,
+      onJumpToBreakpoint: undefined,
+    });
+    const provenance = read({
+      kind: "cssValue",
+      cssProperty,
+      tokenKinds: [],
+    })?.provenance;
+    if (provenance === undefined || provenance.kind === "unset")
+      return undefined;
+    const { entry } = provenance;
+    return {
+      value: entry.value,
+      breakpoint: entry.breakpoint,
+      own: entry.origin.kind === "node" && entry.origin.id === nodeId,
+    };
+  };
+}
+
+/** The catalog's leaf for a row's column template, which the trace records. */
+const TEMPLATE_LEAF: StyleLeaf | undefined = (() => {
+  const shape = STYLE_CATALOG.find(
+    entry => entry.property === "gridTemplateColumns"
+  )?.shape;
+  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
+})();
+
+/**
+ * The column template reaching the row from elsewhere (a wider device, a
+ * shared style it wears, another state), as the cascade the dots read
+ * answers it: one reading of the cascade, never a second walk of it.
+ */
+function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
+  const answer =
+    TEMPLATE_LEAF === undefined ? undefined : provenanceOf(TEMPLATE_LEAF);
+  return answer?.provenance.kind === "inherited"
+    ? answer.provenance.entry.value
+    : undefined;
 }
 
 /** Margin and padding drawn as one box, and what the section shows besides. */
@@ -2116,7 +2306,7 @@ function provenanceReader({
      */
     const beneath = provenanceBeneath({
       ...query,
-      liveBreakpoints: liveBreakpointsFor(breakpoints, breakpoint),
+      liveBreakpoints: editedTierLive(breakpoints, breakpoint, live),
     });
     return {
       provenance,
@@ -5054,6 +5244,12 @@ const OWN_FIELDS: Readonly<
     Field: DecorationField,
     buttons: true,
   },
+  // Any position: the nine points, or one written as CSS beside them.
+  "object-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: FocalPointField,
+    buttons: true,
+  },
 };
 
 /**
@@ -5237,10 +5433,24 @@ function textNumber(text: string): number | undefined {
 }
 
 /**
- * Whether the section a field sits in is held read-only. Its fieldset holds
- * the form controls; a control that is not one (a slider's thumb) reads this.
+ * What describes a number field: its own description, and the words for its
+ * unit while what it shows is a number, or nothing at all. What it shows is
+ * the draft, or, while that is empty, the inherited value it hints. A keyword
+ * such as `inherit` has no unit to be said in.
  */
-const SectionHeld = React.createContext(false);
+export function describedWithUnit(
+  describedBy: string | undefined,
+  unitWords: string | undefined,
+  draft: string,
+  inherited: string | undefined
+): string | undefined {
+  const shown = trimCssWhitespace(draft) === "" ? (inherited ?? "") : draft;
+  const keyword =
+    trimCssWhitespace(shown) !== "" && textNumber(shown) === undefined;
+  return unitWords === undefined || keyword
+    ? describedBy
+    : [describedBy, unitWords].filter(Boolean).join(" ");
+}
 
 /**
  * The id of words naming a field's unit for a screen reader, where the unit
@@ -5528,6 +5738,8 @@ function NumericField({
 }): React.JSX.Element {
   // Words for a unit shown only as a sign beside the field, for its description.
   const unitWords = React.useContext(UnitWords);
+  // The value reaching the field from another tier, which it shows as a hint.
+  const inheritedHint = React.useContext(InheritedValue);
   const units = unitChoicesFor(control.leaf);
   // The draft lives HERE rather than inside the text field, because two
   // controls edit one value and the unit menu was reading the other copy. An
@@ -5589,11 +5801,12 @@ function NumericField({
         draft={draft}
         setDraft={setDraft}
         tokens={tokens}
-        describedBy={
-          unitWords === undefined
-            ? describedBy
-            : [describedBy, unitWords].filter(Boolean).join(" ")
-        }
+        describedBy={describedWithUnit(
+          describedBy,
+          unitWords,
+          draft,
+          inheritedHint
+        )}
         invalid={describedBy !== undefined}
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
