@@ -192,6 +192,7 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import { hasLifecycle } from "../../versions/recorded-status";
+import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   outOfDateSharedFields,
@@ -964,11 +965,8 @@ export class SingleMutationService extends BaseService {
       });
     }
     // Set by a refusal inside the transaction, answered once it rolls back.
-    const stale: PendingChangeStale = {
-      holder: {},
-      judging: await this.pendingChangeJudging(params, singleMeta),
-    };
-    const judging = stale.judging;
+    const judging = await this.pendingChangeJudging(params, singleMeta);
+    const stale: PendingChangeStale = { holder: {}, judging };
 
     // The drafts it removed, counted by the delete made under the lock.
     return this.adapter
@@ -995,21 +993,15 @@ export class SingleMutationService extends BaseService {
           scopeSlug: params.slug,
           entryId,
         };
-        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-          discardedRef,
-          draftLocale
+        const { removed, judged: before } = await removePendingChangeJudged(
+          tx,
+          { ref: discardedRef, locale: draftLocale },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
+          { main: undefined, language: undefined }
         );
-        await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the Single's history only when there was a draft to discard.
-        if (removed > 0 && judging) {
-          // Judged only when there was a change to lose, and under the lock:
-          // out of date, the throw rolls the delete back.
-          const before = await this.refuseIfPendingChangeMoved(
-            tx,
-            judging,
-            entryId,
-            stale
-          );
+        if (removed > 0) {
           // A reader of the pending change now sees the live document, so the
           // version they hold no longer describes what they would read.
           await bumpDocumentRevision(

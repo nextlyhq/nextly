@@ -10,7 +10,7 @@
  *
  * @module domains/collections/services/__tests__/stale-version-pending-change.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { superAdminUser } from "../../../../__tests__/fixtures/permission-holders";
 import { defineCollection, number, text } from "../../../../config";
@@ -25,6 +25,7 @@ import {
 import { createDynamicHandlers } from "../../../../routeHandler";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { VersionsRepository } from "../../../versions/versions-repository";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -307,6 +308,26 @@ describe.each(getConfiguredTestDialects())(
         // The pending change is still there, as Ana left it.
         expect(await pendingTitle(t, id)).toBe(asAnaLeftIt);
         expect(asAnaLeftIt).not.toBe("en title");
+      });
+
+      it("judges a discard before removing anything", async () => {
+        const t = await boot(dialect);
+        const id = await englishBehindSpanish(t);
+        const read = await englishRev(t, id);
+        await save(t, id, "en", { title: "Ana's draft" }, ANA);
+        // A removal that fails: a discard that removed before judging would
+        // answer with this failure rather than with the refusal.
+        const removal = vi
+          .spyOn(VersionsRepository.prototype, "deleteWorkingDraft")
+          .mockRejectedValue(new Error("removal failed"));
+        try {
+          const refused = await restDiscard(t, id, { _rev: read });
+          expect(refused.status, JSON.stringify(refused.json)).toBe(409);
+          expect((refused.json.error as Doc).code).toBe("STALE_VERSION");
+          expect(removal).not.toHaveBeenCalled();
+        } finally {
+          removal.mockRestore();
+        }
       });
 
       it("discards from the current version", async () => {

@@ -749,6 +749,23 @@ export class VersionsRepository {
   }
 
   /**
+   * Whether a document holds a working draft in one locale, without reading
+   * its snapshot: the rows {@link deleteWorkingDraft} would remove, so a
+   * discard can be judged before anything is removed.
+   */
+  async hasWorkingDraft(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<boolean> {
+    const rows = await this.db.select<{ id: string }>(TABLE, {
+      columns: ["id"],
+      where: this.workingDraftWhere(ref, locale),
+      limit: 1,
+    });
+    return rows.length > 0;
+  }
+
+  /**
    * Delete the working draft for a document in one locale, returning the number
    * of rows removed. Called when the draft is promoted (published) or discarded.
    */

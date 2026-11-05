@@ -9,7 +9,7 @@
  *
  * @module domains/singles/__tests__/stale-version-lifecycle.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineSingle, number, text } from "../../../config";
 import {
@@ -18,6 +18,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { VersionsRepository } from "../../versions/versions-repository";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -342,6 +343,32 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         } as never)) as Result;
         expect(live.data?.siteName).toBe("EN");
+      });
+
+      it("judges a discard before removing anything", async () => {
+        const t = await boot(dialect);
+        await englishBehindSpanish(t);
+        const read = await readRev(t, SITE, "en");
+        await save(t, SITE, "en", { siteName: "Ana's draft" }, ANA);
+        // A removal that fails: a discard that removed before judging would
+        // answer with this failure rather than with the refusal.
+        const removal = vi
+          .spyOn(VersionsRepository.prototype, "deleteWorkingDraft")
+          .mockRejectedValue(new Error("removal failed"));
+        try {
+          expect(
+            await codeOf(() =>
+              singlesOf(t).discardWorkingDraftCounted({
+                slug: SITE,
+                locale: "en",
+                version: { _rev: read },
+              })
+            )
+          ).toBe("STALE_VERSION");
+          expect(removal).not.toHaveBeenCalled();
+        } finally {
+          removal.mockRestore();
+        }
       });
 
       it("discards over a change with the overwrite choice, and records it", async () => {
