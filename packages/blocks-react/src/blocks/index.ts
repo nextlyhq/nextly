@@ -106,6 +106,9 @@ export {
   type ContainerTag,
 } from "./container";
 export type { CollectionLoopProps } from "./collection-loop";
+// The engine types a list's props name, so a consumer of the props type can
+// spell its filters and relation source without importing the engine.
+export type { ListFilter, ListRelation } from "@nextlyhq/blocks-engine";
 
 /**
  * Every block in the core library.
