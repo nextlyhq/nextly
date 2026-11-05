@@ -1,4 +1,5 @@
 import {
+  breakpointContexts,
   DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
@@ -1390,6 +1391,19 @@ export const pageBuilder = (
             reason: found.reason,
           }
         );
+      // The site's style as a write is judged against: the code's defaults
+      // and the stored record of the Single as renamed, read when asked.
+      const siteStyleNow = async () => {
+        // Imported at call time, for the reason the readers above give: this
+        // entry reaches a browser bundle, where the Direct API has no place.
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        const nextly = await getCachedNextly();
+        return loadSiteStyle({
+          nextly: { findSingle: args => nextly.findSingle(args) },
+          defaults: configStyle,
+          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+        });
+      };
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -1412,22 +1426,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
-        // The classes a page may add a reference to: the ones the compiler
-        // applies, from the code's defaults and the stored record of the
-        // Single as renamed, read per write so a style removed a moment ago
-        // is gone for the next save.
-        siteClassIds: async () => {
-          // Imported at call time, for the reason the readers above give.
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = await getCachedNextly();
-          const style = await loadSiteStyle({
-            nextly: { findSingle: args => nextly.findSingle(args) },
-            defaults: configStyle,
-            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-          });
-          // Capped and resolved as the compiler reads the library, so a page
-          // may reference exactly the classes it applies.
-          return referableClassIds(style.classes ?? []);
+        // What a page may refer to, from one read of the site style: the
+        // code's defaults and the stored record of the Single as renamed,
+        // read per write so a style or a breakpoint removed a moment ago is
+        // gone for the next save.
+        siteDefinitions: async () => {
+          const style = await siteStyleNow();
+          return {
+            // Capped and resolved as the compiler reads the library, so a
+            // page may reference exactly the classes it applies.
+            classIds: referableClassIds(style.classes ?? []),
+            // The ones its stylesheet is emitted under.
+            breakpointIds: new Set(
+              breakpointContexts(siteBreakpoints(style)).map(
+                context => context.id
+              )
+            ),
+          };
         },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
