@@ -167,11 +167,10 @@ function objectLiteral(value: Record<string, unknown>): string {
 }
 
 /**
- * `data` as an object literal with the version sent under `_rev`, `version`
- * being code rather than JSON, so it joins the literal as text.
+ * `data` as an object literal with `line`, the code that sends its version,
+ * as its last entry: code rather than JSON, so it joins the literal as text.
  */
-function withVersion(data: Record<string, unknown>, version: string): string {
-  const line = `"${VERSION_KEY}": ${version}`;
+function withVersion(data: Record<string, unknown>, line: string): string {
   const literal =
     Object.keys(data).length === 0
       ? `{\n  ${line}\n}`
@@ -187,7 +186,11 @@ function withVersion(data: Record<string, unknown>, version: string): string {
  * than writing over the change. The read answers `null` for a document it
  * cannot find, so the version is read through `?.`.
  */
-function versionedData(body: string | undefined): {
+function versionedData(
+  body: string | undefined,
+  /** The code that sends the version of `current`. */
+  version = `"${VERSION_KEY}": current?.${VERSION_KEY}`
+): {
   data: string;
   readsFirst: boolean;
 } {
@@ -195,11 +198,15 @@ function versionedData(body: string | undefined): {
   if (data === null || VERSION_KEY in data || OVERWRITE_KEY in data) {
     return { data: dataArg(body), readsFirst: false };
   }
-  return {
-    data: withVersion(data, `current?.${VERSION_KEY}`),
-    readsFirst: true,
-  };
+  return { data: withVersion(data, version), readsFirst: true };
 }
+
+/**
+ * How a Single update sends the version of its read: a Single never stored
+ * reads as `null`, with no version and nothing to overwrite, so its first
+ * write sets it whatever is there.
+ */
+const SINGLE_VERSION = `...(current ? { ${VERSION_KEY}: current.${VERSION_KEY} } : { ${OVERWRITE_KEY}: true })`;
 
 /** A bulk body's `revs`, the version it gives each id, when it gives any. */
 function bulkRevs(
@@ -247,10 +254,14 @@ export function toSdk(req: CodeRequest): string {
 
   if (req.isSingle) {
     if (req.action === "update") {
-      const { data, readsFirst } = versionedData(req.body);
+      const { data, readsFirst } = versionedData(req.body, SINGLE_VERSION);
       return call([
+        // Read without creating it: a read that made the Single would leave
+        // it behind if the update were then refused.
         ...(readsFirst
-          ? [`const current = await nextly.findSingle({ slug: ${slug} });`]
+          ? [
+              `const current = await nextly.findSingle({ slug: ${slug}, createIfMissing: false });`,
+            ]
           : []),
         `const result = await nextly.updateSingle({`,
         `  slug: ${slug},`,
@@ -339,16 +350,29 @@ export function toSdk(req: CodeRequest): string {
       const revs = bulkRevs(body);
       // A version for each id: the SDK's bulk form is an update by query,
       // which takes none, so each id is updated on its own with its version,
-      // and refused alone if it changed since it was read.
+      // and refused alone if it changed since it was read, each answer kept
+      // as the REST route reports each id's.
       if (revs !== null) {
+        const named = Array.isArray(body?.ids)
+          ? body.ids.map(String)
+          : Object.keys(revs);
+        const missing = named.filter(id => typeof revs[id] !== "string");
+        // The REST route refuses the whole request, writing nothing, so no
+        // call is offered that would write the ids it does give a version.
+        if (missing.length > 0) {
+          return call([
+            `// \`revs\` gives no version for ${JSON.stringify(missing)}, so the API refuses`,
+            `// the whole request. Give every id its \`_rev\`.`,
+          ]);
+        }
         return call([
           `const revs: Record<string, string> = ${JSON.stringify(revs, null, 2)};`,
-          `const results = await Promise.all(`,
-          `  ${ids ?? JSON.stringify(Object.keys(revs))}.map(id =>`,
+          `const results = await Promise.allSettled(`,
+          `  ${ids ?? JSON.stringify(named)}.map(id =>`,
           `    nextly.update({`,
           `      collection: ${slug},`,
           `      id,`,
-          `      data: ${withVersion(data, "revs[id]").split("\n").join("\n    ")},`,
+          `      data: ${withVersion(data, `"${VERSION_KEY}": revs[id]`).split("\n").join("\n    ")},`,
           `    })`,
           `  )`,
           `);`,

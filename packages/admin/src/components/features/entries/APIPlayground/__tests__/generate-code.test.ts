@@ -291,9 +291,11 @@ describe("sdk — the version an update sends", () => {
       req({ isSingle: true, action: "update", body: '{"title":"Home"}' })
     );
     expect(out).toContain(
-      'const current = await nextly.findSingle({ slug: "posts" });'
+      'const current = await nextly.findSingle({ slug: "posts", createIfMissing: false });'
     );
-    expect(out).toContain('"title": "Home",\n    "_rev": current?._rev\n  }');
+    expect(out).toContain(
+      '"title": "Home",\n    ...(current ? { _rev: current._rev } : { _overwrite: true })\n  }'
+    );
   });
 
   it("an update that already names its version or overwrites is sent as typed, with no read", () => {
@@ -332,13 +334,14 @@ describe("sdk — the version an update sends", () => {
     const update = toSdk(
       req({ action: "update", entryId: "abc123", body: '{"title":"New"}' })
     );
+    expect(update).toContain("current?._rev");
+    expect(update).not.toMatch(/current\._rev/);
+    // A Single never stored reads as null: its first write overwrites.
     const single = toSdk(
       req({ isSingle: true, action: "update", body: '{"title":"Home"}' })
     );
-    for (const out of [update, single]) {
-      expect(out).toContain("current?._rev");
-      expect(out).not.toMatch(/current\._rev/);
-    }
+    expect(single).toContain("current ? { _rev: current._rev }");
+    expect(single).toContain(": { _overwrite: true }");
   });
 
   // The SDK's bulk form is an update by query, which takes no versions, so
@@ -356,8 +359,22 @@ describe("sdk — the version an update sends", () => {
     expect(out).toContain('["a","b"].map(id =>');
     expect(out).toContain("nextly.update({");
     expect(out).toContain('"_rev": revs[id]');
+    expect(out).toContain("Promise.allSettled(");
     expect(out).not.toContain("where:");
     expect(out).not.toContain("_overwrite");
+  });
+
+  // The REST route refuses a `revs` that leaves an id out, writing nothing,
+  // so the snippet offers no calls that would write the ids it does cover.
+  it("bulk update whose revs leave an id out offers no update", () => {
+    const out = toSdk(
+      req({
+        action: "bulk-update",
+        body: '{"ids":["a","b"],"revs":{"a":"3"},"data":{"status":"published"}}',
+      })
+    );
+    expect(out).toContain('gives no version for ["b"]');
+    expect(out).not.toContain("nextly.update(");
   });
 
   it("bulk update keeps an overwrite choice the body already makes", () => {
