@@ -201,6 +201,18 @@ describe("IconField", () => {
     );
   });
 
+  it("is never taller than the room on the side it opens", async () => {
+    // A field low on the screen opens the picker upwards, where a panel of its
+    // full height ran past the window's top edge, search box first. The
+    // variable carries Radix's measurement of the room on the chosen side.
+    renderField();
+    const search = await openPicker(/^Badge/);
+    const panel = search.closest(".flex-col");
+    expect(panel?.className).toContain(
+      "var(--radix-popover-content-available-height,452px)"
+    );
+  });
+
   it("searches as it is typed into, and announces the matches", async () => {
     const { search } = renderField();
     const box = await openPicker(/^Badge/);

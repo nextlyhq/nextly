@@ -450,7 +450,10 @@ export function IconPicker({
   return (
     <div
       className={cn(
-        "flex h-[min(452px,70vh)] flex-col text-sm text-foreground",
+        // Never taller than the room Radix measures on the side it opens: a
+        // field low on the screen opens upwards, and a panel of its full height
+        // there would run past the window's top edge, search box first.
+        "flex h-[min(452px,70vh,var(--radix-popover-content-available-height,452px))] flex-col text-sm text-foreground",
         className
       )}
     >
@@ -823,6 +826,7 @@ export function IconField({
           </PopoverTrigger>
           <PopoverContent
             align="start"
+            collisionPadding={8}
             aria-label="Choose an icon"
             className="w-[min(360px,calc(100vw-32px))] rounded-[10px] p-0 shadow-lg motion-reduce:animate-none"
           >
