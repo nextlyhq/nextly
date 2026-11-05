@@ -321,6 +321,7 @@ describe("every default the core library declares", () => {
       "core/image",
       "core/list",
       "core/quote",
+      "core/section",
       "core/spacer",
     ]);
   });

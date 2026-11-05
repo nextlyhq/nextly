@@ -14,6 +14,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { registerRetiredExposures } from "./retired-exposure-hooks";
+import type { ComponentHistory } from "./retired-history";
 import type { RetiredStore } from "./retired-store";
 
 type Row = Record<string, unknown>;
@@ -113,6 +114,10 @@ function harness(
     componentStoreStatus?: boolean;
     singles?: Record<string, Row[]>;
     collections?: Record<string, Row[]>;
+    /** The component's published definitions, oldest first. */
+    history?: Row[];
+    /** A history read in place of `history`'s. */
+    versions?: ComponentHistory;
   } = {}
 ) {
   const handlers = new Map<string, Handler>();
@@ -156,6 +161,7 @@ function harness(
             ),
           }),
         },
+        versions: options.versions ?? publishedHistory(options.history ?? []),
       },
       logger: {
         warn: (message, meta) => warnings.push({ message, meta }),
@@ -173,6 +179,21 @@ function harness(
       ...context,
     });
   return { handlers, run, errors, warnings, registryReads };
+}
+
+/** A history of published definitions, given oldest first. */
+function publishedHistory(definitions: Row[]): ComponentHistory {
+  return {
+    list: async (_ref, { limit, cursor }) =>
+      definitions
+        .map((_, index) => ({ versionNo: index + 1, status: "published" }))
+        .reverse()
+        .filter(row => cursor === undefined || row.versionNo < cursor)
+        .slice(0, limit),
+    get: async (_ref, versionNo) => ({
+      snapshot: { id: "hero", content: definitions[versionNo - 1] },
+    }),
+  };
 }
 
 describe("recording retired ids at publish", () => {
@@ -355,6 +376,78 @@ describe("recording retired ids at publish", () => {
       retired: { properties: ["title"], slots: [] },
     });
   });
+
+  it("repairs a failed record from the component's history", async () => {
+    const { store, retired } = memoryStore();
+    let attempts = 0;
+    const failingOnce: RetiredStore = {
+      ...store,
+      retire: async (componentId, ids) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("database down");
+        await store.retire(componentId, ids);
+      },
+    };
+    const { run, errors } = harness({
+      store: failingOnce,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title", "body"]), definition(["body"]))
+    );
+
+    expect(errors).toHaveLength(1);
+    expect(retired).toEqual([
+      { componentId: "hero", retired: { properties: ["title"], slots: [] } },
+    ]);
+  });
+
+  it("does not repair in a localized store, which records no retirements", async () => {
+    const { store, retired, reads } = memoryStore();
+    const { run } = harness({
+      store,
+      componentStoreLocalized: true,
+      history: [definition(["title"]), definition([])],
+    });
+
+    await run(
+      "afterUpdate",
+      COMPONENTS,
+      published(definition(["title"]), definition([]))
+    );
+
+    expect(retired).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  it("logs a repair that fails too, and does not throw", async () => {
+    const failing: RetiredStore = {
+      of: async () => {
+        throw new Error("database down");
+      },
+      retire: async () => {
+        throw new Error("database down");
+      },
+    };
+    const { run, errors } = harness({
+      store: failing,
+      history: [definition(["title"]), definition([])],
+    });
+
+    await expect(
+      run(
+        "afterUpdate",
+        COMPONENTS,
+        published(definition(["title"]), definition([]))
+      )
+    ).resolves.toBeUndefined();
+
+    expect(errors).toHaveLength(2);
+    expect(errors[1]!.message).toContain('"hero"');
+  });
 });
 
 describe("stripping retired values on every write", () => {
@@ -508,6 +601,59 @@ describe("stripping retired values on every write", () => {
 });
 
 describe("a component dropping its own retired ids", () => {
+  it("drops an id its history retired when the table lost the record", async () => {
+    const { store, retired } = memoryStore();
+    const { run } = harness({
+      store,
+      history: [definition(["title", "body"]), definition(["body"])],
+    });
+
+    const result = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["title", "body"]), status: "published" },
+    })) as Row;
+
+    expect(
+      (result.content as { exposed: { id: string }[] }).exposed.map(
+        entry => entry.id
+      )
+    ).toEqual(["body"]);
+    expect(retired).toEqual([
+      { componentId: "hero", retired: { properties: ["title"], slots: [] } },
+    ]);
+  });
+
+  it("keeps a component write going when its history cannot be read", async () => {
+    const { store } = memoryStore({
+      hero: { properties: ["title"], slots: [] },
+    });
+    const { run, errors } = harness({
+      store,
+      versions: {
+        list: async () => {
+          throw new Error("database down");
+        },
+        get: async () => ({ snapshot: null }),
+      },
+    });
+
+    const result = (await run("beforeUpdate", "*", {
+      collection: COMPONENTS,
+      operation: "update",
+      originalData: { id: "hero", content: definition(["body"]) },
+      data: { content: definition(["title", "body"]) },
+    })) as Row;
+
+    expect(
+      (result.content as { exposed: { id: string }[] }).exposed.map(
+        entry => entry.id
+      )
+    ).toEqual(["body"]);
+    expect(errors.some(error => error.message.includes('"hero"'))).toBe(true);
+  });
+
   it("drops them from exposed, slots and variants, keeping an emptied variant", async () => {
     const { store } = memoryStore({
       hero: { properties: ["title"], slots: ["aside"] },

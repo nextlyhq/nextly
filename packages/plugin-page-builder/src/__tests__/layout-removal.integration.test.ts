@@ -24,6 +24,7 @@ process.env.NEXTLY_SECRET =
 
 import {
   definePlugin,
+  NextlyError,
   text,
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
@@ -509,6 +510,36 @@ describe.each(getConfiguredTestDialects())(
           expect(relationId(stored?.layout)).toBe(other);
         }
       );
+
+      it("refuses when a page that exists can't be read, never reading it as gone", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "published" });
+        // Only the working draft names the Layout.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { layout: other },
+          overrideAccess: true,
+        });
+        // A read hook answers not found for the page's working draft (the one
+        // read that names the Layout), as one that looks up something the
+        // page relates to can: the page itself is still there.
+        t.hooks.register("afterRead", PAGES_SLUG, async context => {
+          const doc = (context as { data?: Record<string, unknown> }).data;
+          if (relationId(doc) === home && relationId(doc?.layout) === other) {
+            throw NextlyError.notFound();
+          }
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(409);
+        expect(told(answer)).toContain("Not every page could be checked");
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
+      });
 
       it("refuses the site's default, saying to choose another first", async () => {
         const t = await boot();
@@ -1699,6 +1730,233 @@ describe.each(getConfiguredTestDialects())(
           warn: () => {},
           now: () => new Date(Date.now() + 10 * 60_000),
         });
+
+        const restored = await restoredOnes();
+        expect(restored).toHaveLength(1);
+        expect((await settingsOf(t)).defaultLayout).toBe(
+          relationId(restored[0])
+        );
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("falls back to the seed when the Layout a stopped restore recorded was deleted since", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // The restored Layout is deleted before anything resumes, past every
+        // hook.
+        await t.adapter.delete(await tableOf(t, LAYOUTS_SLUG), {
+          and: [{ column: "id", op: "=", value: recorded }],
+        });
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("falls back to the seed when the Layout a stopped restore recorded was unpublished since", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // The restored Layout is unpublished before anything resumes, past
+        // every hook: it still exists, but can't be a default.
+        await t.adapter.update(
+          await tableOf(t, LAYOUTS_SLUG),
+          { status: "draft" },
+          { and: [{ column: "id", op: "=", value: recorded }] }
+        );
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("falls back to the seed when the Layout a stopped restore recorded is unpublished after the resume checked it", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // Another removal unpublishes the recorded Layout, past every hook,
+        // right after the resume reads it as published: between the resume's
+        // check and its write of the default.
+        let unpublished = false;
+        // A list read hands the hook every row it read.
+        t.hooks.register("afterRead", LAYOUTS_SLUG, async context => {
+          const rows = (context as { data?: unknown }).data;
+          const readIt =
+            Array.isArray(rows) &&
+            rows.some(row => relationId(row) === recorded);
+          if (unpublished || !readIt) return;
+          unpublished = true;
+          await t.adapter.update(
+            await tableOf(t, LAYOUTS_SLUG),
+            { status: "draft" },
+            { and: [{ column: "id", op: "=", value: recorded }] }
+          );
+        });
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect(unpublished).toBe(true);
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("settles a check after the write that stops at its page budget, which no later sweep would get past", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        for (const title of ["One", "Two", "Three"]) {
+          await page(t, title, { status: "published" });
+        }
+        await deletedThenStopped(t, other);
+        const warned: string[] = [];
+
+        await settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: message => warned.push(message),
+          now: () => new Date(Date.now() + 10 * 60_000),
+          // Fewer page reads than the site has published pages.
+          budget: 2,
+        });
+
+        expect((await fence().removalOf(other))?.settledAt).not.toBeNull();
+        expect(warned.some(message => message.includes("budget"))).toBe(true);
+      });
+
+      it("has the default repair finish a restore that stopped after its create, before it would fall back to the seed", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        expect(stopped).toBe(true);
+
+        // The next repair, as startup or the default job runs it, before any
+        // sweep has found the row stale.
+        expect(await ensure(t)).toBe("restored");
 
         const restored = await restoredOnes();
         expect(restored).toHaveLength(1);

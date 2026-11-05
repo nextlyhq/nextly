@@ -58,6 +58,7 @@ import type { Nextly } from "nextly";
 import { relationId } from "../default-layout/store";
 import { documentVersionOf, withVersionFrom } from "../document-version";
 
+import { confirmedGone, unlessGone } from "./layout-references";
 import type { LayoutRemoval, LayoutRemovalStore } from "./store";
 import { pageLayoutRefusal, type FencedLayoutState } from "./words";
 
@@ -85,7 +86,7 @@ interface PageHookContext {
 }
 
 /** The Direct API calls the page side makes. */
-type PageReads = Pick<Nextly, "findByID" | "update">;
+type PageReads = Pick<Nextly, "find" | "findByID" | "update">;
 
 /** What the guard needs. */
 export interface PageReferenceGuardArgs {
@@ -133,17 +134,20 @@ function directApiOf(hook: PageHookContext): PageReads | null {
 
 /** The page as it stands: its working draft when it has one, else its row. */
 async function currentPage(
-  nextly: Pick<Nextly, "findByID">,
+  nextly: Pick<Nextly, "find" | "findByID">,
   pages: string,
   id: string
 ): Promise<Record<string, unknown> | null> {
-  const read: unknown = await nextly.findByID({
-    collection: pages,
-    id,
-    draft: true,
-    depth: 0,
-    overrideAccess: true,
-  });
+  const read: unknown = await unlessGone(
+    nextly.findByID({
+      collection: pages,
+      id,
+      draft: true,
+      depth: 0,
+      overrideAccess: true,
+    }),
+    () => confirmedGone(nextly, pages, id)
+  );
   return typeof read === "object" && read !== null
     ? (read as Record<string, unknown>)
     : null;
@@ -238,15 +242,19 @@ export async function clearPageReference(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
-  // Sent with the version the page was read at above, so a save of the page
-  // between that read and this write refuses it rather than being undone.
-  await nextly.update({
-    collection: pages,
-    id: pageId,
-    data: withVersionFrom({ layout: null }, documentVersionOf(current)),
-    overrideAccess: true,
-  });
-  return true;
+  // A page deleted since the read has nothing left to clear. Sent with the
+  // version the page was read at above, so a save of the page between that
+  // read and this write refuses it rather than being undone.
+  const cleared = await unlessGone(
+    nextly.update({
+      collection: pages,
+      id: pageId,
+      data: withVersionFrom({ layout: null }, documentVersionOf(current)),
+      overrideAccess: true,
+    }),
+    () => confirmedGone(nextly, pages, pageId)
+  );
+  return cleared !== null;
 }
 
 /** The page and the Layout a committed page write names, or null. */

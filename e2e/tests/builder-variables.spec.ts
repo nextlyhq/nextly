@@ -95,6 +95,22 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.emulateMedia({ colorScheme: "light" });
+    // On the editor's blank page, which states the canvas's colour scheme from
+    // the nearest theme marker below. A page the site serves states its own,
+    // as it does published, so the site's canvas route is answered as missing
+    // and the editor falls back to the blank page.
+    await page.route("**/page-builder-canvas", async route => {
+      // A thrown handler prints the request, headers and all; answer instead.
+      try {
+        await route.fulfill({
+          status: 404,
+          contentType: "text/html",
+          body: "<!doctype html><html><body><main>Not found</main></body></html>",
+        });
+      } catch {
+        await route.abort().catch(() => undefined);
+      }
+    });
     await openEditorWith(page, NODES, "variables-text");
     await openDesign(page);
 

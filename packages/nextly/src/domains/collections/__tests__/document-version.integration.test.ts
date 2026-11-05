@@ -9,9 +9,14 @@
  *
  * @module domains/collections/__tests__/document-version.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -20,6 +25,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { CollectionService } from "../services/collection-service";
 
 /** The statement that reads translation counters on their own. */
@@ -54,6 +60,9 @@ const OPEN = {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    fieldGroups: [
+      defineFieldGroup({ slug: "note_box", fields: [text({ name: "label" })] }),
+    ],
     collections: [
       defineCollection({
         slug: DOCS,
@@ -76,6 +85,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: NOTES,
         access: OPEN,
         fields: [
+          // A component alone can change: its values live in a table of
+          // their own, and the main counter covers them.
+          fieldGroup({ name: "box", component: "note_box" }),
           text({ name: "title" }),
           // Unique, so a save can be refused by the database itself, inside
           // the write's own transaction.
@@ -199,6 +211,14 @@ function expectCountersBeforeContent(
   expect(counters).toHaveLength(1);
   expect(content).toBeDefined();
   expect(counters[0].at).toBeLessThan(content!.at);
+}
+
+/** A stored time as milliseconds, whatever the driver hands back. */
+function timeOf(value: unknown): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value * 1000;
+  if (typeof value === "string") return new Date(value).getTime();
+  throw new Error(`no time in ${String(value)}`);
 }
 
 async function readRev(
@@ -510,6 +530,157 @@ describe.each(getConfiguredTestDialects())(
       expectCountersBeforeContent(statements, `dc_${DOCS}_locales`);
     });
 
+    it("sets when it changed, equal to the write time a save writes to updated_at", async () => {
+      const t = await boot(dialect);
+      const id = idOf(await createNote(t, { title: "a", code: "a" }));
+      const created = await rowOf(t, `dc_${NOTES}`, { id });
+      // Stored by the same column type and clock as updated_at, so the two
+      // compare as one kind of moment on every dialect.
+      expect(timeOf(created._changed_at)).toBe(timeOf(created.updated_at));
+
+      // Whole seconds on SQLite: wait into the next one, so a save that left
+      // the time where the create put it is told from one that set it.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await updateNote(t, id, { title: "b" });
+      const saved = await rowOf(t, `dc_${NOTES}`, { id });
+      expect(timeOf(saved._changed_at)).toBeGreaterThan(
+        timeOf(created._changed_at)
+      );
+      expect(timeOf(saved._changed_at)).toBe(timeOf(saved.updated_at));
+    });
+
+    it("sets when it changed on a held draft, which leaves updated_at alone", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "live", note: "n", status: "published" }
+        )
+      );
+      const before = await rowOf(t, `dc_${DOCS}`, { id });
+      // Whole seconds on SQLite: wait into the next one, so a time that moved
+      // is told from one that did not.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { note: "held edit" }
+      );
+      const after = await rowOf(t, `dc_${DOCS}`, { id });
+      expect(timeOf(after.updated_at)).toBe(timeOf(before.updated_at));
+      expect(timeOf(after._changed_at)).toBeGreaterThan(
+        timeOf(before._changed_at)
+      );
+    });
+
+    it("sets when it changed on a save of a component alone", async () => {
+      const t = await boot(dialect);
+      const id = idOf(await createNote(t, { title: "a", code: "a" }));
+      const before = await rowOf(t, `dc_${NOTES}`, { id });
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await updateNote(t, id, { box: { label: "only the component" } });
+      const after = await rowOf(t, `dc_${NOTES}`, { id });
+      expect(Number(after._revision)).toBe(Number(before._revision) + 1);
+      expect(timeOf(after._changed_at)).toBeGreaterThan(
+        timeOf(before._changed_at)
+      );
+    });
+
+    it("stores when a translation row changed as its document's row stores it", async () => {
+      // A clock away from UTC, where a time stored with the process's offset
+      // rather than as the column stores it lands hours from the other.
+      vi.stubEnv("TZ", "Asia/Karachi");
+      try {
+        const t = await boot(dialect);
+        const id = idOf(
+          await handlerOf(t).createEntry(
+            { collectionName: DOCS, overrideAccess: true, locale: "en" },
+            { title: "live", note: "n", status: "published" }
+          )
+        );
+        const q = (name: string) =>
+          t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        const p = t.adapter.dialect === "postgresql" ? "$1" : "?";
+        // Both read raw, by one kind of statement, so each comes back exactly
+        // as its column stores it.
+        const [main] = await t.adapter.executeQuery<Record<string, unknown>>(
+          `SELECT ${q("_changed_at")} FROM ${q(`dc_${DOCS}`)} WHERE ${q("id")} = ${p}`,
+          [id]
+        );
+        const language = await languageRow(t, id, "en");
+        expect(typeof language._changed_at).toBe(typeof main?._changed_at);
+        // One create writes both, within the second SQLite keeps.
+        expect(
+          Math.abs(timeOf(language._changed_at) - timeOf(main?._changed_at))
+        ).toBeLessThanOrEqual(1_000);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("a discard of the held draft changes the version a read gives", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "live", note: "n", status: "published" }
+        )
+      );
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { note: "held edit" }
+      );
+      const held = await readRev(t, DOCS, id, "en");
+      await handlerOf(t).getEntryService().discardWorkingDraft({
+        collectionName: DOCS,
+        entryId: id,
+        locale: "en",
+      });
+      expect(await readRev(t, DOCS, id, "en")).not.toBe(held);
+    });
+
+    it("a discard answers with the version it produced, the one a read then gives", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "live", note: "n", status: "published" }
+        )
+      );
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { note: "held edit" }
+      );
+      const held = await readRev(t, DOCS, id, "en");
+      // As the discard route makes it: the live document read first, then
+      // the draft removed under the document's lock.
+      const { document, removed } = await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: DOCS,
+        entryId: id,
+        locale: "en",
+        user: { id: "system-check", roles: ["super-admin"] } as never,
+      });
+      expect(removed).toBe(1);
+      const answered = (document as Record<string, unknown>)._rev;
+      expect(answered).not.toBe(held);
+      expect(answered).toBe(await readRev(t, DOCS, id, "en"));
+    });
+
     it("a wildcard save answers with every language's version", async () => {
       const t = await boot(dialect);
       const id = idOf(
@@ -562,6 +733,7 @@ describe.each(getConfiguredTestDialects())(
       expect(snapshots.length).toBeGreaterThan(0);
       for (const snapshot of snapshots) {
         expect(snapshot).not.toContain("_changed_by");
+        expect(snapshot).not.toContain("_changed_at");
         expect(snapshot).not.toContain("_revision");
         expect(snapshot).not.toContain('"_rev"');
       }
@@ -597,6 +769,11 @@ describe.each(getConfiguredTestDialects())(
       expect(afterPublish).not.toBe("1.en:1,es:1");
       // The response's version is the one after the bumps, not before them.
       expect(revOf(published)).toBe(afterPublish);
+      // Changed at the moment the publish wrote to updated_at.
+      const publishedRow = await rowOf(t, `dc_${DOCS}`, { id });
+      expect(timeOf(publishedRow._changed_at)).toBe(
+        timeOf(publishedRow.updated_at)
+      );
 
       const unpublished = await handlerOf(t).unpublishAllLocales({
         collectionName: DOCS,
@@ -888,7 +1065,11 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as Record<string, unknown>;
       expect(
         Object.keys(read).filter(
-          key => key.includes("changed_by") || key.includes("changedBy")
+          key =>
+            key.includes("changed_by") ||
+            key.includes("changedBy") ||
+            key.includes("changed_at") ||
+            key.includes("changedAt")
         )
       ).toEqual([]);
       expect(read._revision).toBeUndefined();

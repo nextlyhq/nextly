@@ -12,7 +12,11 @@ import { describe, expect, it } from "vitest";
 import { componentUsageIndex } from "./component-usage";
 import type { GroupedUsageReader } from "./usage-index";
 import { backfillScopeKey } from "./usage-backfill-scope";
-import { indexIsWhole, readUsageIndexHealth } from "./usage-index-health";
+import {
+  indexIsWhole,
+  indexStillCounting,
+  readUsageIndexHealth,
+} from "./usage-index-health";
 
 function reader(markers: { bucketCount: number; truncated: boolean }) {
   // `bucketCount` stands for how many marker buckets exist; the reader now
@@ -144,6 +148,7 @@ describe("reading how much of the index is there", () => {
         coversExistingDocuments: true,
         anyUndetermined: false,
         dirty: false,
+        backfillPending: false,
       },
       whole: true,
     });
@@ -172,6 +177,8 @@ describe("reading how much of the index is there", () => {
     });
 
     expect(health.coversExistingDocuments).toBe(false);
+    // A scope is left to walk, so the backfill will move the answer.
+    expect(indexStillCounting(health)).toBe(true);
   });
 
   it("is NOT covered while content exists that the index cannot reach", async () => {
@@ -201,14 +208,17 @@ describe("reading how much of the index is there", () => {
       },
     });
 
+    // Nothing left to walk, so nothing will make it whole: not counting.
     expect({ health, whole: indexIsWhole(health) }).toEqual({
       health: {
         coversExistingDocuments: false,
         anyUndetermined: false,
         dirty: false,
+        backfillPending: false,
       },
       whole: false,
     });
+    expect(indexStillCounting(health)).toBe(false);
   });
 
   it("reads COMPLETION before probing markers, preserving the writer's order", async () => {
@@ -285,6 +295,25 @@ describe("a failed maintenance write, and a derivation that moved", () => {
       dirty: true,
       whole: false,
     });
+    // A run is owed to clear the mark, so it is still counting.
+    expect(indexStillCounting(health)).toBe(true);
+  });
+
+  it("is not counting when only an unreadable document keeps it from whole", async () => {
+    // A document past its walk bound stays a marker until it is saved again;
+    // no backfill run changes that, so a screen has nothing to wait for.
+    const { read } = reader({ bucketCount: 1, truncated: false });
+    const health = await readUsageIndexHealth({
+      index: componentUsageIndex,
+      read,
+      backfill: {
+        scopes: async () => [scope],
+        progress: async () => clean(new Set([backfillScopeKey(scope)])),
+        unreachable: async () => false,
+      },
+    });
+    expect(indexIsWhole(health)).toBe(false);
+    expect(indexStillCounting(health)).toBe(false);
   });
 
   it("is NOT covered by progress recorded under another derivation", async () => {

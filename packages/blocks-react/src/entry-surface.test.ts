@@ -159,10 +159,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     //
     // The pre-hash label exists to explain an unexpected recompile from inside,
     // not to be compared by a consumer who would then be holding a second
-    // opinion about staleness.
+    // opinion about staleness. `stampedUnderCurrentEncoding` is that same
+    // staleness question, asked by `styles.ts` on a read with no context.
     internal: [
       "sharedStyleInputsId",
       "sharedStyleInputsLabel",
+      "stampedUnderCurrentEncoding",
       "UNIDENTIFIED_SHARED_INPUTS",
     ],
   },
@@ -356,11 +358,18 @@ const SOURCE_MODULES: ReadonlyArray<{
     // view would predict a different tree than the one that renders. Exported
     // to delete that second view, not to offer one: a consumer holding a
     // definitions map wants `prepareDocumentForRead`, which builds this itself.
+    //
+    // `prepareDocument` and `readStagesFor` are the route preparing a page once
+    // and the renderer reusing that preparation. The prop that carries one is
+    // internal, and what it carries is sealed inside this module, so there is
+    // nothing here a consumer could build.
     internal: [
       "isUnresolvedInstance",
+      "prepareDocument",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
+      "readStagesFor",
       "repairingLookup",
     ],
   },
@@ -432,6 +441,7 @@ describe("the root entry", () => {
       // the scope each part compiles under.
       "layoutPartSheets",
       "migrationSourceFor",
+      "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
       "prepareDocumentForRead",

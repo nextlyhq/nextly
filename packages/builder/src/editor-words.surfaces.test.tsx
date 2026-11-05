@@ -160,7 +160,9 @@ describe("the editor's surfaces read the catalogue", () => {
       )
     ).toBeTruthy();
     expect(
-      screen.getByText("«sharedStyles» you make from a block show here.")
+      screen.getByText(
+        "No «sharedstyles» yet. Select a block and choose Save as shared style\u2026"
+      )
     ).toBeTruthy();
   });
 

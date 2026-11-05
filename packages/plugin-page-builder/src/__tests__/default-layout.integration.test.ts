@@ -408,7 +408,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     describe("the seed", () => {
-      it("gives a fresh site a published 'Default (site)' Layout as its default, recorded as the seed", async () => {
+      it("gives a fresh site a published 'Site layout' Layout as its default, recorded as the seed", async () => {
         const t = await boot();
         await ensure(t);
 
@@ -419,8 +419,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await allLayouts(t)).toHaveLength(1);
         const seed = await rowOf(t, String(settings.defaultLayout));
         expect(seed).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -428,7 +428,7 @@ describe.each(getConfiguredTestDialects())(
       it("never adopts an authored Layout titled Default that holds the seed's slug", async () => {
         const t = await boot();
         await forgetTheSeed(t, await person(t, "owner"));
-        const authored = await layout(t, "Default", "default-site");
+        const authored = await layout(t, "Default", "site-layout");
 
         await ensure(t);
 
@@ -436,13 +436,13 @@ describe.each(getConfiguredTestDialects())(
         expect(settings.defaultLayout).not.toBe(authored);
         const seed = await rowOf(t, String(settings.defaultLayout));
         expect(seed).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site-2",
+          title: "Site layout",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
           title: "Default",
-          slug: "default-site",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -682,8 +682,8 @@ describe.each(getConfiguredTestDialects())(
         expect(reseeded.defaultLayout).not.toBe(seed);
         expect(reseeded.seededLayout).toBe(reseeded.defaultLayout);
         expect(await rowOf(t, String(reseeded.defaultLayout))).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
 
@@ -718,11 +718,11 @@ describe.each(getConfiguredTestDialects())(
         expect(await allLayouts(t)).toHaveLength(1);
       });
 
-      it("seeds exactly one Layout beside an authored 'Default (site)' when no seed was ever recorded, and adopts nothing", async () => {
+      it("seeds exactly one Layout beside an authored 'Site layout' when no seed was ever recorded, and adopts nothing", async () => {
         const t = await boot();
         await forgetTheSeed(t, await person(t, "owner"));
         expect((await settingsOf(t)).seededLayout).toBeNull();
-        const authored = await layout(t, "Default (site)", "default-site");
+        const authored = await layout(t, "Site layout", "site-layout");
 
         await ensure(t);
         await ensure(t);
@@ -733,13 +733,13 @@ describe.each(getConfiguredTestDialects())(
         const rows = await allLayouts(t);
         expect(rows).toHaveLength(2);
         expect(await rowOf(t, String(settings.seededLayout))).toMatchObject({
-          title: "Default (site) 2",
-          slug: "default-site-2",
+          title: "Site layout 2",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });
@@ -750,7 +750,7 @@ describe.each(getConfiguredTestDialects())(
         await ensure(t);
         const seed = String((await settingsOf(t)).seededLayout);
         await deleteSkippingHooks(t, seed, owner);
-        const authored = await layout(t, "Default (site)", "default-site");
+        const authored = await layout(t, "Site layout", "site-layout");
 
         await ensure(t);
         await ensure(t);
@@ -762,13 +762,13 @@ describe.each(getConfiguredTestDialects())(
         const rows = await allLayouts(t);
         expect(rows).toHaveLength(2);
         expect(await rowOf(t, String(settings.seededLayout))).toMatchObject({
-          title: "Default (site) 2",
-          slug: "default-site-2",
+          title: "Site layout 2",
+          slug: "site-layout-2",
           status: "published",
         });
         expect(await rowOf(t, authored)).toMatchObject({
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         });
       });

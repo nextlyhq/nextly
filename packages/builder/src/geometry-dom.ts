@@ -228,6 +228,13 @@ export interface OverlaySpace {
  */
 export const CANVAS_LAYER_ATTRIBUTE = "data-nx-canvas-layer";
 
+/**
+ * How far past the frame's viewport the layer draws, on every side, in the
+ * chrome's pixels: as far as a selection ring stands outside its block, so the
+ * ring of a block flush with the page's edge is drawn rather than cut off.
+ */
+export const CHROME_BLEED = 4;
+
 /** The attribute marking the box holding a canvas frame and its layer. */
 export const CANVAS_FRAME_BOX_ATTRIBUTE = "data-nx-canvas-frame-box";
 
@@ -627,16 +634,32 @@ export function containerEdges(root: Element): {
  * against that never holds the pointer or the message at all.
  */
 function visibleClientRect(scroller: Element): Rect {
+  /*
+   * The CLIENT box where the scroller has one: a classic scrollbar takes its
+   * width out of what the scroller shows, and chrome kept to the border box
+   * would sit under it. `clientWidth` is 0 for a scroller with no layout box,
+   * where there is no scrollbar to leave out either, so the outer size stands.
+   */
+  const inner = (outer: number, client: number): number =>
+    client > 0 ? Math.min(outer, client) : outer;
   const view = scroller.ownerDocument.defaultView;
   if (view !== null && scroller === scroller.ownerDocument.scrollingElement) {
-    return { x: 0, y: 0, width: view.innerWidth, height: view.innerHeight };
+    return {
+      x: 0,
+      y: 0,
+      width: inner(view.innerWidth, scroller.clientWidth),
+      height: inner(view.innerHeight, scroller.clientHeight),
+    };
   }
   const box = scroller.getBoundingClientRect();
+  // `clientLeft` and `clientTop` are the border, and a scrollbar on the left
+  // in a right-to-left scroller.
+  const laidOut = scroller.clientWidth > 0;
   return {
-    x: box.left,
-    y: box.top,
-    width: box.width,
-    height: box.bottom - box.top,
+    x: box.left + (laidOut ? scroller.clientLeft : 0),
+    y: box.top + (scroller.clientHeight > 0 ? scroller.clientTop : 0),
+    width: inner(box.width, scroller.clientWidth),
+    height: inner(box.bottom - box.top, scroller.clientHeight),
   };
 }
 
@@ -675,6 +698,22 @@ export function canvasScroller(
   return framed
     ? (root.ownerDocument.scrollingElement ?? null)
     : scrollableAncestor(root);
+}
+
+/**
+ * What of a canvas is on screen, in the chrome's coordinates: the part of the
+ * page its scroller shows, where the canvas cuts off anything drawn past it;
+ * the whole page where nothing scrolls it. The marks and the block toolbar
+ * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
+ */
+export function onScreenOf(space: OverlaySpace): Rect {
+  const { root } = space;
+  const scroller = canvasScroller(root, space.frame !== null);
+  return space.place(
+    scroller === null
+      ? canvasContentRect(root, root)
+      : visibleBandOf(scroller, root)
+  );
 }
 
 /**

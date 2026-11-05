@@ -880,6 +880,17 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(params: EveryLanguageLifecycleParams) {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.previewPublishAllLocales(params)
+    );
+  }
+
+  /**
    * Take every language of an entry down at once.
    *
    * The counterpart publishing has had since i18n M7 and withdrawing never did.
@@ -1145,6 +1156,11 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, judged per document; see the bulk service's
+     * `bulkUpdateEntries`.
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, undefined),
@@ -1182,6 +1198,8 @@ export class CollectionEntryService extends BaseService {
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {

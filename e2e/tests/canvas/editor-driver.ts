@@ -284,17 +284,27 @@ export async function editorSelectionText(field: Locator): Promise<string> {
 }
 
 /**
- * Clear the selection by pressing empty canvas below the last block.
+ * Clear the selection by pressing the page below the last block.
  *
  * The editor restores the author's last selection when the page opens again,
  * so a test cannot assume it starts with nothing selected. Cleared with a
  * press on the background rather than Escape, so a broken Escape fails the
  * test about Escape and not every test's setup.
+ *
+ * Below the canvas where the frame shows more of the page: on a page the site
+ * serves, the site's layout decides how tall the canvas is, and the canvas
+ * ends at its last block. On the editor's blank page the canvas fills the
+ * frame, so the press lands on its own ground, just inside its end.
  */
 export async function clearSelection(page: Page): Promise<void> {
   const root = await (await canvasRoot(page)).boundingBox();
-  if (root === null) throw new Error("[e2e] the canvas has no box");
-  await page.mouse.click(root.x + 12, root.y + root.height - 12);
+  const frame = await page.locator("[data-nx-canvas-frame-box]").boundingBox();
+  if (root === null || frame === null) {
+    throw new Error("[e2e] the canvas has no box");
+  }
+  const below = root.y + root.height + 12;
+  const y = below < frame.y + frame.height ? below : root.y + root.height - 12;
+  await page.mouse.click(root.x + 12, y);
   await expect.poll(() => selection(page)).toEqual([]);
 }
 

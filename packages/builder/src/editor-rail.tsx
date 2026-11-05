@@ -10,10 +10,7 @@
  * @module editor-rail
  */
 import {
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
   useShortcuts,
   type ActiveShortcut,
 } from "@nextlyhq/ui";
@@ -29,7 +26,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { isIFrame } from "./dom-kind";
+import { ChromeTooltip } from "./chrome-tooltip";
 import { EDITOR_WORDS } from "./editor-words";
 import { RAIL_GROUPS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
 
@@ -66,40 +63,6 @@ export function panelLabel(panel: LeftPanel): string {
 const ITEM_CLASS =
   "focus-visible:ring-ring inline-flex size-9 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--nx-builder-surface)] focus-visible:outline-none";
 
-/**
- * A tooltip's open state that also closes when the pointer moves into a frame,
- * unless its item has keyboard focus: the icon-only rail's tooltip is that
- * item's only visible name, and the author is still on it.
- *
- * The canvas is an iframe beside the rail. A pointer leaving an item for it
- * passes into another document, so this one sees no further move and Radix,
- * waiting to learn whether the pointer is heading for the tooltip, kept it
- * open over the canvas. The frame's own element does receive `pointerover` as
- * the pointer enters it, so that closes the tooltip; moving onto the tooltip
- * itself still keeps it, as WCAG 1.4.13 asks.
- */
-function useTooltipClosedByFrames(): {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  trigger: React.RefObject<HTMLButtonElement | null>;
-} {
-  const [open, setOpen] = React.useState(false);
-  const trigger = React.useRef<HTMLButtonElement | null>(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const intoFrame = (event: PointerEvent) => {
-      if (!isIFrame(event.target)) return;
-      // `:focus-visible`, not focus: a clicked item keeps focus too, and its
-      // tooltip was opened by the pointer that has now left it.
-      if (trigger.current?.matches(":focus-visible") === true) return;
-      setOpen(false);
-    };
-    document.addEventListener("pointerover", intoFrame, true);
-    return () => document.removeEventListener("pointerover", intoFrame, true);
-  }, [open]);
-  return { open, onOpenChange: setOpen, trigger };
-}
-
 function RailItem({
   label,
   shortcut,
@@ -116,43 +79,50 @@ function RailItem({
   onClick: (button: HTMLElement) => void;
 } & Record<`data-${string}`, string>) {
   const key = shortcut?.toUpperCase();
-  const { trigger, ...tooltip } = useTooltipClosedByFrames();
   return (
-    <Tooltip {...tooltip}>
-      <TooltipTrigger asChild>
-        <button
-          ref={trigger}
-          type="button"
-          data-builder-animates
-          aria-pressed={pressed}
-          aria-label={label}
-          {...(key === undefined ? {} : { "aria-keyshortcuts": key })}
-          onClick={event => onClick(event.currentTarget)}
-          className={cn(
-            ITEM_CLASS,
-            pressed === true
-              ? "bg-[color:var(--nx-builder-accent)] text-[color:var(--nx-builder-accent-text)]"
-              : // A soft wash of the text colour on hover, quiet in both schemes.
-                "text-[color:var(--nx-builder-text-muted)] hover:bg-[color-mix(in_oklch,var(--nx-builder-text)_8%,transparent)] hover:text-[color:var(--nx-builder-text)]"
+    // The editor's own tooltip, which closes as the pointer moves onto the
+    // canvas; to the right, beside the rail rather than over its next item.
+    <ChromeTooltip
+      side="right"
+      className="flex items-center gap-2"
+      content={
+        <>
+          <span>{label}</span>
+          {key === undefined ? null : (
+            <kbd className="rounded border border-border px-1 font-mono text-[11px] text-muted-foreground">
+              {key}
+            </kbd>
           )}
-          {...data}
-        >
-          <Icon className="size-4" aria-hidden="true" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="flex items-center gap-2">
-        <span>{label}</span>
-        {key === undefined ? null : (
-          <kbd className="rounded border border-border px-1 font-mono text-[11px] text-muted-foreground">
-            {key}
-          </kbd>
+        </>
+      }
+    >
+      <button
+        type="button"
+        data-builder-animates
+        aria-pressed={pressed}
+        aria-label={label}
+        {...(key === undefined ? {} : { "aria-keyshortcuts": key })}
+        onClick={event => onClick(event.currentTarget)}
+        className={cn(
+          ITEM_CLASS,
+          pressed === true
+            ? "bg-[color:var(--nx-builder-accent)] text-[color:var(--nx-builder-accent-text)]"
+            : // A soft wash of the text colour on hover, quiet in both schemes.
+              "text-[color:var(--nx-builder-text-muted)] hover:bg-[color-mix(in_oklch,var(--nx-builder-text)_8%,transparent)] hover:text-[color:var(--nx-builder-text)]"
         )}
-      </TooltipContent>
-    </Tooltip>
+        {...data}
+      >
+        <Icon className="size-4" aria-hidden="true" />
+      </button>
+    </ChromeTooltip>
   );
 }
 
-/** The shortcut layer the panel keys register in, which Help reads by name. */
+/**
+ * What every editor's panel-key layer is named after. Each editor registers its
+ * own layer, this name and an id, so Help can tell its editor's keys apart from
+ * a second editor's on the same page.
+ */
 export const PANEL_KEYS_LAYER = "Editor panels";
 
 /**
@@ -161,7 +131,8 @@ export const PANEL_KEYS_LAYER = "Editor panels";
  * from, so a row in Help is a key that works.
  */
 export function panelKeyShortcuts(
-  isAvailable: (panel: LeftPanel) => boolean
+  isAvailable: (panel: LeftPanel) => boolean,
+  layer: string = PANEL_KEYS_LAYER
 ): (ActiveShortcut & { panel: LeftPanel })[] {
   return [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom]
     .filter(isAvailable)
@@ -174,7 +145,7 @@ export function panelKeyShortcuts(
               panel,
               keys: key,
               description: `Open or close ${label}`,
-              layer: PANEL_KEYS_LAYER,
+              layer,
             },
           ];
     });
@@ -192,7 +163,8 @@ export function panelKeyShortcuts(
 function usePanelKeys(
   shortcuts: readonly (ActiveShortcut & { panel: LeftPanel })[],
   onSelect: (panel: LeftPanel) => void,
-  claims: (() => boolean) | undefined
+  claims: (() => boolean) | undefined,
+  layer: string
 ): void {
   // Read at press time through a ref: the manager asks `when` then, and a
   // predicate captured at registration would answer for an older render.
@@ -206,7 +178,7 @@ function usePanelKeys(
       when: () => latest.current?.() ?? true,
       run: () => onSelect(panel),
     })),
-    { name: PANEL_KEYS_LAYER }
+    { name: layer }
   );
 }
 
@@ -240,6 +212,8 @@ export interface EditorRailProps {
    * one; on when absent.
    */
   keysOn?: boolean;
+  /** The layer the panel keys register in: this editor's own. */
+  keysLayer?: string;
 }
 
 export function EditorRail({
@@ -252,11 +226,13 @@ export function EditorRail({
   settingsOpen = false,
   claimsKeys,
   keysOn = true,
+  keysLayer = PANEL_KEYS_LAYER,
 }: EditorRailProps): React.JSX.Element {
   usePanelKeys(
-    keysOn ? panelKeyShortcuts(isAvailable) : [],
+    keysOn ? panelKeyShortcuts(isAvailable, keysLayer) : [],
     onSelect,
-    claimsKeys
+    claimsKeys,
+    keysLayer
   );
   const item = (panel: LeftPanel) => {
     const { label, Icon } = PANEL_CHROME[panel];

@@ -75,6 +75,11 @@ import {
   isWebhookRecordingEnabled,
 } from "../../webhooks/recording-policy";
 import {
+  createReviewState,
+  readReviewState,
+  type ReviewStatesDb,
+} from "../../workflows/review-state-repository";
+import {
   VersionsRepository,
   type VersionRef,
 } from "../../versions/versions-repository";
@@ -369,6 +374,18 @@ async function seedHistory(
     expiresAt: new Date(now.getTime() + 60_000),
     generation: 0,
   });
+  // The document's shared part waiting in review, with an approval, under the workflow.
+  await createReviewState(
+    adapter as unknown as ReviewStatesDb,
+    { ...ref, part: null },
+    {
+      stage: "inReview",
+      enteredAt: now,
+      enteredBy: ANA.id,
+      definitionHash: "h1",
+      approval: { versionNo: 3, digest: "d1", by: ANA.id, at: now },
+    }
+  );
   // A reader's pin of the document: a Single's names its slug alone.
   await adapter.insert("nextly_dashboard_pins", {
     id: randomUUID(),
@@ -535,6 +552,16 @@ async function expectMoved(
     row => row.entryId === entryId && row.scopeKind === kind
   );
   expect(view?.viewKey).toBe(versionViewKey(marker));
+
+  // The part's review state is read by its key, so it answers only if the key moved too: its stage
+  // and its approval are found under the new name, and nothing under the old one.
+  const reviews = adapter as unknown as ReviewStatesDb;
+  expect(await readReviewState(reviews, { ...ref, part: null })).toMatchObject({
+    stage: "inReview",
+    enteredBy: ANA.id,
+    approval: expect.objectContaining({ versionNo: 3, digest: "d1" }),
+  });
+  expect(await readReviewState(reviews, { ...oldRef, part: null })).toBeNull();
 
   // Content events, and each one's parts, which are keyed by the event.
   const events = (await rowsOf("nextly_content_events")).filter(

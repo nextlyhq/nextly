@@ -19,6 +19,7 @@ import {
   PAGES_SEARCH_ROUTE_PATH,
   PAGES_UNTITLED,
   pagesSearchPath,
+  type PagesSearchOrder,
 } from "./pages-search-contract";
 import {
   parsePagesSearchQuery,
@@ -53,6 +54,7 @@ describe("the query, parsed at the boundary", () => {
     // refuses everything.
     expect(parsePagesSearchQuery(BASE)).toEqual({
       limit: PAGES_SEARCH_LIMIT_DEFAULT,
+      order: "title",
     });
   });
 
@@ -114,6 +116,7 @@ describe("the client's path", () => {
       q: "about",
       limit: 3,
       exclude: { collection: "pages", id: "p:1" },
+      order: "collection",
     });
     // Round-tripped through the route's own parser, so the two spellings are
     // held together by behaviour rather than by a second copy of the names.
@@ -121,6 +124,7 @@ describe("the client's path", () => {
       search: "about",
       limit: 3,
       exclude: { collection: "pages", id: "p:1" },
+      order: "collection",
     });
   });
 });
@@ -203,6 +207,7 @@ function readsOver(
   const reads: PagesSearchReads = {
     collections: async () => records,
     stores: () => new Set(stores),
+    pagesCollection: () => "pages",
     find: args => (isWorkflowRead(args) ? workflow(args) : find(args)),
     warn,
   };
@@ -213,6 +218,7 @@ const request = (
   over: Partial<PagesSearchRequest> = {}
 ): PagesSearchRequest => ({
   limit: PAGES_SEARCH_LIMIT_DEFAULT,
+  order: "title",
   ...over,
 });
 
@@ -979,14 +985,15 @@ function readsOverTables(
 /** Every page of a search, walked by its cursor, and the reads it made. */
 async function walk(
   reads: PagesSearchReads,
-  limit: number
+  limit: number,
+  order: PagesSearchOrder = "title"
 ): Promise<{ pages: string[][]; metas: PagesSearchResponseMeta[] }> {
   const pages: string[][] = [];
   const metas: PagesSearchResponseMeta[] = [];
   let before: string | undefined;
   for (let guard = 0; guard < 50; guard += 1) {
     const parsed = parsePagesSearchQuery(
-      `http://nextly.test${pagesSearchPath({ limit, ...(before === undefined ? {} : { before }) })}`
+      `http://nextly.test${pagesSearchPath({ limit, order, ...(before === undefined ? {} : { before }) })}`
     );
     const answer = await readPagesSearch(parsed, reads);
     pages.push(answer.items.map(item => item.title));
@@ -1073,6 +1080,45 @@ describe("paging by cursor", () => {
 
     expect(answer.meta.hasNext).toBe(false);
     expect(answer.meta).not.toHaveProperty("nextBefore");
+  });
+});
+
+describe("listing by collection", () => {
+  it("lists the plugin's Pages first, then the others by name, each in title order, across pages", async () => {
+    // Titles that would interleave by title, so a merge by title cannot
+    // produce this order: "A1" sorts first overall but its collection is not
+    // Pages, and "B3"'s collection sorts after "landing" by name.
+    const { reads } = readsOverTables({
+      posts: ["B3"].map(titled),
+      landing: ["A1", "C1"].map(titled),
+      pages: ["D2", "E2", "F2"].map(titled),
+    });
+
+    const { pages, metas } = await walk(reads, 2, "collection");
+
+    expect(pages).toEqual([
+      ["D2", "E2"],
+      ["F2", "A1"],
+      ["C1", "B3"],
+    ]);
+    expect(metas.at(-1)?.hasNext).toBe(false);
+  });
+
+  it("stops at a collection whose bounded read ran out, so no later collection's page comes first", async () => {
+    // Seven withheld rows ahead of "B" in Pages: the first page's bounded read
+    // finds none of Pages' openable rows, and "A" must still wait for "B".
+    const shut = (id: string) => ({ id, title: id });
+    const { reads } = readsOverTables({
+      pages: [
+        ...["A0", "A1", "A2", "A3", "A4", "A5", "A6"].map(shut),
+        titled("B"),
+      ],
+      landing: ["A"].map(titled),
+    });
+
+    const { pages } = await walk(reads, 2, "collection");
+
+    expect(pages.flat()).toEqual(["B", "A"]);
   });
 });
 

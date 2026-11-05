@@ -197,7 +197,7 @@ describe("a seed whose settings write fails", () => {
     expect(s.rows).toHaveLength(0);
 
     await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
-    expect(s.rows.map(row => row.slug)).toEqual(["default-site"]);
+    expect(s.rows.map(row => row.slug)).toEqual(["site-layout"]);
     expect(s.settings()).toMatchObject({
       defaultLayout: s.rows[0]?.id,
       seededLayout: s.rows[0]?.id,
@@ -216,8 +216,8 @@ describe("a make-default landing while the repair runs", () => {
   it("keeps the newer default when the repair would point it back at the seed", async () => {
     const seed: Row = {
       id: "seed",
-      title: "Default (site)",
-      slug: "default-site",
+      title: "Site layout",
+      slug: "site-layout",
       status: "published",
     };
     const s = site({
@@ -244,7 +244,7 @@ describe("a make-default landing while the repair runs", () => {
     await ensureDefaultLayout(depsFor(s));
 
     const created = s.rows.find(row => row.id !== "newer");
-    expect(created?.slug).toBe("default-site");
+    expect(created?.slug).toBe("site-layout");
     expect(s.settings()).toMatchObject({
       defaultLayout: "newer",
       seededLayout: created?.id,
@@ -254,23 +254,23 @@ describe("a make-default landing while the repair runs", () => {
 
 describe("a slug the database refuses as taken", () => {
   it("moves the seed to the next numbered slug", async () => {
-    const s = site({ refusedSlugs: ["default-site"] });
+    const s = site({ refusedSlugs: ["site-layout"] });
 
     await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("seeded");
 
-    expect(s.rows.map(row => row.slug)).toEqual(["default-site-2"]);
+    expect(s.rows.map(row => row.slug)).toEqual(["site-layout-2"]);
     expect(s.settings()).toMatchObject({ defaultLayout: s.rows[0]?.id });
   });
 
   it("gives up after a bounded number of refusals, creating nothing", async () => {
     const s = site({
       refusedSlugs: [
-        "default-site",
-        "default-site-2",
-        "default-site-3",
-        "default-site-4",
-        "default-site-5",
-        "default-site-6",
+        "site-layout",
+        "site-layout-2",
+        "site-layout-3",
+        "site-layout-4",
+        "site-layout-5",
+        "site-layout-6",
       ],
     });
 
@@ -298,11 +298,11 @@ describe("two runs seeding at once", () => {
   it("adopts the other run's seed when the slug is refused because it just took it", async () => {
     const other: Row = {
       id: "other-seed",
-      title: "Default (site)",
-      slug: "default-site",
+      title: "Site layout",
+      slug: "site-layout",
       status: "published",
     };
-    const s = site({ refusedSlugs: ["default-site"], concurrentSeed: other });
+    const s = site({ refusedSlugs: ["site-layout"], concurrentSeed: other });
 
     await expect(ensureDefaultLayout(depsFor(s))).resolves.toBe("kept");
 
@@ -320,8 +320,8 @@ describe("who chose the default", () => {
       rows: [
         {
           id: "seed",
-          title: "Default (site)",
-          slug: "default-site",
+          title: "Site layout",
+          slug: "site-layout",
           status: "published",
         },
       ],

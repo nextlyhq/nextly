@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SHARED_STYLE_IN_USE_CODE,
   sharedStyleUsagePath,
   sharedStyleWhereUsedPath,
   type SharedStyleUsageKind,
@@ -293,6 +294,7 @@ describe("how widely shared styles are used", () => {
     );
     expect(answer).toEqual({
       whole: true,
+      counting: false,
       mayLock: true,
       styles: {
         "c-card": {
@@ -306,6 +308,21 @@ describe("how widely shared styles are used", () => {
           complete: true,
         },
       },
+    });
+  });
+
+  it("says whether the counts may still become whole", async () => {
+    const counting = usageOf({ ...NOT_WHOLE, backfillPending: true }).source;
+    const stuck = usageOf({ ...NOT_WHOLE, backfillPending: false }).source;
+    const ask = (source: SharedStyleUsageSource) =>
+      readSharedStyleUsage(usageRequest("c-card"), caller(false), source);
+    // A backfill still walking: the next read may be whole.
+    expect(await ask(counting)).toMatchObject({ whole: false, counting: true });
+    // Content the index can never reach: floors for good, nothing to wait for.
+    expect(await ask(stuck)).toMatchObject({ whole: false, counting: false });
+    expect(await ask(usageOf(WHOLE).source)).toMatchObject({
+      whole: true,
+      counting: false,
     });
   });
 
@@ -594,7 +611,7 @@ describe("removing unused shared styles", () => {
     ).toMatchObject({
       code: "CONFLICT",
       publicMessage:
-        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet.",
+        "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed.",
     });
     expect(write).not.toHaveBeenCalled();
   });
@@ -619,11 +636,40 @@ describe("removing unused shared styles", () => {
         )
       )
     ).toMatchObject({
-      code: "CONFLICT",
-      publicMessage:
-        "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+      // A style the index counts as used makes it the in-use refusal, its
+      // one issue naming every reason, as the rescan's refusal does.
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: SHARED_STYLE_IN_USE_CODE,
+            message:
+              "Nothing was removed. hero is locked. code is defined in the site's code. Card is used on 2 documents.",
+          },
+        ],
+      },
     });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses a lock alone as a conflict, saying nothing of use", async () => {
+    const { store } = storeOf([{ ...card, locked: true }]);
+    const { source } = usageOf(WHOLE);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          source,
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: "Nothing was removed. Card is locked.",
+    });
   });
 
   it("refuses a style whose uses could not all be counted", async () => {

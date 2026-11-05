@@ -213,7 +213,9 @@ describe("the exposure picker", () => {
     render(<Harness document={page([bare])} selectedIds={["x"]} seen={seen} />);
 
     expect(
-      screen.getByText(/Nothing in this selection can change from one use to another/)
+      screen.getByText(
+        /Nothing in this selection can change from one use to another/
+      )
     ).toBeTruthy();
   });
 

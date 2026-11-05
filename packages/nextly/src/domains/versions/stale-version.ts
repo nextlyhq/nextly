@@ -23,26 +23,32 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
-import { COMPANION_UPDATED_AT_COLUMN } from "../i18n/companion-columns";
-import {
-  claimCompanionRevision,
-  companionWriteVia,
-} from "../i18n/runtime/companion-io";
+import { claimCompanionRevision } from "../i18n/runtime/companion-io";
+import { languageRevisionTable } from "../schema/services/runtime-schema-generator";
 import type { UserContext } from "../singles/types";
 
 import { peopleById } from "./author-hydration";
 import {
+  CHANGED_AT_COLUMN,
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_REVISION_COLUMN,
   encodeDocumentVersion,
   revisionOf,
+  type SelectsRows,
 } from "./document-revision";
+
+/** A language's counter in a version: 0 where it names none. */
+function languageCounterOf(version: DecodedVersion, code: string): number {
+  return Object.hasOwn(version.languages, code) ? version.languages[code] : 0;
+}
 
 /** A version as its parts: the main counter, and each language's it names. */
 export interface DecodedVersion {
@@ -51,9 +57,10 @@ export interface DecodedVersion {
 }
 
 // `7`, `7.es:3`, `7.en:2,es:3`: what `encodeDocumentVersion` spells. A
-// language code holds letters, digits and `-` (`pt-BR`), never `.`, `:` or `,`.
+// language code holds letters, digits, `-` and `_` (`pt-BR`, `zh_Hant`), never
+// `.`, `:` or `,`.
 const VERSION_PATTERN =
-  /^(\d+)(?:\.([A-Za-z0-9-]+:\d+(?:,[A-Za-z0-9-]+:\d+)*))?$/;
+  /^(\d+)(?:\.([A-Za-z0-9_-]+:\d+(?:,[A-Za-z0-9_-]+:\d+)*))?$/;
 
 /** The refusal of a version that can't be judged: a client's mistake, not someone's change. */
 function unjudgeable(message: string): NextlyError {
@@ -81,11 +88,16 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
       `${DOCUMENT_VERSION_KEY} names a version no document has.`
     );
   }
-  const languages: Record<string, number> = {};
+  // Without a prototype, so a language code such as `constructor` is only
+  // ever an own key.
+  const languages: Record<string, number> = Object.create(null) as Record<
+    string,
+    number
+  >;
   for (const part of match[2]?.split(",") ?? []) {
     const [code, counter] = part.split(":");
     const n = Number(counter);
-    if (code in languages || !Number.isSafeInteger(n)) {
+    if (Object.hasOwn(languages, code) || !Number.isSafeInteger(n)) {
       throw unjudgeable(
         `${DOCUMENT_VERSION_KEY} names a version no document has.`
       );
@@ -180,6 +192,115 @@ export function refuseVersionInSharedData(
   );
 }
 
+/**
+ * Where an update by ids that writes the same values to every id gives each
+ * document's own version: `{ "<id>": "<_rev>" }`, beside `ids` and `data`.
+ *
+ * @experimental
+ */
+export const DOCUMENT_REVS_KEY = "revs";
+
+/**
+ * How an update that writes the same values to many documents is judged:
+ * each id on its own version (`per-document`), over whatever each holds
+ * (`overwrite`), or neither (`required`), which an update of many documents
+ * cannot be judged by, since it carries no one document's version.
+ *
+ * @experimental
+ */
+export type SameValuesRequirement =
+  | { kind: "per-document"; revs: Readonly<Record<string, string>> }
+  | { kind: "overwrite" }
+  | { kind: "required"; byIds: boolean };
+
+const RevsByIdSchema = z.record(z.string(), z.string());
+
+/**
+ * Decide how an update that writes `data` to many documents is judged, before
+ * any of them is read: by its ids (`target.ids`), with a version for each in
+ * `target.revs`, or by a query (`target.ids` undefined), which names no ids to
+ * give versions for. One answer for every door, so REST, the Direct API and
+ * the services cannot judge one request two ways.
+ *
+ * @throws NextlyError.validation for a version in the shared data, an
+ *   `_overwrite` that is not true or false, versions on an update by query,
+ *   versions that are not text keyed by id, a version for an id the update
+ *   does not name, one that is not a version, or versions given beside
+ *   `_overwrite: true`.
+ * @throws NextlyError.versionRequired when versions are given for some ids
+ *   only: the rest would be written over whatever they hold, unjudged.
+ *
+ * @experimental
+ */
+export function sameValuesVersionRequirement(
+  data: Readonly<Record<string, unknown>>,
+  target: { ids: readonly string[] | undefined; revs?: unknown }
+): SameValuesRequirement {
+  refuseVersionInSharedData(data);
+  const overwrite = overwriteOf(data);
+  if (target.revs === undefined) {
+    return overwrite
+      ? { kind: "overwrite" }
+      : { kind: "required", byIds: target.ids !== undefined };
+  }
+  if (target.ids === undefined) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} gives versions by id, and an update by query names no ids. Update by ids to give each document's version.`
+    );
+  }
+  const parsed = RevsByIdSchema.safeParse(target.revs);
+  if (!parsed.success) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} must map each id to the version a read of it returned.`
+    );
+  }
+  if (overwrite) {
+    throw unrevisable(
+      `${DOCUMENT_REVS_KEY} and ${DOCUMENT_OVERWRITE_KEY} say two different things: give each document's version, or overwrite them all.`
+    );
+  }
+  const named = new Set(target.ids);
+  for (const [id, rev] of Object.entries(parsed.data)) {
+    if (!named.has(id)) {
+      throw unrevisable(
+        `${DOCUMENT_REVS_KEY} gives a version for a document this update does not name.`
+      );
+    }
+    // Refused here, before any document is read, rather than as each one's
+    // own refusal once the others are written.
+    decodeDocumentVersion(rev);
+  }
+  if (target.ids.some(id => !(id in parsed.data))) {
+    throw versionRequiredFor("ids");
+  }
+  return { kind: "per-document", revs: parsed.data };
+}
+
+/** The refusal of `revs` that cannot be judged: a client's mistake. */
+function unrevisable(message: string): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: DOCUMENT_REVS_KEY, code: "INVALID_VALUE", message }],
+  });
+}
+
+/**
+ * The refusal of an update of many documents with the same values that gives
+ * neither a version for each nor the overwrite choice, naming the keys that
+ * say either.
+ *
+ * @experimental
+ */
+export function versionRequiredFor(bulk: "ids" | "query"): NextlyError {
+  return NextlyError.versionRequired({
+    bulk,
+    keys: {
+      version: DOCUMENT_VERSION_KEY,
+      overwrite: DOCUMENT_OVERWRITE_KEY,
+      revs: DOCUMENT_REVS_KEY,
+    },
+  });
+}
+
 /** The document a release run's mark is for. */
 export interface ReleaseRunTarget {
   scopeKind: "collection" | "single";
@@ -248,25 +369,22 @@ function textOrNull(value: unknown): string | null {
 }
 
 /**
- * When a row last changed, as every judgement and every picker orders it: the
- * one source of "when", so no two callers can disagree about which change
- * came last. The row's own update time.
+ * When a row's counter last moved, as every judgement and every picker
+ * orders it: the one source of "when", so no two callers can disagree about
+ * which change came last. Its `_changed_at`, set in the same statement as
+ * the counter, so a save that moves the counter and not `updated_at` (a held
+ * draft, a discard, publishing every language) is still dated. Null for a row
+ * not saved since the column was added, which a refusal then gives no time.
+ * Read through a model that declares the column, so it arrives as a `Date`.
  */
-function changedAtOf(
-  row: Record<string, unknown>,
-  column: string
-): Date | null {
-  const value = row[column];
+function changedAtOf(row: Record<string, unknown>): Date | null {
+  const value = row[CHANGED_AT_COLUMN];
   if (value === null || value === undefined) return null;
   const at = value instanceof Date ? value : new Date(value as string | number);
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
-function stateOf(
-  part: string,
-  row: Record<string, unknown>,
-  atColumn: string
-): PartState {
+function stateOf(part: string, row: Record<string, unknown>): PartState {
   return {
     part,
     counter: revisionOf(row[DOCUMENT_REVISION_COLUMN]),
@@ -275,7 +393,7 @@ function stateOf(
       id: textOrNull(row._changed_by_id),
       principalKind: textOrNull(row._changed_by_principal_kind),
     },
-    at: changedAtOf(row, atColumn),
+    at: changedAtOf(row),
   };
 }
 
@@ -305,7 +423,7 @@ function absentPart(part: string): PartState {
  * Undefined when the document is gone.
  */
 export async function readDocumentRevision(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     table: string;
@@ -315,43 +433,49 @@ export async function readDocumentRevision(
   }
 ): Promise<DocumentRevisionState | undefined> {
   const [row] = await db.select<Record<string, unknown>>(args.table, {
-    columns: [DOCUMENT_REVISION_COLUMN, ...CHANGER_COLUMNS, "updated_at"],
+    columns: [DOCUMENT_REVISION_COLUMN, ...CHANGER_COLUMNS, CHANGED_AT_COLUMN],
     where: { and: [{ column: "id", op: "=", value: args.id }] },
     limit: 1,
     ...(args.forUpdate ? { forUpdate: true } : {}),
   });
   if (!row) return undefined;
   const state: DocumentRevisionState = {
-    main: stateOf("main", row, "updated_at"),
+    main: stateOf("main", row),
     languages: {},
   };
   const locales = args.languages?.locales ?? [];
   if (!args.languages || locales.length === 0) return state;
-  // Named in the statement: a translation table's runtime model does not
-  // declare the per-document columns, since the same model serves field-group
-  // translation tables, which are no documents.
-  const q = (name: string) =>
-    args.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-  const p = (n: number) => (args.dialect === "postgresql" ? `$${n}` : "?");
-  const columns = [
-    "_locale",
-    DOCUMENT_REVISION_COLUMN,
-    ...CHANGER_COLUMNS,
-    COMPANION_UPDATED_AT_COLUMN,
-  ];
-  const rows = (await db.execute(
-    `SELECT ${columns.map(q).join(", ")} FROM ${q(args.languages.table)} WHERE ${q("_parent")} = ${p(1)} AND ${q("_locale")} IN (${locales.map((_, i) => p(i + 2)).join(", ")})`,
-    [args.id, ...locales]
-  )) as Record<string, unknown>[];
+  // Through the translation table's revision model: its runtime model does
+  // not declare the per-document columns, since the same model serves
+  // field-group translation tables, which are no documents.
+  const table = languageRevisionTable(args.dialect, args.languages.table);
+  const rows = await db
+    .getDrizzle<SelectsRows>()
+    .select({
+      _locale: table._locale,
+      [DOCUMENT_REVISION_COLUMN]: table[DOCUMENT_REVISION_COLUMN],
+      ...Object.fromEntries(CHANGER_COLUMNS.map(name => [name, table[name]])),
+      [CHANGED_AT_COLUMN]: table[CHANGED_AT_COLUMN],
+    })
+    .from(table as never)
+    .where(
+      and(
+        eq(table._parent as never, args.id),
+        inArray(table._locale as never, [...locales])
+      )
+    );
   const byLocale = new Map(rows.map(r => [String(r._locale), r]));
   for (const locale of locales) {
     const found = byLocale.get(locale);
     state.languages[locale] = found
-      ? stateOf(locale, found, COMPANION_UPDATED_AT_COLUMN)
+      ? stateOf(locale, found)
       : absentPart(locale);
   }
   return state;
 }
+
+/** What `readDocumentRevision` reads through: a transaction, or the pool. */
+export type RevisionReader = Pick<TransactionContext, "select" | "getDrizzle">;
 
 /**
  * The language a save judges, or undefined where it judges none: a document
@@ -365,7 +489,7 @@ export function judgedLanguage(
   writeLocale: string | undefined
 ): string | undefined {
   if (given === undefined || writeLocale === undefined) return undefined;
-  if (!(writeLocale in given.languages)) {
+  if (!Object.hasOwn(given.languages, writeLocale)) {
     throw unjudgeable(
       `${DOCUMENT_VERSION_KEY} names no version of ${writeLocale}, the language this update saves. Send the version a read of ${writeLocale} returned.`
     );
@@ -374,28 +498,23 @@ export function judgedLanguage(
 }
 
 /**
- * The languages a write over every language at once is judged on, such as
- * publishing them all: each one the document keeps, or undefined where it
- * judges none (no version given, or no translation table).
+ * Refuse a version that does not name every one of `locales`, for a write
+ * over every language at once (`locale: "*"`): only a read of every language
+ * gives one that does, and judging a missing language as 0 would refuse the
+ * write over a language its caller never read, rather than tell it so.
  *
- * @throws NextlyError.validation when the version does not name every one of
- *   them: a read of one language cannot say whether another changed since,
- *   and only a read of every language names them all.
+ * @throws NextlyError.validation naming the languages it lacks.
  */
-export function judgedLanguages(
+export function assertVersionNamesEvery(
   given: DecodedVersion | undefined,
-  locales: readonly string[] | undefined
-): readonly string[] | undefined {
-  if (given === undefined || !locales || locales.length === 0) {
-    return undefined;
-  }
-  const missing = locales.filter(locale => !(locale in given.languages));
-  if (missing.length > 0) {
-    throw unjudgeable(
-      `${DOCUMENT_VERSION_KEY} names no version of ${missing.join(", ")}. A write to every language is judged on each of them: send the version a read of every language returned.`
-    );
-  }
-  return locales;
+  locales: readonly string[]
+): void {
+  if (given === undefined) return;
+  const missing = locales.filter(code => !Object.hasOwn(given.languages, code));
+  if (missing.length === 0) return;
+  throw unjudgeable(
+    `${DOCUMENT_VERSION_KEY} names no version of ${missing.join(", ")}. An update of every language at once needs the version a read of every language returned.`
+  );
 }
 
 /**
@@ -417,7 +536,7 @@ export function staleParts(
   const stale: string[] = [];
   if (args.main && args.main.counter !== given.main) stale.push("main");
   for (const language of args.languages ?? []) {
-    if (language.counter !== (given.languages[language.part] ?? 0)) {
+    if (language.counter !== languageCounterOf(given, language.part)) {
       stale.push(language.part);
     }
   }
@@ -456,7 +575,7 @@ export function lastChangerOf(
     ? parts.filter(part =>
         part.part === "main"
           ? part.counter !== given.main
-          : part.counter !== (given.languages[part.part] ?? 0)
+          : part.counter !== languageCounterOf(given, part.part)
       )
     : [...parts];
   const rank = (part: PartState) => (part.part === "main" ? "" : part.part);
@@ -535,6 +654,11 @@ async function staleVersionRefusal(args: {
   mayRead: () => Promise<boolean>;
   /** Whether a person may be looked up by name (a pooled read). */
   namePeople: boolean;
+  /**
+   * The newest recorded version of the part the save writes, where the caller
+   * may read that part's history; asked only once `mayRead` allows.
+   */
+  historyVersion?: () => Promise<StaleVersionPublicData["historyVersion"]>;
   logContext: Record<string, unknown>;
 }): Promise<NextlyError> {
   const data: StaleVersionPublicData = { currentVersion: args.currentVersion };
@@ -545,6 +669,8 @@ async function staleVersionRefusal(args: {
       : undefined;
     if (changedBy) data.changedBy = changedBy;
     if (changer?.at) data.changedAt = changer.at.toISOString();
+    const history = await args.historyVersion?.();
+    if (history) data.historyVersion = history;
   }
   return NextlyError.staleVersion({
     data,
@@ -572,6 +698,8 @@ async function callerMayReadDocument(args: {
   trusted: boolean;
   authenticatedScope?: AuthenticatedScope;
   hookInputs?: { request?: Request; context?: Record<string, unknown> };
+  /** The languages the refusal is about, each of which the caller must be able to read. */
+  locales?: readonly string[];
 }): Promise<boolean> {
   if (args.trusted) return true;
   if (!args.user) return false;
@@ -587,7 +715,8 @@ async function callerMayReadDocument(args: {
       args.entryId,
       args.user,
       args.authenticatedScope,
-      args.hookInputs ?? {}
+      args.hookInputs ?? {},
+      args.locales ?? []
     );
     return true;
   } catch (error) {
@@ -603,8 +732,12 @@ async function callerMayReadDocument(args: {
  */
 export interface StaleWrite {
   table: string;
-  languages?: { table: string; locale: string };
-  everyLanguage?: { table: string; locales: readonly string[] };
+  /**
+   * The translation table and the languages the refusal's current version
+   * names: the ones the save is judged on, so the version it answers can be
+   * sent back with the same save.
+   */
+  languages?: { table: string; locales: readonly string[] };
 }
 
 /**
@@ -617,13 +750,10 @@ export interface StaleWriteHolder {
 }
 
 /** The pool, as `readDocumentRevision` reads it outside a transaction. */
-export function poolRevisionReader(adapter: {
-  select: TransactionContext["select"];
-  executeQuery: TransactionContext["execute"];
-}): Pick<TransactionContext, "select" | "execute"> {
+export function poolRevisionReader(adapter: RevisionReader): RevisionReader {
   return {
     select: (table, options) => adapter.select(table, options),
-    execute: (statement, params) => adapter.executeQuery(statement, params),
+    getDrizzle: () => adapter.getDrizzle(),
   };
 }
 
@@ -633,20 +763,32 @@ export function poolRevisionReader(adapter: {
  * certainly out of date. Any other is left for the row lock to decide.
  */
 export async function certainlyStale(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     table: string;
     id: string;
     given: DecodedVersion;
+    /** The languages the save is judged on, compared as the main row is. */
+    languages?: StaleWrite["languages"];
   }
 ): Promise<boolean> {
   const inHand = await readDocumentRevision(db, {
     dialect: args.dialect,
     table: args.table,
     id: args.id,
+    ...(args.languages ? { languages: args.languages } : {}),
   });
-  return inHand !== undefined && inHand.main.counter > args.given.main;
+  if (inHand === undefined) return false;
+  // Not the version stored: a counter only goes up, so one below it is out of
+  // date for good, and one above it is one no read of this document gave.
+  return (
+    inHand.main.counter !== args.given.main ||
+    Object.values(inHand.languages).some(
+      language =>
+        language.counter !== languageCounterOf(args.given, language.part)
+    )
+  );
 }
 
 /**
@@ -658,10 +800,21 @@ export async function certainlyStale(
  * it saves over is in the state returned.
  */
 export async function judgeMainRow(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
-  row: { table: string; id: string }
+  row: {
+    table: string;
+    id: string;
+    /**
+     * The languages the save is judged on, compared before any write as the
+     * main row is: read plainly, under the main-row lock every writer of a
+     * translation row takes first, so no gap of the table's key is locked.
+     * The save's own write of its language claims that row's version again,
+     * for a caller whose transaction saw an older snapshot.
+     */
+    languages?: StaleWrite["languages"];
+  }
 ): Promise<{ stale: boolean; before?: DocumentRevisionState }> {
   if (check.kind === "unjudged") return { stale: false };
   const before = await readDocumentRevision(tx, {
@@ -670,24 +823,45 @@ export async function judgeMainRow(
     id: row.id,
     forUpdate: true,
   });
+  const languages =
+    before && row.languages && row.languages.locales.length > 0
+      ? await readDocumentRevision(tx, {
+          dialect,
+          table: row.table,
+          id: row.id,
+          languages: row.languages,
+        })
+      : undefined;
+  if (before && languages) before.languages = languages.languages;
   const stale =
     before !== undefined &&
     check.kind === "judge" &&
-    staleParts(check.given, { main: before.main }).length > 0;
+    staleParts(check.given, {
+      main: before.main,
+      languages: Object.values(before.languages),
+    }).length > 0;
   return { stale, before };
 }
 
 /** {@link judgeMainRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfMainMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader,
   dialect: SupportedDialect,
   check: VersionCheck,
-  row: { table: string; id: string },
+  row: {
+    table: string;
+    id: string;
+    /** The languages the save is judged on, for the version a refusal names. */
+    languages?: StaleWrite["languages"];
+  },
   holder: StaleWriteHolder
 ): Promise<DocumentRevisionState | undefined> {
   const judged = await judgeMainRow(tx, dialect, check, row);
   if (!judged.stale) return judged.before;
-  holder.at = { table: row.table };
+  holder.at = {
+    table: row.table,
+    ...(row.languages ? { languages: row.languages } : {}),
+  };
   throw NextlyError.staleVersion({
     data: { currentVersion: String(judged.before?.main.counter) },
   });
@@ -719,7 +893,7 @@ export interface LanguageWrite {
  *   follows must not move it again.
  */
 export async function judgeLanguageRow(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader & Pick<TransactionContext, "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: LanguageWrite,
@@ -742,11 +916,12 @@ export async function judgeLanguageRow(
     };
   }
   const claimed = await claimCompanionRevision(
-    companionWriteVia(tx, dialect),
+    tx,
+    dialect,
     row.languagesTable,
     row.id,
     row.written,
-    check.given.languages[row.written] ?? 0,
+    languageCounterOf(check.given, row.written),
     savedBy
   );
   return { stale: !claimed, claimed };
@@ -754,7 +929,7 @@ export async function judgeLanguageRow(
 
 /** {@link judgeLanguageRow}, refusing a stale save by throwing, for a write whose refusal rolls everything back. */
 export async function refuseIfLanguageMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
+  tx: RevisionReader & Pick<TransactionContext, "execute">,
   dialect: SupportedDialect,
   check: VersionCheck,
   row: LanguageWrite,
@@ -765,68 +940,37 @@ export async function refuseIfLanguageMoved(
   if (!judged.stale) return judged;
   holder.at = {
     table: row.table,
-    languages: { table: row.languagesTable, locale: row.written },
+    languages: { table: row.languagesTable, locales: [row.written] },
   };
   throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
 }
 
-/** A document's translation rows, for a write that moves every language at once. */
-export interface EveryLanguageWrite {
-  table: string;
-  id: string;
-  /** Null where the document keeps no translation table to judge. */
-  languagesTable: string | null;
-  /** The languages judged (`judgedLanguages`); undefined judges none. */
-  judged: readonly string[] | undefined;
+/**
+ * The languages a judgement reads beside the document's own row
+ * (`judgeMainRow`): a translation table and the languages judged on it, or
+ * none where the document keeps no translations or none is judged.
+ */
+export function languagesJudged(
+  table: string | null,
+  locales: readonly string[] | undefined
+): StaleWrite["languages"] {
+  return table !== null && locales && locales.length > 0
+    ? { table, locales }
+    : undefined;
 }
 
 /**
- * Judge a write over every language at once, publishing them all for one,
- * inside its transaction once it holds the document's own row lock and before
- * it writes any language: each translation row against the version given.
- *
- * Read without a lock, as a save's own language is never locked either:
- * every writer of a document's translation rows takes the document's row
- * lock first, so none can move while this write holds it. Read before the
- * write, so a language a row was first created in since the read is found
- * (its version said 0), and a row that has gone is too.
- *
- * Throws, for a write that owns its transaction: a refusal must roll back
- * the main row's move with it. An overwrite is never refused; the rows read
- * are returned so what it replaced can be told.
+ * The judged languages' rows as the judgement read them, before the write:
+ * what an overwrite of all of them saved over.
  */
-export async function refuseIfAnyLanguageMoved(
-  tx: Pick<TransactionContext, "select" | "execute">,
-  dialect: SupportedDialect,
-  check: VersionCheck,
-  row: EveryLanguageWrite,
-  holder: StaleWriteHolder
-): Promise<PartState[] | undefined> {
-  if (check.kind === "unjudged" || !row.judged || row.languagesTable === null) {
-    return undefined;
-  }
-  const read = await readDocumentRevision(tx, {
-    dialect,
-    table: row.table,
-    id: row.id,
-    languages: { table: row.languagesTable, locales: row.judged },
-  });
-  if (!read) return undefined;
-  const before = row.judged.map(locale => read.languages[locale]);
-  // A language the version names that the document no longer keeps a row
-  // for was removed since the read: `readDocumentRevision` reports it as 0,
-  // which differs from what the version names.
-  if (
-    check.kind === "judge" &&
-    staleParts(check.given, { languages: before }).length > 0
-  ) {
-    holder.at = {
-      table: row.table,
-      everyLanguage: { table: row.languagesTable, locales: row.judged },
-    };
-    throw NextlyError.staleVersion({ data: { currentVersion: "unknown" } });
-  }
-  return before;
+export function judgedLanguageStates(
+  state: DocumentRevisionState | undefined,
+  locales: readonly string[] | undefined
+): PartState[] | undefined {
+  if (!state || !locales) return undefined;
+  return locales.flatMap(locale =>
+    state.languages[locale] ? [state.languages[locale]] : []
+  );
 }
 
 /**
@@ -835,7 +979,7 @@ export async function refuseIfAnyLanguageMoved(
  * that came in between, never the refused one.
  */
 export async function staleVersionErrorFor(
-  db: Pick<TransactionContext, "select" | "execute">,
+  db: RevisionReader,
   args: {
     dialect: SupportedDialect;
     scopeKind: "collection" | "single";
@@ -856,19 +1000,14 @@ export async function staleVersionErrorFor(
     >;
   }
 ): Promise<NextlyError> {
-  const locale = args.at.languages?.locale;
-  // The languages the refusal names: the save's own, or every one a write
-  // over all of them was judged on.
-  const languages = args.at.everyLanguage
-    ? args.at.everyLanguage
-    : args.at.languages && locale
-      ? { table: args.at.languages.table, locales: [locale] }
-      : undefined;
+  const locales = args.at.languages?.locales ?? [];
   const state = await readDocumentRevision(db, {
     dialect: args.dialect,
     table: args.at.table,
     id: args.id,
-    ...(languages ? { languages } : {}),
+    ...(args.at.languages && locales.length > 0
+      ? { languages: { table: args.at.languages.table, locales } }
+      : {}),
   });
   if (!state) {
     return NextlyError.notFound({
@@ -879,19 +1018,22 @@ export async function staleVersionErrorFor(
       },
     });
   }
-  const named = (languages?.locales ?? [])
-    .map(code => state.languages[code])
-    .filter((part): part is PartState => part !== undefined);
+  const languages = locales.flatMap(code =>
+    state.languages[code] ? [state.languages[code]] : []
+  );
+  // The part a one-language save writes, for the history version: a save of
+  // every language, or of none, writes the part with no language.
+  const locale = locales.length === 1 ? locales[0] : undefined;
   return staleVersionRefusal({
     state,
     given: args.given,
     currentVersion: encodeDocumentVersion(
       state.main.counter,
-      named.length > 0
-        ? Object.fromEntries(named.map(part => [part.part, part.counter]))
+      languages.length > 0
+        ? Object.fromEntries(languages.map(part => [part.part, part.counter]))
         : undefined
     ),
-    parts: [state.main, ...named],
+    parts: [state.main, ...languages],
     mayRead: () =>
       args.inSharedTransaction
         ? Promise.resolve(args.reader.trusted)
@@ -900,8 +1042,22 @@ export async function staleVersionErrorFor(
             slug: args.slug,
             entryId: args.id,
             ...args.reader,
+            locales,
           }),
     namePeople: !args.inSharedTransaction,
+    // History is read on the pool, so not inside a shared transaction.
+    ...(args.inSharedTransaction
+      ? {}
+      : {
+          historyVersion: () =>
+            newestHistoryVersion({
+              scopeKind: args.scopeKind,
+              slug: args.slug,
+              id: args.id,
+              locale: locale ?? null,
+              reader: args.reader,
+            }),
+        }),
     logContext: {
       reason: "stale-version",
       scopeKind: args.scopeKind,
@@ -909,4 +1065,59 @@ export async function staleVersionErrorFor(
       id: args.id,
     },
   });
+}
+
+/**
+ * The newest recorded version of one part of a document's history, for a
+ * client to compare against what it holds: what the comparison routes take
+ * (`compareDocumentVersions`, by version number, within one part). Undefined
+ * where the document keeps no history, the part has no version yet, or the
+ * caller may not read that part's history, which is asked as the history
+ * routes ask it (`assertHistoryLocalesReadable`).
+ */
+async function newestHistoryVersion(args: {
+  scopeKind: "collection" | "single";
+  slug: string;
+  id: string;
+  locale: string | null;
+  reader: Omit<
+    Parameters<typeof callerMayReadDocument>[0],
+    "scopeKind" | "slug" | "entryId"
+  >;
+}): Promise<StaleVersionPublicData["historyVersion"]> {
+  if (!args.reader.trusted) {
+    if (!args.reader.user) return undefined;
+    // Loaded when a refusal is built, as the read gate is.
+    const { assertHistoryLocalesReadable } = await import(
+      "../../api/versions-access"
+    );
+    try {
+      await assertHistoryLocalesReadable(
+        args.scopeKind,
+        args.slug,
+        args.id,
+        args.reader.user,
+        args.reader.authenticatedScope,
+        args.reader.hookInputs ?? {},
+        [args.locale]
+      );
+    } catch (error) {
+      if (NextlyError.is(error) && error.code === "NOT_FOUND") return undefined;
+      throw error;
+    }
+  }
+  const { getService } = await import("../../di");
+  const versions = await getService("versionsService").listPartVersions({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.id,
+  });
+  const newest = versions
+    .filter(version => version.locale === args.locale)
+    .reduce<
+      number | undefined
+    >((max, version) => (max === undefined || version.versionNo > max ? version.versionNo : max), undefined);
+  return newest === undefined
+    ? undefined
+    : { version: newest, locale: args.locale };
 }

@@ -45,10 +45,12 @@ import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
@@ -451,6 +453,14 @@ export function EntryForm({
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
   });
+  // Publishing every language waits for the entry's recordings in flight.
+  const { run: runAfterRecordings, pending: publishAllPending } =
+    useAfterRecordings(
+      documentRecordingKey(
+        autosaveScopeFor("collection", collection.name, entry?.id)
+      ),
+      publishAllEntryLocales.isPending
+    );
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is
@@ -460,10 +470,19 @@ export function EntryForm({
     if (!entryId) return undefined;
     return {
       slug: collection.slug ?? collection.name,
-      publish: () => publishAllEntryLocales.mutate(entryId),
-      pending: publishAllEntryLocales.isPending,
+      // After this entry's recordings in flight land, as a save waits.
+      publish: () =>
+        runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
+      pending: publishAllPending,
     };
-  }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);
+  }, [
+    entry?.id,
+    collection.slug,
+    collection.name,
+    publishAllEntryLocales,
+    runAfterRecordings,
+    publishAllPending,
+  ]);
 
   const translationMode = useTranslationSource({
     fields: getCollectionFields(collection),
@@ -808,6 +827,9 @@ export function EntryForm({
       // read-only form dirty with work it cannot save.
       scope: readOnlyForReader ? null : autosaveScope,
       form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
       savedCount,
     }),
     recovering

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NEXTLY_ERROR_STATUS } from "../../../errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  judgedLanguage,
   lastChangerOf,
   type PartState,
   releaseRunExemptFor,
@@ -42,6 +43,24 @@ describe("versionCheckFor", () => {
     ).toMatchObject({
       given: { languages: { "pt-BR": 1 } },
     });
+    expect(
+      versionCheckFor({ _rev: "3.zh_Hant:1" }, { exempt: false })
+    ).toMatchObject({ given: { languages: { zh_Hant: 1 } } });
+    // A code that is also an object's inherited property is an ordinary code.
+    expect(
+      versionCheckFor({ _rev: "3.constructor:1" }, { exempt: false })
+    ).toMatchObject({ kind: "judge", given: { main: 3 } });
+    const check = versionCheckFor({ _rev: "3.en:1" }, { exempt: false });
+    expect(
+      check.kind === "judge" && Object.hasOwn(check.given.languages, "toString")
+    ).toBe(false);
+    // Nor does a save in such a language find one the version never named.
+    expect(() =>
+      judgedLanguage(
+        check.kind === "judge" ? check.given : undefined,
+        "toString"
+      )
+    ).toThrow();
   });
 
   it("leaves a write that gives no version unjudged", () => {

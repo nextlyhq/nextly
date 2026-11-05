@@ -1056,6 +1056,21 @@ export class CollectionsHandler {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   */
+  // Reached through the dispatcher's method table, handed the handler the DI
+  // container resolves, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async previewPublishAllLocales(
+    params: Parameters<CollectionsHandler["publishAllLocales"]>[0]
+  ) {
+    return this.entryService.previewPublishAllLocales(
+      this.resolveUserParam(params)
+    );
+  }
+
+  /**
    * Delete an entry.
    * @param params - Collection name, entry ID, and optional user ID
    */
@@ -1206,6 +1221,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
     disableRevalidate?: boolean;
+    /** Each id's own version, judged per document; see the entry service. */
+    revs?: unknown;
   }) {
     return this.entryService.bulkUpdateEntries({
       ...this.resolveUserParam(params),
@@ -1258,6 +1275,8 @@ export class CollectionsHandler {
       authenticatedScope?: AuthenticatedScope;
       /** Skip cache revalidation for this bulk update (the outbox drain still runs). */
       disableRevalidate?: boolean;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: { limit?: number }
   ) {

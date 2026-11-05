@@ -405,7 +405,7 @@ describe.each(getConfiguredTestDialects())(
       const early = await remove(["c-spare"]);
       expect(early.status).toBe(409);
       expect(JSON.stringify(early.body)).toContain(
-        "Some pages are still being counted, so no shared style can be removed yet."
+        "Some pages haven't been counted yet, so no shared style can be removed."
       );
 
       await tick();
@@ -415,7 +415,9 @@ describe.each(getConfiguredTestDialects())(
       expect(usage.body).toMatchObject({ whole: true });
 
       const used = await remove(["c-hero", "c-spare"]);
-      expect(used.status).toBe(409);
+      // The in-use refusal, whichever check found the use.
+      expect(used.status).toBe(400);
+      expect(JSON.stringify(used.body)).toContain('"code":"IN_USE"');
       expect(JSON.stringify(used.body)).toContain(
         "hero is used on 1 document."
       );

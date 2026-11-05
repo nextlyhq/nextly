@@ -14,6 +14,7 @@ import {
   GoingLiveRelationsBatch,
   readStoredComponents,
   readStoredManyToMany,
+  relationsBatchFor,
   relationsGoingLive,
 } from "../collection-mutation-service";
 
@@ -84,6 +85,50 @@ describe("a batch's stored relations", () => {
       tags: ["z"],
     });
     expect(load.components).toHaveBeenLastCalledWith(["z"], "en");
+  });
+});
+
+// A transaction holds the lock of the one row it judges, so the relations it
+// reads through a batch holding other rows could change before it locks them.
+// The plausible broken implementation shares any batch on a transaction, and
+// a judgement there reads another row's relations as they were before it held
+// that row's lock.
+describe("the batch a judgement reads its stored relations through", () => {
+  it("is never a batch holding another entry, on a transaction", async () => {
+    const shared = new GoingLiveRelationsBatch(["a", "b"]);
+    const load = countingLoad();
+    await shared.read("a", "en", load);
+
+    const batch = relationsBatchFor({
+      entryId: "a",
+      onTransaction: true,
+      shared,
+    });
+
+    expect(batch).not.toBe(shared);
+    // A fresh read, for the locked entry alone.
+    await batch.read("a", "en", load);
+    expect(load.components).toHaveBeenCalledTimes(2);
+    expect(load.components).toHaveBeenLastCalledWith(["a"], "en");
+  });
+
+  it("is the batch holding the locked entry alone, on a transaction", () => {
+    const shared = new GoingLiveRelationsBatch(["a"]);
+
+    expect(
+      relationsBatchFor({ entryId: "a", onTransaction: true, shared })
+    ).toBe(shared);
+    expect(
+      relationsBatchFor({ entryId: "b", onTransaction: true, shared })
+    ).not.toBe(shared);
+  });
+
+  it("is the batch the judgement is made with, off a transaction", () => {
+    const shared = new GoingLiveRelationsBatch(["a", "b"]);
+
+    expect(
+      relationsBatchFor({ entryId: "a", onTransaction: false, shared })
+    ).toBe(shared);
   });
 });
 

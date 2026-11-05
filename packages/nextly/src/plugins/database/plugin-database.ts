@@ -1355,11 +1355,19 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       const snapshot = options?.isolation === "snapshot";
       // The option is handed on only when asked for, so a supplier is called
       // exactly as before for every ordinary transaction.
-      const open = <T>(work: (tx: TransactionHandles) => Promise<T>) =>
+      //
+      // The name carries meaning: the transaction-escape check in the tests
+      // names the code that opened a transaction by the first frame of its
+      // stack outside the adapters, skipping a frame whose function name
+      // matches /transaction/i as a wrapper. Named otherwise, this frame
+      // would stand for every caller of `ctx.db.transaction` at once.
+      const openTransaction = <T>(
+        work: (tx: TransactionHandles) => Promise<T>
+      ) =>
         snapshot
           ? deps.transaction(work, { isolation: "snapshot" })
           : deps.transaction(work);
-      const result = await open(async tx => {
+      const result = await openTransaction(async tx => {
         // The same surface, reading the transaction's handles. Built rather
         // than mutated so a caller holding the outer `ctx.db` cannot
         // accidentally write outside the transaction.
