@@ -65,7 +65,7 @@ function changedSinceSentence(changedSince: StaleVersion): string {
 }
 
 /** What an offer of a point saved without its starting version adds. */
-export const STARTING_VERSION_UNKNOWN =
+const STARTING_VERSION_UNKNOWN =
   "The version these edits began from is unknown.";
 
 export function AutosaveRecoveryBanner({

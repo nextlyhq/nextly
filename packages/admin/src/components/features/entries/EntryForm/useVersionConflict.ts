@@ -14,7 +14,7 @@
  * The form keeps its own rules for when a read resets it; it asks `pinned`
  * before applying one, and `adoptRead` when it does.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   DOCUMENT_OVERWRITE_KEY,
@@ -64,6 +64,11 @@ export interface VersionConflictState {
    */
   refused: (error: unknown, payload: Record<string, unknown>) => boolean;
   /**
+   * A rejection handler for a write of `payload`: pins the form, as
+   * `refused` does, then rejects with the same error.
+   */
+  refusedThen: (payload: Record<string, unknown>) => (error: unknown) => never;
+  /**
    * Hold the form on someone else's change the lock told of, before any save
    * was refused: no read resets the edits until the author chooses, and the
    * dialog stays closed. Loading the current version keeps the edits as it
@@ -101,129 +106,123 @@ function withStartingVersion<T extends Record<string, unknown>>(
     : { ...payload, [DOCUMENT_VERSION_KEY]: version };
 }
 
+/** What a form's version holds across renders: its copy's, and a refused save. */
+interface Tracked {
+  startedFrom: string | undefined;
+  pin: Pinned | null;
+  setConflict: (conflict: VersionConflict | null) => void;
+}
+
+function adoptAnswered(tracked: Tracked, item: unknown): void {
+  // A write that answers with no version (an older server) leaves the copy
+  // where it was rather than unversioned.
+  tracked.startedFrom = versionOf(item) ?? tracked.startedFrom;
+}
+
+function adoptRecovered(tracked: Tracked, recovered: string | undefined): void {
+  if (recovered !== undefined) tracked.startedFrom = recovered;
+}
+
+function pinRefusal(
+  tracked: Tracked,
+  error: unknown,
+  payload: Record<string, unknown>
+): boolean {
+  const stale = staleVersionOf(error);
+  if (!stale) return false;
+  const { [DOCUMENT_VERSION_KEY]: _sent, ...rest } = payload;
+  tracked.pin = { stale, payload: rest, startedFrom: tracked.startedFrom };
+  tracked.setConflict({ stale });
+  return true;
+}
+
+function pinThenReject(
+  tracked: Tracked,
+  payload: Record<string, unknown>,
+  error: unknown
+): never {
+  pinRefusal(tracked, error, payload);
+  throw error;
+}
+
+function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
+  const held = tracked.pin;
+  if (!held) return null;
+  // The version the edits began from, so history names whose changes the
+  // overwrite replaced.
+  return withStartingVersion(
+    { ...held.payload, [DOCUMENT_OVERWRITE_KEY]: true },
+    held.startedFrom
+  );
+}
+
+function fail(tracked: Tracked, message: string): void {
+  const held = tracked.pin;
+  if (held) tracked.setConflict({ stale: held.stale, failure: message });
+}
+
+async function keepEdits(
+  tracked: Tracked,
+  scope: VersionScope | null,
+  values: Record<string, unknown>,
+  locale: string | null | undefined
+): Promise<void> {
+  if (!scope) {
+    throw new Error("This document has no recovery points to keep edits in.");
+  }
+  await versionApi.saveAutosave(
+    scope,
+    withStartingVersion(values, tracked.pin?.startedFrom),
+    locale
+  );
+}
+
+function holdForChange(tracked: Tracked, stale: StaleVersion): void {
+  if (tracked.pin !== null) return;
+  // No refused write to replay: a save made later sends its own.
+  tracked.pin = { stale, payload: {}, startedFrom: tracked.startedFrom };
+}
+
+function release(tracked: Tracked): void {
+  tracked.pin = null;
+  tracked.setConflict(null);
+}
+
+/** A form's version actions, over what `tracked` holds. */
+function actionsOver(tracked: Tracked): Omit<VersionConflictState, "conflict"> {
+  return {
+    pinned: () => tracked.pin !== null,
+    startedFrom: () => tracked.startedFrom,
+    withVersion: <T extends Record<string, unknown>>(payload: T): T =>
+      withStartingVersion(payload, tracked.startedFrom),
+    adoptRead: (doc: unknown) => {
+      tracked.startedFrom = versionOf(doc);
+    },
+    adoptAnswered: (item: unknown) => adoptAnswered(tracked, item),
+    adoptRecovered: (recovered: string | undefined) =>
+      adoptRecovered(tracked, recovered),
+    refused: (error: unknown, payload: Record<string, unknown>) =>
+      pinRefusal(tracked, error, payload),
+    refusedThen: (payload: Record<string, unknown>) => (error: unknown) =>
+      pinThenReject(tracked, payload, error),
+    holdForChange: (stale: StaleVersion) => holdForChange(tracked, stale),
+    overwrite: () => overwriteOf(tracked),
+    keepEdits: (scope, values, locale) =>
+      keepEdits(tracked, scope, values, locale),
+    refusedFrom: () => tracked.pin?.startedFrom,
+    failed: (message: string) => fail(tracked, message),
+    release: () => release(tracked),
+  };
+}
+
 export function useVersionConflict(): VersionConflictState {
-  const startedFrom = useRef<string | undefined>(undefined);
-  const pin = useRef<Pinned | null>(null);
   const [conflict, setConflict] = useState<VersionConflict | null>(null);
-
-  const pinned = useCallback(() => pin.current !== null, []);
-  const currentStart = useCallback(() => startedFrom.current, []);
-
-  const withVersion = useCallback(
-    <T extends Record<string, unknown>>(payload: T): T =>
-      withStartingVersion(payload, startedFrom.current),
-    []
+  // Made once, so every action is stable for the form's life and a form's
+  // effects can depend on them.
+  const [actions] = useState(() =>
+    actionsOver({ startedFrom: undefined, pin: null, setConflict })
   );
-
-  const adoptRead = useCallback((doc: unknown) => {
-    startedFrom.current = versionOf(doc);
-  }, []);
-
-  const adoptAnswered = useCallback((item: unknown) => {
-    // A write that answers with no version (an older server) leaves the copy
-    // where it was rather than unversioned.
-    startedFrom.current = versionOf(item) ?? startedFrom.current;
-  }, []);
-
-  const adoptRecovered = useCallback((recovered: string | undefined) => {
-    if (recovered !== undefined) startedFrom.current = recovered;
-  }, []);
-
-  const refused = useCallback(
-    (error: unknown, payload: Record<string, unknown>) => {
-      const stale = staleVersionOf(error);
-      if (!stale) return false;
-      const { [DOCUMENT_VERSION_KEY]: _sent, ...rest } = payload;
-      pin.current = { stale, payload: rest, startedFrom: startedFrom.current };
-      setConflict({ stale });
-      return true;
-    },
-    []
-  );
-
-  const holdForChange = useCallback((stale: StaleVersion) => {
-    if (pin.current !== null) return;
-    // No refused write to replay: a save made later sends its own.
-    pin.current = { stale, payload: {}, startedFrom: startedFrom.current };
-  }, []);
-
-  const overwrite = useCallback(() => {
-    const held = pin.current;
-    if (!held) return null;
-    // The version the edits began from, so history names whose changes the
-    // overwrite replaced.
-    return withStartingVersion(
-      { ...held.payload, [DOCUMENT_OVERWRITE_KEY]: true },
-      held.startedFrom
-    );
-  }, []);
-
-  const failed = useCallback((message: string) => {
-    const held = pin.current;
-    if (held) setConflict({ stale: held.stale, failure: message });
-  }, []);
-
-  const keepEdits = useCallback(
-    async (
-      scope: VersionScope | null,
-      values: Record<string, unknown>,
-      locale: string | null | undefined
-    ) => {
-      if (!scope) {
-        throw new Error(
-          "This document has no recovery points to keep edits in."
-        );
-      }
-      await versionApi.saveAutosave(
-        scope,
-        withStartingVersion(values, pin.current?.startedFrom),
-        locale
-      );
-    },
-    []
-  );
-
-  const refusedFrom = useCallback(() => pin.current?.startedFrom, []);
-
-  const release = useCallback(() => {
-    pin.current = null;
-    setConflict(null);
-  }, []);
-
   // One object while the conflict is unchanged, so a form's effects can
   // depend on it without running again on every render.
-  return useMemo(
-    () => ({
-      conflict,
-      pinned,
-      startedFrom: currentStart,
-      withVersion,
-      adoptRead,
-      adoptAnswered,
-      adoptRecovered,
-      refused,
-      holdForChange,
-      overwrite,
-      keepEdits,
-      refusedFrom,
-      failed,
-      release,
-    }),
-    [
-      adoptRecovered,
-      conflict,
-      pinned,
-      currentStart,
-      withVersion,
-      adoptRead,
-      adoptAnswered,
-      refused,
-      holdForChange,
-      overwrite,
-      keepEdits,
-      refusedFrom,
-      failed,
-      release,
-    ]
-  );
+  return useMemo(() => ({ conflict, ...actions }), [conflict, actions]);
 }

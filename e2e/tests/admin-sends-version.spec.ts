@@ -153,7 +153,11 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
 
     // A list's bulk publish.
     await gotoAdmin(page, "/collections/posts");
-    const row = page.getByRole("row").filter({ hasText: `Versioned ${tag}` });
+    // A row that opens its entry is a button; the phone-width card drawing
+    // the same entry stays hidden.
+    const row = page
+      .getByRole("button", { name: new RegExp(`Versioned ${tag}`) })
+      .filter({ visible: true });
     await expect(row).toBeVisible({ timeout: 30_000 });
     await row.getByRole("checkbox", { name: "Select row" }).click();
     sent = nextWrite(page, r => r.url().includes(`${POSTS}/bulk-update`));

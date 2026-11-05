@@ -63,6 +63,29 @@ import {
  */
 const DOCUMENT_VERSION_KEY = "_rev";
 
+/**
+ * What a save sends: an existing form's save names the version the editor's
+ * copy started from, where it has one, so a save from an older copy is refused.
+ */
+function saveBody(
+  saveData: Record<string, unknown>,
+  isCreating: boolean,
+  startedFrom: string | undefined
+): Record<string, unknown> {
+  return isCreating || startedFrom === undefined
+    ? saveData
+    : { ...saveData, [DOCUMENT_VERSION_KEY]: startedFrom };
+}
+
+/** The version a save answered, or the copy's own where it names none. */
+function versionAfterSave(
+  saved: Record<string, unknown>,
+  previous: string | undefined
+): string | undefined {
+  const answered = saved[DOCUMENT_VERSION_KEY];
+  return typeof answered === "string" ? answered : previous;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -340,9 +363,7 @@ function FormBuilderViewInner({
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify(
-          isCreating || startedFrom.current === undefined
-            ? saveData
-            : { ...saveData, [DOCUMENT_VERSION_KEY]: startedFrom.current }
+          saveBody(saveData, isCreating, startedFrom.current)
         ),
       });
       if (!response.ok) {
@@ -359,8 +380,7 @@ function FormBuilderViewInner({
         item?: Record<string, unknown>;
       } & Record<string, unknown>;
       const savedEntry: Record<string, unknown> = result.item ?? result;
-      const answered = savedEntry[DOCUMENT_VERSION_KEY];
-      if (typeof answered === "string") startedFrom.current = answered;
+      startedFrom.current = versionAfterSave(savedEntry, startedFrom.current);
       void queryClient.invalidateQueries({
         queryKey: ["entries", "list", collectionSlug],
       });
