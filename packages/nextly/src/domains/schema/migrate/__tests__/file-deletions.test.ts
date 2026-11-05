@@ -767,6 +767,68 @@ describe("what the run cannot be sure it created, or where a name points", () =>
     ]);
   });
 
+  it("gives a name back to its live table once MySQL's DROP TEMPORARY TABLE drops the run's temporary table", () => {
+    expect(
+      read("mysql", [
+        "CREATE TEMPORARY TABLE posts (id integer)",
+        "DROP TEMPORARY TABLE posts",
+        "DELETE FROM posts",
+      ])
+    ).toEqual([rows("posts")]);
+    // Dropping a temporary table the run did not make deletes nothing it could name.
+    expect(read("mysql", ["DROP TEMPORARY TABLE IF EXISTS scratch"])).toEqual(
+      []
+    );
+  });
+
+  it("stands for a deletion through a name once anything that changes name resolution ran", () => {
+    const remove = "DELETE FROM posts WHERE id = 1";
+    const unplaced = unreadAs(
+      "DELETE FROM POSTS WHERE ID = 1 (search path changed, not read, may delete data)",
+      remove
+    );
+    for (const moves of [
+      "SET SCHEMA 'archive'",
+      "SET SESSION search_path = archive",
+      "RESET search_path",
+      "RESET ALL",
+      "SET ROLE archivist",
+      "SET SESSION AUTHORIZATION archivist",
+      "RESET ROLE",
+      "DISCARD ALL",
+    ]) {
+      expect(read("postgresql", [moves, remove]), moves).toEqual([unplaced]);
+    }
+    // A setting that leaves names where they were moves nothing.
+    expect(
+      read("postgresql", ["SET LOCAL lock_timeout = '5s'", remove])
+    ).toEqual([rows("posts")]);
+  });
+
+  it("asks the triggers of every descendant a PostgreSQL write without ONLY reaches", () => {
+    const update = "UPDATE events SET seen = true";
+    const facts = {
+      descendants: { events: ["events_2024"] },
+      triggers: { events_2024: ["update" as const] },
+    };
+    expect(read("postgresql", [update], facts)).toEqual([
+      unnamed(
+        "rows written to events_2024 fire an UPDATE trigger, which may delete other data"
+      ),
+    ]);
+    expect(
+      read("postgresql", ["UPDATE ONLY events SET seen = true"], facts)
+    ).toEqual([]);
+    // Descendants that cannot be read may hold such a trigger.
+    expect(
+      read("postgresql", [update], { descendants: { events: undefined } })
+    ).toEqual([
+      unnamed(
+        "rows written to tables that inherit from events or partition it, whose triggers could not be read"
+      ),
+    ]);
+  });
+
   it("follows a partition attached or a table made to inherit earlier in the run into a later removal", () => {
     expect(
       read("postgresql", [

@@ -99,6 +99,7 @@ import {
   runPluginMigrations,
   type PluginMigrationRunResult,
   type PluginMigrationSet,
+  type PluginModulePreview,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
 import {
@@ -144,6 +145,7 @@ import type {
   ContributedElements,
   NextlySchemaSnapshot,
 } from "../../domains/schema/pipeline/diff/types";
+import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import {
   forceUnlock,
   withMigrateLock,
@@ -169,6 +171,7 @@ import {
 import {
   askToDeleteInTerminal,
   deletionSource,
+  eventTriggerNotice,
   judgeRunDeletions,
   type Agreement,
   type DeletionSource,
@@ -717,6 +720,12 @@ export interface MigrateCoreDeps {
    * for tests; the default reads the ledger (`appliedPluginModules`).
    */
   appliedPluginModulesFn?: () => Promise<ReadonlyMap<string, string | null>>;
+  /**
+   * The database's enabled DDL event triggers, named beside the deletions a
+   * run asks consent for (`eventTriggerNotice`). Injected for tests; the
+   * default reads the catalog (`readDdlEventTriggers`).
+   */
+  readEventTriggersFn?: () => Promise<readonly string[]>;
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -862,6 +871,8 @@ export async function previewMigrate(args: {
   plugins: Parameters<typeof pluginMigrationArgs>[0];
   step?: number;
   logger: CommandContext["logger"];
+  /** As `MigrateCoreDeps.readEventTriggersFn`. */
+  readEventTriggers?: () => Promise<readonly string[]>;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   const hasLedger = await (
@@ -932,6 +943,32 @@ export async function previewMigrate(args: {
       .slice(0, moduleRuns.length)
       .map(({ unit, deletions }) => [unit.label, deletions])
   );
+  previewModules(modules, moduleDeletions, logger);
+  await previewFiles(
+    judged.slice(moduleRuns.length).map(({ deletions }) => deletions),
+    pendingFiles,
+    args,
+    logger
+  );
+  await previewBeyondStep(
+    allPendingFiles,
+    pendingFiles,
+    args.migrationsDir,
+    logger
+  );
+  if (hasLedger) await previewChangedFiles(rows, args, logger);
+  if (pendingModules.length + pendingFiles.length > 0) {
+    await previewEventTriggers(args, logger);
+  }
+  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/** Each plugin module a real run reaches, with what it would refuse and what it deletes. */
+function previewModules(
+  modules: readonly PluginModulePreview[],
+  deletions: ReadonlyMap<string, readonly Deletion[]>,
+  logger: CommandContext["logger"]
+): void {
   for (const module of modules) {
     logger.info(
       `  • ${module.filename}${module.recorded ? " (applied)" : ""}${module.transaction ? "" : " (runs outside a transaction)"}`
@@ -939,50 +976,92 @@ export async function previewMigrate(args: {
     for (const refusal of module.refusals) {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
-    previewDeletions(moduleDeletions.get(module.filename) ?? [], logger);
+    previewDeletions(deletions.get(module.filename) ?? [], logger);
   }
-  for (const [at, { deletions }] of judged.slice(moduleRuns.length).entries()) {
-    const m = pendingFiles[at];
-    if (m === undefined) continue;
-    previewPendingFile(m, deletions, dialect, logger);
+}
+
+/** Each pending app file within the step, with what it deletes (`deletions`, in the same order) and a Builder file's refusal. */
+async function previewFiles(
+  deletions: readonly (readonly Deletion[])[],
+  pendingFiles: readonly ParsedMigration[],
+  args: { dialect: SupportedDialect; migrationsDir: string },
+  logger: CommandContext["logger"]
+): Promise<void> {
+  for (const [at, m] of pendingFiles.entries()) {
+    previewPendingFile(m, deletions[at] ?? [], args.dialect, logger);
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
-  // A real run refuses a snapshotless Builder file among ALL its pending files
-  // before it applies any, whatever `--step` allows, so one the step leaves
-  // out of the preview is named too.
+}
+
+/**
+ * A real run refuses a snapshotless Builder file among ALL its pending files
+ * before it applies any, whatever `--step` allows, so one the step leaves
+ * out of the preview is named too.
+ */
+async function previewBeyondStep(
+  allPendingFiles: readonly ParsedMigration[],
+  pendingFiles: readonly ParsedMigration[],
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<void> {
   const previewed = new Set(pendingFiles.map(m => m.name));
   for (const m of allPendingFiles) {
     if (previewed.has(m.name)) continue;
-    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+    if (await isRefusedWithoutSnapshot(m, migrationsDir)) {
       logger.info(
         `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
-  // An applied file edited since it ran stops a real run before it applies
-  // anything (`assertAppliedFilesUnchanged`), so the preview names it.
-  if (hasLedger) {
-    const files = await discoverMigrations(
-      args.migrationsDir,
-      logger,
-      dialect,
-      "app"
+}
+
+/**
+ * An applied file edited since it ran stops a real run before it applies
+ * anything (`assertAppliedFilesUnchanged`), so the preview names it.
+ */
+async function previewChangedFiles(
+  rows: Parameters<typeof appliedChecksums>[1],
+  args: { dialect: SupportedDialect; migrationsDir: string },
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const files = await discoverMigrations(
+    args.migrationsDir,
+    logger,
+    args.dialect,
+    "app"
+  );
+  const { changed } = appliedChecksums(
+    files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
+    rows
+  );
+  for (const filename of changed) {
+    logger.info(
+      `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
     );
-    const { changed } = appliedChecksums(
-      files.map(m => ({ filename: `${m.name}.sql`, checksum: m.checksum })),
-      rows
-    );
-    for (const filename of changed) {
-      logger.info(
-        `  ✖ a real run would refuse before applying anything: \`${filename}\` has changed since it was applied (exit code 2). Restore it, or accept the edit with \`nextly migrate:resolve --applied ${filename}\`.`
-      );
-    }
   }
-  await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/** The database's DDL event triggers, named as a real run names them beside its deletions (`eventTriggerNotice`). */
+async function previewEventTriggers(
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    readEventTriggers?: () => Promise<readonly string[]>;
+  },
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const notice = await eventTriggerNotice(
+    eventTriggersOf({
+      readEventTriggersFn: args.readEventTriggers,
+      db: args.db,
+      dialect: args.dialect,
+    })
+  );
+  if (notice !== undefined) logger.info(`  ⚠ ${notice}`);
 }
 
 /**
@@ -2035,7 +2114,21 @@ async function judgeFileDeletions(
     interactive: deps.interactive,
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
+    notice:
+      sources.size === 0
+        ? undefined
+        : await eventTriggerNotice(eventTriggersOf(deps)),
   });
+}
+
+/** How a run reads the database's DDL event triggers: injected, or from the catalog. */
+function eventTriggersOf(
+  deps: Pick<MigrateCoreDeps, "readEventTriggersFn" | "db" | "dialect">
+): () => Promise<readonly string[]> {
+  return (
+    deps.readEventTriggersFn ??
+    (() => readDdlEventTriggers(deps.db, deps.dialect))
+  );
 }
 
 /** One unit of a run as its consent judges it: its name in the listing, its text (for binding an agreement) and its statements. */

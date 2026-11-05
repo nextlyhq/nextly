@@ -563,6 +563,42 @@ describe("a pending plugin module that deletes data", () => {
     expect(d.reconcileCoreFn).not.toHaveBeenCalled();
     expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
   });
+
+  it("names the database's DDL event triggers beside the deletions, and asks no more consent for them", async () => {
+    const planned = {
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => ["audit_ddl", "watch_ddl"]),
+    };
+    const refusal = (over: Record<string, unknown>) =>
+      migrateCore(deps({ ...planned, ...over }) as never).then(
+        () => "ran",
+        (error: Error) => error.message
+      );
+    // The triggers add no deletion to judge: the same refusal, told beside it.
+    expect(await refusal({})).toBe(
+      `${await refusal({ readEventTriggersFn: async () => [] })}\nThis database has the DDL event triggers audit_ddl, watch_ddl: they run on schema changes, and Nextly cannot see what they do, so what they delete is not listed.`
+    );
+  });
+
+  it("says when whether the database has DDL event triggers could not be read", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        { pluginName: "fx", pluginVersion: "1.0.0", migrations: [deleting] },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => new Map()),
+      interactive: false,
+      readEventTriggersFn: vi.fn(async () => {
+        throw new Error("permission denied for pg_event_trigger");
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toThrow(
+      /could not read whether this database has DDL event triggers/
+    );
+  });
 });
 
 describe("an unresolved app attempt", () => {

@@ -557,6 +557,23 @@ export async function readPgDescendants(
 }
 
 /**
+ * The enabled PostgreSQL event triggers (`pg_event_trigger`, any `evtenabled` but 'D'), by
+ * name: code the database runs on DDL commands, which no statement in a migration shows. Other
+ * dialects have none. Throws when the catalog cannot be read.
+ */
+export async function readDdlEventTriggers(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT evtname AS name FROM pg_event_trigger
+        WHERE evtenabled <> 'D' ORDER BY 1`
+  )) as { rows: { name: string }[] };
+  return result.rows.map(row => row.name);
+}
+
+/**
  * The names of the indexes the table currently carries.
  *
  * Whether a column is indexed is not derivable from its field: an index is created by the path

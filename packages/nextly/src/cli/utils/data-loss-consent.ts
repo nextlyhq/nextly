@@ -182,6 +182,8 @@ export async function judgeRunDeletions(args: {
   interactive: boolean | undefined;
   askToDelete: ((question: string) => Promise<boolean>) | undefined;
   warn: (line: string) => void;
+  /** What the run cannot list, told beside its deletions (`eventTriggerNotice`); never judged. */
+  notice?: string;
 }): Promise<Agreement> {
   const first = args.agreed === undefined;
   const sources = [...args.sources];
@@ -194,6 +196,12 @@ export async function judgeRunDeletions(args: {
         ([deletion, source]) =>
           args.agreed?.has(agreed(source, deletion)) !== true
       );
+  // Told only beside deletions: a question at a terminal follows it, and a
+  // refusal carries it.
+  const notice = judged.length > 0 ? args.notice : undefined;
+  if (first && notice !== undefined && args.interactive === true) {
+    args.warn(notice);
+  }
   const verdict = await judgeDataLoss({
     deletions: judged.map(([deletion]) => deletion),
     consent: args.consent,
@@ -204,7 +212,7 @@ export async function judgeRunDeletions(args: {
   });
   if (verdict.kind === "refused") {
     throw NextlyError.invalidInput({
-      message: verdict.message,
+      message: withNotice(verdict.message, notice),
       logContext: {
         files: [...new Set(sources.map(([, source]) => source.label))],
         reason: `data-loss-${verdict.reason}`,
@@ -212,5 +220,36 @@ export async function judgeRunDeletions(args: {
     });
   }
   if (verdict.kind === "declined") throw dataLossDeclined();
+  if (first && notice !== undefined && args.interactive !== true) {
+    args.warn(notice);
+  }
   return new Set(sources.map(([deletion, source]) => agreed(source, deletion)));
+}
+
+/** A refusal's message with the notice after it, when there is one. */
+function withNotice(message: string, notice: string | undefined): string {
+  return notice === undefined ? message : `${message}\n${notice}`;
+}
+
+/**
+ * What a run tells of the database's DDL event triggers, from `read`
+ * (`readDdlEventTriggers`): each by name, since Nextly cannot see what one
+ * does on the schema changes a migration makes; that the read failed, when it
+ * did; undefined when there are none. Told, never judged: no consent covers
+ * code nobody can read, and asking for blanket consent on every run of a
+ * database that has one would make that consent meaningless.
+ */
+export async function eventTriggerNotice(
+  read: () => Promise<readonly string[]>
+): Promise<string | undefined> {
+  let names: readonly string[];
+  try {
+    names = await read();
+  } catch {
+    return "Nextly could not read whether this database has DDL event triggers, which run on schema changes; what they delete is not listed.";
+  }
+  if (names.length === 0) return undefined;
+  return names.length === 1
+    ? `This database has the DDL event trigger ${names[0]}: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.`
+    : `This database has the DDL event triggers ${names.join(", ")}: they run on schema changes, and Nextly cannot see what they do, so what they delete is not listed.`;
 }

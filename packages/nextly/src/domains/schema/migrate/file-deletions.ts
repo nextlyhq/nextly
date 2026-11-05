@@ -151,7 +151,8 @@ type Reach = "delete" | "truncate" | "none";
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
   | { kind: "create"; table: string; temporary?: boolean }
-  | { kind: "drop"; table: string }
+  /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
+  | { kind: "drop"; table: string; temporary?: boolean }
   | { kind: "add-column"; table: string; column: string }
   | {
       kind: "add-key";
@@ -166,7 +167,13 @@ type Step =
   /** `child` made a descendant of `parent` (ATTACH PARTITION, INHERIT): a later removal from `parent` reaches it. */
   | { kind: "inherit"; parent: string; child: string }
   /** Rows written to `table`, firing the triggers of each event. */
-  | { kind: "writes"; table: string; events: ("insert" | "update")[] }
+  | {
+      kind: "writes";
+      table: string;
+      events: ("insert" | "update")[];
+      /** PostgreSQL's ONLY: the table without its descendants, whose triggers a write otherwise fires. */
+      only?: boolean;
+    }
   | {
       kind: "calls";
       names: string[];
@@ -659,9 +666,15 @@ function readDrop(
   tokens: readonly Token[],
   dialect: SupportedDialect
 ): Step[] {
-  // MySQL's temporary tables live for the session, holding nothing a
-  // migration could have found there.
-  if (cursor.accept("TEMPORARY")) return [];
+  // MySQL's DROP TEMPORARY TABLE drops only a temporary table: one the run
+  // made gives its name back to what it shadowed, and one it did not make
+  // held nothing a migration could have found there.
+  if (cursor.accept("TEMPORARY")) {
+    if (!cursor.accept("TABLE")) return [];
+    return readDropTables(cursor, tokens).map(step =>
+      step.kind === "drop" ? { ...step, temporary: true } : step
+    );
+  }
   if (cursor.accept("TABLE")) return readDropTables(cursor, tokens);
   const kind = cursor.peek();
   const definition =
@@ -752,18 +765,24 @@ function readRowsInto(
  */
 function readMerge(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   cursor.accept("INTO");
-  cursor.accept("ONLY");
+  const only = cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return [unread(tokens)];
   const steps: Step[] = [];
   if (tokens.includes("DELETE")) {
-    steps.push({ kind: "rows", table, reach: "delete", removal: "delete" });
+    steps.push({
+      kind: "rows",
+      table,
+      reach: "delete",
+      removal: "delete",
+      only,
+    });
   }
   const events = (["update", "insert"] as const).filter(event =>
     tokens.includes(event.toUpperCase())
   );
   if (events.length > 0)
-    steps.push({ kind: "writes", table, events: [...events] });
+    steps.push({ kind: "writes", table, events: [...events], only });
   return steps;
 }
 
@@ -782,10 +801,10 @@ function readWrite(tokens: readonly Token[]): Step[] {
   if (!insert) cursor.accept("UPDATE");
   for (const modifier of WRITE_MODIFIERS) cursor.accept(modifier);
   if (insert && !cursor.accept("INTO")) return [];
-  if (!insert) cursor.accept("ONLY");
+  const only = !insert && cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return [unread(tokens)];
-  return [{ kind: "writes", table, events: writeEvents(insert, tokens) }];
+  return [{ kind: "writes", table, events: writeEvents(insert, tokens), only }];
 }
 
 /** The events a write fires: an UPDATE its own, an INSERT its own and, as an upsert, UPDATE too. */
@@ -1477,7 +1496,7 @@ class FileWalk {
         this.create(step.table, step.temporary === true);
         return true;
       case "drop":
-        this.drop(step.table);
+        this.drop(step.table, step.temporary === true);
         return true;
       case "rows":
         this.removeRows(step);
@@ -1565,7 +1584,7 @@ class FileWalk {
     this.origins.set(table, null);
   }
 
-  private drop(name: string): void {
+  private drop(name: string, temporary: boolean): void {
     if (this.shadowed.has(name)) {
       // Dropping a temporary table loses only what the run put in it, and
       // the name reaches what it reached before again.
@@ -1575,6 +1594,9 @@ class FileWalk {
       else this.origins.set(name, before);
       return;
     }
+    // A temporary drop of a name the run made no temporary table for drops
+    // a session's temporary table, never the live one.
+    if (temporary) return;
     const table = this.origin(name);
     if (table !== null) this.emit({ kind: "table", table });
     this.origins.set(name, null);
@@ -1796,7 +1818,26 @@ class FileWalk {
       !this.runTriggers.has("*")
     )
       return;
-    for (const event of step.events) this.triggers([name], event);
+    // Without ONLY, PostgreSQL writes through a parent reach its descendants
+    // (an UPDATE their rows, an INSERT into a partitioned table its
+    // partitions), whose own triggers fire.
+    const written =
+      table === null || step.only === true
+        ? [name]
+        : [name, ...this.writtenDescendants(table)];
+    for (const event of step.events) this.triggers(written, event);
+  }
+
+  /** The descendants a write through `table` may reach; none when unreadable, which only blanket consent covers. */
+  private writtenDescendants(table: string): readonly string[] {
+    const found = this.facts.descendantsOf(table);
+    if (found === undefined) {
+      this.emit({
+        kind: "unnamed",
+        description: `rows written to tables that inherit from ${table} or partition it, whose triggers could not be read`,
+      });
+    }
+    return [...(found ?? []), ...this.attachedTo(table)];
   }
 
   /** What the live keys of `table` reach, named; the tables reached. */
@@ -2064,13 +2105,35 @@ function walk(
 }
 
 /**
- * Whether a statement changes where an unqualified name points: PostgreSQL's
- * `SET search_path` (or a `set_config` call, which may set it) and MySQL's
- * `USE`. The live facts were read for the names as they pointed before.
+ * The settings whose change moves where an unqualified name points:
+ * PostgreSQL's search path (`SCHEMA` is its alias), the role its `"$user"`
+ * entry resolves to, and `ALL`, which resets both.
+ */
+const NAME_SETTINGS = new Set([
+  "SEARCH_PATH",
+  "SCHEMA",
+  "ROLE",
+  "AUTHORIZATION",
+  "ALL",
+]);
+
+/**
+ * Whether a statement changes where an unqualified name points: a
+ * `SET`/`RESET` of a setting names resolve by (`NAME_SETTINGS`, after an
+ * optional `SESSION` or `LOCAL`), PostgreSQL's `DISCARD` (`ALL` resets the
+ * path, `TEMP` gives shadowed names back), a `set_config` call, which may set it, and MySQL's `USE`. The live
+ * facts were read for the names as they pointed before.
  */
 function movesPath(tokens: readonly Token[]): boolean {
-  if (tokens[0] === "USE") return true;
-  if (tokens[0] === "SET" && tokens.includes("SEARCH_PATH")) return true;
+  const [first] = tokens;
+  if (first === "USE" || first === "DISCARD") return true;
+  if (first === "SET" || first === "RESET") {
+    // The setting follows SESSION or LOCAL when one is written: `SET
+    // CONSTRAINTS ALL` names no setting.
+    const at = tokens[1] === "SESSION" || tokens[1] === "LOCAL" ? 2 : 1;
+    const setting = tokens[at];
+    return typeof setting === "string" && NAME_SETTINGS.has(setting);
+  }
   return tokens.some(
     (token, at) =>
       (token === "SET_CONFIG" || token === "PG_CATALOG.SET_CONFIG") &&
@@ -2334,6 +2397,12 @@ class FactReading {
     Map<string, string> | undefined
   >();
   private readonly spellings = new Map<string, string>();
+  /**
+   * Lower-cased names two live tables share but for case ("Posts" beside posts, which
+   * PostgreSQL's quoted names and MySQL on a case-sensitive file system allow): which one a
+   * statement means cannot be told, so every fact for such a name reads unknown.
+   */
+  private readonly twins = new Set<string>();
   /** Null until a walk calls a function; undefined when they could not be read. */
   private userFunctions: ReadonlySet<string> | undefined | null = null;
 
@@ -2451,11 +2520,18 @@ class FactReading {
       introspectTableNames(this.db, this.dialect, unspelled)
     );
     if (live === undefined) this.spellFailed = true;
-    for (const name of live ?? []) this.spellings.set(name.toLowerCase(), name);
+    for (const name of live ?? []) {
+      const key = name.toLowerCase();
+      const spelled = this.spellings.get(key);
+      if (spelled !== undefined && spelled !== name) this.twins.add(key);
+      this.spellings.set(key, name);
+    }
   }
 
   /** How a table is named to the catalog: its live spelling, or a PostgreSQL name already qualified (a descendant's). */
   private live(table: string): string | undefined {
+    // A name two live tables share but for case names neither for certain.
+    if (this.twins.has(table)) return undefined;
     const spelled = this.spellings.get(table);
     if (spelled !== undefined) return spelled;
     return this.dialect === "postgresql" && table.includes(".")

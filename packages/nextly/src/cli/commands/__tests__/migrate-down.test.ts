@@ -223,6 +223,19 @@ describe("a rollback's deletions, read as one run", () => {
     expect(executed).toEqual([]);
   });
 
+  it("names the database's DDL event triggers beside a rollback's deletions", async () => {
+    const { deps, executed } = baseDeps({
+      listFileApplies: async () => [row("b.sql", "applied", 1000)],
+      readDownSql: async () => down('DELETE FROM "posts";'),
+      readDeletionFacts: quietFacts,
+      readEventTriggers: async () => ["audit_ddl"],
+    });
+    await expect(migrateDownCore(deps as never)).rejects.toThrow(
+      /DDL event trigger audit_ddl/
+    );
+    expect(executed).toEqual([]);
+  });
+
   it("never lets a yes to one file's deletion stand for another file's, when the plan moves while the lock is awaited", async () => {
     // Before the lock a.sql is the newest applied file; while this run waits,
     // another rolls it back, and the plan under the lock reaches b.sql,

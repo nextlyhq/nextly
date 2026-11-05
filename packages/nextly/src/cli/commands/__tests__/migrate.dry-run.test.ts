@@ -83,7 +83,8 @@ describe("migrate --dry-run", () => {
 
   function preview(
     step?: number,
-    planned: Parameters<typeof previewMigrate>[0]["plugins"] = plugins
+    planned: Parameters<typeof previewMigrate>[0]["plugins"] = plugins,
+    readEventTriggers?: () => Promise<readonly string[]>
   ): Promise<void> {
     const record = (message: string) => {
       lines.push(message);
@@ -97,6 +98,7 @@ describe("migrate --dry-run", () => {
       migrationsDir: dir,
       plugins: planned,
       step,
+      readEventTriggers,
       logger: {
         info: record,
         keyValue: (key: string, value: string) => record(`${key}: ${value}`),
@@ -185,6 +187,14 @@ describe("migrate --dry-run", () => {
     );
     // The file deletes rows only from the table the module before it creates.
     expect(lines.join("\n")).not.toMatch(/deletes data:.*acme_notes/);
+  });
+
+  it("names the database's DDL event triggers, whose effects it cannot list", async () => {
+    await preview(undefined, plugins, async () => ["audit_ddl"]);
+
+    expect(lines).toContain(
+      "  ⚠ This database has the DDL event trigger audit_ddl: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed."
+    );
   });
 
   it("reads an absent ledger as nothing applied, and creates none", async () => {

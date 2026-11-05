@@ -20,6 +20,7 @@ import {
   lockWorld,
   type LockWorld,
 } from "../../pipeline/__tests__/helpers/schema-lock-world";
+import { readDdlEventTriggers } from "../../pipeline/live-table-facts";
 import { fileDeletions, readDeletionFacts } from "../file-deletions";
 
 describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
@@ -247,6 +248,60 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     },
     120_000
   );
+
+  it.runIf(dialect !== "sqlite")(
+    "reads nothing for a name two live tables share but for case, so a deletion there needs blanket consent",
+    async () => {
+      // PostgreSQL keeps a quoted name's case, and MySQL on Linux compares
+      // table names by case, so both hold the two tables side by side.
+      const twin = `${P}_twin`;
+      const cased = dialect === "postgresql" ? `"${P}_Twin"` : `\`${P}_Twin\``;
+      for (const statement of [
+        `CREATE TABLE ${twin} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${cased} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${P}_twin_child (id integer PRIMARY KEY, twin_id integer, FOREIGN KEY (twin_id) REFERENCES ${cased} (id) ON DELETE CASCADE)`,
+      ]) {
+        await adapter.executeQuery(statement);
+      }
+      const facts = await readDeletionFacts(adapter.getDrizzle(), dialect, [
+        `DELETE FROM ${twin}`,
+      ]);
+      // Which of the two the lower-cased name means cannot be told.
+      expect(facts.cascadeFrom(twin)).toBeUndefined();
+      expect(facts.triggered(twin, "delete")).toBeUndefined();
+    },
+    120_000
+  );
+
+  it("reads the enabled DDL event triggers, none disabled, and none outside PostgreSQL", async () => {
+    if (dialect !== "postgresql") {
+      expect(await readDdlEventTriggers(adapter.getDrizzle(), dialect)).toEqual(
+        []
+      );
+      return;
+    }
+    const on = `${P}_ddl_on`;
+    const off = `${P}_ddl_off`;
+    await adapter.executeQuery(
+      `CREATE FUNCTION ${P}_ddl() RETURNS event_trigger AS 'BEGIN PERFORM 1; END' LANGUAGE plpgsql`
+    );
+    try {
+      await adapter.executeQuery(
+        `CREATE EVENT TRIGGER ${on} ON ddl_command_end EXECUTE FUNCTION ${P}_ddl()`
+      );
+      await adapter.executeQuery(
+        `CREATE EVENT TRIGGER ${off} ON ddl_command_start EXECUTE FUNCTION ${P}_ddl()`
+      );
+      await adapter.executeQuery(`ALTER EVENT TRIGGER ${off} DISABLE`);
+      const names = await readDdlEventTriggers(adapter.getDrizzle(), dialect);
+      expect(names).toContain(on);
+      expect(names).not.toContain(off);
+    } finally {
+      // An event trigger fires on every DDL in the database: never left behind.
+      await adapter.executeQuery(`DROP EVENT TRIGGER IF EXISTS ${on}`);
+      await adapter.executeQuery(`DROP EVENT TRIGGER IF EXISTS ${off}`);
+    }
+  }, 120_000);
 
   it("judges a file against the facts the database gives", async () => {
     const facts = await readDeletionFacts(

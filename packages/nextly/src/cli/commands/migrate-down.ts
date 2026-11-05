@@ -86,6 +86,7 @@ import {
   type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
+import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
@@ -101,6 +102,7 @@ import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
   deletionSource,
+  eventTriggerNotice,
   judgeRunDeletions,
   type Agreement,
   type DeletionSource,
@@ -403,6 +405,11 @@ export interface MigrateDownCoreDeps {
    * targets.
    */
   readDeletionFacts?: (statements: readonly string[]) => Promise<DeletionFacts>;
+  /**
+   * The database's enabled DDL event triggers, named beside a rollback's
+   * deletions (`eventTriggerNotice`). Absent, none is named.
+   */
+  readEventTriggers?: () => Promise<readonly string[]>;
   /**
    * Refuses while an app migration has an unresolved attempt that may have
    * stopped part-way (`refuseUnresolvedAppAttempts`), its own down section's
@@ -818,8 +825,57 @@ async function planAndGuard(
     interactive: deps.interactive,
     askToDelete: deps.askToDelete,
     warn: line => deps.logger.warn(line),
+    notice:
+      sources.size === 0 || deps.readEventTriggers === undefined
+        ? undefined
+        : await eventTriggerNotice(deps.readEventTriggers),
   });
   return { planned, agreement };
+}
+
+/**
+ * What `migrate:down --dry-run` reports of a plan: the refusal a real run
+ * makes under the lock, each target with its refusal or what its DOWN deletes
+ * and the SQL it runs, and the database's DDL event triggers.
+ */
+async function previewRollback(
+  planned: readonly PlannedDown[],
+  deps: MigrateDownCoreDeps
+): Promise<void> {
+  // The refusal a real run makes under the lock, reported as the others are.
+  await reportUnresolvedRefusal(deps);
+  deps.logger.info(`Would roll back ${planned.length} migration(s):`);
+  const notice =
+    deps.readEventTriggers === undefined
+      ? undefined
+      : await eventTriggerNotice(deps.readEventTriggers);
+  if (notice !== undefined) deps.logger.info(`  ⚠ ${notice}`);
+  // Judged as the real run judges them: every target's DOWN as one run.
+  const perTarget = await rollbackDeletions(
+    planned,
+    deps.dialect,
+    deps.readDeletionFacts
+  );
+  for (const [at, p] of planned.entries()) {
+    deps.logger.info(`  • ${p.filename}`);
+    const refusal = refusalOf(p, deps);
+    if (refusal !== undefined) {
+      deps.logger.info(
+        `    ✖ a real run would be refused: ${describeError(refusal, { context: false })}`
+      );
+      continue;
+    }
+    const deletes = perTarget[at] ?? [];
+    if (deletes.length > 0) {
+      deps.logger.info(
+        `    ⚠ deletes data: ${deletes.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletes)}.`
+      );
+    }
+    if (!p.transaction) {
+      deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
+    }
+    deps.logger.info(p.downSql);
+  }
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
@@ -875,35 +931,7 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
-    // The refusal a real run makes under the lock, reported as the others are.
-    await reportUnresolvedRefusal(deps);
-    deps.logger.info(`Would roll back ${planned.length} migration(s):`);
-    // Judged as the real run judges them: every target's DOWN as one run.
-    const perTarget = await rollbackDeletions(
-      planned,
-      deps.dialect,
-      deps.readDeletionFacts
-    );
-    for (const [at, p] of planned.entries()) {
-      deps.logger.info(`  • ${p.filename}`);
-      const refusal = refusalOf(p, deps);
-      if (refusal !== undefined) {
-        deps.logger.info(
-          `    ✖ a real run would be refused: ${describeError(refusal, { context: false })}`
-        );
-        continue;
-      }
-      const deletes = perTarget[at] ?? [];
-      if (deletes.length > 0) {
-        deps.logger.info(
-          `    ⚠ deletes data: ${deletes.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletes)}.`
-        );
-      }
-      if (!p.transaction) {
-        deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
-      }
-      deps.logger.info(p.downSql);
-    }
+    await previewRollback(planned, deps);
     return { rolledBack: [] };
   }
 
@@ -1035,6 +1063,7 @@ export async function downDatabaseDeps(args: {
     | "readLiveTables"
     | "readLiveIndexTables"
     | "readDeletionFacts"
+    | "readEventTriggers"
     | "listFileApplies"
     | "execDown"
     | "recordRolledBack"
@@ -1074,6 +1103,7 @@ export async function downDatabaseDeps(args: {
     readLiveTables: lists => readLiveTables(db, dialect, lists),
     readLiveIndexTables: lists => readLiveIndexTables(db, dialect, lists),
     readDeletionFacts: statements => readDeletionFacts(db, dialect, statements),
+    readEventTriggers: () => readDdlEventTriggers(db, dialect),
     listFileApplies: () => repo.listFileApplies(),
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>
