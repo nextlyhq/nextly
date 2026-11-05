@@ -255,6 +255,30 @@ describeEachDialect("the archive's entity kind", dialect => {
     });
   });
 
+  it("a dry run counts what a restore writes and claims, and writes nothing", async () => {
+    const collectionId = await seedCollection();
+    await seedFieldGroup();
+    await makeShared();
+    await makeCollectionTranslated();
+    const archivedBefore = await archived();
+
+    const plan = await restoreI18nArchive({
+      adapter: restoreAdapter(),
+      collection: "hero",
+      kind: "collection",
+      companionTableName: "dc_hero_locales",
+      purge: true,
+      dryRun: true,
+    });
+
+    expect(plan.rowsRead).toBe(1);
+    expect(plan.rowsRestored).toBe(1);
+    expect(plan.locales).toEqual(["es"]);
+    // Neither the companion nor the archive changed, the purge included.
+    expect(await spanishOf("dc_hero", collectionId)).toBeNull();
+    expect(await archived()).toEqual(archivedBefore);
+  });
+
   it("removes only the deleted entity's archived values", async () => {
     await seedCollection();
     const groupId = await seedFieldGroup();

@@ -137,6 +137,7 @@ const WRITES = [
   "generate:manifest",
   "generate:types",
   "generate:widget",
+  "i18n:restore",
   "init",
   "migrate",
   "migrate:baseline",
@@ -157,7 +158,6 @@ const WRITES = [
  */
 const WRITES_WITHOUT_DRY_RUN_YET = [
   "db:sync",
-  "i18n:restore",
   "media reindex-usage",
   "plugins install",
   "plugins uninstall",

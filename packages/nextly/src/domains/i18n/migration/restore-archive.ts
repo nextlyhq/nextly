@@ -18,7 +18,7 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import { and, asc, count, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, count, eq, getTableName, inArray, lte } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -98,6 +98,12 @@ export interface RestoreArchiveArgs {
    * want the spec's retention behavior opt in.
    */
   purge?: boolean;
+  /**
+   * `--dry-run`: read and check as a restore does, and write nothing: no
+   * archive created or relabelled, no companion row, no claim and no purge.
+   * The counts returned are what a restore would write.
+   */
+  dryRun?: boolean;
 }
 
 export interface RestoreArchiveResult {
@@ -166,6 +172,23 @@ async function refuseFieldsNotTranslatedNow(
   });
 }
 
+/** A restore that found nothing archived. */
+const NOTHING_RESTORED: RestoreArchiveResult = {
+  rowsRead: 0,
+  rowsRestored: 0,
+  locales: [],
+  rowsClaimed: 0,
+  rowsUnattributed: 0,
+};
+
+/** Whether the archive table exists, asked without creating it. */
+async function archiveExists(
+  adapter: RestoreArchiveArgs["adapter"]
+): Promise<boolean> {
+  const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
+  return (await adapter.listTables()).includes(getTableName(nextlyI18nArchive));
+}
+
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
@@ -175,8 +198,13 @@ export async function restoreI18nArchive(
   const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
   // An archive from before rows recorded their kind is brought up to date first, and its rows
   // given their owner's kind where the registries can tell; one never written is created empty.
-  await ensureI18nArchive(adapter, adapter.dialect);
-  await labelLegacyArchiveRows(adapter);
+  // A dry run makes neither: an archive never written has nothing to restore.
+  if (args.dryRun === true) {
+    if (!(await archiveExists(adapter))) return NOTHING_RESTORED;
+  } else {
+    await ensureI18nArchive(adapter, adapter.dialect);
+    await labelLegacyArchiveRows(adapter);
+  }
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
@@ -252,6 +280,20 @@ export async function restoreI18nArchive(
     g.data[r.field] = r.value;
   }
 
+  const rowsClaimed = rows.filter(r =>
+    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
+  ).length;
+  // What a restore writes, counted and not written.
+  if (args.dryRun === true) {
+    return {
+      rowsRead: rows.length,
+      rowsRestored: grouped.size,
+      locales: [...new Set(rows.map(r => r.locale))].sort(),
+      rowsClaimed,
+      rowsUnattributed: await unattributed(),
+    };
+  }
+
   // 🔴 Probed ONCE before the loop, because `"clear"` NAMES the column and a companion that
   // predates it would fail the whole restore before a single archived value landed. That is a
   // regression the chronology fix introduced: the previous mode omitted the column, so it
@@ -293,9 +335,6 @@ export async function restoreI18nArchive(
 
   // Bounded to the rows read here, for the reason the purge below gives.
   const maxId = rows.reduce((max, r) => (r.id > max ? r.id : max), rows[0].id);
-  const rowsClaimed = rows.filter(r =>
-    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
-  ).length;
   if (rowsClaimed > 0) {
     // Recorded only once their values are back, so a restore refused above claims nothing.
     await db
