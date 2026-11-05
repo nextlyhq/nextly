@@ -89,7 +89,7 @@ describe("draft/published split on every write path (integration)", () => {
 
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { body: "edited body" }
+      { body: "edited body", _overwrite: true }
     );
 
     expect(await workingDrafts(id)).toHaveLength(1);

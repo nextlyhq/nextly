@@ -691,7 +691,7 @@ describe.each(getConfiguredTestDialects())(
               routeAuthorized: true,
               ...caller,
             },
-            { name: "rewritten" }
+            { name: "rewritten", _overwrite: true }
           );
           expect(updated.success).toBe(true);
           return [

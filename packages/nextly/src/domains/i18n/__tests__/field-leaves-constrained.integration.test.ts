@@ -185,7 +185,7 @@ describeEachDialect(
       const written = await singles.update(
         "hero",
         value === undefined ? { views: 1 } : { code: value, views: 1 },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }
@@ -658,7 +658,7 @@ describeEachDialect(
         const written = await singles.update(
           "hero",
           { code: value },
-          { locale: "en", overrideAccess: true }
+          { locale: "en", overrideAccess: true, _overwrite: true }
         );
         expect(written.success, JSON.stringify(written)).toBe(true);
         const read = await singles.get("hero", {
@@ -881,7 +881,7 @@ describeEachDialect(
       const written = await singles.update(
         "hero",
         { code: "b2@example.com" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
       const read = await singles.get("hero", {

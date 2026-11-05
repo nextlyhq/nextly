@@ -127,7 +127,7 @@ describeEachDialect("the archive's entity kind", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Colección" }
+      { heading: "Colección", _overwrite: true }
     );
     expect(es.success, JSON.stringify(es)).toBe(true);
     return id;

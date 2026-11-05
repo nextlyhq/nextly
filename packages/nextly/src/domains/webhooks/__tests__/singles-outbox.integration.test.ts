@@ -80,7 +80,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const rows = (await events(current)).filter(
@@ -125,13 +125,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // Publish: draft → published.
     await singles(current).update(
       "preferences",
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const types = (await events(current)).map(r => r.type);
@@ -155,12 +155,12 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles(current).update(
       "preferences",
       { status: "draft" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const types = (await events(current)).map(r => r.type);
@@ -182,13 +182,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // A later content-only edit must not re-emit a publish event.
     await singles(current).update(
       "preferences",
       { title: "world" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const types = (await events(current)).map(r => r.type);
@@ -209,7 +209,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello", apiKey: "s3cr3t-value" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -231,7 +231,11 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true, user: { id: "user-123", email: "e@x.c" } }
+      {
+        overrideAccess: true,
+        user: { id: "user-123", email: "e@x.c" },
+        _overwrite: true,
+      }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -259,7 +263,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hallo", status: "published" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const rows = await events(current);
@@ -292,13 +296,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hi", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     // Now publish German for the first time.
     await singles(current).update(
       "preferences",
       { title: "hallo", status: "published" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const dePublished = (await events(current)).filter(
@@ -329,13 +333,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hi", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     // German was never published, so drafting it is not an unpublish.
     await singles(current).update(
       "preferences",
       { title: "hallo", status: "draft" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const deUnpublished = (await events(current)).filter(
@@ -364,13 +368,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hallo", body: "welt" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
     // Edit only `title`; `body` is untouched but must still appear in data.
     await singles(current).update(
       "preferences",
       { title: "hallo-2" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const rows = (await events(current)).filter(
@@ -408,7 +412,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -442,12 +446,12 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hi", theme: "light", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     await singles(current).update(
       "preferences",
       { theme: "dark" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const rows = await events(current);
@@ -486,17 +490,17 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     await singles(current).update(
       "preferences",
       { title: "hallo" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
     await singles(current).update(
       "preferences",
       { theme: "dark" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const shared = (await events(current)).find(
@@ -540,7 +544,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { hero: { heading: "Welcome" } },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -575,7 +579,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { hero: { heading: "Willkommen" } },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -617,7 +621,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { blocks: [{ _componentType: "hero_localized", heading: "Willkommen" }] },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -658,7 +662,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { blocks: [{ heading: "Willkommen" }] },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -697,13 +701,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { hero: { heading: "Willkommen", anchor: "top" } },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
     // ...then change ONLY the shared field.
     await singles(current).update(
       "preferences",
       { hero: { anchor: "bottom" } },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     // Select each event by its component content (row order is not guaranteed
@@ -751,7 +755,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     const result = await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(result.success).toBe(true);
@@ -796,7 +800,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hallo" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     const row = (await events(current)).find(r => r.type === "single.updated");
@@ -823,7 +827,7 @@ describe("webhook outbox capture — singles (integration)", () => {
     await singles(current).update(
       "preferences",
       { title: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const evRows = (await events(current)).filter(

@@ -171,7 +171,7 @@ async function boot(dialect: TestDialect, placement: Placement) {
         : documentWith(placement.path, { heading: "Live", code: "ok" })),
       status: "published",
     },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   );
   expect(first.success, JSON.stringify(first)).not.toBe(false);
   return singles;
@@ -180,7 +180,10 @@ async function boot(dialect: TestDialect, placement: Placement) {
 type Singles = Awaited<ReturnType<typeof boot>>;
 
 async function hold(singles: Singles, data: Record<string, unknown>) {
-  const result = await singles.update("home", data, { overrideAccess: true });
+  const result = await singles.update("home", data, {
+    overrideAccess: true,
+    _overwrite: true,
+  });
   expect(result.success, JSON.stringify(result)).not.toBe(false);
 }
 

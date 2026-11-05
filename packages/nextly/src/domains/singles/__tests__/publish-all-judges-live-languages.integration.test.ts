@@ -60,7 +60,7 @@ describe("publishing every language of a Single", () => {
       const live = await singles.update(
         SLUG,
         { siteName, region: "us", status: "published" },
-        { locale, overrideAccess: true }
+        { locale, overrideAccess: true, _overwrite: true }
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
     }
@@ -68,7 +68,7 @@ describe("publishing every language of a Single", () => {
     const held = await singles.update(
       SLUG,
       { region: "eu" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 

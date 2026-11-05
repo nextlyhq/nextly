@@ -339,7 +339,11 @@ async function postWithFourEvents(t: TestNextly, id?: string): Promise<string> {
   });
   const postId = (created.item as { id: string }).id;
   for (const title of ["two", "three", "four"]) {
-    await t.nextly.update({ collection: "posts", id: postId, data: { title } });
+    await t.nextly.update({
+      collection: "posts",
+      id: postId,
+      data: { title, _overwrite: true },
+    });
   }
   return postId;
 }

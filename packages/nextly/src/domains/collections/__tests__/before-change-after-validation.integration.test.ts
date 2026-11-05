@@ -205,7 +205,7 @@ describe("beforeChange runs after the validation gate", () => {
     await current.nextly.update({
       collection: DOCS,
       id: String(created.item.id),
-      data: { code: "AFTER" },
+      data: { code: "AFTER", _overwrite: true },
     });
 
     // The stored value, not the patch: the handler can tell what changed.
@@ -253,7 +253,7 @@ describe("beforeChange runs after the validation gate", () => {
     // Without `contact`, so only the handler can get this past the gate.
     await current.nextly.updateSingle({
       slug: SETTINGS,
-      data: { siteName: "Nextly" },
+      data: { siteName: "Nextly", _overwrite: true },
       overrideAccess: true,
     });
 

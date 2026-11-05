@@ -194,7 +194,7 @@ describe.each(getConfiguredTestDialects())(
       await collections.updateEntry(
         NOTES,
         id,
-        { guarded: "after" },
+        { guarded: "after", _overwrite: true },
         {
           as: "user",
           user: {

@@ -109,15 +109,15 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "b" }
+        { title: "b", _overwrite: true }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       await t.handler.deleteEntry({
         collectionName: "posts",
@@ -186,7 +186,7 @@ describe.each(getConfiguredTestDialects())(
       for (const status of ["published", "draft"]) {
         await t.handler.updateEntry(
           { collectionName: "posts", entryId: edited, ...as },
-          { status }
+          { status, _overwrite: true }
         );
       }
       // Inside a caller's transaction, as a batch updates: its own write.
@@ -225,11 +225,11 @@ describe.each(getConfiguredTestDialects())(
       // No status on a published document: held as a draft over it.
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "held" }
+        { title: "held", _overwrite: true }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const events = await t.eventsOf(id);
@@ -258,7 +258,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "a" }
+        { title: "a", _overwrite: true }
       );
 
       expect((await t.eventsOf(id)).map(e => e.kind)).toEqual(["created"]);
@@ -308,7 +308,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "translated", entryId: id, locale: "es", ...as },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
       const published = await t.handler.publishAllLocales({
         collectionName: "translated",

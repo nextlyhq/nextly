@@ -84,7 +84,7 @@ describe("publishing every language of an entry", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Hinweis", status: "draft" }
+      { heading: "Hinweis", status: "draft", _overwrite: true }
     );
     expect(german.success, JSON.stringify(german)).toBe(true);
     // The default language's row removed, as a document whose default
@@ -121,7 +121,7 @@ describe("publishing every language of an entry, with a language since removed",
         locale: "de",
         overrideAccess: true,
       },
-      { tag: "general", status: "draft" }
+      { tag: "general", status: "draft", _overwrite: true }
     );
     expect(german.success, JSON.stringify(german)).toBe(true);
     // The row relabelled to a language the app no longer configures, as one

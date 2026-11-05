@@ -292,20 +292,20 @@ async function regionalDocument(t: TestNextly): Promise<string> {
     await t.nextly.update({
       collection: "regional",
       id,
-      data: { title, region: "closed" },
+      data: { title, region: "closed", _overwrite: true },
       locale: "es",
     });
   }
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { code: "c2" },
+    data: { code: "c2", _overwrite: true },
     locale: "en",
   });
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { title: "hello again" },
+    data: { title: "hello again", _overwrite: true },
     locale: "en",
   });
   return id;
@@ -488,7 +488,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id: plainId,
-        data: { title: "two" },
+        data: { title: "two", _overwrite: true },
       });
       // Its versions are of no language, which the readable languages do not
       // name.
@@ -517,7 +517,7 @@ describe.each(getConfiguredTestDialects())(
       const written = await singles.update(
         "bulletin",
         { headline: "hello", region: "open" },
-        { ...as, locale: "en" }
+        { ...as, locale: "en", _overwrite: true }
       );
       expect(written.success).toBe(true);
       const id = String((written.data as { id: unknown }).id);
@@ -526,7 +526,7 @@ describe.each(getConfiguredTestDialects())(
           await singles.update(
             "bulletin",
             { headline: "hola", region: "closed" },
-            { ...as, locale: "es" }
+            { ...as, locale: "es", _overwrite: true }
           )
         ).success
       ).toBe(true);
@@ -889,7 +889,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id,
-        data: { title: "two" },
+        data: { title: "two", _overwrite: true },
       });
       const subject = { kind: "collection" as const, slug: "plain", id };
       const repo = new VersionsRepository(

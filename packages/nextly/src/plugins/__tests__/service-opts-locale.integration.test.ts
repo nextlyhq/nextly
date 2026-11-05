@@ -96,7 +96,7 @@ async function pageInTwoLanguages(services: PluginServices): Promise<string> {
   await services.collections.updateEntry(
     "pages",
     id,
-    { title: "Seite DE" },
+    { title: "Seite DE", _overwrite: true },
     { as: "system", locale: "de" }
   );
   return id;

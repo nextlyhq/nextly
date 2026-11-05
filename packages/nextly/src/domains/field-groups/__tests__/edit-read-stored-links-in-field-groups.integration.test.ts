@@ -304,7 +304,7 @@ async function saveRef(fx: Fixture, data: Doc): Promise<void> {
       user: { id: fx.editor },
       routeAuthorized: true,
     },
-    data
+    { ...data, _overwrite: true }
   );
   expect(result.success).toBe(true);
 }

@@ -95,10 +95,26 @@ describe.each(getConfiguredTestDialects())(
     it("records its creation, saves, a publish and an unpublish, each by the person who made it", async () => {
       const t = await boot(dialect);
       const as = { overrideAccess: true, user: ANA };
-      await t.singles.update("masthead", { heading: "a", status: "draft" }, as);
-      await t.singles.update("masthead", { heading: "b" }, as);
-      await t.singles.update("masthead", { status: "published" }, as);
-      await t.singles.update("masthead", { status: "draft" }, as);
+      await t.singles.update(
+        "masthead",
+        { heading: "a", status: "draft", _overwrite: true },
+        as
+      );
+      await t.singles.update(
+        "masthead",
+        { heading: "b", _overwrite: true },
+        as
+      );
+      await t.singles.update(
+        "masthead",
+        { status: "published", _overwrite: true },
+        as
+      );
+      await t.singles.update(
+        "masthead",
+        { status: "draft", _overwrite: true },
+        as
+      );
 
       const events = await t.eventsOf("masthead");
       const kinds = events.map(e => e.kind);
@@ -140,12 +156,12 @@ describe.each(getConfiguredTestDialects())(
       await t.singles.update(
         "banner",
         { headline: "hello" },
-        { ...as, locale: "en" }
+        { ...as, locale: "en", _overwrite: true }
       );
       await t.singles.update(
         "banner",
         { headline: "hola" },
-        { ...as, locale: "es" }
+        { ...as, locale: "es", _overwrite: true }
       );
       await t.singles.publishAllLocales("banner", as);
 

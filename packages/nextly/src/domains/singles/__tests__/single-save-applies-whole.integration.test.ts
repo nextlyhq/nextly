@@ -94,6 +94,7 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       current.getService("singleEntryService");
     const written = await singles.update("hero", values, {
       overrideAccess: true,
+      _overwrite: true,
     });
     expect(written.success, JSON.stringify(written)).toBe(true);
   }
@@ -150,7 +151,7 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     const written = await singles.update(
       "hero",
       { heading: value },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
   }
@@ -410,7 +411,7 @@ describeEachDialect(
         const written = await singles.update(
           "hero",
           { heading },
-          { locale, overrideAccess: true }
+          { locale, overrideAccess: true, _overwrite: true }
         );
         expect(written.success, JSON.stringify(written)).toBe(true);
       }

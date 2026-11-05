@@ -168,7 +168,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola" }
+      { heading: "Hola", _overwrite: true }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;
@@ -190,7 +190,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       const written = await singles.update(
         "hero",
         { heading, views: 7 },
-        { locale, overrideAccess: true }
+        { locale, overrideAccess: true, _overwrite: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }
@@ -587,7 +587,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     const written = await singles.update(
       "hero",
       { heading: "Hello", views: 7 },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
     const [row] = await query<{ id: string }>(
@@ -1023,7 +1023,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola" }
+      { heading: "Hola", _overwrite: true }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;

@@ -64,11 +64,11 @@ describe.each(getConfiguredTestDialects())(
       const trusted = new Nextly();
       await trusted.updateSingle({
         slug: SETTINGS,
-        data: { siteName: "Acme", status: "published" },
+        data: { siteName: "Acme", status: "published", _overwrite: true },
       });
       await trusted.updateSingle({
         slug: SETTINGS,
-        data: { siteName: "Acme (pending)" },
+        data: { siteName: "Acme (pending)", _overwrite: true },
       });
       const live = (await trusted.findSingle({ slug: SETTINGS })) as {
         id: string;

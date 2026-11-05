@@ -167,7 +167,7 @@ describe.each(getConfiguredTestDialects())(
       await (current!.nextly as unknown as DirectApi).update({
         collection: PAGES,
         id,
-        data: { hero: { heading: "Two" } },
+        data: { hero: { heading: "Two" }, _overwrite: true },
       });
       expect(await storedHeadings()).toEqual(["Two"]);
     }, 120_000);

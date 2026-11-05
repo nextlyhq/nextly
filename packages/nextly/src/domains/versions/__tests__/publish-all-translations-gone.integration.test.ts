@@ -89,7 +89,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         BANNER,
         { headline: "en" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await t.adapter.executeQuery(
         `DROP TABLE IF EXISTS single_${BANNER}_locales`

@@ -82,6 +82,7 @@ async function save(
   const saved = await singles.update(SLUG, data, {
     locale,
     overrideAccess: true,
+    _overwrite: true,
   });
   expect(saved.success, JSON.stringify(saved)).toBe(true);
 }
@@ -328,13 +329,18 @@ describe.each(getConfiguredTestDialects())(
       const trusted = { locale: "en", overrideAccess: true };
       const live = await singles.update(
         CODED,
-        { siteName: "Hello", code: "OK", status: "published" },
+        {
+          siteName: "Hello",
+          code: "OK",
+          status: "published",
+          _overwrite: true,
+        },
         trusted
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
       const held = await singles.update(
         CODED,
-        { siteName: "Hello again" },
+        { siteName: "Hello again", _overwrite: true },
         trusted
       );
       expect(held.success, JSON.stringify(held)).toBe(true);

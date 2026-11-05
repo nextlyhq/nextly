@@ -338,7 +338,7 @@ describe("an editor's write through an entry's versions whose update rule answer
       await t.nextly.update({
         collection: DRAFTED,
         id,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
       } as never);
     }
 
@@ -387,7 +387,7 @@ describe("an editor's write through an entry's versions whose update rule answer
         collection: LOCALIZED_DRAFTS,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
     }
     const takeLive = (id: string) =>
@@ -450,13 +450,18 @@ describe.each(getConfiguredTestDialects())(
         collection,
         id,
         locale: "de",
-        data: { title: "meins", owner: OTHER, status: "published" },
+        data: {
+          title: "meins",
+          owner: OTHER,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       await t.nextly.update({
         collection,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
       return id;
     }
@@ -556,14 +561,19 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       for (const locale of ["en", "de"]) {
         await t.nextly.update({
           collection: SLUG,
           id,
           locale,
-          data: { title: "held" },
+          data: { title: "held", _overwrite: true },
         } as never);
       }
       const discard = (query: string) =>
@@ -606,13 +616,18 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       await t.nextly.update({
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
 
       expect(
@@ -653,7 +668,12 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       const german = (
         await new VersionsRepository(t.adapter).newestVersionNoByLocale(
@@ -704,7 +724,7 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
       const entries = t
         .getService("collectionsHandler")
@@ -745,7 +765,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: SLUG,
         id: own,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
       } as never);
       const gave = giveAwayAtLock(t, SLUG, own);
 

@@ -108,12 +108,12 @@ async function seedBothLanguages(t: TestNextly): Promise<void> {
   await singles.update(
     "preferences",
     { siteName: "Prefs EN", region: "eu", status: "draft" },
-    { locale: "en", overrideAccess: true }
+    { locale: "en", overrideAccess: true, _overwrite: true }
   );
   await singles.update(
     "preferences",
     { siteName: "Prefs DE", status: "draft" },
-    { locale: "de", overrideAccess: true }
+    { locale: "de", overrideAccess: true, _overwrite: true }
   );
 }
 
@@ -183,12 +183,12 @@ describe("publishAllLocales (singles)", () => {
     await singlesOf(t).update(
       "preferences",
       { status: "draft" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singlesOf(t).update(
       "preferences",
       { status: "draft" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     expect(await companionStatuses(t)).toEqual({ en: "draft", de: "draft" });
 
@@ -216,7 +216,7 @@ describe("publishAllLocales (singles)", () => {
     await singlesOf(t).update(
       "preferences",
       { status: "published" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     expect((await companionStatuses(t)).de).toBe("published");
     expect((await mainRow(t))?.status).not.toBe("published");
@@ -259,12 +259,12 @@ describe("publishAllLocales (singles)", () => {
     await singlesOf(t).update(
       "preferences",
       { siteName: "EN", status: "draft" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singlesOf(t).update(
       "preferences",
       { siteName: "DE", status: "draft" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
 
     // A code rule only narrows the permission, so the caller holds read.
@@ -310,7 +310,7 @@ describe("publishAllLocales (singles)", () => {
     await singlesOf(t).update(
       "preferences",
       { region: "eu" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const res = await singlesOf(t).publishAllLocales("preferences", {

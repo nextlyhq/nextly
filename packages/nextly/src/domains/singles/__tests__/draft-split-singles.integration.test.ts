@@ -129,14 +129,14 @@ describe("pending changes for Singles (integration)", () => {
     const created = await singles.update(
       SLUG,
       { siteName: "first", status: "draft" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(created.success).toBe(true);
 
     const res = await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -153,7 +153,7 @@ describe("pending changes for Singles (integration)", () => {
         await singles.update(
           SLUG,
           { siteName: "live", status: "published" },
-          { overrideAccess: true }
+          { overrideAccess: true, _overwrite: true }
         )
       ).success
     ).toBe(true);
@@ -161,7 +161,7 @@ describe("pending changes for Singles (integration)", () => {
     const res = await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -175,18 +175,18 @@ describe("pending changes for Singles (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect({ success: published.success }).toEqual({ success: true });
 
@@ -200,18 +200,18 @@ describe("pending changes for Singles (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "EN live", status: "published" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE live", status: "published" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
 
     const res = await singles.update(
       SLUG,
       { siteName: "DE edited" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -227,22 +227,22 @@ describe("pending changes for Singles (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "EN live", status: "published" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE live", status: "published" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "EN edited" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE edited" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     // The fixture has to have held both, or the assertions below are trivially
     // satisfied by a system that stored nothing.
@@ -282,12 +282,12 @@ describe("reading a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     const held = await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(held.success).toBe(true);
     expect(await pendingLocales(t)).toEqual(["(none)"]);
@@ -316,12 +316,12 @@ describe("reading a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(await pendingLocales(t)).toEqual(["(none)"]);
 
@@ -338,17 +338,17 @@ describe("reading a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "EN live", status: "published" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE live", status: "published" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE edited" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     expect(await pendingLocales(t)).toEqual(["de"]);
 
@@ -392,12 +392,12 @@ describe("reading a Single's pending change (integration)", () => {
         seo: { metaTitle: "live title" },
         status: "published",
       },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     const held = await singles.update(
       SLUG,
       { seo: { metaTitle: "pending title" } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(held.success).toBe(true);
 
@@ -427,12 +427,12 @@ describe("reading a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const shown = await singles.get(SLUG, {
@@ -443,7 +443,7 @@ describe("reading a Single's pending change (integration)", () => {
     const publish = await singles.update(
       SLUG,
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(publish.success).toBe(true);
 
@@ -477,12 +477,12 @@ describe("discarding a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     const res = await singles.update(
       SLUG,
       { siteName: "edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(res.success).toBe(true);
     // The fixture must actually hold a pending change, or the assertions below
@@ -515,22 +515,22 @@ describe("discarding a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "EN live", status: "published" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE live", status: "published" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "EN edited" },
-      { locale: "en", overrideAccess: true }
+      { locale: "en", overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "DE edited" },
-      { locale: "de", overrideAccess: true }
+      { locale: "de", overrideAccess: true, _overwrite: true }
     );
     expect(await pendingLocales(t)).toEqual(["de", "en"]);
 
@@ -561,7 +561,7 @@ describe("discarding a Single's pending change (integration)", () => {
     await singles.update(
       SLUG,
       { siteName: "live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(await pendingLocales(t)).toEqual([]);
 

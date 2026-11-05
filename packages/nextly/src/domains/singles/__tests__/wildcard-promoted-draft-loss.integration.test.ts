@@ -119,12 +119,12 @@ async function germanOnlyAndPublished(t: TestNextly): Promise<void> {
   await singlesOf(t).update(
     SLUG,
     { siteName: "DE live", status: "published" },
-    { locale: "de", overrideAccess: true }
+    { locale: "de", overrideAccess: true, _overwrite: true }
   );
   await singlesOf(t).update(
     SLUG,
     { status: "published" },
-    { locale: "*", overrideAccess: true }
+    { locale: "*", overrideAccess: true, _overwrite: true }
   );
 }
 
@@ -143,7 +143,7 @@ describe.each(getConfiguredTestDialects())(
       await singlesOf(t).update(
         SLUG,
         { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
 
       // POPULATION CONTROL: the edit really was held. Without it, a later
@@ -154,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
       const result = await singlesOf(t).update(
         SLUG,
         { status: "published" },
-        { locale: "*", overrideAccess: true }
+        { locale: "*", overrideAccess: true, _overwrite: true }
       );
 
       // An edit the author saved is either readable or still pending. Which of
@@ -177,14 +177,14 @@ describe.each(getConfiguredTestDialects())(
       await singlesOf(t).update(
         SLUG,
         { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(JSON.stringify(await pendingDrafts(t))).toContain("EN pending");
 
       await singlesOf(t).update(
         SLUG,
         { status: "published" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
 
       const readable = await readSiteName(t, "en");
@@ -201,12 +201,12 @@ describe.each(getConfiguredTestDialects())(
       await singlesOf(t).update(
         SLUG,
         { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await singlesOf(t).update(
         SLUG,
         { status: "published" },
-        { locale: "*", overrideAccess: true }
+        { locale: "*", overrideAccess: true, _overwrite: true }
       );
 
       // Proves the probe is aimed correctly: the read path works, and German

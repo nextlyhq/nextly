@@ -157,7 +157,7 @@ describe.each(getConfiguredTestDialects())(
         await new Nextly({ overrideAccess: false }).update({
           collection: "cpages",
           id,
-          data,
+          data: { ...data, _overwrite: true },
         } as never);
         return;
       }
@@ -196,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
       await trusted.update({
         collection: "cpages",
         id,
-        data: { deck: [first, wrap("t-new")] },
+        data: { deck: [first, wrap("t-new")], _overwrite: true },
       } as never);
 
       expect(secrets((await read(id)).deck)).toEqual(["s-t-0", "s-t-new"]);

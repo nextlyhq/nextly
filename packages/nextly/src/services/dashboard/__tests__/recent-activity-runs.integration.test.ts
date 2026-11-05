@@ -209,7 +209,11 @@ describe.each(getConfiguredTestDialects())(
         const saved = await singles.update(
           HOME,
           { headline: `Welcome ${i}` },
-          { overrideAccess: true, actor: { type: "user", id: ANA.id } }
+          {
+            overrideAccess: true,
+            actor: { type: "user", id: ANA.id },
+            _overwrite: true,
+          }
         );
         expect(saved.success).toBe(true);
       }

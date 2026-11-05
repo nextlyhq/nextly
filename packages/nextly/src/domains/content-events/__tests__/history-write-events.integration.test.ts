@@ -140,7 +140,7 @@ describe.each(getConfiguredTestDialects())(
         title: "live",
         status: "published",
       });
-      await t.update("articles", id, { title: "held edit" });
+      await t.update("articles", id, { title: "held edit", _overwrite: true });
 
       await t.handler.discardWorkingDraft({
         collectionName: "articles",
@@ -167,9 +167,9 @@ describe.each(getConfiguredTestDialects())(
     it("records a retention pass once, with how many versions it removed, by the system", async () => {
       const t = await boot(dialect);
       const id = await t.create("kept", { title: "1" });
-      await t.update("kept", id, { title: "2" });
-      await t.update("kept", id, { title: "3" });
-      await t.update("kept", id, { title: "4" });
+      await t.update("kept", id, { title: "2", _overwrite: true });
+      await t.update("kept", id, { title: "3", _overwrite: true });
+      await t.update("kept", id, { title: "4", _overwrite: true });
 
       const removals = (await t.eventsOf(id)).filter(
         e => e.kind === "versions-removed"
@@ -188,8 +188,8 @@ describe.each(getConfiguredTestDialects())(
         title: "live",
         status: "published",
       });
-      await t.update("drafted", id, { title: "held 1" });
-      await t.update("drafted", id, { title: "held 2" });
+      await t.update("drafted", id, { title: "held 1", _overwrite: true });
+      await t.update("drafted", id, { title: "held 2", _overwrite: true });
       const versionsOf = async () =>
         (
           await current!.adapter.select<{

@@ -86,7 +86,7 @@ describe.each(getConfiguredTestDialects())(
       const saved = await singles.update(
         "preferences",
         { seo: { heading: "Hello", related: ids } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       // The message is asserted with the flag so a refused save names its reason.
       expect({ success: saved.success, message: saved.message }).toEqual({
@@ -121,7 +121,7 @@ describe.each(getConfiguredTestDialects())(
       const saved = await singles.update(
         "preferences",
         { seo: { heading: "Hello", related: ids } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(saved.success).toBe(true);
 
@@ -148,7 +148,7 @@ describe.each(getConfiguredTestDialects())(
       const saved = await singles.update(
         "preferences",
         { seo: { heading: "Hello", related: id } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(saved.success).toBe(true);
 

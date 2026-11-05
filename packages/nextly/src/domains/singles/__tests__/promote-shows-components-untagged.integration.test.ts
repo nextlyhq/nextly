@@ -66,7 +66,7 @@ async function bootSingle(dialect: TestDialect) {
   const first = (await singles.update(
     "home",
     { title: "T", hero: { heading: "Live" }, status: "published" },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   )) as Result;
   expect(first.success, JSON.stringify(first)).not.toBe(false);
   return singles;
@@ -88,14 +88,14 @@ describe.each(getConfiguredTestDialects())(
       const held = (await singles.update(
         "home",
         { title: "Held" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as Result;
       expect(held.success, JSON.stringify(held)).not.toBe(false);
 
       const published = (await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as Result;
 
       expect(published.success, JSON.stringify(published)).not.toBe(false);
@@ -107,13 +107,13 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { hero: { heading: "Held" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const published = (await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as Result;
 
       expect(published.success, JSON.stringify(published)).not.toBe(false);
@@ -121,7 +121,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("publishes every language's held change the same way", async () => {
       const singles = await bootSingle(dialect);
-      await singles.update("home", { title: "Held" }, { overrideAccess: true });
+      await singles.update(
+        "home",
+        { title: "Held" },
+        { overrideAccess: true, _overwrite: true }
+      );
 
       await singles.publishAllLocales("home", { overrideAccess: true });
 
@@ -134,7 +138,7 @@ describe.each(getConfiguredTestDialects())(
       const published = (await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       )) as Result;
 
       expect(published.success, JSON.stringify(published)).not.toBe(false);
@@ -167,7 +171,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages" as never,
         id,
-        data: { title: "Held" } as never,
+        data: { title: "Held", _overwrite: true } as never,
       });
 
       await expect(

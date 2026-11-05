@@ -101,13 +101,13 @@ describe("single draft overlay — related-row collection access (integration)",
     const published = await singles.update(
       SLUG,
       { headline: "Live", featured: pageId, status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(published.success).toBe(true);
     const held = await singles.update(
       SLUG,
       { headline: "Edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(held.success).toBe(true);
 
@@ -146,12 +146,12 @@ describe("single draft overlay — related-row collection access (integration)",
     await singles.update(
       SLUG,
       { headline: "Live", featured: pageId, status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { headline: "Edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const draft = await singles.get(SLUG, {

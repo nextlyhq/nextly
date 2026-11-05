@@ -98,12 +98,12 @@ describe.each(getConfiguredTestDialects())(
           links: [{ label: "Live link" }],
           status: "published",
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "site-meta",
         { seo: { metaTitle: "Held title" }, links: [{ label: "Held link" }] },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const draft = await workingDraft(current, "site-meta");
@@ -116,7 +116,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "site-meta",
         { seo: { metaTitle: "Later title" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       await restoreVersion({
         scopeKind: "single",
@@ -133,7 +133,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "site-meta",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const live = await liveRead(current, "site-meta");
@@ -165,7 +165,7 @@ describe.each(getConfiguredTestDialects())(
           seo: { metaTitle: "Live title" },
           status: "published",
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const before = (await rowsFor(current, "site-meta")).filter(
         r => typeof r.versionNo === "number"
@@ -175,7 +175,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "site-meta",
         { siteName: "Live", seo: { metaTitle: "Live title" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const after = (await rowsFor(current, "site-meta")).filter(
         r => typeof r.versionNo === "number"
@@ -204,17 +204,17 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { heading: "EN live", tagline: "EN tagline", status: "published" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "home",
         { heading: "DE live", tagline: "DE tagline", status: "published" },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "home",
         { heading: "DE held" },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
 
       const draft = await workingDraft(current, "home");
@@ -232,7 +232,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { status: "published" },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
       expect(await liveRead(current, "home", "de")).toMatchObject({
         heading: "DE held",

@@ -73,7 +73,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -108,7 +108,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -149,7 +149,7 @@ describe("restoreVersion (integration)", () => {
     const entryId = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -201,7 +201,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     const ref = {
@@ -242,7 +242,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -296,12 +296,12 @@ describe("restoreVersion (integration)", () => {
     await singles.update(
       "preferences",
       { title: "First" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       "preferences",
       { title: "Second" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     interface VRow {
@@ -357,19 +357,19 @@ describe("restoreVersion (integration)", () => {
     await singles.update(
       "branding",
       { heading: "EN", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     // The German translation stays draft: its companion `_status` never leaves
     // draft even though the main row is published.
     await singles.update(
       "branding",
       { heading: "DE one" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
     await singles.update(
       "branding",
       { heading: "DE two" },
-      { overrideAccess: true, locale: "de" }
+      { overrideAccess: true, locale: "de", _overwrite: true }
     );
 
     interface VRow {
@@ -446,12 +446,12 @@ describe("restoreVersion (integration)", () => {
     await singles.update(
       "prefs",
       { title: "one", byline: { author: authorId } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       "prefs",
       { title: "two", byline: { author: authorId } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     interface VRow {

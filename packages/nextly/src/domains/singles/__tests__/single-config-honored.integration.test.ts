@@ -77,7 +77,7 @@ describe("single config honored — hooks + defaults (integration)", () => {
     const updated = await service.update(
       "branding",
       { siteName: "Beta" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(updated.success).toBe(true);
     expect(beforeChange).toHaveBeenCalled();

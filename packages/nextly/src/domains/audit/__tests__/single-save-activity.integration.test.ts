@@ -118,7 +118,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const saved = await t.singles.update(
         "site-settings",
-        { siteName: "Acme" },
+        { siteName: "Acme", _overwrite: true },
         AS_ANA
       );
       expect(saved.success, JSON.stringify(saved)).toBe(true);
@@ -140,14 +140,18 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a Single that opted out of webhooks", async () => {
       const t = await boot(dialect);
-      await t.singles.update("quiet", { note: "x" }, AS_ANA);
+      await t.singles.update("quiet", { note: "x", _overwrite: true }, AS_ANA);
       expect(await t.rowsOf("quiet")).toHaveLength(1);
     }, 120_000);
 
     it("records one row per save, without folding consecutive saves together", async () => {
       const t = await boot(dialect);
       for (const siteName of ["a", "b", "c"]) {
-        await t.singles.update("site-settings", { siteName }, AS_ANA);
+        await t.singles.update(
+          "site-settings",
+          { siteName, _overwrite: true },
+          AS_ANA
+        );
       }
       expect(await t.rowsOf("site-settings")).toHaveLength(3);
     }, 120_000);
@@ -158,12 +162,12 @@ describe.each(getConfiguredTestDialects())(
       await t.singles.update(
         "masthead",
         { heading: "Live", status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const held = await t.singles.update(
         "masthead",
         { heading: "Next" },
-        { routeAuthorized: true, user: ANA }
+        { routeAuthorized: true, user: ANA, _overwrite: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -184,6 +188,7 @@ describe.each(getConfiguredTestDialects())(
         {
           ...AS_ANA,
           locale: "en",
+          _overwrite: true,
         }
       );
       await t.singles.update(
@@ -192,6 +197,7 @@ describe.each(getConfiguredTestDialects())(
         {
           ...AS_ANA,
           locale: "es",
+          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(2);
@@ -202,6 +208,7 @@ describe.each(getConfiguredTestDialects())(
         {
           ...AS_ANA,
           locale: "*",
+          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(3);
@@ -212,6 +219,7 @@ describe.each(getConfiguredTestDialects())(
         {
           ...AS_ANA,
           locale: "*",
+          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(4);
@@ -224,7 +232,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const saved = await t.singles.update(
         "site-settings",
-        { siteName: "Acme" },
+        { siteName: "Acme", _overwrite: true },
         AS_ANA
       );
       const versions = current!.getService("versionsService");
@@ -247,14 +255,18 @@ describe.each(getConfiguredTestDialects())(
       await t.singles.update(
         "site-settings",
         { siteName: "by the system" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(await t.rowsOf("site-settings")).toEqual([]);
 
       await t.singles.update(
         "site-settings",
         { siteName: "by a key" },
-        { overrideAccess: true, actor: { type: "apiKey", id: "key-1" } }
+        {
+          overrideAccess: true,
+          actor: { type: "apiKey", id: "key-1" },
+          _overwrite: true,
+        }
       );
       expect(await t.rowsOf("site-settings")).toEqual([
         expect.objectContaining({ actorType: "apiKey", subjectKind: "single" }),
@@ -268,6 +280,7 @@ describe.each(getConfiguredTestDialects())(
         { siteName: "Before" },
         {
           overrideAccess: true,
+          _overwrite: true,
         }
       );
       const service = container.get<ActivityLogService>("activityLogService");
@@ -276,7 +289,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await t.singles.update(
         "site-settings",
-        { siteName: "After" },
+        { siteName: "After", _overwrite: true },
         AS_ANA
       );
       expect(result.success).toBe(false);

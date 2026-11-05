@@ -137,7 +137,7 @@ describe("cache revalidation — write path (sqlite)", () => {
 
     await entries.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { slug: "new" }
+      { slug: "new", _overwrite: true }
     );
 
     expect(spy.tags).toContain("nextly:pages:slug:new");
@@ -491,7 +491,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         entryId: "does-not-exist",
         overrideAccess: true,
       },
-      { title: "x" }
+      { title: "x", _overwrite: true }
     );
     expect(result.success).toBe(false);
     expect(spy.flushed).toHaveLength(0);
@@ -514,7 +514,7 @@ describe("cache revalidation — write path (sqlite)", () => {
     await singleEntry.update(
       "header",
       { title: "Site" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
   });
@@ -587,7 +587,7 @@ describe("cache revalidation — write path (sqlite)", () => {
     await singleEntry.update(
       "footer",
       { title: "Site" },
-      { overrideAccess: true, disableRevalidate: true }
+      { overrideAccess: true, disableRevalidate: true, _overwrite: true }
     );
     expect(spy.flushed).toHaveLength(0);
   });
@@ -612,7 +612,7 @@ describe("cache revalidation — write path (sqlite)", () => {
     await singleEntry.update(
       "footer",
       { title: "Site" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(spy.flushed).toHaveLength(0);
   });

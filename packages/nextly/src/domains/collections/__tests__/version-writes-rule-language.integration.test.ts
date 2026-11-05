@@ -83,14 +83,19 @@ async function publishedWithHeldEdits(
     collection,
     id,
     locale: "de",
-    data: { title: "deutsch", owner: AUTHOR, status: "published" },
+    data: {
+      title: "deutsch",
+      owner: AUTHOR,
+      status: "published",
+      _overwrite: true,
+    },
   } as never);
   for (const locale of ["en", "de"]) {
     await t.nextly.update({
       collection,
       id,
       locale,
-      data: { title: `held ${locale}` },
+      data: { title: `held ${locale}`, _overwrite: true },
     } as never);
   }
   return id;
@@ -248,7 +253,7 @@ describe.each(getConfiguredTestDialects())(
             const written = await singles.update(
               BY_LANGUAGE_SINGLE,
               { headline: `live ${locale}`, status: "published" },
-              { overrideAccess: true, locale }
+              { overrideAccess: true, locale, _overwrite: true }
             );
             expect(written.success).toBe(true);
             id = String((written.data as { id: unknown }).id);
@@ -259,7 +264,7 @@ describe.each(getConfiguredTestDialects())(
                 await singles.update(
                   BY_LANGUAGE_SINGLE,
                   { headline: `held ${locale}` },
-                  { overrideAccess: true, locale }
+                  { overrideAccess: true, locale, _overwrite: true }
                 )
               ).success
             ).toBe(true);

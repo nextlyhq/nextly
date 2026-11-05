@@ -119,7 +119,7 @@ async function bootSingle(dialect: TestDialect) {
       cards: [{ label: "One" }],
       status: "published",
     },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   );
   return singles;
 }
@@ -139,7 +139,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { hero: { heading: "Pending", subheading: "Live sub" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const draft = await workingDraft(current!, "home");
@@ -152,7 +152,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(contentOf((await liveHome(current!)).hero)).toMatchObject({
         heading: "Pending",
@@ -167,7 +167,7 @@ describe.each(getConfiguredTestDialects())(
           title: "New title",
           hero: { heading: "Pending", subheading: "Live sub" },
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const draft = await workingDraft(current!, "home");
@@ -177,7 +177,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const live = await liveHome(current!);
       expect(live.title).toBe("New title");
@@ -189,13 +189,13 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { cards: [{ label: "Two" }, { label: "Three" }] },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const labels = (
         contentOf((await liveHome(current!)).cards) as {
@@ -210,7 +210,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { hero: { heading: "Pending", subheading: "Live sub" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const version = await newestVersion(current!, "home");
@@ -243,12 +243,12 @@ describe.each(getConfiguredTestDialects())(
           hero: { heading: "Live", subheading: "Live sub" },
           status: "published",
         },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "home",
         { hero: { heading: "Pending", subheading: "Live sub" } },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       expect(
         contentOf((await workingDraft(current, "home")).hero)
@@ -289,12 +289,12 @@ describe.each(getConfiguredTestDialects())(
           hero: { heading: "Live", subheading: "Live sub" },
           status: "published",
         },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "home",
         { hero: { heading: "Pending", subheading: "Live sub" } },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       // By id, not by position: a select has no order on every dialect.
       const before = new Set(
@@ -365,13 +365,13 @@ describe.each(getConfiguredTestDialects())(
             banner: { heading: `Live ${locale}` },
             status: "published",
           },
-          { locale, overrideAccess: true }
+          { locale, overrideAccess: true, _overwrite: true }
         );
       }
       await singles.update(
         "home",
         { banner: { heading: "Pending de" } },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
       // A restart: no readiness verdict is remembered for any companion.
       forgetCompanionReadiness(current.adapter);
@@ -425,12 +425,12 @@ describe.each(getConfiguredTestDialects())(
           hero: { heading: "Live", subheading: "Live sub" },
           status: "published",
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "home",
         { title: "Locked" },
-        { routeAuthorized: true, user: { id: "u1" } }
+        { routeAuthorized: true, user: { id: "u1" }, _overwrite: true }
       );
 
       const res = await singles.update(
@@ -439,7 +439,7 @@ describe.each(getConfiguredTestDialects())(
           hero: { heading: "Slipped in", subheading: "Live sub" },
           status: "published",
         },
-        { routeAuthorized: true, user: { id: "u1" } }
+        { routeAuthorized: true, user: { id: "u1" }, _overwrite: true }
       );
       expect(res.success).toBe(false);
       expect(contentOf((await liveHome(current)).hero)).toMatchObject({
@@ -482,13 +482,13 @@ describe.each(getConfiguredTestDialects())(
             banner: { heading: `Live ${locale}` },
             status: "published",
           },
-          { locale, overrideAccess: true }
+          { locale, overrideAccess: true, _overwrite: true }
         );
       }
       await singles.update(
         "home",
         { banner: { heading: "Edited de" } },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
 
       const rows = await current.adapter.select<Row>("nextly_versions");
@@ -542,7 +542,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { title: "T", note: "Live", status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const live = (await liveHome(current)) as { id: string };
       await new VersionsRepository(
@@ -558,7 +558,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { title: "New", status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(await liveHome(current)).toMatchObject({
         title: "New",
@@ -601,7 +601,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { title: "T", account: { label: "L" }, status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       // The second save changes a field a version shows, as well as setting
       // the password: a password alone is never in a snapshot, so a save that
@@ -609,7 +609,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { account: { label: "M", secret: "plain-text-secret" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const rows = await current.adapter.select<Row>("nextly_versions");
@@ -655,19 +655,19 @@ describe.each(getConfiguredTestDialects())(
           hero: { heading: "Live", subheading: "Live sub" },
           status: "published",
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       // The draft holds the live hero, untouched; only the title changes.
       await singles.update(
         "home",
         { title: "New title" },
-        { routeAuthorized: true, user: BOSS }
+        { routeAuthorized: true, user: BOSS, _overwrite: true }
       );
 
       const res = await singles.update(
         "home",
         { status: "published" },
-        { routeAuthorized: true, user: CLERK }
+        { routeAuthorized: true, user: CLERK, _overwrite: true }
       );
       expect(res.success, JSON.stringify(res)).toBe(true);
       expect((await liveHome(current)).title).toBe("New title");
@@ -720,7 +720,7 @@ describe.each(getConfiguredTestDialects())(
             banner: { heading: "Live" },
             status: "published",
           },
-          { locale, overrideAccess: true }
+          { locale, overrideAccess: true, _overwrite: true }
         );
       }
       // English changes the guarded banner; German, saved after it, holds the
@@ -729,12 +729,12 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { banner: { heading: "Changed" } },
-        { locale: "en", routeAuthorized: true, user: BOSS }
+        { locale: "en", routeAuthorized: true, user: BOSS, _overwrite: true }
       );
       await singles.update(
         "home",
         { title: "T de edited" },
-        { locale: "de", routeAuthorized: true, user: BOSS }
+        { locale: "de", routeAuthorized: true, user: BOSS, _overwrite: true }
       );
 
       // A refusal either throws or comes back unsuccessful; both refuse.
@@ -756,7 +756,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { hero: { heading: "First", subheading: "Live sub" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const handle = current!;
       const repo = new VersionsRepository(
@@ -803,7 +803,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(attempts).toBeGreaterThanOrEqual(2);
       vi.restoreAllMocks();
@@ -817,13 +817,13 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { hero: { heading: "Pending", subheading: "Live sub" } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       await singles.update(
         "home",
         { hero: { subheading: "Sent with the publish" }, status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(contentOf((await liveHome(current!)).hero)).toMatchObject({
         heading: "Pending",
@@ -868,15 +868,19 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await pages.updateEntry(
         { collectionName: "pages", entryId: id, overrideAccess: true },
-        { hero: edit }
+        { hero: edit, _overwrite: true }
       );
       const singles = current.getService("singleEntryService");
       await singles.update(
         "home",
         { title: "T", hero: live, status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
-      await singles.update("home", { hero: edit }, { overrideAccess: true });
+      await singles.update(
+        "home",
+        { hero: edit },
+        { overrideAccess: true, _overwrite: true }
+      );
 
       const collectionDraft = await workingDraft(current, "pages");
       const singleDraft = await workingDraft(current, "home");

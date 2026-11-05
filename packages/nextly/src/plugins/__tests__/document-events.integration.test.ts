@@ -63,7 +63,7 @@ describe("document.* post-commit status events", () => {
     await current.nextly.update({
       collection: "articles",
       id,
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
     });
     await current.events.settle();
 
@@ -98,7 +98,7 @@ describe("document.* post-commit status events", () => {
     await current.nextly.update({
       collection: "articles",
       id,
-      data: { title: "T2" },
+      data: { title: "T2", _overwrite: true },
     });
     await current.events.settle();
 
@@ -129,7 +129,7 @@ describe("document.* post-commit status events", () => {
     await current.nextly.update({
       collection: "articles",
       id,
-      data: { status: "published" },
+      data: { status: "published", _overwrite: true },
     });
     await current.events.settle();
 
@@ -139,7 +139,7 @@ describe("document.* post-commit status events", () => {
     await current.nextly.update({
       collection: "articles",
       id,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
     await current.events.settle();
 

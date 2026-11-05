@@ -136,7 +136,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           user: { id: ownerId },
         },
-        { title: "edited" }
+        { title: "edited", _overwrite: true }
       );
       expect(
         (await draftParts(ref)).length,

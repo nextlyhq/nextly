@@ -98,7 +98,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "notes",
         id,
-        data: { hero: { heading: "h2" } },
+        data: { hero: { heading: "h2" }, _overwrite: true },
       });
 
       const versions = await versionsOf(t, id);
@@ -134,7 +134,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "notes",
         id,
         locale: "es",
-        data: { hero: { heading: "h2" } },
+        data: { hero: { heading: "h2" }, _overwrite: true },
       });
 
       const versions = await versionsOf(t, id);

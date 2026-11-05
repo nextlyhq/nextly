@@ -293,7 +293,7 @@ for (const dialect of getConfiguredTestDialects()) {
       const written = await entries.update(
         slug,
         { body: "kept" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(written.success).toBe(true);
 

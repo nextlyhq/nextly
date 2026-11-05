@@ -144,7 +144,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
             overrideAccess: true,
             locale,
           },
-          { heading: value }
+          { heading: value, _overwrite: true }
         );
         expect(translated.success, JSON.stringify(translated)).toBe(true);
       }
@@ -210,7 +210,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { summary: "Resumen" }
+      { summary: "Resumen", _overwrite: true }
     );
 
     const preview = await previewShared(
@@ -323,7 +323,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       const written = await singles.update(
         "hero",
         { heading: value },
-        { locale, overrideAccess: true }
+        { locale, overrideAccess: true, _overwrite: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }

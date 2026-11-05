@@ -144,7 +144,7 @@ describe("singles lazy runtime-table registration (integration)", () => {
     const write = await entryServiceOf(current).update(
       "test-page",
       { description: "hello" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(write.success).toBe(true);
     const adapter = current.adapter as unknown as {

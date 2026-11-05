@@ -274,7 +274,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale,
         },
-        data
+        { ...data, _overwrite: true }
       );
       expect(updated).toMatchObject({ success: true });
     }
@@ -438,7 +438,7 @@ describe.each(getConfiguredTestDialects())(
     it("records a Single's uses, under the Single alone", async () => {
       await t.nextly.updateSingle({
         slug: "usagesite",
-        data: { logo: A.id },
+        data: { logo: A.id, _overwrite: true },
         overrideAccess: true,
       });
       expect(await recordedFor(t, "single", "usagesite", "")).toEqual(
@@ -447,7 +447,7 @@ describe.each(getConfiguredTestDialects())(
 
       await t.nextly.updateSingle({
         slug: "usagesite",
-        data: { logo: B.id },
+        data: { logo: B.id, _overwrite: true },
         overrideAccess: true,
       });
       expect(await recordedFor(t, "single", "usagesite", "")).toEqual(
@@ -1379,7 +1379,10 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "fr",
         },
-        { promo: { caption: "Salut", blurb: imageText(H.url) } }
+        {
+          promo: { caption: "Salut", blurb: imageText(H.url) },
+          _overwrite: true,
+        }
       );
       expect(french.success, JSON.stringify(french)).toBe(true);
       const both = expected("collection", "usagekeptposts", id, [
@@ -1400,7 +1403,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "Kept, saved again" }
+        { title: "Kept, saved again", _overwrite: true }
       );
       expect(saved.success, JSON.stringify(saved)).toBe(true);
       expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(

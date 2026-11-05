@@ -154,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "de live", status: "published" }
+        { title: "de live", status: "published", _overwrite: true }
       );
       const de = await compare(id, { to: 3, baseline: "published" });
       expect(de).toMatchObject({ from: 7, to: 3, locale: "de" });
@@ -302,7 +302,7 @@ describe.each(getConfiguredTestDialects())(
       // Withdrawn: the live row is a draft now, and nothing is served.
       await handler.updateEntry(
         { collectionName: "notes", entryId: id, overrideAccess: true },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       const notes = (args: { to?: number; baseline?: string }) =>
         getVersionDiffForDocument({
@@ -405,7 +405,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE", status: "published" }
+        { title: "DE", status: "published", _overwrite: true }
       ); // v2, de published
       await handler.updateEntry(
         {
@@ -414,7 +414,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE edited" }
+        { title: "DE edited", _overwrite: true }
       ); // v3: the document is a draft, so the save is not held; German stays published
 
       const de = await refusal(

@@ -275,7 +275,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: NOT_IN_GERMAN,
         id: entryIn[NOT_IN_GERMAN]!,
-        data: { title: "eins" },
+        data: { title: "eins", _overwrite: true },
         locale: "de",
       });
       readerId = (

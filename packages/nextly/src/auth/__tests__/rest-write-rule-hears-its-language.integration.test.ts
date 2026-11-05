@@ -108,7 +108,7 @@ async function draft(): Promise<string> {
       collection: POSTS,
       id,
       locale,
-      data: { title: `t-${locale}`, status: "draft" },
+      data: { title: `t-${locale}`, status: "draft", _overwrite: true },
     } as never);
   }
   return id;
@@ -120,7 +120,7 @@ async function draftHome(): Promise<void> {
     await trusted().updateSingle({
       slug: HOME,
       locale,
-      data: { headline: `h-${locale}`, status: "draft" },
+      data: { headline: `h-${locale}`, status: "draft", _overwrite: true },
     } as never);
   }
 }

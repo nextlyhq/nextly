@@ -103,7 +103,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     const first = await singles.update(
       "preferences",
       { headline: "Original headline", seo: { heading: "Original SEO" } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(first.success).toBe(true);
     // A committed write carries the explicit `committed` flag (the write-path
@@ -117,7 +117,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     const second = await singles.update(
       "preferences",
       { headline: "Changed headline", seo: { heading: "Changed SEO" } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     // update() never throws — every error is caught and mapped to a
@@ -146,7 +146,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     const first = await singles.update(
       "preferences",
       { headline: "Original headline", seo: { heading: "Original SEO" } },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(first.success).toBe(true);
 
@@ -161,7 +161,7 @@ describe("SingleMutationService component-save atomicity (integration)", () => {
     const scalar = await singles.update(
       "preferences",
       { headline: "Scalar-only change" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(scalar.success).toBe(true);

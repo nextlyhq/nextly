@@ -188,7 +188,7 @@ async function writeTwoIds(
   const saved = await singles.update(
     `${slug}_page`,
     { card: { heading: "Hello", related: ids } },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   );
   // The message travels with the flag so a refused save names its reason.
   return { saved: { success: saved.success, message: saved.message }, ids };

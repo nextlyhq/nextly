@@ -308,7 +308,7 @@ describe.each(TRANSACTIONS)(
           await ctx.users.delete(doomed.id, {});
           await current!.nextly.updateSingle({
             slug: "site",
-            data: { siteName: "rolled-back" },
+            data: { siteName: "rolled-back", _overwrite: true },
           });
           throw new Error("later step failed");
         })
@@ -326,7 +326,7 @@ describe.each(TRANSACTIONS)(
         await ctx.users.delete(doomed.id, {});
         await current!.nextly.updateSingle({
           slug: "site",
-          data: { siteName: "committed" },
+          data: { siteName: "committed", _overwrite: true },
         });
       });
       await current!.events.settle();
@@ -382,7 +382,12 @@ describe.each(TRANSACTIONS)(
       seen.log.length = 0;
       seen.revalidated.length = 0;
       const updateThenDelete = async () => {
-        await ctx.collections.updateEntry(SLUG, id, { title: "after" }, {});
+        await ctx.collections.updateEntry(
+          SLUG,
+          id,
+          { title: "after", _overwrite: true },
+          {}
+        );
         await ctx.collections.deleteEntry(SLUG, id, {});
       };
 

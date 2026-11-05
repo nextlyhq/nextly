@@ -66,14 +66,14 @@ describe("a status-only publish of a Single with components", () => {
     const draft = await singles.update(
       SLUG,
       { title: "Home", seo: { metaTitle: "Short" }, status: "draft" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(draft.success, JSON.stringify(draft)).toBe(true);
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(published.success, JSON.stringify(published)).toBe(true);

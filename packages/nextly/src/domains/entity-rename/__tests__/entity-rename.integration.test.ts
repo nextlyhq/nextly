@@ -253,7 +253,7 @@ async function writeNote(): Promise<string> {
   const created = await handler.createEntry(as, { title: "v1" });
   const entryId = (created.data as { id: string }).id;
   for (const title of ["v2", "v3"]) {
-    await handler.updateEntry({ ...as, entryId }, { title });
+    await handler.updateEntry({ ...as, entryId }, { title, _overwrite: true });
   }
   return entryId;
 }
@@ -265,7 +265,7 @@ async function writeMasthead(): Promise<string> {
     await singles.update(
       "masthead",
       { heading },
-      { overrideAccess: true, user: ANA }
+      { overrideAccess: true, user: ANA, _overwrite: true }
     );
   }
   const [row] = (await rowsOf("nextly_versions")).filter(

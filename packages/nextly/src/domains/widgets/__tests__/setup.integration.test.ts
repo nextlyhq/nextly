@@ -164,6 +164,7 @@ async function saveSingle(h: Handles, slug: string): Promise<void> {
     {
       overrideAccess: true,
       user: { id: h.ownerId, name: "Owner", email: "owner@su.test" },
+      _overwrite: true,
     }
   );
   expect(saved.success).toBe(true);

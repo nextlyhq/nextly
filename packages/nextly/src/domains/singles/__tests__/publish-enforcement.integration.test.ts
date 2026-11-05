@@ -44,7 +44,7 @@ describe("single publish enforcement — authorize before create (integration)",
     const denied = await service.update(
       "branding",
       { siteName: "S", status: "published" },
-      { user: { id: "u1" }, routeAuthorized: true }
+      { user: { id: "u1" }, routeAuthorized: true, _overwrite: true }
     );
 
     expect(denied.success).toBe(false);
@@ -78,7 +78,7 @@ describe("single publish enforcement — authorize before create (integration)",
     const ok = await service.update(
       "branding",
       { siteName: "S", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(ok.success).toBe(true);
@@ -111,7 +111,7 @@ describe("single publish enforcement — authorize before create (integration)",
     const ok = await service.update(
       "branding",
       { siteName: "S", status: "draft" },
-      { user: { id: "u1" }, routeAuthorized: true }
+      { user: { id: "u1" }, routeAuthorized: true, _overwrite: true }
     );
 
     expect(ok.success).toBe(true);
@@ -160,7 +160,7 @@ describe("single publish enforcement — authorize before create (integration)",
     await service.update(
       "branding",
       { heading: "H", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     const mainRow = await current.adapter.selectOne<{ id: string }>(
       "single_branding",
@@ -178,7 +178,12 @@ describe("single publish enforcement — authorize before create (integration)",
     const denied = await service.update(
       "branding",
       { heading: "H2", status: "published" },
-      { user: { id: "u1" }, routeAuthorized: true, locale: "en" }
+      {
+        user: { id: "u1" },
+        routeAuthorized: true,
+        locale: "en",
+        _overwrite: true,
+      }
     );
     expect(denied.success).toBe(false);
     // No read grant either: the refusal is answered as the Single missing.
@@ -212,7 +217,7 @@ describe("single publish enforcement — authorize before create (integration)",
     await service.update(
       "branding",
       { siteName: "S", status: "draft" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const denied = await service.update(
@@ -225,6 +230,7 @@ describe("single publish enforcement — authorize before create (integration)",
           actorType: "apiKey",
           permissions: ["update-branding"],
         },
+        _overwrite: true,
       }
     );
     expect(denied.success).toBe(false);
@@ -242,6 +248,7 @@ describe("single publish enforcement — authorize before create (integration)",
           actorType: "apiKey",
           permissions: ["update-branding", "publish-branding"],
         },
+        _overwrite: true,
       }
     );
     expect(allowed.success).toBe(true);
@@ -266,14 +273,14 @@ describe("single publish enforcement — authorize before create (integration)",
     await service.update(
       "branding",
       { siteName: "S", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     // A plain field edit that also carries an explicit undefined status.
     const res = await service.update(
       "branding",
       { siteName: "changed", status: undefined },
-      { user: { id: "editor" }, routeAuthorized: true }
+      { user: { id: "editor" }, routeAuthorized: true, _overwrite: true }
     );
     expect(res.success).toBe(true);
 

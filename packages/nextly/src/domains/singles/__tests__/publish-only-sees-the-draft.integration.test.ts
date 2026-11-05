@@ -94,11 +94,12 @@ async function heldDraft(
   await singles.update(
     slug,
     { siteName: "Live", status: "published" },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   );
   const held = await singles.update(slug, change, {
     routeAuthorized: true,
     user: EDITOR,
+    _overwrite: true,
   });
   expect(held.success, JSON.stringify(held)).toBe(true);
 }
@@ -163,7 +164,12 @@ describe.each(getConfiguredTestDialects())(
       const published = await singles.update(
         FIELD_RULED,
         { status: "published" },
-        { routeAuthorized: false, user: PUBLISHER, overrideAccess: false }
+        {
+          routeAuthorized: false,
+          user: PUBLISHER,
+          overrideAccess: false,
+          _overwrite: true,
+        }
       );
       expect(published.success).toBe(false);
     });

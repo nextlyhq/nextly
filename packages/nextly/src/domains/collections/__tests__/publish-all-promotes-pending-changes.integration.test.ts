@@ -462,7 +462,7 @@ describe.each(getConfiguredTestDialects())(
       const publisher = { overrideAccess: false, user: { id: PUBLISHER } };
       const one = await entries.updateEntry(
         { collectionName: GUARDED, entryId: id, locale: "en", ...publisher },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       const every = await entries.publishAllLocales({
         collectionName: GUARDED,
@@ -844,6 +844,7 @@ describe.each(getConfiguredTestDialects())(
             { ...at(id, "en", HOOKED), locale },
             {
               title: "Hello again",
+              _overwrite: true,
             }
           );
           expect(held.success, JSON.stringify(held)).toBe(true);
@@ -860,6 +861,7 @@ describe.each(getConfiguredTestDialects())(
           { ...at(alone, "en", HOOKED), locale },
           {
             status: "published",
+            _overwrite: true,
           }
         );
         expect(one.success, JSON.stringify(one)).toBe(true);

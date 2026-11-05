@@ -62,7 +62,12 @@ async function anonymousWrite(
   if (write === "create") {
     await collections.createEntry(slug, { title: "from a visitor" }, asPublic);
   } else if (write === "update") {
-    await collections.updateEntry(slug, id, { title: "changed" }, asPublic);
+    await collections.updateEntry(
+      slug,
+      id,
+      { title: "changed", _overwrite: true },
+      asPublic
+    );
   } else {
     await collections.deleteEntry(slug, id, asPublic);
   }
@@ -228,7 +233,12 @@ describe.each(getConfiguredTestDialects())(
       const sys = { as: "system" } as const;
       const made = await c.createEntry(OPEN, { title: "sys-made" }, sys);
       const id = String(made.item.id);
-      await c.updateEntry(OPEN, id, { title: "sys-changed" }, sys);
+      await c.updateEntry(
+        OPEN,
+        id,
+        { title: "sys-changed", _overwrite: true },
+        sys
+      );
       const many = await c.createMany(OPEN, [{ title: "sys-many" }], sys);
       expect(many.successful).toBe(1);
       const updated = await c.updateMany(

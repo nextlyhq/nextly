@@ -149,7 +149,7 @@ async function seed(
       overrideAccess: true,
       locale: "de",
     },
-    { title: "deutsch", status }
+    { title: "deutsch", status, _overwrite: true }
   );
   return id;
 }

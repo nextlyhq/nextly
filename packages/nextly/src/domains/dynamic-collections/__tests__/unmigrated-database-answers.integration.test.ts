@@ -191,9 +191,15 @@ async function boot(dialect: TestDialect): Promise<{
     collection: POSTS,
     data: { title: "First", subtitle: "One" },
   });
-  await api.updateSingle({ slug: BANNER, data: { title: "First" } });
+  await api.updateSingle({
+    slug: BANNER,
+    data: { title: "First", _overwrite: true },
+  });
   const pub = await api.create({ collection: PUB, data: { title: "Draft" } });
-  await api.updateSingle({ slug: PUB_BANNER, data: { title: "Draft" } });
+  await api.updateSingle({
+    slug: PUB_BANNER,
+    data: { title: "Draft", _overwrite: true },
+  });
   return { key, id: entry.item.id, owner: owner.item.id, pubId: pub.item.id };
 }
 
@@ -990,7 +996,7 @@ describe.each(getConfiguredTestDialects())(
         registry.retractDynamicSchema(BANNER_TABLE);
         await direct().updateSingle({
           slug: BANNER,
-          data: { title: "Second" },
+          data: { title: "Second", _overwrite: true },
         });
         expect(await bannerTitles()).toEqual(["Second"]);
       } finally {

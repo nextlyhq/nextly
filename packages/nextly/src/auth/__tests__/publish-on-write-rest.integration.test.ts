@@ -382,7 +382,7 @@ for (const dialect of getConfiguredTestDialects()) {
         // Back to a draft, so the next caller's refusal is seen on a draft.
         await t.nextly.updateSingle({
           slug: BANNER,
-          data: { status: "draft" },
+          data: { status: "draft", _overwrite: true },
         });
       });
     });

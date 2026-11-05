@@ -146,7 +146,7 @@ async function publishedInBothLanguages(t: TestNextly): Promise<string> {
 
   await handlerOf(t).updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "de" },
-    { title: "Seite DE", status: "published" }
+    { title: "Seite DE", status: "published", _overwrite: true }
   );
   return id;
 }
@@ -248,7 +248,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Seite DE", status: "draft" }
+        { title: "Seite DE", status: "draft", _overwrite: true }
       );
 
       const before = await companionStatuses(t, `dc_${SLUG}_locales`);
@@ -303,12 +303,12 @@ describe.each(getConfiguredTestDialects())(
       await singlesOf(t).update(
         SINGLE_SLUG,
         { siteName: "Prefs EN", status: "published" },
-        { locale: "en", overrideAccess: true }
+        { locale: "en", overrideAccess: true, _overwrite: true }
       );
       await singlesOf(t).update(
         SINGLE_SLUG,
         { siteName: "Prefs DE", status: "published" },
-        { locale: "de", overrideAccess: true }
+        { locale: "de", overrideAccess: true, _overwrite: true }
       );
 
       const rows = await t.adapter.select<{ id: string }>(
@@ -351,7 +351,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { title: "overwritten everywhere", status: "draft" }
+        { title: "overwritten everywhere", status: "draft", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);

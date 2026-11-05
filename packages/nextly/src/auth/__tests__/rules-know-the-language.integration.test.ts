@@ -310,7 +310,7 @@ async function seedWithFrench(
     collection,
     id,
     locale: "fr",
-    data: { body: "bonjour" },
+    data: { body: "bonjour", _overwrite: true },
   } as never);
   return id;
 }
@@ -627,7 +627,7 @@ describe.each(getConfiguredTestDialects())(
             await singlesOf(t).update(
               SETTINGS,
               { tagline: "hello" },
-              { overrideAccess: true, locale: "en" }
+              { overrideAccess: true, locale: "en", _overwrite: true }
             )
           ).success
         ).toBe(true);
@@ -649,7 +649,7 @@ describe.each(getConfiguredTestDialects())(
             await singlesOf(t).update(
               SETTINGS,
               { tagline: "hello" },
-              { overrideAccess: true, locale: "en" }
+              { overrideAccess: true, locale: "en", _overwrite: true }
             )
           ).success
         ).toBe(true);

@@ -373,7 +373,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: slug,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         return entryId;
       }
@@ -398,7 +398,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: HIDDEN_READ,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         for (const who of [callers.editor, callers.editorKey]) {
           const entry = `collections/${HIDDEN_READ}/entries/${entryId}`;
@@ -423,7 +423,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: PLAIN,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         const entry = `collections/${PLAIN}/entries/${entryId}`;
         // As above: the update passes, the read does not.
@@ -642,7 +642,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: PLAIN,
           id: liveId,
-          data: { title: "pending" },
+          data: { title: "pending", _overwrite: true },
         });
         // A working draft is pending, so copying the live row is a choice.
         const withDraft = (await t.nextly.findByID({

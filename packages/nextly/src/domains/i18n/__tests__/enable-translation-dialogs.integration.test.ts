@@ -181,7 +181,7 @@ describeEachDialect(
           const written = await singles.update(
             "hero",
             { heading: "Hello", views: 7 },
-            { overrideAccess: true }
+            { overrideAccess: true, _overwrite: true }
           );
           expect(written.success, JSON.stringify(written)).toBe(true);
           const [row] = await query<{ id: string }>(

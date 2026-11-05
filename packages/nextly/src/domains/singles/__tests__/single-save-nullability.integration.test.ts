@@ -110,6 +110,7 @@ describeEachDialect(
       const written = await singles.update("hero", data, {
         locale,
         overrideAccess: true,
+        _overwrite: true,
       });
       expect(written.success, JSON.stringify(written)).toBe(true);
     }

@@ -607,7 +607,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.statusCode).toBe(409);
@@ -645,7 +645,7 @@ describe.each(getConfiguredTestDialects())(
         (
           await entries.updateEntry(
             { collectionName: "plain", entryId: id, overrideAccess: true },
-            { title: "pending", total: 2 }
+            { title: "pending", total: 2, _overwrite: true }
           )
         ).success
       ).toBe(true);

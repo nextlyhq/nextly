@@ -88,10 +88,14 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { title: "Live", status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
-      await singles.update("home", { title: "Held" }, { overrideAccess: true });
+      await singles.update(
+        "home",
+        { title: "Held" },
+        { overrideAccess: true, _overwrite: true }
+      );
 
       expect(await workingDrafts(current)).toHaveLength(1);
       const live = await singles.get("home", { overrideAccess: true });
@@ -130,7 +134,7 @@ describe.each(getConfiguredTestDialects())(
           layout: { hero: { heading: "Live" } },
           status: "published",
         },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       return singles;
     }
@@ -141,7 +145,7 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { layout: { hero: { heading: "Held" } } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const [draft] = await workingDrafts(current!);
@@ -159,13 +163,13 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "home",
         { layout: { hero: { heading: "Held" } } },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
 
       const published = await singles.update(
         "home",
         { status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       expect(published.success, JSON.stringify(published)).not.toBe(false);
 

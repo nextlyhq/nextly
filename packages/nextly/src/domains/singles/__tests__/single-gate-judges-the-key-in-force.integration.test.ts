@@ -63,7 +63,7 @@ async function boot(dialect: TestDialect): Promise<{
   const singles = current.nextly as unknown as Singles;
   await singles.updateSingle({
     slug: SINGLE,
-    data: { title: "first" },
+    data: { title: "first", _overwrite: true },
     overrideAccess: true,
   });
   return { singles, owner };

@@ -124,7 +124,7 @@ describe.each(getConfiguredTestDialects())(
       await as(EDITOR.id).update({
         collection: SLUG,
         id,
-        data: { body: "finished draft" },
+        data: { body: "finished draft", _overwrite: true },
       } as never);
       // POPULATION CONTROL: the change is held, not live.
       expect((await liveDoc(t, id)).body).toBe("live");
@@ -132,7 +132,7 @@ describe.each(getConfiguredTestDialects())(
       await as(PUBLISHER.id).update({
         collection: SLUG,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       } as never);
       expect((await liveDoc(t, id)).body).toBe("finished draft");
     });
@@ -173,7 +173,11 @@ async function heldDraft(
     { body: "live", status: "published" }
   );
   const id = (created.data as { id?: string }).id as string;
-  await as(EDITOR.id).update({ collection, id, data: change } as never);
+  await as(EDITOR.id).update({
+    collection,
+    id,
+    data: { ...change, _overwrite: true },
+  } as never);
   return id;
 }
 

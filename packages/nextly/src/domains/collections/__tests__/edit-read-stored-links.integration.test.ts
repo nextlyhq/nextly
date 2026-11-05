@@ -206,7 +206,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       logo: media[0],
       gallery: [media[1], media[0]],
     },
-    { overrideAccess: true }
+    { overrideAccess: true, _overwrite: true }
   );
   const deleted = await handler.deleteEntry({
     collectionName: "pages",
@@ -255,7 +255,7 @@ async function saveRef(
       user: { id: fx.editor },
       routeAuthorized: true,
     },
-    data
+    { ...data, _overwrite: true }
   );
   expect(result.success).toBe(true);
 }
@@ -587,7 +587,7 @@ describe.each(getConfiguredTestDialects())(
           user: { id: "denied" },
           routeAuthorized: true,
         },
-        { name: "renamed", tags }
+        { name: "renamed", tags, _overwrite: true }
       );
       expect(saved.success).toBe(true);
       const after = await handler.getEntry({

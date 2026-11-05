@@ -267,7 +267,10 @@ describe.each(getConfiguredTestDialects())(
         data: { ...valid, status: "draft" },
       });
       entryId = String(made.item.id);
-      await singles(t).update(BANNER, valid, { overrideAccess: true });
+      await singles(t).update(BANNER, valid, {
+        overrideAccess: true,
+        _overwrite: true,
+      });
       const banner = await t.nextly.findSingle({ slug: BANNER });
       const bannerId = String((banner as unknown as { id: unknown }).id);
 
@@ -301,18 +304,18 @@ describe.each(getConfiguredTestDialects())(
         collection: LANG_ENTRIES,
         id: langEntryId,
         locale: "de",
-        data: { headline: "h de", germanOnly: "ok" },
+        data: { headline: "h de", germanOnly: "ok", _overwrite: true },
       } as never);
       for (const slug of [LANG_BANNER, LANG_HIDDEN]) {
         await singles(t).update(
           slug,
           { headline: "h" },
-          { overrideAccess: true }
+          { overrideAccess: true, _overwrite: true }
         );
         await singles(t).update(
           slug,
           { headline: "h de", germanOnly: "ok" },
-          { overrideAccess: true, locale: "de" }
+          { overrideAccess: true, locale: "de", _overwrite: true }
         );
       }
       const languageRows: Array<[string, string]> = [

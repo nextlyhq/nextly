@@ -346,7 +346,12 @@ describe.each(getConfiguredTestDialects())(
       const refused = await singles.update(
         SLUG,
         { status: "published" },
-        { locale: "en", overrideAccess: true, routeAuthorized: true }
+        {
+          locale: "en",
+          overrideAccess: true,
+          routeAuthorized: true,
+          _overwrite: true,
+        }
       );
 
       expect(refused.statusCode).toBe(409);

@@ -384,7 +384,7 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs(who).update({
           collection: "pages",
           id,
-          data,
+          data: { ...data, _overwrite: true },
         } as never);
         return;
       }
@@ -417,7 +417,11 @@ describe.each(getConfiguredTestDialects())(
         expect(res.status).toBe(200);
         return;
       }
-      await checkedAs(who).update({ collection, id, data } as never);
+      await checkedAs(who).update({
+        collection,
+        id,
+        data: { ...data, _overwrite: true },
+      } as never);
     }
 
     beforeAll(async () => {
@@ -1070,7 +1074,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted.update({
           collection: "pinboard",
           id,
-          data: { one: null },
+          data: { one: null, _overwrite: true },
         } as never);
 
         expect(list((await stored("pinboard", id)).one)).toEqual([]);
@@ -1159,6 +1163,7 @@ describe.each(getConfiguredTestDialects())(
             title: "s",
             meta: guardedValues("site-meta"),
             one: { heading: "h", ...guardedValues("site") },
+            _overwrite: true,
           },
         } as never);
         const before = (await trusted.findSingle({
@@ -1179,7 +1184,7 @@ describe.each(getConfiguredTestDialects())(
         } else {
           await checkedAs("editor").updateSingle({
             slug: "site",
-            data,
+            data: { ...data, _overwrite: true },
           } as never);
         }
 
@@ -1205,7 +1210,7 @@ describe.each(getConfiguredTestDialects())(
       it("is judged by its own grants on the Single's own fields", async () => {
         await trusted.updateSingle({
           slug: "site",
-          data: { title: "s", keyed: "stored" },
+          data: { title: "s", keyed: "stored", _overwrite: true },
         } as never);
         // Owned by the editor, whose role holds `publish-board`; the key
         // does not.
@@ -1219,7 +1224,7 @@ describe.each(getConfiguredTestDialects())(
         } as never);
         await asKey.updateSingle({
           slug: "site",
-          data: { title: "s-key", keyed: "by-key" },
+          data: { title: "s-key", keyed: "by-key", _overwrite: true },
         } as never);
         const afterKey = (await trusted.findSingle({
           slug: "site",
@@ -1230,7 +1235,7 @@ describe.each(getConfiguredTestDialects())(
         // The owner, the control: the rule lets them write it.
         await checkedAs("editor").updateSingle({
           slug: "site",
-          data: { keyed: "by-owner" },
+          data: { keyed: "by-owner", _overwrite: true },
         } as never);
         const afterOwner = (await trusted.findSingle({
           slug: "site",
@@ -1245,7 +1250,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted.update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
         const live = await stored("drafted", id);
         // The allowed person's draft changes `locked`, which they may write.
@@ -1254,6 +1259,7 @@ describe.each(getConfiguredTestDialects())(
           id,
           data: {
             one: { ...(live.one as Doc), ...guardedValues("p-draft") },
+            _overwrite: true,
           },
         } as never);
 
@@ -1277,6 +1283,7 @@ describe.each(getConfiguredTestDialects())(
             title: "b",
             status: "published",
             one: { heading: "h", ...guardedValues("board") },
+            _overwrite: true,
           },
         } as never);
         const live = (await trusted.findSingle({
@@ -1286,6 +1293,7 @@ describe.each(getConfiguredTestDialects())(
           slug: "board",
           data: {
             one: { ...(live.one as Doc), ...guardedValues("board-draft") },
+            _overwrite: true,
           },
         } as never);
 
@@ -1328,7 +1336,7 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("allowed").update({
           collection: "logged",
           id,
-          data: { log: logWith(live, `pending-${tag}`) },
+          data: { log: logWith(live, `pending-${tag}`), _overwrite: true },
         } as never);
         return id;
       }
@@ -1341,6 +1349,7 @@ describe.each(getConfiguredTestDialects())(
             title: tag,
             status: "published",
             log: { heading: "h", trail: { updatedAt: `live-${tag}` } },
+            _overwrite: true,
           },
         } as never);
         const live = (await trusted.findSingle({
@@ -1348,7 +1357,7 @@ describe.each(getConfiguredTestDialects())(
         } as never)) as Doc;
         await checkedAs("allowed").updateSingle({
           slug: "ledger",
-          data: { log: logWith(live, `pending-${tag}`) },
+          data: { log: logWith(live, `pending-${tag}`), _overwrite: true },
         } as never);
       }
 
@@ -1370,10 +1379,13 @@ describe.each(getConfiguredTestDialects())(
           if ("single" in target) {
             await checkedAs(who).updateSingle({
               slug: target.single,
-              data: body,
+              data: { ...body, _overwrite: true },
             } as never);
           } else {
-            await checkedAs(who).update({ ...target, data: body } as never);
+            await checkedAs(who).update({
+              ...target,
+              data: { ...body, _overwrite: true },
+            } as never);
           }
           return 200;
         } catch (error) {
@@ -1448,7 +1460,7 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("editor").update({
           collection: "groupdrafted",
           id,
-          data: { one: null },
+          data: { one: null, _overwrite: true },
         } as never);
 
         const draft = await heldDraft("groupdrafted", id);
@@ -1470,7 +1482,7 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("editor").update({
           collection: "drafted",
           id,
-          data: { many: [{ id: first.id, heading: "a" }] },
+          data: { many: [{ id: first.id, heading: "a" }], _overwrite: true },
         } as never);
 
         const draft = await heldDraft("drafted", id);
@@ -1486,7 +1498,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted.update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
         return id;
       }
@@ -1505,13 +1517,14 @@ describe.each(getConfiguredTestDialects())(
               heading: "h-draft",
               locked: "locked-hd-draft",
             },
+            _overwrite: true,
           },
         } as never);
         // The allowed person may write all of it, and publishes the draft.
         await checkedAs("allowed").update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
 
         const after = await stored("drafted", id);
@@ -1532,13 +1545,17 @@ describe.each(getConfiguredTestDialects())(
           id,
           data: {
             box: { ...box, inBox: { ...inBox, locked: "locked-hg-pending" } },
+            _overwrite: true,
           },
         } as never);
         // The editor, who may not write `locked`, then saves the same group.
         await checkedAs("editor").update({
           collection: "drafted",
           id,
-          data: { box: { ...box, inBox: { ...inBox, heading: "h-hg" } } },
+          data: {
+            box: { ...box, inBox: { ...inBox, heading: "h-hg" } },
+            _overwrite: true,
+          },
         } as never);
 
         const draft = (await trusted.findByID({
@@ -1564,6 +1581,7 @@ describe.each(getConfiguredTestDialects())(
           id,
           data: {
             many: [...list(live.many), { heading: "h-new", later: "set" }],
+            _overwrite: true,
           },
         } as never);
 
@@ -1593,13 +1611,16 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("allowed").update({
           collection: "groupdrafted",
           id,
-          data: { one: { ...(live.one as Doc), heading: "h-g2" } },
+          data: {
+            one: { ...(live.one as Doc), heading: "h-g2" },
+            _overwrite: true,
+          },
         } as never);
 
         await checkedAs("allowed").update({
           collection: "groupdrafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
 
         expect(((await stored("groupdrafted", id)).one as Doc).heading).toBe(
@@ -1624,7 +1645,10 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("allowed").update({
           collection: "groupdrafted",
           id,
-          data: { one: { ...(live.one as Doc), locked: "locked-rel-draft" } },
+          data: {
+            one: { ...(live.one as Doc), locked: "locked-rel-draft" },
+            _overwrite: true,
+          },
         } as never);
         const handler = t.getService("collectionsHandler") as unknown as {
           releasePublishIssues: (params: {
@@ -1754,21 +1778,25 @@ describe.each(getConfiguredTestDialects())(
         await trusted.update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
         const live = await stored("drafted", id);
         // Held, so no save judges the instances it removes.
         await checkedAs("editor").update({
           collection: "drafted",
           id,
-          data: { one: null, many: list(live.many).slice(0, 1) },
+          data: {
+            one: null,
+            many: list(live.many).slice(0, 1),
+            _overwrite: true,
+          },
         } as never);
         // The publisher may write everything, so nothing stops the removal
         // except the draft having been judged when it was held.
         await checkedAs("allowed").update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
 
         // Each instance is the stored one, kept whole with its id: a partial
@@ -1802,7 +1830,7 @@ describe.each(getConfiguredTestDialects())(
         await trusted.update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
         const live = await stored("drafted", id);
 
@@ -1811,12 +1839,15 @@ describe.each(getConfiguredTestDialects())(
         await checkedAs("allowed").update({
           collection: "drafted",
           id,
-          data: { one: { ...(live.one as Doc), owned: "owned-idr" } },
+          data: {
+            one: { ...(live.one as Doc), owned: "owned-idr" },
+            _overwrite: true,
+          },
         } as never);
         await checkedAs("allowed").update({
           collection: "drafted",
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never);
 
         const one = (await stored("drafted", id)).one as Doc;
@@ -1842,6 +1873,7 @@ describe.each(getConfiguredTestDialects())(
               heading: "h2",
               ...guardedValues("v2"),
             },
+            _overwrite: true,
           },
         } as never);
 

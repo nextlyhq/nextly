@@ -181,13 +181,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // The author may write `guarded`, so the held draft carries their edit.
     const held = await singles.update(
       SLUG,
       { guarded: "secret" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -195,7 +195,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success).toBe(false);
@@ -234,20 +234,20 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // The draft edits only a field this publisher may write. `guarded` is in
     // the snapshot too, as it is in every snapshot, but it is unchanged.
     await singles.update(
       SLUG,
       { siteName: "Edited" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
     expect(published.success, JSON.stringify(published)).toBe(true);
 
@@ -260,18 +260,18 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { guarded: "secret" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
     expect(published.success, JSON.stringify(published)).toBe(true);
 
@@ -284,13 +284,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // Legal under the schema as it stands: no rule on `checked` yet.
     const held = await singles.update(
       SLUG,
       { checked: "anything" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -299,7 +299,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(published.success).toBe(false);
@@ -327,18 +327,18 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         seo: { metaTitle: "Title" },
         status: "published",
       },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { siteName: "Edited" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     expect(published.success, JSON.stringify(published)).toBe(true);
@@ -354,13 +354,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // Legal under the schema as it stands.
     await singles.update(
       SLUG,
       { checked: "anything" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
 
     // The schema tightens while the change is held.
@@ -403,18 +403,18 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { ops: { runbook: "internal" } },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success).toBe(false);
@@ -434,12 +434,12 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         card: { note: "live-note", runbook: "live-runbook" },
         status: "published",
       },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { card: { note: "live-note", runbook: "boss-runbook" } },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     const published = await singles.update(
@@ -448,7 +448,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         status: "published",
         card: { note: "clerk-note", runbook: "live-runbook" },
       },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success, JSON.stringify(published)).toBe(false);
@@ -467,12 +467,12 @@ describe("a Single's publish re-judges the draft it promotes", () => {
         ops: { runbook: "live-runbook" },
         status: "published",
       },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { ops: { runbook: "boss-runbook" } },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     // The publisher sends the whole group, the child at its live value. Kept
@@ -481,7 +481,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const published = await singles.update(
       SLUG,
       { status: "published", ops: { runbook: "live-runbook" } },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success, JSON.stringify(published)).toBe(false);
@@ -512,18 +512,18 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     await singles.update(
       SLUG,
       { guarded: "secret" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { siteName: "Edited" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success).toBe(false);
@@ -570,7 +570,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Live", guarded: "kept", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // A full form resubmits every field, so the held snapshot carries the
     // translated `guarded` at the value it already has. Saved by someone who
@@ -578,13 +578,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { siteName: "Edited", guarded: "kept" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: CLERK }
+      { routeAuthorized: true, user: CLERK, _overwrite: true }
     );
 
     expect(published.success, JSON.stringify(published)).toBe(true);
@@ -630,13 +630,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { kind: "public", status: "published" },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     // Allowed when it was saved: `kind` was `public`.
     const held = await singles.update(
       SLUG,
       { confidential: "sealed" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -646,7 +646,7 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const published = await singles.update(
       SLUG,
       { status: "published", kind: "private" },
-      { routeAuthorized: true, user: BOSS }
+      { routeAuthorized: true, user: BOSS, _overwrite: true }
     );
 
     expect(published.success).toBe(false);
@@ -693,19 +693,19 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { headline: "H", subhead: "S", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     const held = await singles.update(
       SLUG,
       { headline: "H2" },
-      { routeAuthorized: true, user: BOSS, locale: "en" }
+      { routeAuthorized: true, user: BOSS, locale: "en", _overwrite: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 
     const published = await singles.update(
       SLUG,
       { status: "published" },
-      { routeAuthorized: true, user: BOSS, locale: "en" }
+      { routeAuthorized: true, user: BOSS, locale: "en", _overwrite: true }
     );
 
     // Judged on the snapshot alone, `subhead` is simply not there and the
@@ -777,13 +777,13 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     await singles.update(
       SLUG,
       { headline: "EN", guarded: "L", status: "published" },
-      { overrideAccess: true, locale: "en" }
+      { overrideAccess: true, locale: "en", _overwrite: true }
     );
     for (const locale of ["de", "fr"]) {
       await singles.update(
         SLUG,
         { headline: locale.toUpperCase(), status: "published" },
-        { overrideAccess: true, locale }
+        { overrideAccess: true, locale, _overwrite: true }
       );
     }
     return { singles, asBoss, ok };
@@ -807,26 +807,50 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     ok(
       await singles.update(
         SLUG,
-        { headline: "EN2", guarded: "X" },
+        { headline: "EN2", guarded: "X", _overwrite: true },
         asBoss("en")
       )
     );
     // German publishes "X"...
-    ok(await singles.update(SLUG, { guarded: "X" }, asBoss("de")));
-    ok(await singles.update(SLUG, { status: "published" }, asBoss("de")));
+    ok(
+      await singles.update(
+        SLUG,
+        { guarded: "X", _overwrite: true },
+        asBoss("de")
+      )
+    );
+    ok(
+      await singles.update(
+        SLUG,
+        { status: "published", _overwrite: true },
+        asBoss("de")
+      )
+    );
     // ...then begins from it and edits it back to "L": its history held "X"
     // after English's edit, so this edit of the same field is the later...
     ok(
       await singles.update(
         SLUG,
-        { headline: "DE2", guarded: "L" },
+        { headline: "DE2", guarded: "L", _overwrite: true },
         asBoss("de")
       )
     );
     if (revertLive) {
       // ...and French publishes "L" again, so the live value is "L".
-      ok(await singles.update(SLUG, { guarded: "L" }, asBoss("fr")));
-      ok(await singles.update(SLUG, { status: "published" }, asBoss("fr")));
+      ok(
+        await singles.update(
+          SLUG,
+          { guarded: "L", _overwrite: true },
+          asBoss("fr")
+        )
+      );
+      ok(
+        await singles.update(
+          SLUG,
+          { status: "published", _overwrite: true },
+          asBoss("fr")
+        )
+      );
     }
     return singles;
   }
@@ -892,11 +916,17 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     ok(
       await singles.update(
         SLUG,
-        { headline: "EN2", guarded: "X" },
+        { headline: "EN2", guarded: "X", _overwrite: true },
         asBoss("en")
       )
     );
-    ok(await singles.update(SLUG, { headline: "DE2" }, asBoss("de")));
+    ok(
+      await singles.update(
+        SLUG,
+        { headline: "DE2", _overwrite: true },
+        asBoss("de")
+      )
+    );
 
     // A publisher who may not write `guarded` is refused, naming it. Judged
     // on each change as stored, German's later copy of "L" would stand in for

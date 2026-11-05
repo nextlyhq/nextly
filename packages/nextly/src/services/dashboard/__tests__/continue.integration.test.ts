@@ -664,7 +664,13 @@ describe.each(getConfiguredTestDialects())(
         actor: { type: "user", id: ANA.id },
       };
       expect(
-        (await singles.update(HOME, { headline: "Hi" }, actor)).success
+        (
+          await singles.update(
+            HOME,
+            { headline: "Hi", _overwrite: true },
+            actor
+          )
+        ).success
       ).toBe(true);
       const outboxBefore = (await t.adapter.select("nextly_events")).length;
       // The control: with neither on, the first save recorded nothing either,

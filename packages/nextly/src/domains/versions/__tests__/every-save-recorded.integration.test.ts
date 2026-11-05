@@ -112,7 +112,7 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         await handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true, user },
-          { title }
+          { title, _overwrite: true }
         );
       }
 
@@ -153,26 +153,26 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "branding",
         { heading: "Live", status: "published" },
-        { overrideAccess: true, user: ana }
+        { overrideAccess: true, user: ana, _overwrite: true }
       );
       const before = (await versionsFor(current, "branding")).length;
 
       await singles.update(
         "branding",
         { heading: "Ana's" },
-        { overrideAccess: true, user: ana }
+        { overrideAccess: true, user: ana, _overwrite: true }
       );
       await singles.update(
         "branding",
         { heading: "Ben's" },
-        { overrideAccess: true, user: ben }
+        { overrideAccess: true, user: ben, _overwrite: true }
       );
 
       // Saving the same heading again changes nothing, so records nothing.
       await singles.update(
         "branding",
         { heading: "Ben's" },
-        { overrideAccess: true, user: ben }
+        { overrideAccess: true, user: ben, _overwrite: true }
       );
 
       const saves = (await versionsFor(current, "branding")).slice(before);
@@ -202,7 +202,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Hallo", status: "published" }
+        { title: "Hallo", status: "published", _overwrite: true }
       );
       const before = (await versionsFor(current, "posts")).length;
 
@@ -214,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "de",
           user: ana,
         },
-        { title: "Hallo, Welt" }
+        { title: "Hallo, Welt", _overwrite: true }
       );
 
       const saves = (await versionsFor(current, "posts")).slice(before);
@@ -391,17 +391,17 @@ describe.each(getConfiguredTestDialects())(
       await singles.update(
         "branding",
         { heading: "Live", status: "published" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "branding",
         { heading: "Pending A" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       await singles.update(
         "branding",
         { heading: "Pending B" },
-        { overrideAccess: true }
+        { overrideAccess: true, _overwrite: true }
       );
       const versions = await versionsFor(current, "branding");
       const pendingA = versions.find(
@@ -491,7 +491,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await handler.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true },
-        { title: "Pending" }
+        { title: "Pending", _overwrite: true }
       );
       const versions = await versionsFor(current, "posts");
       const published = versions.find(v => v.status === "published")!;

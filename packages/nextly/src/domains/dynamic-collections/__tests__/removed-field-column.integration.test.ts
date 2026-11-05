@@ -182,7 +182,7 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
     const first = await singles.update(
       "banner",
       { headline: "Kept", views: 1 },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(first.success, JSON.stringify(first)).toBe(true);
 
@@ -198,7 +198,7 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
     const later = await singles.update(
       "banner",
       { views: 2 },
-      { overrideAccess: true }
+      { overrideAccess: true, _overwrite: true }
     );
     expect(later.success, JSON.stringify(later)).toBe(true);
   });
