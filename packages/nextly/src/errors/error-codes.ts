@@ -248,6 +248,10 @@ export const NEXTLY_ERROR_STATUS = {
   // `experimental.perLanguageStorage` is on over a database whose main tables still hold
   // translatable values. 500 for the same reason: the remedy is the server's configuration or data.
   NEXTLY_PER_LANGUAGE_STORAGE_MIXED: 500,
+  // `experimental.perLanguageStorage` is on, the site declares no languages, so it would serve the
+  // implicit English alone, and its translations in other languages would read as gone. 500 for the
+  // same reason: the remedy is the server's configuration.
+  NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
   // `db.postgres.schema` names a schema other than `public`, which the schema
   // push cannot yet create tables in. 500 for the same reason as the mismatch
   // above: a boot-time refusal of the server's own configuration.

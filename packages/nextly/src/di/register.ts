@@ -5180,4 +5180,28 @@ async function refuseMixedStorageInConfig(
     ))
   );
   await refuseMixedStorage(adapter, entities, perLanguage);
+  // With no languages declared in the configuration or in Settings, the site would serve the
+  // implicit language alone: refused where its per-language tables hold others, so translations
+  // never read as gone after a `localization` block is removed.
+  if (perLanguage && config.localization === undefined) {
+    const [
+      { refuseUndeclaredLanguages },
+      { IMPLICIT_LANGUAGE, localizationFromStoredLanguages },
+      { storedLanguageReader },
+    ] = await Promise.all([
+      import("../domains/i18n/per-language-storage-layout"),
+      import("../domains/i18n/config/stored-languages"),
+      import("../domains/i18n/stored-language-reader"),
+    ]);
+    const stored = localizationFromStoredLanguages(
+      await storedLanguageReader(adapter).rows()
+    );
+    if (stored === undefined) {
+      await refuseUndeclaredLanguages(
+        adapter,
+        entities,
+        IMPLICIT_LANGUAGE.code
+      );
+    }
+  }
 }

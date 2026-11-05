@@ -515,6 +515,72 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A site that declared its languages and then drops its `localization` block would fall back
+    // to the implicit English, and its translations in any other language would read as gone. It
+    // is refused instead, naming those languages and the way back.
+    it.runIf(dialect === "sqlite")(
+      "refuses to boot in the implicit language over translations in languages it no longer declares",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const site = {
+          perLanguageStorage: true,
+          collections: [
+            defineCollection({
+              slug: "articles",
+              fields: [text({ name: "headline" })],
+            }),
+          ],
+        };
+        try {
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+            localization: { locales: ["en", "de"], defaultLocale: "en" },
+          });
+          const created = await before.nextly.create({
+            collection: "articles",
+            data: { headline: "Hello" },
+          });
+          await before.nextly.update({
+            collection: "articles",
+            id: (created.item as { id: string }).id,
+            locale: "de",
+            data: { headline: "Hallo" },
+          });
+          await before.destroy();
+
+          let refused: unknown;
+          try {
+            current = await createTestNextly({
+              ...site,
+              adapter: await onFile(),
+            });
+          } catch (error) {
+            refused = error;
+          }
+          expect(
+            NextlyError.isCode(
+              refused,
+              "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED"
+            )
+          ).toBe(true);
+          expect((refused as Error).message).toMatch(/"de"/);
+          expect((refused as Error).message).toMatch(/localization block/);
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
     // A related entry is populated with its translatable values too, from its own companion.
     // A site restarted over the database it laid out: the tables registered at boot, before any
     // service, describe the per-language layout, so the entries it wrote read back.

@@ -11,6 +11,7 @@
  * @experimental
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { introspectLiveSnapshot } from "../schema/pipeline/diff/introspect-live";
@@ -223,5 +224,56 @@ async function refuseValuesKeptPerLanguage(
         columns: perLanguageOnly,
       })),
     },
+  });
+}
+
+/** What the undeclared-languages check needs of the adapter, beyond the layout refusal's. */
+type LanguageCheckAdapter = LayoutAdapter & {
+  listTables(): Promise<string[]>;
+  queryStatement<T>(statement: SQL): Promise<T[]>;
+};
+
+/**
+ * Refuses the boot of a site keeping every translatable field per language that declares no
+ * languages, neither in its configuration nor in Settings, while its per-language tables hold rows
+ * in a language other than the implicit one (`implicitLocale`). Such a site would serve the
+ * implicit language alone and its other translations would read as gone, as after a
+ * `localization` block is removed. Nothing is moved: the refusal names the languages found and the
+ * way back.
+ */
+export async function refuseUndeclaredLanguages(
+  adapter: LanguageCheckAdapter,
+  entities: readonly LaidOutEntity[],
+  implicitLocale: string
+): Promise<void> {
+  const rules = await readIdentifierCaseRules(adapter);
+  const catalog = indexCatalog(await adapter.listTables(), rules.tables);
+  const found = new Set<string>();
+  for (const entity of entities) {
+    const companion = resolveCatalogName(
+      catalog,
+      `${entity.tableName}_locales`
+    );
+    if (companion === undefined) continue;
+    const rows = await adapter.queryStatement<{ locale: unknown }>(
+      sql`SELECT DISTINCT ${sql.identifier("_locale")} AS locale FROM ${sql.identifier(companion)} WHERE ${sql.identifier("_locale")} <> ${implicitLocale}`
+    );
+    for (const row of rows) {
+      if (typeof row.locale === "string") found.add(row.locale);
+    }
+  }
+  if (found.size === 0) return;
+  const named = [...found]
+    .sort()
+    .map(locale => `"${locale}"`)
+    .join(", ");
+  throw new NextlyError({
+    code: "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED",
+    publicMessage:
+      `experimental.perLanguageStorage is on and this site declares no languages, so it would ` +
+      `serve its content in "${implicitLocale}" alone, but this database holds translations in ` +
+      `${named}. Put the localization block back, or add these languages in Settings, then ` +
+      `restart.`,
+    logContext: { languages: [...found].sort(), implicitLocale },
   });
 }
