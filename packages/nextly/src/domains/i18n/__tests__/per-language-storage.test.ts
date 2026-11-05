@@ -41,13 +41,17 @@ describe("per-language storage", () => {
     expect(storesPerLanguage(undefined)).toBe(true);
   });
 
-  it("adopts a config's choice in a process that has not chosen, and keeps a boot's choice", async () => {
+  it("adopts a config's choice in a process that has not chosen, refuses a later read that changes it, and keeps a boot's choice", async () => {
     // A fresh process: this file's other cases have already chosen.
     const fresh = await freshProcess();
     fresh.adoptPerLanguageStorage(true);
     expect(fresh.perLanguageStorageEnabled()).toBe(true);
-    // Once chosen, a later config read leaves it, as a running site's reload does.
-    fresh.adoptPerLanguageStorage(false);
+    // A later read of the config that keeps it is accepted; one that changes it, as `db:sync
+    // --watch` reloading an edited config would, is refused, as a running site's reload is.
+    fresh.adoptPerLanguageStorage(true);
+    expect(() => fresh.adoptPerLanguageStorage(false)).toThrow(
+      expect.objectContaining({ code: "NEXTLY_PER_LANGUAGE_STORAGE_CHANGED" })
+    );
     expect(fresh.perLanguageStorageEnabled()).toBe(true);
 
     const booted = await freshProcess();

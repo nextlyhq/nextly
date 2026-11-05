@@ -69,6 +69,7 @@ import type {
 } from "../../i18n/migration/types";
 import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
 import {
+  perLanguageStorageEnabled,
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
@@ -393,6 +394,16 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory
   );
+
+  // A file that moves existing values between a main table and its companion records the language
+  // they are in. Under `experimental.perLanguageStorage` a site may declare no languages and keep
+  // them in Settings instead, which a migration file cannot depend on, since the database the
+  // developer reaches is not the one the file runs against. So such a file is refused until the
+  // config names its default.
+  refuseUndeclaredSeedLanguage(args.defaultLocale, {
+    seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+    moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+  });
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1109,6 +1120,25 @@ function buildDisableSpec(
     // out again as it was, not as the untranslated definition now asked for would.
     status: publishesPerLanguage({ localized: true, status: entity.status }),
   };
+}
+
+/**
+ * Refuse a file that seeds or moves existing translatable values when, under
+ * `experimental.perLanguageStorage`, the config declares no default language to record them in.
+ */
+function refuseUndeclaredSeedLanguage(
+  defaultLocale: string | undefined,
+  planned: { seeds: boolean; moves: boolean }
+): void {
+  if (defaultLocale !== undefined || !perLanguageStorageEnabled()) return;
+  if (!planned.seeds && !planned.moves) return;
+  throw NextlyError.invalidInput({
+    message:
+      "This migration moves existing content into its per-language tables, which records the " +
+      "language that content is in, and the config declares none. Declare `localization` with " +
+      "its defaultLocale in the config, then run migrate:create again.",
+    logContext: { reason: "per-language-seed-language-undeclared" },
+  });
 }
 
 /** A localized collection's derived companion spec paired with its planned migration. */
