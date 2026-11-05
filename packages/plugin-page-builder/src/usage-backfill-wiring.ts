@@ -27,6 +27,7 @@ import {
 } from "./class-usage-runtime";
 import { componentUsageIndex } from "./component-usage";
 import type { SingleToWalk } from "./host-rewrite/site";
+import { lastIdOf } from "./paged-walk";
 import type { BackfillStateStore } from "./usage-backfill";
 import type { UsageBackfillDeps } from "./usage-backfill-job";
 import {
@@ -35,14 +36,18 @@ import {
   backfillScopesFor,
   type BackfillScope,
 } from "./usage-backfill-scope";
-import type { UsageBookkeeping, UsageRun } from "./usage-bookkeeping";
+import {
+  forgetScopeProgress,
+  type UsageBookkeeping,
+  type UsageRun,
+} from "./usage-bookkeeping";
+import type { UsageRowReader } from "./usage-count";
 import {
   fencedUsageTableStore,
   forgetUsageRows,
   usageTableOf,
   usageTableRows,
   type UsageDb,
-  type UsageTable,
 } from "./usage-index-tables";
 
 /** What the wiring must be able to ask of the host, named structurally. */
@@ -310,9 +315,6 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
   };
 }
 
-/** How many pages of a Single's rows one sweep reads; a runaway guard. */
-const MOST_SINGLE_ROW_PAGES = 100;
-
 /**
  * Remove the rows filed under a Single that no scope existing now names: a
  * Single removed from the configuration, one that no longer stores blocks
@@ -322,57 +324,83 @@ const MOST_SINGLE_ROW_PAGES = 100;
  *
  * Asked only once every scope has been walked, from the scopes that pass
  * read, so a Single the registry could not list is never taken for gone:
- * reading the registry failed the pass before this point. Each removal is
- * fenced by the run, as a walk's writes are.
+ * reading the registry failed the pass before this point. Every row is read,
+ * to the end of each table. Each gone scope's rows in both indexes, and the
+ * progress recorded for it, are removed in one transaction fenced by the run,
+ * so a Single that comes back under the same scope is walked again rather
+ * than read as walked.
  */
 export async function forgetGoneSingles(
   host: BackfillHost,
   scopes: readonly BackfillScope[],
-  fenced: BackfillStateStore["fenced"]
+  fenced: BackfillStateStore["fenced"],
+  /** Rows per read of each table; smaller only in a test. */
+  pageSize?: number
 ): Promise<void> {
   const live = new Set(
     scopes.filter(scope => scope.scope === "single").map(backfillScopeKey)
   );
-  for (const table of [
+  const tables = [
     usageTableOf(classUsageIndex),
     usageTableOf(componentUsageIndex),
-  ]) {
-    for (const scope of await goneSingleScopes(host.db, table, live)) {
-      await fenced(tx =>
-        forgetUsageRows(tx, table, {
+  ];
+  const gone = new Map<string, BackfillScope>();
+  for (const table of tables) {
+    const rows = usageTableRows(host.db, table, pageSize);
+    for (const scope of await goneSingleScopes(rows, live)) {
+      gone.set(backfillScopeKey(scope), scope);
+    }
+  }
+  for (const [key, scope] of gone) {
+    await fenced(async tx => {
+      for (const table of tables) {
+        await forgetUsageRows(tx, table, {
           scope: { equals: "single" },
           entity: { equals: scope.entity },
           field: { equals: scope.field },
           locale: { equals: scope.locale },
           variant: { equals: scope.variant },
-        })
-      );
-    }
+        });
+      }
+      await forgetScopeProgress(tx, key);
+    });
   }
 }
 
 /**
- * The Single scopes one table holds rows for that are not among `live`.
- * Collected whole before any is removed, so a removal cannot move a row the
- * listing has yet to reach across a page boundary.
+ * The Single scopes a table holds rows for that are not among `live`, read
+ * to the table's end a page at a time by id. Collected whole before any is
+ * removed.
  */
-async function goneSingleScopes(
-  db: UsageDb,
-  table: UsageTable,
+export async function goneSingleScopes(
+  rows: UsageRowReader,
   live: ReadonlySet<string>
 ): Promise<BackfillScope[]> {
-  const rows = usageTableRows(db, table);
   const gone = new Map<string, BackfillScope>();
-  for (let page = 1; page <= MOST_SINGLE_ROW_PAGES; page += 1) {
-    const found = await rows({ where: { scope: { equals: "single" } }, page });
+  let after: string | undefined;
+  for (let page = 1; ; page += 1) {
+    const found = await rows({
+      where: { scope: { equals: "single" } },
+      page,
+      ...(after === undefined ? {} : { after }),
+    });
     for (const scope of found.items.map(singleScopeOf)) {
       if (scope !== null && !live.has(backfillScopeKey(scope))) {
         gone.set(backfillScopeKey(scope), scope);
       }
     }
-    if (!found.hasNext) break;
+    const next = lastIdOf(found.items);
+    if (!found.hasNext) return [...gone.values()];
+    // A page that names no id to resume after cannot move the read on, and
+    // reading it again would never end: refused, so the run does not finish
+    // and health stays not whole.
+    if (next === undefined || next === after) {
+      throw new Error(
+        "[page-builder] the usage index's Single rows could not be read to their end, so the rows of Singles that are gone were not all removed"
+      );
+    }
+    after = next;
   }
-  return [...gone.values()];
 }
 
 /** The Single scope a stored row is filed under, or `null` for one this cannot read. */

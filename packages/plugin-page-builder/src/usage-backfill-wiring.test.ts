@@ -11,11 +11,14 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { backfillScopeKey } from "./usage-backfill-scope";
 import {
   backfillScopes,
   backfillSurvey,
+  goneSingleScopes,
   type BackfillHost,
 } from "./usage-backfill-wiring";
+import type { UsageRowReader } from "./usage-count";
 
 const NOT_USED = () => {
   throw new Error("the scope enumeration should not have reached this");
@@ -159,6 +162,32 @@ describe("enumerating the scopes a site currently has", () => {
     ).toEqual(["en", "fr"]);
   });
 
+  it("reads a blocks field in a nameless group per language when a Single's languages are unknown", async () => {
+    // The group is presentational, so the field is stored at the top level;
+    // marked per language only at the top, it read as shared and a
+    // translation's components were missed.
+    const scopes = await backfillScopes(
+      host({
+        collectionSlugs: async () => [],
+        singles: async () => [
+          {
+            slug: "home",
+            fields: [
+              { type: "group", fields: [{ name: "content", type: "blocks" }] },
+            ],
+            localized: true,
+            languagesUnknown: true,
+          },
+        ],
+        locales: () => ["en", "fr"],
+      })
+    );
+
+    expect(
+      scopes.filter(s => s.variant === "published").map(s => s.locale)
+    ).toEqual(["en", "fr"]);
+  });
+
   it("REFUSES when the Singles registry cannot be read", async () => {
     // As for collections: answering no Singles would call a site whose
     // homepage is a Single whole without having walked it.
@@ -257,5 +286,72 @@ describe("reporting content no scope can cover", () => {
     expect(await backfillScopes(one)).toEqual(
       (await backfillSurvey(one)).scopes
     );
+  });
+});
+
+describe("finding the rows of Singles that are gone", () => {
+  /** A table of `pages` pages of `size` rows, read as the row reader reads it. */
+  function rowsOf(pages: number, size: number, last: Record<string, unknown>) {
+    const all: Record<string, unknown>[] = [];
+    for (let n = 0; n < pages * size; n += 1) {
+      all.push({
+        id: `r${String(n).padStart(6, "0")}`,
+        scope: "single",
+        entity: "home",
+        field: "content",
+        locale: "",
+        variant: "published",
+      });
+    }
+    all.push({ ...last, id: "r999999" });
+    const asked: (string | undefined)[] = [];
+    const rows: UsageRowReader = async args => {
+      asked.push(args.after);
+      const start =
+        args.after === undefined
+          ? 0
+          : all.findIndex(row => row.id === args.after) + 1;
+      const items = all.slice(start, start + size);
+      return { items, hasNext: start + size < all.length };
+    };
+    return { rows, asked };
+  }
+
+  const HOME = backfillScopeKey({
+    scope: "single",
+    entity: "home",
+    field: "content",
+    locale: "",
+    variant: "published",
+  });
+
+  it("reads to the end of the table, however many pages that takes", async () => {
+    // Past the hundred pages a fixed bound once stopped at, with only the
+    // last row naming a Single that is gone.
+    const { rows, asked } = rowsOf(150, 2, {
+      scope: "single",
+      entity: "retired",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    const gone = await goneSingleScopes(rows, new Set([HOME]));
+
+    expect(gone.map(scope => scope.entity)).toEqual(["retired"]);
+    // Each page after the first starts after the last id the one before read.
+    expect(asked.slice(0, 3)).toEqual([undefined, "r000001", "r000003"]);
+  });
+
+  it("CONTROL: finds nothing gone when every row's Single is live", async () => {
+    const { rows } = rowsOf(3, 2, {
+      scope: "single",
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    expect(await goneSingleScopes(rows, new Set([HOME]))).toEqual([]);
   });
 });

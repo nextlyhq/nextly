@@ -25,7 +25,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -38,6 +38,7 @@ import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index
 import { COMPONENTS_SLUG } from "../collections/components";
 import { componentUsageCount, componentUsageIndex } from "../component-usage";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 import { backfillScopeKey } from "../usage-backfill-scope";
@@ -46,6 +47,11 @@ import {
   type UsageHealthService,
 } from "../usage-health-service";
 import { indexIsWhole } from "../usage-index-health";
+import {
+  usageTableOf,
+  usageTableRows,
+  type UsageDb,
+} from "../usage-index-tables";
 
 type Node = Record<string, unknown>;
 
@@ -120,6 +126,22 @@ async function refusalCodes(write: Promise<unknown>): Promise<string[]> {
   }
 }
 
+/**
+ * A plugin depending on the page builder, so its `ctx.db` reaches the page
+ * builder's tables, as the plugin's own reads do.
+ */
+function probePlugin(holder: { db?: UsageDb }): PluginDefinition {
+  return definePlugin({
+    name: "@test/usage-index-probe",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    init(ctx) {
+      holder.db = ctx.db;
+    },
+  });
+}
+
 /** The plugin's own backfill job and health service, as it contributes them. */
 function installed(plugin: PluginDefinition) {
   const job = plugin.contributes?.jobs?.find(
@@ -172,7 +194,7 @@ describe.each(getConfiguredTestDialects())(
       const plugin = pageBuilder(options);
       current = await createTestNextly({
         dialect,
-        plugins: [plugin],
+        plugins: [plugin, probePlugin(probe)],
         singles: [
           {
             slug: SINGLE,
@@ -185,6 +207,9 @@ describe.each(getConfiguredTestDialects())(
       });
       return { t: current, options, ...installed(plugin) };
     }
+
+    /** The page builder's database, as a plugin depending on it reaches it. */
+    const probe: { db?: UsageDb } = {};
 
     async function component(
       t: TestNextly,
@@ -310,6 +335,28 @@ describe.each(getConfiguredTestDialects())(
             componentId: header,
           });
         }
+        // And its scope recorded as walked by the current run, which would
+        // read a Single that comes back under the same scope as walked.
+        const retired = backfillScopeKey({
+          scope: "single",
+          entity: "retired",
+          field: "content",
+          locale: "",
+          variant: "published",
+        });
+        const [run] = await t.adapter.select<{ token: string }>(RUNS, {});
+        await t.adapter.insert(PROGRESS, {
+          id: globalThis.crypto.randomUUID(),
+          token: run!.token,
+          scopeKey: retired,
+          cursor: null,
+          done: true,
+        });
+        const progressOfRetired = () =>
+          t.adapter.select(PROGRESS, {
+            where: { and: [{ column: "scopeKey", op: "=", value: retired }] },
+          });
+        expect(await progressOfRetired()).toHaveLength(1);
         const sidebar = () =>
           t.adapter.select(COMPONENT_ROWS, {
             where: { and: [{ column: "field", op: "=", value: "sidebar" }] },
@@ -325,6 +372,7 @@ describe.each(getConfiguredTestDialects())(
         // CONTROL: the live Single's row, in the field it does store, stays.
         expect(await placers(t, header)).toEqual([`single:${SINGLE}:`]);
         expect(await sidebar()).toHaveLength(0);
+        expect(await progressOfRetired()).toHaveLength(0);
         expect(await count(header)).toEqual({ documents: 1, complete: true });
       });
 
@@ -380,6 +428,78 @@ describe.each(getConfiguredTestDialects())(
         expect(await placers(t, deep)).toEqual([
           `collection:${COMPONENTS_SLUG}:${picker}`,
         ]);
+      });
+    });
+
+    describe("reading the index a page at a time", () => {
+      it("skips no row when a row of a page already read is removed", async () => {
+        const { t } = await boot();
+        const ids = ["r1", "r2", "r3", "r4", "r5"];
+        for (const id of ids) {
+          await t.adapter.insert(COMPONENT_ROWS, {
+            id,
+            scope: "collection",
+            entity: "probe",
+            entityKey: id,
+            field: "content",
+            locale: "",
+            variant: "published",
+            kind: "reference",
+            componentId: "probed",
+          });
+        }
+        const rows = usageTableRows(
+          probe.db!,
+          usageTableOf(componentUsageIndex),
+          2
+        );
+        const where = { componentId: { equals: "probed" } };
+        const seen: unknown[] = [];
+        let after: string | undefined;
+        for (let page = 1; page <= 5; page += 1) {
+          const found = await rows({
+            where,
+            page,
+            ...(after === undefined ? {} : { after }),
+          });
+          seen.push(...found.items.map(item => (item as { id: string }).id));
+          after = (found.items.at(-1) as { id: string } | undefined)?.id;
+          // A row of the page just read goes, as a concurrent save can make
+          // it go, before the next page is asked for.
+          if (page === 1) {
+            await t.adapter.delete(COMPONENT_ROWS, {
+              and: [{ column: "id", op: "=", value: "r1" }],
+            });
+          }
+          if (!found.hasNext) break;
+        }
+
+        expect(seen).toEqual(ids);
+      });
+    });
+
+    describe("a placement's text too long to be a component id", () => {
+      it("is left out, so the save, the backfill and health all succeed", async () => {
+        const { t, tick, service } = await boot();
+        const plain = await component(t, "plain", [text("x")]);
+        const picker = await component(
+          t,
+          "picker",
+          [placing("n1", plain)],
+          picks("n1")
+        );
+        const long = "x".repeat(600);
+        const home = await page(t, [placing("i1", picker, { card: long })]);
+        await tick();
+
+        const health = await service.read(componentUsageIndex);
+        expect({ whole: indexIsWhole(health), dirty: health.dirty }).toEqual({
+          whole: true,
+          dirty: false,
+        });
+        // CONTROL: the page's real component is recorded.
+        expect(await placers(t, picker)).toEqual([`collection:pages:${home}`]);
+        expect(await placers(t, long)).toEqual([]);
       });
     });
 

@@ -33,6 +33,7 @@ import {
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import type { ComponentUsageRow } from "./collections/component-usage-index";
+import { MAX_COMPONENT_ID_LENGTH } from "./schema/tables";
 import { readStoredJson } from "./stored-json";
 import { countDocumentsUsing, type UsageCount } from "./usage-count";
 import type {
@@ -67,17 +68,29 @@ export function componentUsageOf(
   // resolver's own writer. Through the same depth-first survey
   // `componentUsageIn` makes, so the stored ids are the ones the page resolves.
   const reach = componentReachIn(document, limits.maxNodes);
-  if (!reach.complete) return { ids: reach.ids, complete: false };
-  const ids = [...reach.ids];
+  if (!reach.complete) {
+    return { ids: reach.ids.filter(mayNameAComponent), complete: false };
+  }
+  const ids = reach.ids.filter(mayNameAComponent);
   const seen = new Set(ids);
   for (const placement of reach.placements) {
     for (const id of overrideValuesOf(placement.node)) {
-      if (seen.has(id)) continue;
+      if (seen.has(id) || !mayNameAComponent(id)) continue;
       seen.add(id);
       ids.push(id);
     }
   }
   return { ids, complete: true };
+}
+
+/**
+ * Whether a value could be a component's id: no longer than the plugin
+ * records one. A longer value names no component, so leaving it out loses no
+ * use, and storing it would fail on MySQL, whose column is that wide, on every
+ * write and every walk of the document.
+ */
+function mayNameAComponent(id: string): boolean {
+  return id.length <= MAX_COMPONENT_ID_LENGTH;
 }
 
 /**

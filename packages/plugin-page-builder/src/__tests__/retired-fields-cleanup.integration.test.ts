@@ -26,7 +26,6 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
@@ -37,6 +36,9 @@ import {
   type CleanupPass,
   type RetiredCleanupService,
 } from "../retired-cleanup";
+
+/** Where the component usage index keeps its rows. */
+const COMPONENT_ROWS = "page_builder__component_usage";
 
 type Row = Record<string, unknown>;
 type Kind = "page" | "component" | "pattern";
@@ -272,21 +274,14 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       // The index forgets one note, as if it never saw it.
-      const rows = await t.nextly.find({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        limit: 100,
-        depth: 0,
-        overrideAccess: true,
-      });
-      const forgotten = (rows.items as Row[]).filter(row =>
+      const rows = await t.adapter.select<Row>(COMPONENT_ROWS, {});
+      const forgotten = rows.filter(row =>
         String(row.entityKey).includes(unlisted)
       );
       expect(forgotten.length).toBeGreaterThan(0);
       for (const row of forgotten) {
-        await t.nextly.delete({
-          collection: COMPONENT_USAGE_INDEX_SLUG,
-          id: String(row.id),
-          overrideAccess: true,
+        await t.adapter.delete(COMPONENT_ROWS, {
+          and: [{ column: "id", op: "=", value: String(row.id) }],
         });
       }
 

@@ -45,7 +45,7 @@ import {
   type CommittedWriteReconciler,
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
-import { classUsageDocumentRowReader } from "./class-usage-runtime";
+import { hostFieldReader } from "./class-usage-runtime";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -1901,19 +1901,8 @@ export const pageBuilder = (
         variantUseRoute({
           store: componentStoreOf(opts),
           hosts: () => composition?.hostsOf,
-          readForm: async (host, form) => {
-            const row = await classUsageDocumentRowReader(
-              await requireInstalled().nextly()
-            )({
-              entity: host.slug,
-              entityKey: host.id,
-              locale: "",
-              variant: form,
-            });
-            return row !== null && typeof row === "object"
-              ? (row as Record<string, unknown>)[host.field]
-              : undefined;
-          },
+          readForm: async (host, form) =>
+            hostFieldReader(await requireInstalled().nextly())(host, form),
           limits: opts.limits ?? DEFAULT_LIMITS,
         }),
         // Save a selection as a component, or convert it into one. Here

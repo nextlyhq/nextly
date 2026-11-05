@@ -529,12 +529,27 @@ export function singleUsageDeclaration(single: {
   if (single.languagesUnknown !== true) {
     return { fields: single.fields, localized: single.localized === true };
   }
-  const fields = Array.isArray(single.fields)
-    ? single.fields.map((field: unknown) =>
-        typeof field === "object" && field !== null
-          ? { ...field, localized: true }
-          : field
-      )
-    : single.fields;
-  return { fields, localized: true };
+  return { fields: everyFieldLocalized(single.fields, 0), localized: true };
+}
+
+/**
+ * A list of declarations with every field in it, and in every container it
+ * holds, marked as stored per language, so a blocks field inside a nameless
+ * group is read per language as a top-level one is. Containers deeper than
+ * the declaration walk reads are left as they are; the walk reports those as
+ * out of reach anyway.
+ */
+function everyFieldLocalized(fields: unknown, depth: number): unknown {
+  if (!Array.isArray(fields) || depth > MAX_GROUP_DEPTH) return fields;
+  return fields.map((field: unknown) => {
+    if (typeof field !== "object" || field === null) return field;
+    const nested = (field as { fields?: unknown }).fields;
+    return {
+      ...field,
+      localized: true,
+      ...(Array.isArray(nested)
+        ? { fields: everyFieldLocalized(nested, depth + 1) }
+        : {}),
+    };
+  });
 }

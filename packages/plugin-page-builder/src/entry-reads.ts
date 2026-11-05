@@ -143,3 +143,26 @@ function titleOf(
   }
   return readableTitleText(record[titleField]);
 }
+
+/**
+ * Whether the caller may read a Single's document, read through the Single
+ * API as the caller, without creating it: `false` where the caller may not
+ * read it, or where nobody has saved it, since then there is no document to
+ * name.
+ */
+export async function singleReadableByCaller(
+  ctx: Pick<PluginRouteContext, "caller">,
+  slug: string
+): Promise<boolean> {
+  const row = await readOrNull(async () =>
+    requireNextly().findSingle({
+      slug,
+      ...(await readingAsUser(ctx)),
+      createIfMissing: false,
+      status: "all",
+      select: { id: true },
+      depth: 0,
+    })
+  );
+  return row !== null && typeof row === "object";
+}

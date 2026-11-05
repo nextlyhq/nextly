@@ -161,7 +161,7 @@ export function classUsageDocumentReader(
  * is not part of addressing a row. Separating them is what lets both callers
  * share one variant rule.
  */
-export interface UsageDocumentAddress {
+interface UsageDocumentAddress {
   /** Whether `entity` is a collection or a Single; a collection when absent. */
   scope?: UsageScope;
   /** The collection holding it, or the Single. */
@@ -185,7 +185,7 @@ export interface UsageDocumentAddress {
  * re-decide draft-versus-published for itself, or index the published row
  * under the draft subject the first time the two disagreed.
  */
-export function classUsageDocumentRowReader(
+function classUsageDocumentRowReader(
   nextly: ClassUsageDirectApi
 ): (address: UsageDocumentAddress) => Promise<unknown> {
   return async address => {
@@ -598,5 +598,31 @@ export function singleRebuildDocumentStore(
       return { items: [document], meta: { hasNext: false } };
     },
     exists: async args => (await read(args)) !== undefined,
+  };
+}
+
+/**
+ * One stored form of a host's blocks field, as the system reads it: a Single
+ * by its slug, without creating it, and a collection entry by its id.
+ * `undefined` where the document has no such form.
+ */
+export function hostFieldReader(
+  nextly: ClassUsageDirectApi
+): (
+  host: { slug: string; id: string; field: string; single?: boolean },
+  form: ClassUsageSubject["variant"]
+) => Promise<unknown> {
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (host, form) => {
+    const row = await readRow({
+      scope: host.single === true ? "single" : "collection",
+      entity: host.slug,
+      entityKey: host.id,
+      locale: "",
+      variant: form,
+    });
+    return row !== null && typeof row === "object"
+      ? (row as Record<string, unknown>)[host.field]
+      : undefined;
   };
 }

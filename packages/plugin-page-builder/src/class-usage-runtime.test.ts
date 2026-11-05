@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import {
   classUsageDocumentReader,
+  hostFieldReader,
   singleRebuildDocumentStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
@@ -380,6 +381,38 @@ describe("resolving a Single's subject to its document", () => {
         variant: "published",
       })
     ).toBe(true);
+  });
+});
+
+describe("reading a host's field, as the variant count does", () => {
+  it("reads a Single by its slug, without creating it, and an entry by its id", async () => {
+    const { api, calls } = recordingApi();
+    const read = hostFieldReader(api);
+
+    expect(
+      await read(
+        { slug: "home", id: "", field: "content", single: true },
+        "published"
+      )
+    ).toEqual(documentUsing("hero"));
+    expect(calls).toEqual([
+      expect.objectContaining({
+        op: "findSingle",
+        slug: "home",
+        createIfMissing: false,
+      }),
+    ]);
+
+    // CONTROL: a collection entry is read by its id.
+    calls.length = 0;
+    await read({ slug: "pages", id: "p1", field: "content" }, "published");
+    expect(calls).toEqual([
+      expect.objectContaining({
+        op: "findByID",
+        collection: "pages",
+        id: "p1",
+      }),
+    ]);
   });
 });
 

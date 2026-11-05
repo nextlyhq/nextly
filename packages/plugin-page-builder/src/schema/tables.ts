@@ -354,6 +354,16 @@ export const classUsageRows: TableDefinition<"class_usage", ClassUsageColumns> =
     }
   );
 
+/**
+ * The longest component id the plugin records: the width of the component
+ * index's `componentId` column, the widest MySQL lets it be beside the other
+ * columns of its index. A component definition is an entry of a collection,
+ * whose id core makes 36 characters long; a value longer than this names no
+ * component, and the derivation leaves it out rather than fail every write
+ * that would store it.
+ */
+export const MAX_COMPONENT_ID_LENGTH = 512;
+
 /** The columns of {@link componentUsageRows}. */
 type ComponentUsageColumns = UsageSubjectColumns & {
   readonly kind: ColumnBuilder<string, false, false>;
@@ -364,10 +374,9 @@ type ComponentUsageColumns = UsageSubjectColumns & {
  * The component usage index: one row per component a stored document can
  * place, or one `unreadable` row for a document that could not be read whole.
  *
- * `componentId` is as wide as MySQL lets an indexed column be beside the
- * other columns of its key, since a component id is constrained only by being
- * a nonempty string. Indexed by document and by component, for the reasons the
- * class index is.
+ * `componentId` is {@link MAX_COMPONENT_ID_LENGTH} wide; the derivation
+ * records no longer value. Indexed by document and by component, for the
+ * reasons the class index is.
  */
 export const componentUsageRows: TableDefinition<
   "component_usage",
@@ -377,7 +386,7 @@ export const componentUsageRows: TableDefinition<
   {
     ...usageSubjectColumns(),
     kind: col.varchar(16),
-    componentId: col.varchar(512),
+    componentId: col.varchar(MAX_COMPONENT_ID_LENGTH),
   },
   {
     indexes: [

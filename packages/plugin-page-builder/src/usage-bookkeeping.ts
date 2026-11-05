@@ -179,6 +179,19 @@ async function dropOtherRuns(
   await tx.delete(usageProgress).where(ne(p.token, token));
 }
 
+/**
+ * Forget every run's progress on one scope, through the transaction it is
+ * handed: for a scope that no longer exists, so one that comes back under the
+ * same key is walked again rather than read as walked.
+ */
+export async function forgetScopeProgress(
+  tx: Pick<PluginTransaction, "delete" | "table">,
+  scopeKey: string
+): Promise<void> {
+  const p = tx.table(usageProgress);
+  await tx.delete(usageProgress).where(eq(p.scopeKey, scopeKey));
+}
+
 /** One scope's progress row, written whether or not it exists yet. */
 async function writeProgress(
   tx: PluginTransaction,

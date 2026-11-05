@@ -16,7 +16,7 @@
  *
  * @module usage-index-tables
  */
-import { and, asc, eq, inArray } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, eq, gt, inArray } from "@nextlyhq/plugin-sdk/db";
 import type {
   PluginInsert,
   PluginTransaction,
@@ -26,6 +26,7 @@ import type {
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { componentUsageIndex } from "./component-usage";
+import { lastIdOf } from "./paged-walk";
 import {
   classUsageRows,
   componentUsageRows,
@@ -61,12 +62,16 @@ export interface UsageTable {
   readonly name: string;
   /** Its columns, by the row's field names. */
   columns(db: UsageDb): Readonly<Record<string, Column>>;
-  /** One page of rows, oldest id first. */
+  /**
+   * Up to `limit` rows in id order, after the row whose id is `after` when
+   * given. A keyset rather than an offset: a row deleted from a page already
+   * read moves no later row back past the next page's start.
+   */
   rows(
     db: UsageDb,
     where: Condition | undefined,
     limit: number,
-    offset: number
+    after: string | undefined
   ): Promise<unknown[]>;
   /** Store one row, from the values reconciliation derived. */
   insert(db: UsageDb, data: Record<string, unknown>): Promise<void>;
@@ -90,14 +95,13 @@ function usageTable<T extends TableDefinition>(
   return {
     name: tableName(definition),
     columns,
-    rows: (db, where, limit, offset) => {
+    rows: (db, where, limit, after) => {
+      const id = columnOf(columns(db), "id", definition.name);
+      const window =
+        after === undefined ? where : (and(where, gt(id, after)) ?? where);
       const select = db.select(definition);
-      const filtered = where === undefined ? select : select.where(where);
-      return filtered
-        .orderBy(asc(columnOf(columns(db), "id", definition.name)))
-        .limit(limit)
-        .offset(offset)
-        .all();
+      const filtered = window === undefined ? select : select.where(window);
+      return filtered.orderBy(asc(id)).limit(limit).all();
     },
     insert: (db, data) => db.insert(definition, insert(data)),
     remove: (db, where) => db.delete(definition).where(where),
@@ -211,19 +215,29 @@ function conditionOf(
   return parts.length === 0 ? undefined : and(...parts);
 }
 
-/** One page of the rows a predicate matches, and whether more follow. */
+/**
+ * One page of the rows a predicate matches, after the row `after` names, and
+ * whether more follow. The first page is the one with no `after`; a later page
+ * asked for by number alone is refused, since only the cursor says where the
+ * last page ended once rows have come and gone.
+ */
 async function pageOf(
   table: UsageTable,
   db: UsageDb,
   where: UsageWhere,
-  page: number,
+  at: { page: number; after?: string | undefined },
   limit: number
 ): Promise<{ items: unknown[]; hasNext: boolean }> {
+  if (at.page > 1 && at.after === undefined) {
+    throw new Error(
+      `[page-builder] the usage table "${table.name}" pages by id and was asked for page ${String(at.page)} without the id the last page ended on`
+    );
+  }
   const condition = conditionOf(table, db, where);
   if (condition === null) return { items: [], hasNext: false };
   // One row past the page, so whether another follows is read rather than
   // guessed from a full page.
-  const rows = await table.rows(db, condition, limit + 1, (page - 1) * limit);
+  const rows = await table.rows(db, condition, limit + 1, at.after);
   return { items: rows.slice(0, limit), hasNext: rows.length > limit };
 }
 
@@ -243,7 +257,7 @@ function usageTableStore(db: UsageDb, table: UsageTable): ClassUsageIndexStore {
           `[page-builder] the usage index pages by id and was asked to sort by "${args.sort}"`
         );
       }
-      const found = await pageOf(table, db, args.where, args.page, args.limit);
+      const found = await pageOf(table, db, args.where, args, args.limit);
       return { items: found.items, meta: { hasNext: found.hasNext } };
     },
     create: args => table.insert(db, args.data),
@@ -309,8 +323,13 @@ export async function forgetUsageRows(
 const ROWS_PER_PAGE = 500;
 
 /** The rows of one index a predicate matches, a page at a time. */
-export function usageTableRows(db: UsageDb, table: UsageTable): UsageRowReader {
-  return args => pageOf(table, db, args.where, args.page, ROWS_PER_PAGE);
+export function usageTableRows(
+  db: UsageDb,
+  table: UsageTable,
+  /** Rows per page; smaller only in a test. */
+  pageSize: number = ROWS_PER_PAGE
+): UsageRowReader {
+  return args => pageOf(table, db, args.where, args, pageSize);
 }
 
 /**
@@ -332,8 +351,16 @@ export function usageTableGroups(
 ): GroupedUsageReader {
   return async args => {
     const buckets = new Set<string | null>();
+    let after: string | undefined;
     for (let page = 1; ; page += 1) {
-      const found = await pageOf(table, db, args.where, page, ROWS_PER_PAGE);
+      const found = await pageOf(
+        table,
+        db,
+        args.where,
+        { page, after },
+        ROWS_PER_PAGE
+      );
+      after = lastIdOf(found.items);
       for (const row of found.items) {
         const value = (row as Record<string, unknown>)[args.groupBy];
         buckets.add(typeof value === "string" ? value : null);
@@ -359,7 +386,7 @@ export async function anyUndetermined<TRow extends UsageSubject>(
     usageTableOf(index),
     db,
     index.whereUndetermined(),
-    1,
+    { page: 1 },
     1
   );
   return found.items.length > 0;

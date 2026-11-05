@@ -555,6 +555,39 @@ describe("a Single, which a wildcard registration also receives", () => {
   });
 });
 
+describe("a Single whose fields' languages the registry does not say", () => {
+  it("reads a blocks field in a nameless group in every language", async () => {
+    // The component the French document uses appears in no other language:
+    // read as shared, it was never recorded.
+    const { fire, api } = harness({
+      locales: ["en", "fr"],
+      single: async slug => ({
+        slug,
+        fields: [
+          { type: "group", fields: [{ type: "blocks", name: "content" }] },
+        ],
+        localized: true,
+        languagesUnknown: true,
+      }),
+    });
+    api.findSingle.mockImplementation(
+      async (args: Record<string, unknown>) => ({
+        id: "s1",
+        content: documentUsing(args.locale === "fr" ? "fr-only" : "hero"),
+      })
+    );
+
+    await fire({ collection: "single:home", data: { id: "s1" } });
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        data: expect.objectContaining({ locale: "fr", classId: "fr-only" }),
+      })
+    );
+  });
+});
+
 describe("reconciling a write made in a caller-owned transaction", () => {
   it("brings the indexes up to date for the document named", async () => {
     const { api, reconcile } = harness();

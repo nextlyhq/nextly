@@ -13,6 +13,7 @@
 import { componentUsageIndex } from "./component-usage";
 import type { HostFinder, HostRef } from "./fields/blocks-composition";
 import { chunked } from "./id-batches";
+import { lastIdOf } from "./paged-walk";
 import type { UsageRowReader } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 import { indexIsWhole } from "./usage-index-health";
@@ -63,11 +64,14 @@ async function readRows(
   budget: number
 ): Promise<number> {
   let read = 0;
+  let after: string | undefined;
   for (let page = 1; read < budget; page += 1) {
     const answer = await rows({
       where: componentUsageIndex.whereReferencingAny(ids),
       page,
+      ...(after === undefined ? {} : { after }),
     });
+    after = lastIdOf(answer.items) ?? after;
     for (const row of answer.items) {
       const host = hostOf(row);
       // A row this cannot address names a document that cannot be judged, so
