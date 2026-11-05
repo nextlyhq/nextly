@@ -81,6 +81,7 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+import type { InTransactionPhaseInput } from "../../../hooks/in-transaction-phase";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -2499,6 +2500,8 @@ export class CollectionMutationService extends BaseService {
   ): Promise<{
     eventRecorded: boolean;
     revalidationIntent: RevalidationIntent | undefined;
+    /** The created document in read shape, as the outbox event carries it. */
+    document: Record<string, unknown>;
   }> {
     const entryId = args.entry.id as string;
 
@@ -2533,7 +2536,10 @@ export class CollectionMutationService extends BaseService {
       // A curated `webhooks.emit` consumes the assembled document too — its
       // allowlist may include a component/m2m field — so assemble relations
       // even when the raw entry.* recording is opted out for this collection.
-      getWebhookEmitSpec("collection", args.collectionName) !== undefined;
+      getWebhookEmitSpec("collection", args.collectionName) !== undefined ||
+      // An in-transaction handler is handed the whole document, as on the
+      // create that opens its own transaction.
+      this.hookService.hookRegistry.hasInTransaction(args.collectionName);
     const { documentParts: createdParts, document: createdDocument } =
       await this.readTxDocumentParts(tx, {
         collectionName: args.collectionName,
@@ -2653,6 +2659,7 @@ export class CollectionMutationService extends BaseService {
 
     return {
       eventRecorded,
+      document: createdDocument,
       revalidationIntent: buildEntryRevalidationIntent(
         args.collectionName,
         readRevalidateConfig(args.collection),
@@ -7706,6 +7713,18 @@ export class CollectionMutationService extends BaseService {
             ]
           );
         }
+
+        // Last in the transaction: the entry, its field groups, version,
+        // history and outbox event are all written, so a handler sees them
+        // and what it writes commits or rolls back with them.
+        await this.runInTransactionPhase(tx, {
+          collection: params.collectionName,
+          operation: "create",
+          id: entry.id as string,
+          data: createdDocument,
+          user: params.user,
+          context: sharedContext,
+        });
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -14404,6 +14423,11 @@ export class CollectionMutationService extends BaseService {
           )
         );
 
+        // What the in-transaction phase is handed: the document this attempt
+        // leaves, set below once the row is re-read. Undefined when the row
+        // is gone, and then nothing was written and the phase does not run.
+        let writtenDocument: Record<string, unknown> | undefined;
+
         // Capture a version snapshot of the post-update document atomically
         // with the write when the collection opts into versioning. The parent
         // is re-read fresh here (not the pre-transaction `existingEntry`) so a
@@ -14743,6 +14767,11 @@ export class CollectionMutationService extends BaseService {
             // draft edit records no public event: the live document did not
             // change.
             const updatedDocument = assembleDocument(documentParts);
+            // A held edit left the live row as it was, so what this write
+            // produced is the pending draft, marked as the hooks see it.
+            writtenDocument = workingDraftDocument
+              ? markedDraft(workingDraftDocument)
+              : updatedDocument;
             if (!storeAsWorkingDraft) {
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
@@ -15062,6 +15091,21 @@ export class CollectionMutationService extends BaseService {
           // for them all.
           locale: rawParams.locale,
         });
+
+        // Last in the transaction, and so again on each retried attempt,
+        // which is why every handler's writes go through this `tx`: a
+        // discarded attempt's roll back with it.
+        if (writtenDocument) {
+          await this.runInTransactionPhase(tx, {
+            collection: params.collectionName,
+            operation: "update",
+            id: params.entryId,
+            data: writtenDocument,
+            originalData: previousDocument ?? undefined,
+            user: params.user,
+            context: sharedContext,
+          });
+        }
       }, versionConflictRetries());
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
@@ -17213,6 +17257,17 @@ export class CollectionMutationService extends BaseService {
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
         });
+
+        // Last in the transaction, with the removed document: a handler that
+        // throws keeps the entry, and what it writes goes with the delete.
+        await this.runInTransactionPhase(tx, {
+          collection: params.collectionName,
+          operation: "delete",
+          id: params.entryId,
+          data: deletedDocument,
+          user: params.user,
+          context: sharedContext,
+        });
       });
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
@@ -17851,6 +17906,19 @@ export class CollectionMutationService extends BaseService {
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
 
+      // Last of the write itself, on the caller's transaction, before the
+      // after-hooks this path runs inside it. Run whether or not hooks are:
+      // see `runInTransactionPhase`. A handler's failure is thrown, not
+      // softened, so the caller's transaction keeps nothing of this entry.
+      await this.runInTransactionPhase(tx, {
+        collection: params.collectionName,
+        operation: "create",
+        id: (entry as { id: string }).id,
+        data: createEffects.document,
+        user: params.user,
+        context: sharedContext,
+      });
+
       // Execute afterCreate hooks (unless skipped)
       if (options.runHooks) {
         // Execute afterCreate hooks (code-registered)
@@ -17969,6 +18037,28 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * The in-transaction phase for one write, run last on the write's own
+   * transaction (see `hooks/in-transaction-phase`).
+   *
+   * Asked of the registry first, so a write no handler is registered for
+   * loads nothing and does exactly what it did before the phase existed. It
+   * runs whether or not the write runs its hooks: what a handler writes keeps
+   * a plugin's rows in step with the entry, as the version and the outbox
+   * event do, and those are recorded under `skipHooks` too.
+   */
+  private async runInTransactionPhase(
+    tx: TransactionContext,
+    input: InTransactionPhaseInput
+  ): Promise<void> {
+    const registry = this.hookService.hookRegistry;
+    if (!registry.hasInTransaction(input.collection)) return;
+    const { runInTransactionPhase } = await import(
+      "../../../hooks/in-transaction-phase"
+    );
+    await runInTransactionPhase(registry, tx, input);
   }
 
   /**
@@ -18934,9 +19024,15 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         actorForWrite(params.actor, params.user)
       );
+      // An in-transaction handler is handed the whole document and the one
+      // before it, as on the update that opens its own transaction.
+      const handsInTransaction = this.hookService.hookRegistry.hasInTransaction(
+        params.collectionName
+      );
       const needsRelations =
         !!versionsConfig?.enabled ||
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
       // The `previous` document is carried by the outbox event and by the
       // trail's changed-field names, never by the version snapshot: a
@@ -18944,6 +19040,7 @@ export class CollectionMutationService extends BaseService {
       // paying a second full relational walk whose result is discarded.
       const previousNeedsRelations =
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
@@ -19315,6 +19412,20 @@ export class CollectionMutationService extends BaseService {
       if (workingDraftDocument) {
         written._isWorkingDraft = true;
       }
+
+      // Last of the write itself, on the caller's transaction, handed the
+      // documents the outbox event carries; see the create path.
+      await this.runInTransactionPhase(tx, {
+        collection: params.collectionName,
+        operation: "update",
+        id: entryId,
+        data: workingDraftDocument
+          ? markedDraft(workingDraftDocument)
+          : updatedDocument,
+        originalData: previousDocument ?? undefined,
+        user: params.user,
+        context: sharedContext,
+      });
 
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
@@ -19834,6 +19945,17 @@ export class CollectionMutationService extends BaseService {
         ),
         actor: actorForWrite(params.actor, params.user),
       });
+      // Last of the write itself, still inside the window whose failure is
+      // thrown: a handler that refuses the delete keeps the entry.
+      await this.runInTransactionPhase(tx, {
+        collection: params.collectionName,
+        operation: "delete",
+        id: entryId,
+        data: deletedDocument,
+        user: params.user,
+        context: sharedContext,
+      });
+
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;

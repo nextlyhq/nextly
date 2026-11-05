@@ -689,6 +689,11 @@ export type {
  * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
  * `offBeforeOperation` accept, and are exported so a plugin can type a handler
  * it holds in a variable in order to unregister the same function later.
+ *
+ * @experimental `InTransactionHandler`, `InTransactionContext` — what
+ *   `ctx.hooks.onInTransaction`/`offInTransaction` accept: a handler run inside
+ *   a write's own transaction, and the write plus the plugin's database bound
+ *   to that transaction. New, and not yet exercised by a first-party plugin.
  */
 export type {
   BeforeOperationArgs,
@@ -698,6 +703,8 @@ export type {
   HookContextPhase,
   HookHandler,
   HookType,
+  InTransactionContext,
+  InTransactionHandler,
 } from "nextly";
 
 /**
