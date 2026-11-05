@@ -6135,6 +6135,7 @@ describe("a stated NULL among the reconciled inputs", () => {
     const stripped = withoutStatedNulls({
       namedClasses: null,
       blockBases: null,
+      blockDefaults: null,
       tokenPrefix: null,
       previewContainer: null,
       previewStates: null,
@@ -6149,6 +6150,7 @@ describe("a stated NULL among the reconciled inputs", () => {
      */
     expect(Object.keys(stripped).sort()).toEqual([
       "blockBases",
+      "blockDefaults",
       "namedClasses",
       "previewContainer",
       "previewStates",

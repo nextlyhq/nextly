@@ -115,6 +115,9 @@ export type SharedStyleInputs = Pick<
   // whether any gap is written, so a sheet compiled under one model must not
   // be served under the other.
   | "spacingMode"
+  // The site's edits to its blocks' own looks change every page holding the
+  // type, so they move the stamp as the bases do.
+  | "blockDefaults"
 >;
 
 /**
@@ -686,6 +689,12 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // already; this slot is what tells apart two compiles those tiers agree
     // on, since the classic model also drops every child gap.
     ...(inputs.spacingMode === "classic" ? ["spacing-classic"] : []),
+    // The site's edits to its blocks' own looks, SPREAD for the reason the
+    // spacing model is: absent, every stored artifact keeps its stamp, and a
+    // site that edits a default moves the stamp of every page.
+    ...(Object.keys(inputs.blockDefaults ?? {}).length > 0
+      ? [["block-defaults", blockBaseParts(inputs.blockDefaults, reading)]]
+      : []),
   ]);
 }
 

@@ -273,6 +273,7 @@ interface SiteInputRoles {
   breakpoints: "reconciled-here";
   classes: "reconciled-here";
   blockBases: "reconciled-here";
+  blockDefaults: "reconciled-here";
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
@@ -391,6 +392,7 @@ export function withoutStatedNulls(
   return {
     namedClasses: shared.namedClasses ?? undefined,
     blockBases: shared.blockBases ?? undefined,
+    blockDefaults: shared.blockDefaults ?? undefined,
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
@@ -461,6 +463,9 @@ export function sharedStyleInputs(
     breakpoints: firstStated(stored.breakpoints, route.breakpoints),
     namedClasses: firstStated(route.namedClasses, stored.classes),
     blockBases: firstStated(stored.blockBases, route.blockBases),
+    // The site's edits to its blocks' own looks: a fact about the site, so
+    // the stored tier wins, as it does for the bases they are laid over.
+    blockDefaults: firstStated(stored.blockDefaults, route.blockDefaults),
     tokenPrefix: firstStated(
       stored.tokenPrefix,
       stored.tokens?.prefix,

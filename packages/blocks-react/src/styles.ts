@@ -3,6 +3,8 @@ import {
   declaresNoMarkup,
   hasItemBindings,
   isFetchableUrl,
+  isPlainRecord,
+  isTokenRef,
   nodeAtPointer,
   nodeClassNames,
   walkNodes,
@@ -210,16 +212,69 @@ export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver,
   stated?: Readonly<Record<string, NodeStyles>>,
-  spacingMode?: SpacingMode
+  spacingMode?: SpacingMode,
+  /**
+   * The site's edits to its block types' own looks, laid over each base the
+   * model chose, so the order is: the base (frozen under Classic), then the
+   * site's edit of it, then a look, a shared style and the block's own values.
+   */
+  siteDefaults?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
   // A derived default follows the spacing model; a stated record is the
   // caller's own choice and is narrowed as it is.
-  return perUsedType(
+  const bases = perUsedType(
     document,
     blocks,
     definition => blockBaseUnder(definition, spacingMode),
     stated
   );
+  if (siteDefaults === undefined) return bases;
+  const edited = perUsedType(document, blocks, () => undefined, siteDefaults);
+  for (const [type, edit] of Object.entries(edited)) {
+    bases[type] = overlaidBase(bases[type], edit);
+  }
+  return bases;
+}
+
+/** A plain record that isn't a token reference: a composite value's sides. */
+function isCompositeValue(value: unknown): value is Record<string, unknown> {
+  return isPlainRecord(value) && !isTokenRef(value);
+}
+
+/** One value over another, a composite side by side. */
+function overlaidValue(under: unknown, over: unknown): unknown {
+  if (!isCompositeValue(under) || !isCompositeValue(over)) return over;
+  const out: Record<string, unknown> = { ...under };
+  for (const [key, value] of Object.entries(over)) {
+    out[key] = overlaidValue(under[key], value);
+  }
+  return out;
+}
+
+/**
+ * A block type's base with the site's edit of it laid over, state by state,
+ * breakpoint by breakpoint and property by property: the site keeps every
+ * default value it did not change.
+ */
+function overlaidBase(
+  base: NodeStyles | undefined,
+  edit: NodeStyles
+): NodeStyles {
+  const out: Record<string, Record<string, Record<string, unknown>>> = {};
+  for (const source of [base, edit]) {
+    for (const [state, byBreakpoint] of Object.entries(source ?? {})) {
+      if (!isPlainRecord(byBreakpoint)) continue;
+      const states = (out[state] ??= {});
+      for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+        if (!isPlainRecord(values)) continue;
+        const at = (states[breakpoint] ??= {});
+        for (const [property, value] of Object.entries(values)) {
+          at[property] = overlaidValue(at[property], value);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -453,7 +508,8 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockBases,
-      styleContext.spacingMode
+      styleContext.spacingMode,
+      styleContext.blockDefaults
     ),
     blockParts: blockPartsFor(
       storedDocument ?? document,

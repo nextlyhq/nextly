@@ -45,6 +45,16 @@ export interface SiteSheetInput {
   classes?: readonly NamedClass[];
   /** Each block type's default look, keyed by type. */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * The site's own edits to block types' default looks, keyed by type: a
+   * button's Primary as the site changed it. Laid over each type's base
+   * (after the spacing model chose it) property by property, so a type keeps
+   * every default value the site did not change. A renderer reads it when it
+   * works out the bases; the compiler reads only the bases that result.
+   *
+   * @experimental
+   */
+  blockDefaults?: Readonly<Record<string, NodeStyles>>;
   /** The site's breakpoints, which decide the at-rules every tier is emitted under. */
   breakpoints: BreakpointSet;
   /** The custom-property prefix tokens are written under. */

@@ -160,6 +160,16 @@ export interface StyleCompileContext {
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
   /**
+   * The site's own edits to block types' default looks, keyed by type: a
+   * button's Primary as the site changed it. Laid over each type's base
+   * (after the spacing model chose it) property by property, so a type keeps
+   * every default value the site did not change. A renderer reads it when it
+   * works out the bases; the compiler reads only the bases that result.
+   *
+   * @experimental
+   */
+  blockDefaults?: Readonly<Record<string, NodeStyles>>;
+  /**
    * Base styles for the elements a block renders inside its root, keyed by
    * block name and then by part name.
    *
