@@ -52,7 +52,10 @@ import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
-import { recordTransitionEvents } from "../../content-events/write-event";
+import {
+  recordOverwriteEvent,
+  recordTransitionEvents,
+} from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   readComponentSubtrees,
@@ -97,10 +100,12 @@ import {
   revisionBumpColumns,
   translationRevisionBumpColumns,
   translationTableOf,
+  versionLanguagesFor,
   withDocumentVersion,
 } from "../../versions/document-revision";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
+import { overwriteRecordOf } from "../../versions/overwrite-record";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -126,6 +131,18 @@ import {
   releaseAllSharedBases,
   sharedValuesConflict,
 } from "../../versions/shared-publish-base";
+import {
+  assertVersionNamesEvery,
+  givenOf,
+  languagesJudged,
+  poolRevisionReader,
+  refuseIfMainMoved,
+  releaseRunExemptFor,
+  type StaleWriteHolder,
+  staleVersionErrorFor,
+  type VersionCheck,
+  versionCheckFor,
+} from "../../versions/stale-version";
 import {
   type ComponentFieldResolver,
   resolveComponentFieldMap,
@@ -168,6 +185,7 @@ import {
   type SingleQueryService,
 } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
+import { buildSingleErrorResult } from "./single-utils";
 import {
   buildSingleWebhookDoc,
   readCompanionLocaleValues,
@@ -257,6 +275,17 @@ interface PublishOutcome {
 }
 
 /**
+ * How a publish of every language is judged by the version its caller gave,
+ * and what a refusal inside its transaction leaves for its answer once that
+ * rolls back: the holder, and the document the lock was taken on.
+ */
+interface PublishAllStale {
+  check: VersionCheck;
+  holder: StaleWriteHolder;
+  id?: string;
+}
+
+/**
  * The status the trail reads as the one before a publish of every language,
  * from each language's status read under the lock: published only when every
  * one already was, so a publish that puts any language live, or promotes
@@ -336,12 +365,29 @@ export class SinglePublishAllService extends BaseService {
     const refused: { denied?: SingleResult<PublishAllSingleResult> } = {};
     // The Single's translations table, once known, for the catch below.
     let translationsTable: string | undefined;
+    // Judged against the version the caller read, when it sent one, as a save
+    // is: a publish from an out-of-date view would put live what the publisher
+    // never saw. A refusal inside the transaction is kept here, and answered
+    // once it has rolled back.
+    const stale: PublishAllStale = {
+      check: { kind: "unjudged" },
+      holder: {},
+    };
 
     try {
+      stale.check = versionCheckFor(
+        { ...options.data },
+        {
+          exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
+        }
+      );
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
       translationsTable = plan.companion?.companionTableName;
+      // Every language this moves is judged, so the version must name each
+      // one: asked before any work only a publish needs.
+      const judged = this.everyLanguageJudged(plan, stale.check);
 
       // The publish permission and rule, asked once for each language this
       // puts live, before the transaction and off its connection: a rule is
@@ -396,7 +442,8 @@ export class SinglePublishAllService extends BaseService {
             refused,
             askedLanguages,
             promoteGrants,
-            promoteReads
+            promoteReads,
+            { stale, languages: judged }
           )
         )
       );
@@ -438,6 +485,8 @@ export class SinglePublishAllService extends BaseService {
       };
     } catch (error) {
       if (refused.denied) return refused.denied;
+      const staleRefusal = await this.staleRefusal(slug, options, stale);
+      if (staleRefusal) return staleRefusal;
       const gone = this.translationsGoneRefusal(slug, translationsTable, error);
       if (gone) throw gone;
       throw await publishAllFailure(
@@ -552,6 +601,104 @@ export class SinglePublishAllService extends BaseService {
         companionTable: translationsTable,
       },
     });
+  }
+
+  /**
+   * The languages a publish of every language is judged on, as the table and
+   * locales the judgement reads: every language a read of every language
+   * names, and the version must name each one (`assertVersionNamesEvery`).
+   * None where nothing is given, or the Single keeps no translations to move.
+   *
+   * @throws NextlyError.validation for a version that does not name every
+   *   language.
+   */
+  private everyLanguageJudged(
+    plan: PublishPlan,
+    check: VersionCheck
+  ): ReturnType<typeof languagesJudged> {
+    const given = givenOf(check);
+    const table = translationTableOf(plan.companion, plan.companionPublishable);
+    const locales = versionLanguagesFor({
+      localized: table !== null,
+      localization: this.localization,
+      locale: EVERY_LOCALE,
+    });
+    if (given === undefined || !locales) return undefined;
+    assertVersionNamesEvery(given, locales);
+    return languagesJudged(table, locales);
+  }
+
+  /**
+   * Judge the publish under the Single's lock, and record an overwrite of a
+   * change since the read in this transaction, so a publish that cannot
+   * record it is not kept either.
+   */
+  private async refuseIfMoved(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    version: {
+      stale: PublishAllStale;
+      languages: ReturnType<typeof languagesJudged>;
+    }
+  ): Promise<void> {
+    const { stale } = version;
+    stale.id = plan.existingDoc.id;
+    const before = await refuseIfMainMoved(
+      tx,
+      this.adapter.dialect,
+      stale.check,
+      {
+        table: plan.singleMeta.tableName,
+        id: plan.existingDoc.id,
+        languages: version.languages,
+      },
+      stale.holder
+    );
+    if (stale.check.kind !== "overwrite") return;
+    await recordOverwriteEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug: plan.slug, id: plan.existingDoc.id },
+        actor: plan.actor,
+        personName: null,
+        locale: null,
+        ...overwriteRecordOf(stale.check, {
+          main: before?.main,
+          languages: Object.values(before?.languages ?? {}),
+        }),
+      }
+    );
+  }
+
+  /**
+   * The refusal of a publish found out of date inside its transaction, read
+   * from the Single as it is now that the transaction has rolled back.
+   */
+  private async staleRefusal(
+    slug: string,
+    options: PublishAllSingleLocalesOptions,
+    stale: PublishAllStale
+  ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
+    if (!stale.holder.at || !stale.id || stale.check.kind !== "judge") {
+      return undefined;
+    }
+    return buildSingleErrorResult(
+      await staleVersionErrorFor(poolRevisionReader(this.adapter), {
+        dialect: this.adapter.dialect,
+        scopeKind: "single",
+        slug,
+        id: stale.id,
+        given: stale.check.given,
+        at: stale.holder.at,
+        reader: {
+          user: options.user,
+          trusted: fieldTrustOf(options),
+          authenticatedScope: options.authenticatedScope,
+        },
+      }),
+      "Failed to publish all languages"
+    );
   }
 
   /**
@@ -950,7 +1097,12 @@ export class SinglePublishAllService extends BaseService {
     /** Resolved before this transaction opened; see `publishAllLocales`. */
     promoteGrants?: () => Promise<CallerGrants>,
     /** Whether the caller may read the Single, asked with `promoteGrants`. */
-    promoteReads?: boolean
+    promoteReads?: boolean,
+    /** How the version given is judged; see `publishAllLocales`. */
+    version?: {
+      stale: PublishAllStale;
+      languages: ReturnType<typeof languagesJudged>;
+    }
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
 
@@ -970,6 +1122,9 @@ export class SinglePublishAllService extends BaseService {
         languages: [],
       };
     }
+    // Judged under the lock, before anything is written: the Single's own row
+    // and every language it moves. A refusal throws, rolling back the publish.
+    if (version) await this.refuseIfMoved(tx, plan, version);
 
     // Each locale's committed `_status` BEFORE the bulk flip below, so a real
     // draft->published transition can be told from a locale that was already

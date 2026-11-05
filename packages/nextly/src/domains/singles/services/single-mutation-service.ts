@@ -1503,6 +1503,8 @@ export class SingleMutationService extends BaseService {
     before: {
       main: DocumentRevisionState | undefined;
       language: PartState | undefined;
+      /** Every language's row, for a write over all of them at once. */
+      languages?: readonly PartState[];
       locale: string | undefined;
     }
   ): Promise<void> {
@@ -1518,6 +1520,10 @@ export class SingleMutationService extends BaseService {
         ...overwriteRecordOf(check, {
           main: before.main?.main,
           language: before.language,
+          // Every language a write over all of them judged, as the main row's
+          // read under the lock carries them, where none are given apart.
+          languages:
+            before.languages ?? Object.values(before.main?.languages ?? {}),
         }),
       }
     );
