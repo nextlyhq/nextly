@@ -733,6 +733,35 @@ describe("after a save", () => {
       expect(result.current.recovery.offer?.snapshot).toEqual(CURRENT.snapshot);
     });
 
+    // The re-read takes a round trip, and the author may switch language
+    // meanwhile. The answer then belongs to the language the restore was asked
+    // in, and written now it would put French work in the English fields.
+    it("restores nothing when the editor switched language while it was asked about again", async () => {
+      const french = { ...CURRENT, locale: "fr" };
+      let answer: (point: typeof french) => void = () => {};
+      getSpy.mockResolvedValueOnce(french).mockReturnValueOnce(
+        new Promise(resolve => {
+          answer = resolve;
+        })
+      );
+      const { result, rerender } = renderHook(
+        ({ locale }: { locale: string | null }) =>
+          useRecoveryHarness(SCOPE, STORED, locale),
+        { wrapper, initialProps: { locale: "fr" as string | null } }
+      );
+      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
+
+      act(() => result.current.recovery.restore());
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+      rerender({ locale: "en" });
+      await act(async () => {
+        answer(french);
+        await Promise.resolve();
+      });
+
+      expect(result.current.form.getValues()).toEqual(STORED);
+    });
+
     it("restores it when it is still current, which is the control", async () => {
       getSpy.mockResolvedValue(CURRENT);
       const { result } = renderRecovery(SCOPE);
