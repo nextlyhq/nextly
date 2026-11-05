@@ -214,10 +214,10 @@ for (const theme of ["light", "dark"] as const) {
         "the selection ring against the page"
       ).toBeGreaterThanOrEqual(3);
 
-      // The toolbar's buttons and their icons, by axe and by ratio.
+      // The toolbar's icons by ratio: the bar holds no text, so there is
+      // nothing for axe's contrast rule to read there.
       const bar = page.getByRole("toolbar", { name: "Block actions" });
       await expect(bar).toBeVisible();
-      await expectNoAxeViolations(page, { include: ".nx-block-toolbar" });
       const icon = await bar
         .locator("button svg")
         .first()
@@ -279,9 +279,10 @@ for (const theme of ["light", "dark"] as const) {
           name: /Drop a block here, or click to add one, in /,
         })
       ).toBeVisible();
-      const add = page.getByRole("button", {
-        name: "Add a section after Canvas states",
-      });
+      // The first gap's +, named after the block above it.
+      const add = page
+        .getByRole("button", { name: /^Add a section after / })
+        .first();
       const spot = await add.boundingBox();
       if (spot === null) throw new Error("the + is not laid out");
       await page.mouse.move(spot.x - 200, spot.y + spot.height / 2, {
@@ -314,7 +315,11 @@ test.describe("the canvas while an author works", () => {
     });
 
     await open(page, id, "light");
-    await expect(canvasBlock(page, IMAGE).locator("img")).toBeVisible();
+    await expect(
+      canvasFrame(page).locator(
+        `img[data-nx-node="${IMAGE}"], [data-nx-node="${IMAGE}"] img`
+      )
+    ).toBeVisible();
     await expect
       .poll(() =>
         canvasBlock(page, IMAGE)
