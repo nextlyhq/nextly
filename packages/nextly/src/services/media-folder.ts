@@ -605,11 +605,16 @@ export class MediaFolderService extends BaseService {
       const { mediaQueryCondition } = await import(
         "../domains/media/media-library-query"
       );
-      const where = mediaQueryCondition(media, null, {
-        ...(folderSchemaAvailable ? { folderId: folderId ?? null } : {}),
-        search,
-        type,
-      });
+      const where = mediaQueryCondition(
+        media,
+        null,
+        {
+          ...(folderSchemaAvailable ? { folderId: folderId ?? null } : {}),
+          search,
+          type,
+        },
+        this.dialect
+      );
       const [counted] = await this.db
         .select({ value: count() })
         .from(media)
