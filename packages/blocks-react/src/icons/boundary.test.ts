@@ -18,14 +18,22 @@ import { describe, expect, it } from "vitest";
 
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), "../../dist");
 
-/** Every built file an entry loads, itself included. */
-function loadedBy(entry: string): string[] {
+/**
+ * Every built file an entry loads, itself included: through static imports
+ * alone, or through dynamic `import()` too, which is everything it can EVER
+ * load.
+ */
+function loadedBy(entry: string, through: "static" | "any" = "any"): string[] {
+  const pattern =
+    through === "static"
+      ? /from\s*"(\.{1,2}\/[^"]+)"/g
+      : /(?:from\s*|import\s*\(\s*)"(\.{1,2}\/[^"]+)"/g;
   const seen = new Set<string>();
   const visit = (file: string): void => {
     if (seen.has(file)) return;
     seen.add(file);
     const source = readFileSync(file, "utf8");
-    for (const [, specifier] of source.matchAll(/from\s*"(\.{1,2}\/[^"]+)"/g)) {
+    for (const [, specifier] of source.matchAll(pattern)) {
       if (specifier !== undefined) visit(join(dirname(file), specifier));
     }
   };
@@ -44,7 +52,15 @@ describe("the icon set's reach", () => {
     expect(loadedBy("next.mjs").some(carriesIcons)).toBe(true);
   });
 
-  it("is not loaded by the renderer, the blocks or the client entry", () => {
+  it("is loaded by the server only when a page draws an icon", () => {
+    // Not on its static graph: a render, or a cold start, that draws no icon
+    // never parses the set.
+    for (const entry of ["next.mjs", "icons/lucide.mjs"]) {
+      expect(loadedBy(entry, "static").filter(carriesIcons), entry).toEqual([]);
+    }
+  });
+
+  it("can never be loaded by the renderer, the blocks or the client entry", () => {
     for (const entry of ["index.mjs", "blocks/index.mjs", "environment.mjs"]) {
       expect(loadedBy(entry).filter(carriesIcons), entry).toEqual([]);
     }

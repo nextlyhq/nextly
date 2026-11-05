@@ -17,12 +17,17 @@
  */
 import type { ResolvedIcon } from "../context";
 
-import {
-  LUCIDE_ALIASES,
-  LUCIDE_ICONS,
-  LUCIDE_TAGS,
-  LUCIDE_VERSION,
-} from "./lucide-data";
+import type * as LucideSet from "./lucide-data";
+
+/*
+ * The set itself, loaded on first use and kept for the life of the process.
+ * Imported statically, every server render and every cold start would parse
+ * the whole set, on a site that never draws an icon as much as on one that
+ * does.
+ */
+let loaded: Promise<typeof LucideSet> | undefined;
+const lucideSet = (): Promise<typeof LucideSet> =>
+  (loaded ??= import("./lucide-data"));
 
 /** The set prefix every Lucide id carries: `lucide:star`. */
 export const LUCIDE_PREFIX = "lucide";
@@ -46,9 +51,12 @@ export function parseIconId(
  * Lucide has renamed resolves to the icon it now is, so an id stored before a
  * rename keeps drawing; the answer names the current icon.
  */
-export function resolveLucideIcon(id: string): ResolvedIcon | null {
+export async function resolveLucideIcon(
+  id: string
+): Promise<ResolvedIcon | null> {
   const parsed = parseIconId(id);
   if (parsed === null || parsed.set !== LUCIDE_PREFIX) return null;
+  const { LUCIDE_ALIASES, LUCIDE_ICONS } = await lucideSet();
   const name = Object.hasOwn(LUCIDE_ICONS, parsed.name)
     ? parsed.name
     : Object.hasOwn(LUCIDE_ALIASES, parsed.name)
@@ -66,8 +74,12 @@ export function resolveLucideIcon(id: string): ResolvedIcon | null {
 }
 
 /** The words an icon is found by, for a picker's search. */
-export function lucideTagsOf(name: string): readonly string[] {
+export async function lucideTagsOf(name: string): Promise<readonly string[]> {
+  const { LUCIDE_TAGS } = await lucideSet();
   return Object.hasOwn(LUCIDE_TAGS, name) ? (LUCIDE_TAGS[name] ?? []) : [];
 }
 
-export { LUCIDE_VERSION };
+/** The Lucide release the set was taken from. */
+export async function lucideVersion(): Promise<string> {
+  return (await lucideSet()).LUCIDE_VERSION;
+}
