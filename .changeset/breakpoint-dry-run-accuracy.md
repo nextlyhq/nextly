@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-What a breakpoint removal would drop is now counted exactly as the page is drawn: values the stylesheet never writes, blocks it cannot style apart and shared styles it drops are no longer counted, and readable documents are named even when others in the list cannot be opened.
+The count of what a breakpoint removal would drop names readable documents even when others in the list cannot be opened, and asks about each document once.
