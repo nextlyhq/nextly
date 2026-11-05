@@ -7,6 +7,7 @@ import { MAX_NAMED_CLASSES } from "../document";
 
 import { blockLooks, lookClassId } from "./block-looks";
 import { compilePageCss } from "./compile-page";
+import { styleOrigin } from "./style-origin";
 import {
   classNameOf,
   isLook,
@@ -172,5 +173,50 @@ describe("a look's own name and binding", () => {
       styles: colour("red"),
     }));
     expect(namedClassesRead(many)).toHaveLength(512);
+  });
+});
+
+describe("a look the engine could not use", () => {
+  it("is left out rather than declared and then dropped", () => {
+    const long = {
+      name: "core/button",
+      editor: {
+        variations: [{ name: "x".repeat(130), styles: colour("red") }],
+      },
+    };
+    expect(blockLooks([long])).toEqual([]);
+  });
+});
+
+describe("a look in the cascade's own reading", () => {
+  it("reaches only a node of its own block type", () => {
+    const [outline] = blockLooks([button]);
+    if (outline === undefined) throw new Error("no look");
+    const traced = (type: string) => {
+      const { trace } = compilePageCss(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "n1", type, version: 1, props: {}, classes: [outline.id] },
+          ],
+        } as unknown as BlockDocument,
+        {
+          breakpoints: FIXTURE_BREAKPOINTS,
+          namedClasses: [outline],
+          trace: true,
+        } as never
+      );
+      return styleOrigin(
+        trace ?? [],
+        { nodeId: "n1", blockType: type, classIds: [outline.id] },
+        { property: "color", state: "base", breakpoints: ["base"] }
+      );
+    };
+    expect(traced("core/button")?.origin).toMatchObject({
+      kind: "class",
+      id: outline.id,
+    });
+    expect(traced("core/box")).toBeUndefined();
   });
 });

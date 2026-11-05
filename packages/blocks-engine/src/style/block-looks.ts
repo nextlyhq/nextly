@@ -15,7 +15,11 @@
 
 import type { BlockVariation } from "../block";
 
-import { NAMED_CLASS_SLUG_RE, type NamedClass } from "./named-class";
+import {
+  isUsableNamedClass,
+  NAMED_CLASS_SLUG_RE,
+  type NamedClass,
+} from "./named-class";
 
 /** What a look reads from a block definition: its type and its variations. */
 interface LookSource {
@@ -53,18 +57,33 @@ export function blockLooks(definitions: Iterable<LookSource>): NamedClass[] {
   const looks: NamedClass[] = [];
   for (const definition of definitions) {
     for (const variation of definition.editor?.variations ?? []) {
-      if (variation.styles === undefined) continue;
-      const slug = lookSlug(definition.name, variation.name);
-      if (!NAMED_CLASS_SLUG_RE.test(slug)) continue;
-      looks.push({
-        id: lookClassId(definition.name, variation.name),
-        slug,
-        ...(variation.label === undefined ? {} : { label: variation.label }),
-        orderIndex: looks.length,
-        blockType: definition.name,
-        styles: variation.styles,
-      });
+      const look = lookOf(definition.name, variation, looks.length);
+      if (look !== undefined) looks.push(look);
     }
   }
   return looks;
+}
+
+/**
+ * One variation as a look's class, or `undefined` for a variation that is no
+ * look (no styles) or whose class the engine could not use (a name it can't
+ * write, or one too long), rather than one declared and then dropped.
+ */
+function lookOf(
+  blockType: string,
+  variation: BlockVariation,
+  orderIndex: number
+): NamedClass | undefined {
+  if (variation.styles === undefined) return undefined;
+  const slug = lookSlug(blockType, variation.name);
+  if (!NAMED_CLASS_SLUG_RE.test(slug)) return undefined;
+  const look: NamedClass = {
+    id: lookClassId(blockType, variation.name),
+    slug,
+    ...(variation.label === undefined ? {} : { label: variation.label }),
+    orderIndex,
+    blockType,
+    styles: variation.styles,
+  };
+  return isUsableNamedClass(look) ? look : undefined;
 }

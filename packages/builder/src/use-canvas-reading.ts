@@ -82,6 +82,32 @@ export interface CanvasReading {
    * a positional claim with nothing behind it.
    */
   readonly orientation: SideOrientation | undefined;
+  /**
+   * The address of the picture the node draws, the node itself or the one
+   * inside it (a link or a figure around an image), or `undefined` for none.
+   * What the canvas really shows, so a control aimed at the picture (a focal
+   * point) shows the same one.
+   */
+  readonly picture?: string | undefined;
+}
+
+/**
+ * The picture an element draws: itself, or the first image inside it that is
+ * its own (a link or a figure around it), not one of a block inside it.
+ */
+function pictureOf(element: Element | undefined | null): string | undefined {
+  if (element == null) return undefined;
+  // Its own, past any image a block inside it draws first.
+  const image =
+    element.tagName === "IMG"
+      ? element
+      : [...element.querySelectorAll("img")].find(
+          candidate => candidate.closest("[data-nx-node]") === element
+        );
+  if (image === undefined) return undefined;
+  const shown =
+    (image as HTMLImageElement).currentSrc || image.getAttribute("src");
+  return shown === null || shown === "" ? undefined : shown;
 }
 
 /** Nothing known yet, shared so an unchanged reading keeps its identity. */
@@ -91,6 +117,7 @@ const NOTHING: CanvasReading = { tag: undefined, orientation: undefined };
 function same(a: CanvasReading, b: CanvasReading): boolean {
   return (
     a.tag === b.tag &&
+    a.picture === b.picture &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
     a.orientation?.direction === b.orientation?.direction &&
     // The layout too: alignment icons follow it, and it can change alone.
@@ -133,6 +160,7 @@ export function useCanvasReading(
       const next: CanvasReading = {
         tag: element?.tagName.toLowerCase(),
         orientation: orientationOfElement(element),
+        picture: pictureOf(element),
       };
       setReading(current => (same(current, next) ? current : next));
     };
