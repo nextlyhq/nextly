@@ -753,8 +753,11 @@ The answer can be incomplete, and says so in `meta`. It asks at most 20 collecti
 (`MAX_WORKLIST_COLLECTIONS`); the slugs it skipped, and any whose read failed, are listed in
 `meta.notConsulted`. Collections that cannot answer a translation question until their
 schema is migrated are listed in `meta.unanswerable`. Each field is present only when it
-has entries. The endpoint takes no `page`, and `meta.hasNext` is always `false`, so read
-these two fields, not `hasNext`, to know whether the answer is whole.
+has entries. The rows are also cut at `limit`: `meta.total` counts every matching document
+in the collections asked, so `meta.total` above the number of rows (or `meta.totalPages`
+above 1) means more work than this answer lists. The endpoint takes no `page`, and
+`meta.hasNext` is always `false`, so read these fields, not `hasNext`, to know whether the
+answer is whole; ask with a larger `limit`, up to 200, to see more.
 
 ## Pagination
 
