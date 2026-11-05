@@ -5,9 +5,12 @@
  * that are not published, before it closes.
  *
  * Each test writes documents and releases of its own, named with a stamp, and
- * cancels the releases it made.
+ * cancels the releases it made. The linked-documents tests share one
+ * collection, made once for them.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
+
+import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
 import { cancel, membersOf, ok, post } from "./support/releases-api";
@@ -40,17 +43,15 @@ async function author(page: Page, title: string): Promise<string> {
 }
 
 /**
- * A collection of this test's own with a Draft/Published lifecycle and a link
- * to an author, and one entry of it linking `authorId`.
+ * A collection with a Draft/Published lifecycle and a link to an author, made
+ * at runtime as the Schema Builder makes one.
  */
-async function pieceLinking(
-  page: Page,
-  slug: string,
-  title: string,
-  authorId: string
-): Promise<string> {
+async function piecesLinkingAuthors(
+  api: APIRequestContext,
+  slug: string
+): Promise<void> {
   await ok(
-    await page.request.post(`${API}/collections`, {
+    await api.post(`${API}/collections`, {
       data: {
         name: slug,
         labels: { singular: "Piece", plural: "Pieces" },
@@ -65,6 +66,15 @@ async function pieceLinking(
       },
     })
   );
+}
+
+/** An entry of the pieces collection `slug`, linking `authorId`. */
+async function pieceLinking(
+  page: Page,
+  slug: string,
+  title: string,
+  authorId: string
+): Promise<string> {
   const { item } = await ok<{ item: { id: string } }>(
     await page.request.post(`${API}/collections/${slug}/entries`, {
       data: { title, writer: authorId },
@@ -84,8 +94,8 @@ async function openPicker(page: Page, releaseId: string, stamp: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  // Each test writes documents, releases and, for the links, a collection of its own, and the
-  // first reads of the dev server compile on demand: more than the default allows.
+  // Each test writes documents and releases of its own, and the first reads of the dev server
+  // compile on demand: more than the default allows.
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1440, height: 900 });
 });
@@ -131,14 +141,35 @@ test("adds three documents from two collections in one action", async ({
 });
 
 test.describe("the linked documents offered next", () => {
-  // Each test makes a collection at runtime, which writes migration files and the schema.
+  // The describe makes a collection at runtime, which writes migration files and the schema.
   test.describe.configure({ lock: [LOCK.schema] });
+
+  // One collection for the describe, not one per test: making one, and
+  // removing its migrations after, each write files the dev server reloads
+  // on, and a page opened during those reloads waits on them. Each test then
+  // writes only entries of its own.
+  const slug = `pieces-${stamped().replace(/[^a-z0-9]/g, "")}`;
+
+  test.beforeAll(async ({ playwright, baseURL }) => {
+    const api = await playwright.request.newContext({
+      baseURL,
+      storageState: STORAGE_STATE,
+    });
+    try {
+      await piecesLinkingAuthors(api, slug);
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  test.afterAll(async () => {
+    await removeMigrationsOf(slug);
+  });
 
   test("offers an unpublished author of a piece going live, and adds it", async ({
     page,
   }) => {
     const stamp = stamped();
-    const slug = `pieces-${stamp.replace(/[^a-z0-9]/g, "")}`;
     const writer = await author(page, `Linked author ${stamp}`);
     const piece = await pieceLinking(page, slug, `Piece ${stamp}`, writer);
     const releaseId = await emptyRelease(page, `Linked ${stamp}`);
@@ -166,13 +197,11 @@ test.describe("the linked documents offered next", () => {
       expect(members).toHaveLength(2);
     } finally {
       await cancel(page, releaseId).catch(() => undefined);
-      await removeMigrationsOf(slug);
     }
   });
 
   test("adds nothing more on Not now", async ({ page }) => {
     const stamp = stamped();
-    const slug = `pieces-${stamp.replace(/[^a-z0-9]/g, "")}`;
     const writer = await author(page, `Linked author ${stamp}`);
     const piece = await pieceLinking(page, slug, `Piece ${stamp}`, writer);
     const releaseId = await emptyRelease(page, `Not now ${stamp}`);
@@ -188,13 +217,11 @@ test.describe("the linked documents offered next", () => {
       ]);
     } finally {
       await cancel(page, releaseId).catch(() => undefined);
-      await removeMigrationsOf(slug);
     }
   });
 
   test("offers nothing for a piece added to come down", async ({ page }) => {
     const stamp = stamped();
-    const slug = `pieces-${stamp.replace(/[^a-z0-9]/g, "")}`;
     const writer = await author(page, `Linked author ${stamp}`);
     const piece = await pieceLinking(page, slug, `Piece ${stamp}`, writer);
     const releaseId = await emptyRelease(page, `Down ${stamp}`);
@@ -210,7 +237,6 @@ test.describe("the linked documents offered next", () => {
       ]);
     } finally {
       await cancel(page, releaseId).catch(() => undefined);
-      await removeMigrationsOf(slug);
     }
   });
 });
