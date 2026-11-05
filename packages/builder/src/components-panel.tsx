@@ -181,8 +181,8 @@ export function ComponentsPanel({
     onInsert,
   });
   const unplaceable = React.useMemo(
-    () => unplaceableComponentEntries(components, componentDefinitions),
-    [components, componentDefinitions]
+    () => unplaceableComponentEntries(components, catalog),
+    [components, catalog]
   );
   const listed = componentRows(components, catalog, unplaceable, "");
   const entries = componentRows(components, catalog, unplaceable, query);

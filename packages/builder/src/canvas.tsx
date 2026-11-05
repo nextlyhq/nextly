@@ -85,6 +85,7 @@ import {
   scrollEventTarget,
   visibleBandOf,
 } from "./geometry-dom";
+import { useHoveredBlockSetter } from "./hovered-block";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked } from "./locking";
 import { useNearestThemeMarker } from "./nearest-theme";
@@ -626,6 +627,32 @@ export function isOutermostForAddress(
 }
 
 /**
+ * Every element standing for each of `addresses` on this canvas: the
+ * outermost per address, in document order. What a toolbar or a gap measures a
+ * block by, so that a component placement whose definition draws several
+ * top-level elements is measured as all of them rather than as its first.
+ * Only this canvas's own: a canvas nested inside a block (component edit
+ * mode) scopes ids to its own document, which may reuse an address from out
+ * here.
+ */
+export function outermostElementsOf(
+  root: HTMLElement,
+  addresses: ReadonlySet<string>
+): Map<string, Element[]> {
+  const drawn = new Map<string, Element[]>();
+  for (const element of nodeElements(root)) {
+    if (!ownedByCanvas(element, root)) continue;
+    const address = nodeAddressOf(element);
+    if (address === null || !addresses.has(address)) continue;
+    if (!isOutermostForAddress(element, address, root)) continue;
+    const elements = drawn.get(address) ?? [];
+    elements.push(element);
+    drawn.set(address, elements);
+  }
+  return drawn;
+}
+
+/**
  * The element a node id was rendered as, or `null` when it is not on screen.
  *
  * The inverse of {@link nodeIdFromEvent}, and beside it because the two are one
@@ -823,11 +850,14 @@ function useCanvasMarkers(
         // Whether the engine would refuse to move this node, asked from the set
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
-        // that quadratic on a large page.
+        // that quadratic on a large page. Asked by the ADDRESS, as the selection
+        // pass above is: a placement's parts carry a re-minted id the document
+        // does not hold, and the lock that holds them is the placement's.
+        const address = nodeAddressOf(element);
         setMark(
           element,
           LOCKED_ATTRIBUTE,
-          id === null ? undefined : lockedIds.get(id)
+          address === null ? undefined : lockedIds.get(address)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -984,6 +1014,102 @@ function setMark(
   if (element.getAttribute(attribute) === (value ?? null)) return;
   if (value === undefined) element.removeAttribute(attribute);
   else element.setAttribute(attribute, value);
+}
+
+/**
+ * The marks the site's surface puts on the canvas root, written before paint:
+ * the nearest theme marker above it (`useNearestThemeMarker`), and whether the
+ * site's ground is fully opaque.
+ *
+ * Only an opaque ground is repeated on the rendered page as well as the
+ * canvas: painted twice, an opaque ground looks exactly as it does once, while
+ * a translucent one would darken where the layers overlap. Judged from the
+ * colour the root's background RESOLVES to, because the host's own CSS can
+ * set the token's property to something the token set does not say. The
+ * token set's answer stands where the resolved colour says nothing: one that
+ * cannot be read, or one fully transparent, which is what a root painting no
+ * ground of its own resolves to (a page the site serves), and a transparent
+ * ground repeated on the page paints nothing either way.
+ */
+/**
+ * The alpha of a computed colour written as a function this module's colour
+ * reader does not otherwise read — `color(display-p3 0 0 0 / 0.5)`, which a
+ * browser can keep in a computed value — from its `/ alpha` part, 1 without
+ * one; `undefined` for anything that is not a colour function.
+ */
+function computedAlphaOf(text: string): number | undefined {
+  const call = /^[a-z-]+\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const alpha = (call[1] ?? "").split("/")[1];
+  return alpha === undefined ? 1 : fractionOf(alpha.trim(), 1);
+}
+
+function useSiteSurfaceMarks(
+  rootRef: React.RefObject<HTMLElement | null>,
+  opaqueByTokens: boolean
+): void {
+  useNearestThemeMarker(rootRef);
+  const tokens = useRef(opaqueByTokens);
+  tokens.current = opaqueByTokens;
+  // On every render: a render is what brings new site styles.
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root !== null) markGround(root, tokens.current);
+  });
+  /*
+   * And on what changes the ground with no render, subscribed once for the
+   * root rather than on every render:
+   *
+   * - the site's mode: the theme marker rewrites the root's
+   *   `data-nx-site-theme` from an observer of its own, and the device's
+   *   colour scheme changes on its own. A light ground and a dark one can
+   *   differ in whether they are opaque;
+   * - the canvas's window resizing, or the canvas itself: a site can override
+   *   the ground under a width or height query, which a resized frame
+   *   crosses, and under a container query, which a canvas drawn without a
+   *   frame crosses as the layout around it changes.
+   */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const view = root.ownerDocument.defaultView;
+    const mark = (): void => markGround(root, tokens.current);
+    const Observer = view?.MutationObserver;
+    const theme =
+      typeof Observer === "function" ? new Observer(() => mark()) : null;
+    theme?.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-nx-site-theme"],
+    });
+    const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
+    scheme?.addEventListener("change", mark);
+    view?.addEventListener("resize", mark);
+    const Sizes = view?.ResizeObserver;
+    const size = typeof Sizes === "function" ? new Sizes(() => mark()) : null;
+    size?.observe(root);
+    return () => {
+      theme?.disconnect();
+      scheme?.removeEventListener("change", mark);
+      view?.removeEventListener("resize", mark);
+      size?.disconnect();
+    };
+  }, [rootRef]);
+}
+
+/**
+ * Mark whether the site's ground is fully opaque, from the colour the root's
+ * background resolves to; the token set's answer where that says nothing.
+ */
+function markGround(root: HTMLElement, opaqueByTokens: boolean): void {
+  const resolved = (
+    root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ?? ""
+  ).trim();
+  const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
+  setFlag(
+    root,
+    "data-nx-site-ground-opaque",
+    alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+  );
 }
 
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
@@ -1797,6 +1923,94 @@ function useSelectionPointer({
 }
 
 /**
+ * Point the editor's hovered block at the deepest block under the pointer, so
+ * the canvas outlines it as a Layers row does, and at nothing when the
+ * pointer leaves the canvas or is over its background.
+ *
+ * Nothing while a block is dragged: the drag's own marks say where it will
+ * land, and an outline under the moving pointer would compete with them. The
+ * drag's own move handler runs first, so the gesture behaves exactly as it
+ * did; a move over the editor's chrome points at nothing new.
+ */
+function useCanvasHover(
+  dragMove: React.PointerEventHandler<HTMLElement> | undefined,
+  dragging: boolean
+): {
+  onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onPointerLeave: () => void;
+} {
+  const setHovered = useHoveredBlockSetter();
+  // In the layout phase, so the frame that first draws the drag never also
+  // draws the hovered outline its marks replace: a passive effect runs after
+  // that paint.
+  useIsomorphicLayoutEffect(() => {
+    if (dragging) setHovered(null);
+  }, [dragging, setHovered]);
+  // Nothing stays pointed at once the canvas goes.
+  useEffect(() => () => setHovered(null), [setHovered]);
+  const onPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragMove?.(event);
+      if (dragging) return;
+      const { target } = event;
+      // Chrome over a block is inside the canvas, so moving onto it fires no
+      // `pointerleave`: the block is let go here instead.
+      if (isChrome(target)) {
+        setHovered(null);
+        return;
+      }
+      // A canvas a block renders is another document, with its own addresses:
+      // its moves bubble here and are left to it.
+      if (
+        !isElement(target) ||
+        target.closest(`.${CANVAS_ROOT_CLASS}`) !== event.currentTarget
+      ) {
+        return;
+      }
+      setHovered(nodeIdFromEvent(target));
+    },
+    [dragMove, dragging, setHovered]
+  );
+  const onPointerLeave = useCallback(() => setHovered(null), [setHovered]);
+  return { onPointerMove, onPointerLeave };
+}
+
+/**
+ * A click on the page around the canvas, inside its frame, answered as a
+ * click on the canvas's own ground: the selection is cleared.
+ *
+ * On a page the site serves, the site's layout decides how tall the canvas
+ * is, so below a short page the frame shows the site's own page rather than
+ * the canvas, and the click an author makes there to let go of a block lands
+ * outside the canvas root. Only inside a frame: where the canvas shares the
+ * editor's document, everything outside it is the editor's own panels.
+ */
+function useFrameGroundClick(
+  root: React.RefObject<HTMLDivElement | null>,
+  onSelect: CanvasProps["onSelect"]
+): void {
+  const framed = useCanvasFrame().frame !== null;
+  const latest = useRef(onSelect);
+  useEffect(() => {
+    latest.current = onSelect;
+  }, [onSelect]);
+  useEffect(() => {
+    const element = root.current;
+    if (!framed || element === null) return;
+    const doc = element.ownerDocument;
+    const ground = (event: MouseEvent): void => {
+      const { target } = event;
+      // The canvas answers its own clicks, and chrome is not the page.
+      if (isElement(target) && element.contains(target)) return;
+      if (isChrome(target)) return;
+      latest.current?.(null, selectionModeFor(event));
+    };
+    doc.addEventListener("click", ground);
+    return () => doc.removeEventListener("click", ground);
+  }, [framed, root]);
+}
+
+/**
  * The document and window the blocks are drawn in, for block code that
  * measures itself or listens (`useBlockEnvironment`). Read from the canvas
  * root's OWN document rather than the globals, so the answer is the frame's
@@ -1882,6 +2096,11 @@ export function Canvas({
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
   usePublishedRoot(root, rootRef, onRoot);
+  useFrameGroundClick(root, onSelect);
+  const hover = useCanvasHover(
+    dragHandlers?.onPointerMove,
+    drag?.draggingBlockName != null
+  );
 
   const { marked, pointer, pointerDown } = useSelectionPointer({
     selectedIds,
@@ -1891,8 +2110,8 @@ export function Canvas({
     dragPointerDown: dragHandlers?.onPointerDown,
   });
 
-  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
+  useSiteSurfaceMarks(root, surface?.opaqueGround === true);
   // The scale the page is painted at, for chrome drawn inside it to undo.
   const canvasScale = useCanvasFrame().scale;
 
@@ -1955,15 +2174,10 @@ export function Canvas({
        * not rendered here: see that hook.
        */
       /*
-       * Whether the site's ground is fully opaque, in every mode. Only then
-       * does the rendered page carry the ground as well as the canvas: painted
-       * twice, an opaque ground looks exactly as it does once, while a
-       * translucent one would darken where the layers overlap. See the page
-       * root's rule in `builder-chrome.css` for why the page wants it.
+       * `data-nx-site-ground-opaque`, whether the site's ground is fully
+       * opaque, is written onto this element by `useSiteSurfaceMarks` from the
+       * colour it resolves to, not rendered here: see that hook.
        */
-      data-nx-site-ground-opaque={
-        surface?.opaqueGround === true ? "" : undefined
-      }
       /*
        * What the pointer means, for the cursor.
        *
@@ -1990,6 +2204,8 @@ export function Canvas({
       // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
       onPointerDown={pointerDown}
+      onPointerMove={hover.onPointerMove}
+      onPointerLeave={hover.onPointerLeave}
     >
       <RegionsAround drawn={drawn} rendered={render} environment={environment}>
         {page}

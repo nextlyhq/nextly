@@ -31,6 +31,7 @@ import type { VersionsDbApi } from "./db-api";
 import { lockDocument } from "./history-locks";
 import {
   VersionsRepository,
+  type AutosaveSupersession,
   type AutosaveWriteResult,
   type PendingEditCursor,
   type PendingEditOrder,
@@ -292,7 +293,13 @@ export class VersionsService {
   async getAutosave(
     ref: VersionRef,
     createdBy: string | null
-  ): Promise<VersionRow | undefined> {
-    return this.repo.findAutosave(ref, createdBy);
+  ): Promise<(VersionRow & { superseded?: AutosaveSupersession }) | undefined> {
+    const row = await this.repo.findAutosave(ref, createdBy);
+    if (!row) return undefined;
+    // Said by the server, from the counters it keeps: whether the document has
+    // been written since this point began, and by whom, so an editor never
+    // offers older work back as if it were current.
+    const superseded = await this.repo.autosaveSupersession(row);
+    return superseded === undefined ? row : { ...row, superseded };
   }
 }

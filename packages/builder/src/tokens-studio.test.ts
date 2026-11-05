@@ -34,6 +34,9 @@ import {
   setTokenValue,
   tokenNameIssue,
   tokenRowsFor,
+  writeTokenValue,
+  LINE_HEIGHT_MIXED,
+  DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -603,7 +606,12 @@ describe("variables, grouped as the Design panel shows them", () => {
     const type = variableGroups(made.tokens).find(g => g.group === "type");
     expect(type?.entries).toHaveLength(1);
     expect(type?.entries[0]?.row.value).toBe("16px");
-    expect(type?.entries[0]?.lineHeight?.value).toBe("24px");
+    // Unitless, so it scales with whatever size the author gives the step,
+    // and held as a number so the engine reports nothing about it.
+    expect(type?.entries[0]?.lineHeight?.value).toBe("1.25");
+    const line = made.tokens.tokens.find(t => t.name.startsWith("line-"));
+    expect(line?.kind).toBe("number");
+    expect(emitTokenBlocks(made.tokens, ":root").issues).toEqual([]);
   });
 
   it("adds spacing, radius and shadow to their shared group", () => {
@@ -646,6 +654,88 @@ describe("a type size's name", () => {
     expect(variableLabelIssue(PAIR, 0, "Body copy")).toBeUndefined();
     expect(variableLabelIssue(PAIR, 2, "Body")).toMatch(
       /already called "Body"/
+    );
+  });
+});
+
+describe("a line height's two modes", () => {
+  it("hold the kind a unitless dark value needs over a legacy unitless zero", () => {
+    // A zero was storable as a length with no unit. A dark value written as a
+    // plain number beside it makes the token a number, which both values are.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "line-height.body", kind: "dimension", values: { light: "0" } },
+      ],
+    };
+    const dark = writeTokenValue(set, 0, "dark", "1.2");
+    expect("tokens" in dark && dark.tokens.tokens[0]).toEqual({
+      name: "line-height.body",
+      kind: "number",
+      values: { light: "0", dark: "1.2" },
+    });
+    expect(
+      "tokens" in dark && emitTokenBlocks(dark.tokens, ":root").issues
+    ).toEqual([]);
+  });
+
+  it("take their kind from light: a light edit of the other kind drops dark, and says so", () => {
+    // Both lengths: the light value is the one edit that can change which,
+    // and dark then follows it until it is set again.
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "line-height.body",
+          kind: "dimension",
+          values: { light: "24px", dark: "28px" },
+        },
+      ],
+    };
+    const light = writeTokenValue(set, 0, "light", "1.4");
+    expect(light).toEqual({
+      tokens: {
+        tokens: [
+          {
+            name: "line-height.body",
+            kind: "number",
+            values: { light: "1.4" },
+          },
+        ],
+      },
+      note: DARK_FOLLOWS_LIGHT,
+    });
+    // Dark of the other kind is still refused, in the words that say how.
+    expect(writeTokenValue(set, 0, "dark", "1.6")).toEqual({
+      issue: LINE_HEIGHT_MIXED,
+    });
+  });
+
+  it("are one kind, so a length beside a number is refused in words", () => {
+    // A token has one kind: written as given, the dark length would be a
+    // value the number token reports, and the save would be refused for it.
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "line-height.body", kind: "number", values: { light: "1.4" } },
+      ],
+    };
+    const dark = writeTokenValue(set, 0, "dark", "24px");
+    expect(dark).toEqual({ issue: LINE_HEIGHT_MIXED });
+    const same = writeTokenValue(set, 0, "dark", "1.6");
+    expect("tokens" in same && same.tokens.tokens[0]).toEqual({
+      name: "line-height.body",
+      kind: "number",
+      values: { light: "1.4", dark: "1.6" },
+    });
+  });
+
+  it("leaves every other variable's kind as it is", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      ],
+    };
+    const written = writeTokenValue(set, 0, "light", "2");
+    expect("tokens" in written && written.tokens.tokens[0]?.kind).toBe(
+      "dimension"
     );
   });
 });

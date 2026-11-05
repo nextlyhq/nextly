@@ -763,7 +763,7 @@ export interface GeneratePluginMigrationResult {
 
 /**
  * Build and write the module plus the rewritten barrel. Returns null when
- * there is nothing to migrate (the CLI exits 2 for that, as the app path
+ * there is nothing to migrate (the CLI exits 0 for that, as the app path
  * does). A module with a dialect left to the author (`handWritten`) is
  * written hand-sealed, so the SQL added to it keeps it intact.
  */

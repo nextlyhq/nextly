@@ -12,12 +12,14 @@ import { describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import {
   mayReadSiteStyle,
   readSiteStyleForEditor,
   type SiteStyleRouteContext,
 } from "./site-style-route";
 import { SITE_STYLE_SLUG } from "./site-style-storage";
+import { SPACING_MODE_SERVICE } from "./spacing-mode-reader";
 
 const blocks = (name: string) => ({ name, type: "blocks" });
 
@@ -257,8 +259,27 @@ describe("what the editor's route answers", () => {
       fonts: null,
       classes: [],
       breakpoints: null,
+      // The model lives outside the Single; a reader offering no plugin
+      // services records none.
+      spacingMode: null,
     });
     expect(reads).toEqual([{ slug: SITE_STYLE_SLUG, overrideAccess: true }]);
+  });
+
+  it("answers the site's recorded spacing model beside the sections", async () => {
+    const answer = await readSiteStyleForEditor(
+      context([`update-${PAGES_SLUG}`]),
+      {
+        findSingle: async () => ({}),
+        plugins: {
+          [PAGE_BUILDER_PLUGIN_NAME]: {
+            [SPACING_MODE_SERVICE]: { read: async () => "classic" },
+          },
+        },
+      },
+      {}
+    );
+    expect(answer.spacingMode).toBe("classic");
   });
 
   it("refuses before reading anything", async () => {

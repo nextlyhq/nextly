@@ -1,4 +1,4 @@
-import { expect, type Frame, type Page } from "@playwright/test";
+import { expect, type Frame, type Locator, type Page } from "@playwright/test";
 
 import { CANVAS_FRAME, canvasFrame } from "../support/canvas-frame";
 import { test } from "../support/test";
@@ -748,9 +748,13 @@ test.describe("spacing values on the canvas", () => {
       (
         document.querySelector('[data-nx-node="hx-nested-text"]') as HTMLElement
       ).style.marginBottom = "24px";
-      (
-        document.querySelector('[data-nx-node="hx-section"]') as HTMLElement
-      ).style.overflow = "hidden";
+      const section = document.querySelector(
+        '[data-nx-node="hx-section"]'
+      ) as HTMLElement;
+      section.style.overflow = "hidden";
+      // No padding, so the clip can reach the block: a section's own
+      // padding would hold it clear of a 10px clip.
+      section.style.padding = "0";
     });
     await target.click();
 
@@ -797,6 +801,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     await target.click();
     await expect(page.locator(BAND)).not.toHaveCount(0);
@@ -849,6 +855,8 @@ test.describe("spacing values on the canvas", () => {
         '[data-nx-node="hx-section"]'
       ) as HTMLElement;
       section.style.overflow = "clip";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
     });
     // Selected while the container still shows it. Shrinking first would clip
     // the target out of reach and the click would land on the page instead.
@@ -925,6 +933,8 @@ test.describe("spacing values on the canvas", () => {
       ) as HTMLElement;
       section.style.overflow = "hidden";
       section.style.border = "20px solid transparent";
+      // No padding, so the clip edge sits against the block.
+      section.style.padding = "0";
       // From the top left, so the border's rendered thickness is a plain
       // doubling rather than a function of where the box happens to sit.
       section.style.transformOrigin = "0 0";
@@ -1973,5 +1983,73 @@ test.describe("rounded geometry", () => {
     expect(ancestor.area).toBe(0);
 
     await expect(page.locator(BAND)).not.toHaveCount(0);
+  });
+});
+
+test.describe("the space a container puts between its children", () => {
+  /**
+   * Put an element before the section's only block, so that block is a child
+   * after the first and the section's gap rule reaches it. Plain markup, not a
+   * block: the gap rule is `> * + *` and counts any element.
+   */
+  async function secondChildOfSection(page: Page): Promise<Locator> {
+    await page.goto(ROUTE);
+    const target = canvasFrame(page).locator('[data-nx-node="hx-nested-text"]');
+    await expect(target).toBeVisible();
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const text = document.querySelector('[data-nx-node="hx-nested-text"]');
+      text?.parentElement?.insertBefore(document.createElement("div"), text);
+    });
+    return target;
+  }
+
+  test("names the section a block's top space comes from", async ({ page }) => {
+    const target = await secondChildOfSection(page);
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)? · Gap · from Section$/
+    );
+  });
+
+  test("calls an author's margin the block's own, even when it reads the gap's own token", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // At an author's weight (above the gap rule's single class), and the same
+    // length the gap gives, through the very token it reads.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: var(--site-space-stack); }';
+      document.head.append(style);
+    });
+    await target.click();
+    const margin = page.locator(band("margin", "top"));
+    await expect(margin).toHaveText(/^\d+(\.\d+)?$/);
+  });
+
+  test("calls an author's percentage margin the block's own inside a padded section", async ({
+    page,
+  }) => {
+    const target = await secondChildOfSection(page);
+    // A percentage resolves against a width the section's own padding decides,
+    // so anything that took the section's defaults away to ask would see it
+    // move. Only the gap marker comes off, and the author's margin stands.
+    await (
+      await inCanvas(page)
+    ).evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent =
+        '.nx-pb-page.nx-pb-page [data-nx-node="hx-nested-text"] { margin-block-start: 5%; }';
+      document.head.append(style);
+    });
+    await target.click();
+    await expect(page.locator(band("margin", "top"))).toHaveText(
+      /^\d+(\.\d+)?$/
+    );
   });
 });

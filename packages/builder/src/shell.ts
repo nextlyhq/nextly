@@ -298,6 +298,7 @@ export type {
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
   ComponentVerbsHost,
+  SharedStyleVerbHost,
 } from "./keyboard-actions";
 // Which way "Turn into component…" may go, as the host is told when it opens.
 export type { TurnIntoChoice } from "./toolbar-actions";
@@ -373,6 +374,8 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+export { PageInserters } from "./page-inserters";
+export type { PageInsertersProps } from "./page-inserters";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -543,7 +546,11 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  * decides when an edit is persisted; this exports the surface, not the save.
  */
 export { TokensPanel, useVariablesHeader } from "./tokens-panel";
-export type { TokensPanelProps, VariablesHeader } from "./tokens-panel";
+export type {
+  SpacingModeControl,
+  TokensPanelProps,
+  VariablesHeader,
+} from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
 /*
@@ -562,13 +569,20 @@ export type { EditorWord } from "./editor-words";
  * not the save.
  */
 export { ClassSelector } from "./class-selector";
+export type { ClassSelectorProps } from "./class-selector";
 /*
- * `ClassCreation` travels with the selector's props because a HOST implements
- * `onCreateClass` and has to name what it answers with. It was reachable only
- * through `ClassSelectorProps["onCreateClass"]`, which spells one type as a
- * lookup into another and reads as though the answer were private.
+ * Saving a block's look as a shared style: the dialog the host raises from
+ * the block verb, and what the Style tab borrows from the host to edit a
+ * shared style as its target.
  */
-export type { ClassCreation, ClassSelectorProps } from "./class-selector";
+export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
+export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
+export type { SharedStylesHost } from "./style-target";
+export type {
+  SharedStyleChange,
+  SharedStyleOffer,
+} from "./shared-style-target";
+export { sharedStyleNameTaken } from "./shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *
@@ -592,6 +606,8 @@ export type {
 export type {
   SharedStyleKind,
   SharedStyleReach,
+  SharedStyleRefusal,
+  SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,

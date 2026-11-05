@@ -14,8 +14,12 @@
  * @module index
  */
 export type {
+  BindingIssuesHandler,
   BlockHostPolicy,
   BlockRenderArgs,
+  BlocksFieldShapeRef,
+  BlocksFieldShapes,
+  BlocksSiteSettings,
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksFilter,
@@ -24,9 +28,11 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  PageBindings,
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
+  ResolvedIcon,
   ResolvedMedia,
 } from "./context";
 export {
@@ -47,8 +53,8 @@ export type { PageRendererProps } from "./page-renderer";
 // The rest are `SiteSheetInput`'s TRANSITIVE closure, and they are not padding.
 // Naming the outer type alone lets a consumer declare a variable and not build
 // one: the tokens are a `SiteTokenSet` of `SiteToken`s whose `kind` is a
-// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, and `darkMode` is
-// a `DarkModeStrategy`. A caller writing a site's design system needs every one
+// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, `darkMode` is
+// a `DarkModeStrategy` and `spacingMode` is a `SpacingMode`. A caller writing a site's design system needs every one
 // of them by name, so withholding any makes the prop typeable but unusable —
 // which is the same defect as not exporting the outer type, one level in.
 /**
@@ -70,6 +76,7 @@ export type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
   TokenKind,
 } from "@nextlyhq/blocks-engine";
 
@@ -124,7 +131,33 @@ export {
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.
 export { isAllowedAttribute } from "./block-boundary";
-export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
+export type {
+  BlockBoundaryProps,
+  BlockListProps,
+  BoundaryBindings,
+} from "./block-boundary";
+// The binding pass's own types, which the props above and a block's `bound`
+// argument name. A consumer passing bindings or reading a bound value has no
+// other path to them: the engine is this package's dependency, not theirs.
+export type {
+  BindablePropKind,
+  BindingFieldShape,
+  BindingFormatter,
+  BindingIssue,
+  BindingIssueCode,
+  BindingRun,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  BindingSources,
+  BlockPropsLookup,
+  BoundValue,
+  BoundValues,
+  CheckedFormat,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+  FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * Draw stored rich text as React.
@@ -193,13 +226,17 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
-export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
+export {
+  pageBindingRun,
+  prepareDocumentForRead,
+  rendersOwnMarkup,
+} from "./prepare-document";
 /**
  * @experimental The tree the renderer walks, placeholders included, for a
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
-export type { PrepareDocumentArgs } from "./prepare-document";
+export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
 

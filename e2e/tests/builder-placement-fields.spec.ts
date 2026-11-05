@@ -84,6 +84,54 @@ function headerDefinition() {
   };
 }
 
+/** A passage, as the rich-text editor stores one. */
+function passage(text: string) {
+  return {
+    root: {
+      type: "root",
+      children: [
+        { type: "paragraph", children: [{ type: "text", text, format: 0 }] },
+      ],
+    },
+  };
+}
+
+/** The header with a rich-text intro under its headline, the intro exposed. */
+function introDefinition() {
+  const header = headerDefinition();
+  return {
+    ...header,
+    nodes: [
+      header.nodes[0],
+      {
+        id: "intro",
+        type: "core/rich-text",
+        version: 1,
+        props: { content: passage("The component's intro.") },
+      },
+    ],
+    exposed: [
+      header.exposed[0],
+      {
+        id: "intro",
+        label: "Intro",
+        nodeId: "intro",
+        propPath: "content",
+        type: "richText",
+      },
+    ],
+  };
+}
+
+/** A stored passage's words, its text nodes joined in order. */
+function textOf(value: unknown): string {
+  if (value === null || typeof value !== "object") return "";
+  const node = value as { text?: unknown; root?: unknown; children?: unknown };
+  if (typeof node.text === "string") return node.text;
+  const children = Array.isArray(node.children) ? node.children : [];
+  return [node.root, ...children].map(textOf).join("");
+}
+
 function placement(id: string, extra: Record<string, unknown> = {}) {
   return {
     id,
@@ -97,14 +145,15 @@ function placement(id: string, extra: Record<string, unknown> = {}) {
 /** Seed a published header and a page placing it; returns the page's id. */
 async function seed(
   page: Page,
-  placements: readonly ReturnType<typeof placement>[]
+  placements: readonly ReturnType<typeof placement>[],
+  definition: unknown = headerDefinition()
 ): Promise<{ pageId: string; componentId: string }> {
   const tag = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
   const component = await page.request.post(COMPONENTS, {
     data: {
       title: COMPONENT_TITLE,
       slug: `placement-header-${tag}`,
-      content: headerDefinition(),
+      content: definition,
       status: "published",
     },
   });
@@ -271,20 +320,28 @@ test.describe("a placement's exposed fields", () => {
       "data-nx-exposed",
       ""
     );
-    // The heading is also the placement's selected root: it keeps the solid
-    // selection ring rather than trading it for the dashed one. The marks are
-    // drawn over the canvas frame, so the ring is a mark there and no dashed
-    // mark is drawn over the heading.
+    // The placement is ONE frame around its parts, tagged with its name, and
+    // the heading, a selected part as well as an exposed one, keeps its dash
+    // inside it. The marks are drawn over the canvas frame.
     await expect(await headline(page, "p1")).toHaveAttribute(
       "data-nx-selected",
       /.*/
     );
-    await expect(
-      page.locator('.nx-canvas-mark[data-mark="selected"]')
-    ).not.toHaveCount(0);
+    const frame = page.locator('.nx-canvas-mark[data-mark="selected"]');
+    await expect(frame).toHaveCount(1);
+    await expect(frame).toHaveAttribute("data-component", "");
+    await expect(frame).toHaveAttribute(
+      "data-placement-label",
+      `◇ ${COMPONENT_TITLE}`
+    );
+    // One dash for each exposed part, the selected heading's included.
+    const exposedParts = await (await canvasRoot(page))
+      .locator("[data-nx-exposed]")
+      .count();
+    expect(exposedParts).toBeGreaterThan(0);
     await expect(
       page.locator('.nx-canvas-mark[data-mark="exposed"]')
-    ).toHaveCount(0);
+    ).toHaveCount(exposedParts);
     await expect(
       (await canvasRoot(page))
         .locator('[data-nx-instance="p1"]')
@@ -309,7 +366,7 @@ test.describe("a placement's exposed fields", () => {
     await link.press("Enter");
     await expect(refusal).toHaveCount(0);
 
-    await page.getByRole("checkbox", { name: "Button shown" }).click();
+    await page.getByRole("switch", { name: "Button shown" }).click();
 
     await save(page, pageId);
     const stored = await storedPlacements(page, pageId);
@@ -332,9 +389,63 @@ test.describe("a placement's exposed fields", () => {
       page.getByRole("textbox", { name: "Button link" })
     ).toHaveValue("/pricing");
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).not.toBeChecked();
     await expect(row(page, "Heading level")).toContainText("H3");
+  });
+
+  test("an exposed passage is edited in the panel with the rich-text editor, on that placement only", async ({
+    page,
+  }) => {
+    const { pageId } = await seed(
+      page,
+      [placement("p1"), placement("p2")],
+      introDefinition()
+    );
+    await openBuilder(page, pageId);
+    await selectPlacement(page, "p1");
+
+    const intro = page
+      .locator(".nx-inspector")
+      .getByRole("textbox", { name: "Intro" });
+    await expect(intro).toContainText("The component's intro.");
+    await intro.click();
+    // Editable once the shared editor has attached to it.
+    await expect(intro).toHaveAttribute("contenteditable", "true");
+    // The passage's end, not its first line's: the panel's field wraps, and
+    // no one key reaches a passage's end on every platform.
+    for (let line = 0; line < 12; line += 1) {
+      await page.keyboard.press("ArrowDown");
+    }
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Ours.");
+    await intro.blur();
+
+    // Drawn on the canvas for this placement, and only this one.
+    await expect(await part(page, "p1", "content")).toContainText(
+      "The component's intro. Ours."
+    );
+    await expect(await part(page, "p2", "content")).toHaveText(
+      "The component's intro."
+    );
+    await expect(row(page, "Intro")).toContainText("Set on this page");
+
+    await save(page, pageId);
+    const stored = await storedPlacements(page, pageId);
+    const overrides = stored.p1?.props.overrides as
+      | Record<string, unknown>
+      | undefined;
+    expect(textOf(overrides?.intro)).toBe("The component's intro. Ours.");
+    expect(stored.p2?.props.overrides).toBeUndefined();
+
+    await page.reload();
+    await expect(await part(page, "p1", "content")).toContainText("Ours.", {
+      timeout: 30_000,
+    });
+    await selectPlacement(page, "p1");
+    await expect(
+      page.locator(".nx-inspector").getByRole("textbox", { name: "Intro" })
+    ).toContainText("The component's intro. Ours.");
   });
 
   test("clearing and resetting are different: Cleared shows nothing, Reset brings back the inherited value", async ({
@@ -348,22 +459,20 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
     const badge = row(page, "Headline").locator(".nx-inspector__source");
-    await expect(badge).toHaveText("Overridden");
+    await expect(badge).toHaveText("Set on this page");
 
     const field = page.getByRole("textbox", { name: "Headline" });
     await field.fill("");
     await field.press("Enter");
-    await expect(badge).toHaveText("Cleared");
+    await expect(badge).toHaveText("Cleared on this page");
     // Cleared draws no headline at all: neither the old value nor the
     // component's own.
     const placed = (await canvasRoot(page)).locator('[data-nx-instance="p1"]');
     await expect(placed.filter({ hasText: "Site name" })).toHaveCount(0);
     await expect(placed.filter({ hasText: "Mine" })).toHaveCount(0);
 
-    await page
-      .getByRole("button", { name: "Reset Headline to inherited value" })
-      .click();
-    await expect(badge).toHaveText("Inherited");
+    await page.getByRole("button", { name: "Reset Headline" }).click();
+    await expect(badge).toHaveText("From the component");
     await expect(await headline(page, "p1")).toHaveText("Site name");
     await expect(field).toHaveValue("Site name");
 
@@ -379,15 +488,17 @@ test.describe("a placement's exposed fields", () => {
     await openBuilder(page, pageId);
     await selectPlacement(page, "p1");
 
-    await expect(page.getByText(/This component is locked/)).toBeVisible();
+    // Said once, by the card's lock line, which the held fields point at.
+    const headlineField = page.getByRole("textbox", { name: "Headline" });
+    await expect(headlineField).toBeDisabled();
     await expect(
-      page.getByRole("textbox", { name: "Headline" })
-    ).toBeDisabled();
+      page.locator("fieldset[disabled]").first()
+    ).toHaveAccessibleDescription(/^Locked: it can.t be moved/);
     await expect(
       page.getByRole("textbox", { name: "Button link" })
     ).toBeDisabled();
     await expect(
-      page.getByRole("checkbox", { name: "Button shown" })
+      page.getByRole("switch", { name: "Button shown" })
     ).toBeDisabled();
 
     const text = await headline(page, "p1");

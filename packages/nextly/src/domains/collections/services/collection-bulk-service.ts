@@ -38,6 +38,7 @@ import { BaseService } from "../../../shared/base-service";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { refuseVersionInSharedData } from "../../versions/stale-version";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -944,6 +945,8 @@ export class CollectionBulkService extends BaseService {
     // Refused whole, before any row is read, when the collection is removed
     // from code, rather than once for each entry it names.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // One set of values for every id names no one document's version.
+    refuseVersionInSharedData(params.data);
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
@@ -1092,6 +1095,8 @@ export class CollectionBulkService extends BaseService {
     // read, and the gate this asks and the rows written must read the same
     // body.
     const data = { ...params.data };
+    // One set of values for every match names no one document's version.
+    refuseVersionInSharedData(data);
     const gate = await writeGateFor(data, "collection", () =>
       this.mutationService.hasLifecycle(params.collectionName)
     );

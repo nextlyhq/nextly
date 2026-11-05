@@ -63,6 +63,20 @@ code-first collection that has been synced shows read-only in the Schema Builder
   many-to-many fields cannot share one junction table, since a link does not record which field
   made it. Rename one many-to-many field per save — with two renamed in one save the builder
   cannot tell which old table belongs to which new field, and refuses rather than guess.
+- In development a save also changes the database, as one schema apply under the schema lock,
+  so it never runs beside `nextly migrate`, `db:sync` or another schema change; one that meets
+  the lock held is refused with nothing written. The apply compares every table the builder
+  owns with what was recorded for it, so a table changed outside the builder refuses the save,
+  naming that table: bring it in step (apply its own change in its editor, or run
+  `nextly db:sync`) and save again. PostgreSQL applies the change whole or not at all. MySQL
+  and SQLite apply each schema statement as it runs, so a save the database refuses part-way
+  keeps what ran before the refusal; saving again finishes the rest.
+- A Required field added to a table that has rows is filled with its default where it has one,
+  and otherwise with its type's empty value; a date with the moment of the save. The column
+  keeps no default afterwards.
+- On SQLite, the saved migration file does not make a field leaving translation NOT NULL when
+  it is Required or Unique, although the database in development does. A database built from
+  the files alone keeps that column nullable.
 
 ## Related
 

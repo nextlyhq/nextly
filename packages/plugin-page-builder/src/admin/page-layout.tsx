@@ -208,6 +208,25 @@ function useStoredLayout<T extends FieldValues>(
   );
 }
 
+/**
+ * What a publish of the page puts it inside, as a readiness request names it:
+ * the Layout its form names; the site's default when it names none and still
+ * draws a header and footer; or neither, for "No header or footer" or a form
+ * that is not a page's.
+ */
+export function usePageLayoutAsk<T extends FieldValues>(
+  control: Control<T>
+): { layout: string | null; siteDefault: boolean } {
+  const stored = useStoredLayout(control);
+  return useMemo(() => {
+    if (stored === undefined || stored.noHeaderFooter) {
+      return { layout: null, siteDefault: false };
+    }
+    const layout = selectedOf(stored);
+    return { layout, siteDefault: layout === null };
+  }, [stored]);
+}
+
 /** The id the stored values select, which the choices are asked about. */
 function selectedOf(
   stored: { layout: unknown; noHeaderFooter: boolean } | undefined
@@ -366,8 +385,9 @@ function Picker<T extends FieldValues>({
 }
 
 /**
- * An option's words: its label, and a short reason muted after it when it
- * has one (a Layout behind Remove Layout's fence).
+ * An option's words: its label, and a short note muted after it when it
+ * has one (the default Layout's name, or why a Layout behind Remove Layout's
+ * fence is not offered).
  */
 function OptionText({ option }: { option: PickerOption }): JSX.Element {
   if (option.note === undefined) return <>{option.label}</>;
@@ -549,7 +569,11 @@ function SearchingPicker({
           className="w-full justify-between font-normal"
         >
           <span className="min-w-0 truncate text-left">
-            {current?.label ?? "Choose a Layout"}
+            {current === undefined ? (
+              "Choose a Layout"
+            ) : (
+              <OptionText option={current} />
+            )}
           </span>
           <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
         </Button>

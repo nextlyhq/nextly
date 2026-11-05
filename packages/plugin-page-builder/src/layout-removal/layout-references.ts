@@ -13,7 +13,9 @@
  * `draft: true`. So every published page is read once more by id, one at a
  * time, and the answer counts only when it IS a working draft
  * (`_isWorkingDraft`); without one the read falls back to the live row, which
- * the first query already judged.
+ * the first query already judged. A page whose live row names the Layout is
+ * read too: its working draft naming it as well is a second place, which a
+ * removal that moves its pages has to clear ({@link namesItOffTheLiveRow}).
  *
  * ## By id, never by offset
  *
@@ -33,6 +35,7 @@
  *
  * @module layout-removal/layout-references
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { relationId } from "../default-layout/store";
@@ -58,14 +61,40 @@ export interface PageReference {
   readonly id: string;
   readonly title: string;
   readonly place: ReferencePlace;
+  /** On a `live` reference: the page's working draft names the Layout too. */
+  readonly draftToo?: true;
+}
+
+/**
+ * Whether a page names the Layout somewhere other than its live row: its only
+ * row, or its working draft. Those are what a removal that moves its pages
+ * clears; a live row is left, and draws the site default once the Layout is
+ * gone.
+ */
+export function namesItOffTheLiveRow(reference: PageReference): boolean {
+  return reference.place !== "live" || reference.draftToo === true;
 }
 
 /** What one scan found. */
 export interface ReferenceScan {
-  /** One entry per page, in the order found. */
+  /** One entry per page still there, in the order found. */
   readonly references: readonly PageReference[];
-  /** False when the budget ran out before every page was read. */
+  /**
+   * False when the budget ran out before every page was read, or a page still
+   * there could not be read.
+   */
   readonly complete: boolean;
+  /** The pages still there whose working draft could not be read. */
+  readonly unread: readonly string[];
+}
+
+/**
+ * Whether a scan stopped only because its budget ran out: incomplete, with
+ * every page it reached read. Reading again from the first page with the same
+ * budget stops at the same place, so a retry cannot finish it.
+ */
+export function stoppedAtBudget(scan: ReferenceScan): boolean {
+  return !scan.complete && scan.unread.length === 0;
 }
 
 /** A row's string field, or the empty string. */
@@ -85,6 +114,99 @@ function isWorkingDraft(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Whether page `id` is confirmed gone: listed again as the system, asking for
+ * nothing but its id, and not there. A check that itself fails confirms
+ * nothing.
+ */
+export async function confirmedGone(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  id: string
+): Promise<boolean> {
+  try {
+    return !(await existingIds(nextly, pages, [id])).has(id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which of `ids` are pages that exist now, listed as the system asking for
+ * nothing but their ids, in chunks ({@link idChunks}). The one existence check
+ * a scan and a by-id read both use. Raises when a listing fails.
+ */
+async function existingIds(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  ids: readonly string[]
+): Promise<Set<string>> {
+  const there = new Set<string>();
+  for (const chunk of idChunks(ids)) {
+    const found = await nextly.find({
+      collection: pages,
+      where: { id: { in: chunk } },
+      status: "all",
+      limit: chunk.length,
+      depth: 0,
+      select: { id: true },
+      overrideAccess: true,
+    });
+    for (const row of found.items) {
+      const id = relationId(row);
+      if (id !== null) there.add(id);
+    }
+  }
+  return there;
+}
+
+/**
+ * The pages `found` that still exist: a page listed as naming the Layout and
+ * deleted since names nothing. When the check itself fails every page is kept,
+ * so a fault never lets a removal through.
+ */
+async function stillThere(
+  nextly: Pick<Nextly, "find">,
+  pages: string,
+  found: ReadonlyMap<string, PageReference>
+): Promise<PageReference[]> {
+  const references = [...found.values()];
+  if (references.length === 0) return references;
+  try {
+    const there = await existingIds(
+      nextly,
+      pages,
+      references.map(reference => reference.id)
+    );
+    return references.filter(reference => there.has(reference.id));
+  } catch {
+    return references;
+  }
+}
+
+/**
+ * `read`, or `null` when the page it reads was deleted in the meantime: a page
+ * listed by one read can be gone by the next. A not-found answer can also come
+ * from the page's own read hooks, about something the page relates to, so it
+ * reads as nothing only once `gone` confirms the page itself is absent; any
+ * other answer, that one included, is raised, so a fault is never taken for an
+ * absent page.
+ */
+export async function unlessGone<T>(
+  read: Promise<T>,
+  gone: () => Promise<boolean>
+): Promise<T | null> {
+  try {
+    return await read;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND") && (await gone())) return null;
+    throw error;
+  }
+}
+
+/** A page whose draft read failed though the page is still there. */
+const UNCHECKED = Symbol("unchecked");
+
+/**
  * How many working drafts are read at once. A draft is read only by id, so a
  * scan makes one read per published page; they go in batches this size rather
  * than one after another, which bounds both the scan's time and the
@@ -101,23 +223,33 @@ async function workingDraftsNaming(
   collection: string,
   pages: readonly { id: string; title: string }[],
   layoutId: string
-): Promise<{ id: string; title: string }[]> {
+): Promise<{ naming: { id: string; title: string }[]; unread: string[] }> {
   const naming: { id: string; title: string }[] = [];
+  const unread: string[] = [];
   for (let at = 0; at < pages.length; at += DRAFT_READS_AT_ONCE) {
     const batch = pages.slice(at, at + DRAFT_READS_AT_ONCE);
     const drafts = await Promise.all(
       batch.map(page =>
-        nextly.findByID({
-          collection,
-          id: page.id,
-          draft: true,
-          depth: 0,
-          overrideAccess: true,
+        unlessGone(
+          nextly.findByID({
+            collection,
+            id: page.id,
+            draft: true,
+            depth: 0,
+            overrideAccess: true,
+          }),
+          () => confirmedGone(nextly, collection, page.id)
+        ).catch((error: unknown) => {
+          // Not found, yet still there: unread, so the scan cannot say
+          // nothing names the Layout.
+          if (NextlyError.isCode(error, "NOT_FOUND")) return UNCHECKED;
+          throw error;
         })
       )
     );
     drafts.forEach((draft, index) => {
       const page = batch[index];
+      if (draft === UNCHECKED && page !== undefined) unread.push(page.id);
       if (
         page !== undefined &&
         isWorkingDraft(draft) &&
@@ -127,7 +259,7 @@ async function workingDraftsNaming(
       }
     });
   }
-  return naming;
+  return { naming, unread };
 }
 
 /**
@@ -206,9 +338,17 @@ export async function scanLayoutReferences(args: {
       return spent >= budget && hasNext ? "stop" : undefined;
     },
   });
-  if (!rowsDone) return { references: [...found.values()], complete: false };
+  const unreadIds: string[] = [];
+  if (!rowsDone) {
+    return {
+      references: await stillThere(nextly, pages, found),
+      complete: false,
+      unread: unreadIds,
+    };
+  }
 
-  // Every published page's working draft, read one at a time.
+  // Every published page's working draft, read one at a time, those whose
+  // live row names the Layout included.
   const draftsDone = await walkPages({
     describe: "the published pages",
     maxPages,
@@ -237,24 +377,33 @@ export async function scanLayoutReferences(args: {
         }
         spent += 1;
         const id = relationId(row);
-        if (id !== null && !found.has(id)) {
-          toRead.push({ id, title: textOf(row, "title") });
-        }
+        if (id !== null) toRead.push({ id, title: textOf(row, "title") });
       }
-      for (const draft of await workingDraftsNaming(
-        nextly,
-        pages,
-        toRead,
-        layoutId
-      )) {
-        found.set(draft.id, { ...draft, place: "draft" });
+      const drafts = await workingDraftsNaming(nextly, pages, toRead, layoutId);
+      for (const draft of drafts.naming) {
+        const live = found.get(draft.id);
+        found.set(
+          draft.id,
+          live === undefined
+            ? { ...draft, place: "draft" }
+            : { ...live, draftToo: true }
+        );
       }
-      // Incomplete only when a row went unread: on this page past the budget,
-      // or on a page after it.
-      return unread > 0 || (spent >= budget && hasNext) ? "stop" : undefined;
+      unreadIds.push(...drafts.unread);
+      // Incomplete when a row went unread: on this page past the budget, on a
+      // page after it, or a page still there whose draft could not be read.
+      return drafts.unread.length > 0 ||
+        unread > 0 ||
+        (spent >= budget && hasNext)
+        ? "stop"
+        : undefined;
     },
   });
-  return { references: [...found.values()], complete: draftsDone };
+  return {
+    references: await stillThere(nextly, pages, found),
+    complete: draftsDone,
+    unread: unreadIds,
+  };
 }
 
 /**

@@ -23,7 +23,9 @@ import {
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   editingBreakpointOf,
+  fallbackBreakpoint,
   frameFitScale,
+  frameFillingRegion,
   previewHeight,
   previewWidth,
   widthForBreakpoint,
@@ -434,6 +436,96 @@ describe("the device an edit goes to", () => {
   });
 });
 
+describe("the device edited once the chosen one is removed", () => {
+  /*
+   * Four bounded devices, so a removal in the middle has both a narrower and
+   * a wider neighbour, and the answer shows which way the fallback moves.
+   */
+  const four = (): BreakpointSet => ({
+    viewport: [
+      { id: "laptop", label: "Laptop", maxWidth: 1199 },
+      { id: "tablet", label: "Tablet", maxWidth: 991 },
+      { id: "small", label: "Small tablet", maxWidth: 767 },
+      { id: "mobile", label: "Mobile", maxWidth: 575 },
+    ],
+    container: [],
+  });
+  const without = (set: BreakpointSet, ...ids: string[]): BreakpointSet => ({
+    ...set,
+    viewport: set.viewport.filter(entry => !ids.includes(entry.id)),
+  });
+
+  it("moves to the narrowest breakpoint wider than the removed one", () => {
+    // Tablet, the next one up: not Laptop, the widest remaining, and not
+    // Mobile, the next one down.
+    expect(fallbackBreakpoint(four(), without(four(), "small"), "small")).toBe(
+      "tablet"
+    );
+    // With the next one up removed too, the one beyond it.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "small", "tablet"), "small")
+    ).toBe("laptop");
+  });
+
+  it("keeps the width when a breakpoint at the same bound remains", () => {
+    /*
+     * Two at one bound: only the later is offered, until it is removed and the
+     * earlier one is offered at that same width. Strictly wider would skip it
+     * for Laptop.
+     */
+    const doubled: BreakpointSet = {
+      viewport: [
+        { id: "laptop", label: "Laptop", maxWidth: 1199 },
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "tablet-wide", label: "Wide tablet", maxWidth: 991 },
+        { id: "mobile", label: "Mobile", maxWidth: 575 },
+      ],
+      container: [],
+    };
+    expect(
+      fallbackBreakpoint(
+        doubled,
+        without(doubled, "tablet-wide"),
+        "tablet-wide"
+      )
+    ).toBe("tablet");
+  });
+
+  it("moves to the base when no wider breakpoint remains", () => {
+    // Narrower ones remain, and none of them is chosen.
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop", "tablet"), "tablet")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("moves to the base when the removed one was the widest", () => {
+    expect(
+      fallbackBreakpoint(four(), without(four(), "laptop"), "laptop")
+    ).toBe(BASE_BREAKPOINT);
+  });
+
+  it("keeps the chosen breakpoint while the site still has it", () => {
+    // Another one removed, a wider one among them.
+    expect(fallbackBreakpoint(four(), without(four(), "laptop"), "small")).toBe(
+      "small"
+    );
+    // Its own bound moved: still the same breakpoint.
+    const moved: BreakpointSet = {
+      ...four(),
+      viewport: four().viewport.map(entry =>
+        entry.id === "small" ? { ...entry, maxWidth: 1300 } : entry
+      ),
+    };
+    expect(fallbackBreakpoint(four(), moved, "small")).toBe("small");
+    expect(fallbackBreakpoint(four(), four(), null)).toBe(BASE_BREAKPOINT);
+  });
+
+  it("goes to the base for a choice the earlier set never offered", () => {
+    // No width to compare: a stored choice for a breakpoint already gone.
+    expect(fallbackBreakpoint(four(), four(), "watch")).toBe(BASE_BREAKPOINT);
+  });
+});
+
 describe("the height a device is previewed at", () => {
   it("changes band exactly at 600 and at 1024", () => {
     // Each pair straddles a bound, so a band written with `<=` instead of `<`
@@ -464,6 +556,49 @@ describe("the height a device is previewed at", () => {
     expect(previewHeight(phablet ?? 0)).toBe(1024);
     expect(previewHeight(small ?? 0)).toBe(844);
     expect(previewHeight(base ?? 0)).toBe(800);
+  });
+});
+
+describe("a frame that fills its region's height", () => {
+  const region = { width: 1000, height: 820 };
+
+  it("fits the device's width, and is as tall as the region at that scale", () => {
+    // Desktop at 1280 in a 1000-wide region: scaled to fit its width, and
+    // tall enough that painted it fills the region from top to bottom.
+    const { scale, height } = frameFillingRegion(1280, region, { kind: "fit" });
+    expect(scale).toBeCloseTo(1000 / 1280);
+    expect(height * scale).toBeCloseTo(820);
+  });
+
+  it("fills the region at a chosen zoom too", () => {
+    for (const chosen of [0.5, 1, 2]) {
+      const { scale, height } = frameFillingRegion(1280, region, {
+        kind: "fixed",
+        scale: chosen,
+      });
+      expect(scale).toBe(chosen);
+      expect(height * scale, String(chosen)).toBeCloseTo(820);
+    }
+  });
+
+  it("is never drawn larger than life to fit", () => {
+    // A phone in a wide region fits at 1, not magnified.
+    const { scale, height } = frameFillingRegion(390, region, { kind: "fit" });
+    expect(scale).toBe(1);
+    expect(height).toBe(820);
+  });
+
+  it("holds a chosen zoom before the region is measured", () => {
+    expect(
+      frameFillingRegion(1280, undefined, { kind: "fixed", scale: 0.5 })
+    ).toEqual({ scale: 0.5, height: previewHeight(1280) });
+  });
+
+  it("keeps the device's own height until the region is measured", () => {
+    expect(frameFillingRegion(1280, undefined, { kind: "fit" })).toEqual({
+      scale: 1,
+      height: previewHeight(1280),
+    });
   });
 });
 

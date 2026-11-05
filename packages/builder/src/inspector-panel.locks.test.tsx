@@ -181,13 +181,10 @@ describe("a block inside a contentOnly area", () => {
     expect(screen.getAllByText(/locked to its content/).length).toBeGreaterThan(
       0
     );
-    // Style: read-only with the reason.
+    // Style: read-only, its reason said once, by the card's line above, not
+    // again under the tab's bar.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    expect(
-      screen.getByText(/locked to its content/, {
-        selector: "[data-read-only]",
-      })
-    ).toBeDefined();
+    expect(document.querySelector('[data-read-only="style"]')).toBeNull();
     const padding = document.querySelector(
       '[data-property="padding"]'
     ) as HTMLElement;
@@ -383,14 +380,46 @@ describe("the bar that says what an edit changes", () => {
     );
     expect(bar.querySelector("[data-edit-state]")?.textContent).toBe("Hover");
     expect(bar.querySelector("[data-edit-device]")?.textContent).toBe("Tablet");
-    expect(baseDevice).toBe("Desktop");
+    // Named for what the edit reaches: the unconditional tier is every device.
+    expect(baseDevice).toBe("All devices");
   });
 });
 
-describe("the device the bar names", () => {
-  it("names the unconditional tier as the device switcher does", () => {
+describe("the devices the bar says an edit reaches", () => {
+  it("names a narrower tier and those below it, from the site's own list", () => {
+    const breakpoints = {
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 991 },
+        { id: "phone", label: "Phone", maxWidth: 600 },
+      ],
+      container: [],
+    } as never;
+    const { rerender } = render(
+      <InspectorPanel
+        editor={editorFor(inside("acme/row"))}
+        breakpoints={breakpoints}
+        breakpoint={"tablet" as never}
+        styleState={{ state: "base", onChange: vi.fn() }}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    const device = () => document.querySelector("[data-edit-device]");
+    expect(device()?.textContent).toBe("Tablet and smaller");
+    rerender(
+      <InspectorPanel
+        editor={editorFor(inside("acme/row"))}
+        breakpoints={breakpoints}
+        breakpoint={"phone" as never}
+        styleState={{ state: "base", onChange: vi.fn() }}
+      />
+    );
+    // The narrowest reaches only itself.
+    expect(device()?.textContent).toBe("Phone");
+  });
+
+  it("says an edit to the unconditional tier reaches all devices", () => {
     // A site's breakpoints list only its narrower tiers; the unconditional
-    // one is built in, and the switcher calls it Desktop.
+    // one is built in, and an edit there reaches every device.
     const breakpoints = {
       viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
       container: [],
@@ -405,7 +434,7 @@ describe("the device the bar names", () => {
     );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
     const device = document.querySelector("[data-edit-device]");
-    expect(device?.textContent).toBe("Desktop");
+    expect(device?.textContent).toBe("All devices");
   });
 });
 

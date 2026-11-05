@@ -24,6 +24,7 @@ process.env.NEXTLY_SECRET =
 
 import {
   definePlugin,
+  NextlyError,
   text,
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
@@ -50,13 +51,17 @@ import {
 import { readLayoutCopy } from "../layout-removal/layout-copy";
 import { settleLayoutRemovals } from "../layout-removal/settle";
 import { LAYOUT_REMOVAL_CONTEXT_KEY } from "../layout-removal/layout-removal-guard";
+import { LAYOUT_CLEAR_CONTEXT_KEY } from "../layout-removal/page-reference-guard";
+import { PAGES_PER_TICK } from "../layout-removal/move-pages";
 import {
   layoutRemovalStore,
   REMOVAL_LEASE_MS,
   type LayoutRemovalStore,
 } from "../layout-removal/store";
 import {
+  ALREADY_BEING_REMOVED,
   BEING_REMOVED_NOT_DEFAULT,
+  CANT_EDIT_PAGE,
   KEPT_AS_DEFAULT,
   LAYOUT_EDIT_DURING_REMOVAL,
   pageLayoutRefusal,
@@ -426,10 +431,12 @@ describe.each(getConfiguredTestDialects())(
         expect(answer.status, JSON.stringify(answer.body)).toBe(200);
         expect((answer.body.item as { check?: unknown }).check).toEqual({
           isDefault: false,
-          pages: [{ id: home, title: "Home" }],
+          pages: [{ id: home, title: "Home", state: "published" }],
           unreadable: 0,
           complete: true,
           pagesCollection: PAGES_SLUG,
+          liveRows: 1,
+          siteDefault: expect.any(String),
         });
         expect(await fence().removalOf(other)).toBeNull();
         expect(await layoutRow(t, other)).toBeDefined();
@@ -509,6 +516,36 @@ describe.each(getConfiguredTestDialects())(
           expect(relationId(stored?.layout)).toBe(other);
         }
       );
+
+      it("refuses when a page that exists can't be read, never reading it as gone", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const home = await page(t, "Home", { status: "published" });
+        // Only the working draft names the Layout.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: home,
+          data: { layout: other },
+          overrideAccess: true,
+        });
+        // A read hook answers not found for the page's working draft (the one
+        // read that names the Layout), as one that looks up something the
+        // page relates to can: the page itself is still there.
+        t.hooks.register("afterRead", PAGES_SLUG, async context => {
+          const doc = (context as { data?: Record<string, unknown> }).data;
+          if (relationId(doc) === home && relationId(doc?.layout) === other) {
+            throw NextlyError.notFound();
+          }
+        });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status, JSON.stringify(answer.body)).toBe(409);
+        expect(told(answer)).toContain("Not every page could be checked");
+        expect((await layoutRow(t, other))?.status).toBe("published");
+        expect(await fence().removalOf(other)).toBeNull();
+      });
 
       it("refuses the site's default, saying to choose another first", async () => {
         const t = await boot();
@@ -1691,6 +1728,233 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("falls back to the seed when the Layout a stopped restore recorded was deleted since", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // The restored Layout is deleted before anything resumes, past every
+        // hook.
+        await t.adapter.delete(await tableOf(t, LAYOUTS_SLUG), {
+          and: [{ column: "id", op: "=", value: recorded }],
+        });
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("falls back to the seed when the Layout a stopped restore recorded was unpublished since", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // The restored Layout is unpublished before anything resumes, past
+        // every hook: it still exists, but can't be a default.
+        await t.adapter.update(
+          await tableOf(t, LAYOUTS_SLUG),
+          { status: "draft" },
+          { and: [{ column: "id", op: "=", value: recorded }] }
+        );
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("falls back to the seed when the Layout a stopped restore recorded is unpublished after the resume checked it", async () => {
+        const t = await boot();
+        const seed = String((await settingsOf(t)).seededLayout);
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        const recorded = (await fence().removalOf(other))?.copy?.restoredAs;
+        expect(recorded).toBeDefined();
+        // Another removal unpublishes the recorded Layout, past every hook,
+        // right after the resume reads it as published: between the resume's
+        // check and its write of the default.
+        let unpublished = false;
+        // A list read hands the hook every row it read.
+        t.hooks.register("afterRead", LAYOUTS_SLUG, async context => {
+          const rows = (context as { data?: unknown }).data;
+          const readIt =
+            Array.isArray(rows) &&
+            rows.some(row => relationId(row) === recorded);
+          if (unpublished || !readIt) return;
+          unpublished = true;
+          await t.adapter.update(
+            await tableOf(t, LAYOUTS_SLUG),
+            { status: "draft" },
+            { and: [{ column: "id", op: "=", value: recorded }] }
+          );
+        });
+
+        expect(await ensure(t)).toBe("repointed");
+
+        expect(unpublished).toBe(true);
+        expect((await settingsOf(t)).defaultLayout).toBe(seed);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
+      it("settles a check after the write that stops at its page budget, which no later sweep would get past", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        for (const title of ["One", "Two", "Three"]) {
+          await page(t, title, { status: "published" });
+        }
+        await deletedThenStopped(t, other);
+        const warned: string[] = [];
+
+        await settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: message => warned.push(message),
+          now: () => new Date(Date.now() + 10 * 60_000),
+          // Fewer page reads than the site has published pages.
+          budget: 2,
+        });
+
+        expect((await fence().removalOf(other))?.settledAt).not.toBeNull();
+        expect(warned.some(message => message.includes("budget"))).toBe(true);
+      });
+
+      it("has the default repair finish a restore that stopped after its create, before it would fall back to the seed", async () => {
+        const t = await boot();
+        const other = await layout(t, "Other", "other");
+        await deletedThenStopped(t, other);
+        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        const restoredOnes = async () =>
+          (
+            await t.nextly.find({
+              collection: LAYOUTS_SLUG,
+              where: { title: { equals: "Other" } },
+              status: "all",
+              limit: 10,
+              depth: 0,
+              overrideAccess: true,
+            })
+          ).items.filter(row => relationId(row) !== other);
+        // The first repair stops once the restored Layout is created and
+        // recorded, before it points the default at it.
+        let stopped = false;
+        t.hooks.register(
+          "afterRead",
+          `single:${PAGE_BUILDER_SETTINGS_SLUG}`,
+          async () => {
+            if (stopped || (await restoredOnes()).length === 0) return;
+            stopped = true;
+            throw new Error("the process stopped");
+          }
+        );
+        await expect(ensure(t)).rejects.toThrow();
+        expect(stopped).toBe(true);
+
+        // The next repair, as startup or the default job runs it, before any
+        // sweep has found the row stale.
+        expect(await ensure(t)).toBe("restored");
+
+        const restored = await restoredOnes();
+        expect(restored).toHaveLength(1);
+        expect((await settingsOf(t)).defaultLayout).toBe(
+          relationId(restored[0])
+        );
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          copy: null,
+        });
+      });
+
       it("keeps the copy when every address a restore could take is taken, and restores once one is free", async () => {
         const t = await boot();
         const other = await layout(t, "Other", "other");
@@ -1821,6 +2085,366 @@ describe.each(getConfiguredTestDialects())(
           title: "Other",
           status: "draft",
         });
+      });
+    });
+
+    describe("moving the pages to the site default first", () => {
+      /** One tick of a move, as the dialog sends it. */
+      const tick = (
+        cookie: string,
+        id: string,
+        body: Record<string, unknown>
+      ) =>
+        post(cookie, ["layouts", id, "remove"], {
+          action: "delete",
+          move: true,
+          ...body,
+        });
+
+      /** A move's progress, from a tick's answer. */
+      function progressOf(answer: Answer): Record<string, unknown> {
+        const item = answer.body.item as { move?: Record<string, unknown> };
+        if (item.move === undefined) {
+          throw new Error(`no move in ${JSON.stringify(answer.body)}`);
+        }
+        return item.move;
+      }
+
+      /** Tick until the move leaves `moving`; answers the last progress. */
+      async function runMove(
+        cookie: string,
+        id: string,
+        action: "delete" | "unpublish" = "delete"
+      ): Promise<Record<string, unknown>> {
+        let body: Record<string, unknown> = { action };
+        for (let i = 0; i < 20; i += 1) {
+          const answer = await tick(cookie, id, body);
+          expect(answer.status, JSON.stringify(answer.body)).toBe(200);
+          const move = progressOf(answer);
+          if (move.state !== "moving") return move;
+          body = { action, token: move.token, after: move.after };
+        }
+        throw new Error("the move never finished");
+      }
+
+      /** The Layout a page names: its working draft's, else its row's. */
+      async function pageLayout(t: TestNextly, id: string): Promise<unknown> {
+        const read = await t.nextly.findByID({
+          collection: PAGES_SLUG,
+          id,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return relationId(read?.layout);
+      }
+
+      /** The Layout a published page's live row names. */
+      async function liveLayout(t: TestNextly, id: string): Promise<unknown> {
+        const found = await t.nextly.find({
+          collection: PAGES_SLUG,
+          where: { id: { equals: id } },
+          status: "published",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return relationId(
+          (found.items[0] as { layout?: unknown } | undefined)?.layout
+        );
+      }
+
+      /** `count` unpublished pages on `layoutId`. */
+      async function unpublishedPages(
+        t: TestNextly,
+        layoutId: string,
+        count: number
+      ): Promise<string[]> {
+        const ids: string[] = [];
+        for (let i = 0; i < count; i += 1) {
+          ids.push(
+            await page(t, `Draft ${String(i)}`, {
+              layout: layoutId,
+              status: "draft",
+            })
+          );
+        }
+        return ids;
+      }
+
+      /** Give `userId` a role holding exactly the permissions `slugs`. */
+      async function grant(
+        t: TestNextly,
+        userId: string,
+        slugs: readonly string[]
+      ): Promise<void> {
+        const permissions = await t.nextly.permissions.find({ limit: 500 });
+        const granted = permissions.items.filter(p => slugs.includes(p.slug));
+        expect(granted).toHaveLength(slugs.length);
+        const role = await t.nextly.roles.create({
+          data: {
+            name: `Role of ${userId}`,
+            slug: `role-${userId}`.toLowerCase().slice(0, 60),
+            permissionIds: granted.map(p => p.id),
+          },
+        });
+        const assigned = await new ServiceContainer(
+          t.adapter
+        ).userRoles.assignRoleToUser(userId, role.item.id);
+        expect(assigned.success).toBe(true);
+      }
+
+      /** The sweep, as the jobs pass runs it, judged once the lease is past. */
+      const sweepLate = (t: TestNextly) =>
+        settleLayoutRemovals({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          store: fence(),
+          warn: () => {},
+          now: () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000),
+        });
+
+      it("moves unpublished pages and working drafts, leaves live rows, and deletes the Layout", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const drafts = await unpublishedPages(t, other, 2);
+        const live = await page(t, "Live", {
+          layout: other,
+          status: "published",
+        });
+        const edited = await page(t, "Edited", {
+          layout: other,
+          status: "published",
+        });
+        // A save without a status: the working draft names it beside the live row.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: edited,
+          data: { title: "Edited again" },
+          overrideAccess: true,
+        });
+
+        const last = await runMove(cookie, other);
+
+        expect(last.state).toBe("done");
+        expect(await layoutRow(t, other)).toBeUndefined();
+        for (const id of drafts) expect(await pageLayout(t, id)).toBeNull();
+        expect(await pageLayout(t, edited)).toBeNull();
+        // Live rows are left; they draw the site default now it is gone.
+        expect(await liveLayout(t, edited)).toBe(other);
+        expect(await liveLayout(t, live)).toBe(other);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          pagesLeft: 0,
+        });
+      });
+
+      it("moves the pages and then unpublishes the Layout", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const [draft] = await unpublishedPages(t, other, 1);
+        const live = await page(t, "Live", {
+          layout: other,
+          status: "published",
+        });
+
+        const last = await runMove(cookie, other, "unpublish");
+
+        expect(last.state).toBe("done");
+        expect((await layoutRow(t, other))?.status).toBe("draft");
+        expect(await pageLayout(t, String(draft))).toBeNull();
+        expect(await liveLayout(t, live)).toBe(other);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+          action: "unpublish",
+        });
+      });
+
+      it("keeps the Layout and every page moved when the dialog goes away, and finishes when started again", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const ids = await unpublishedPages(t, other, PAGES_PER_TICK + 2);
+
+        const first = progressOf(await tick(cookie, other, {}));
+        expect(first).toMatchObject({ state: "moving", moved: PAGES_PER_TICK });
+        // The dialog closed: no more ticks, and the lease lapses.
+        await sweepLate(t);
+
+        expect(await fence().removalOf(other)).toBeNull();
+        expect(await layoutRow(t, other)).toBeDefined();
+        const moved = [];
+        for (const id of ids) {
+          if ((await pageLayout(t, id)) === null) moved.push(id);
+        }
+        expect(moved).toHaveLength(PAGES_PER_TICK);
+        // A late tick of the lapsed move writes nothing.
+        const late = progressOf(
+          await tick(cookie, other, { token: first.token, after: first.after })
+        );
+        expect(late.state).toBe("stopped");
+
+        const resumed = await runMove(cookie, other);
+
+        expect(resumed).toMatchObject({ state: "done", moved: 2 });
+        expect(await layoutRow(t, other)).toBeUndefined();
+      });
+
+      it("refuses a new reference to the Layout while its pages move", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        await unpublishedPages(t, other, PAGES_PER_TICK + 1);
+        const first = progressOf(await tick(cookie, other, {}));
+        expect(first.state).toBe("moving");
+
+        const added = await refusalOf(
+          page(t, "Newcomer", { layout: other, status: "draft" })
+        );
+
+        expect(JSON.stringify(added)).toContain(pageLayoutRefusal("removing"));
+      });
+
+      it("refuses a second person's move while the first runs", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        await unpublishedPages(t, other, PAGES_PER_TICK + 1);
+        const first = progressOf(await tick(cookie, other, {}));
+        expect(first.state).toBe("moving");
+        const secondId = await person(t, "second");
+        // A person who may remove Layouts and edit pages, but did not start it.
+        await grant(t, secondId, [
+          "read-layouts",
+          "delete-layouts",
+          "read-pages",
+          "update-pages",
+        ]);
+        const second = await sessionOf(t, secondId);
+
+        const started = await tick(second, other, {});
+        const continued = await tick(second, other, {
+          token: first.token,
+          after: first.after,
+        });
+
+        expect(started.status).toBe(409);
+        expect(told(started)).toBe(ALREADY_BEING_REMOVED);
+        expect(continued.status).toBe(409);
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "moving",
+          token: first.token,
+        });
+      });
+
+      it("leaves the pages a person may not edit, names them with why, and keeps the Layout", async () => {
+        const t = await boot();
+        await owner(t);
+        const reader = await person(t, "reader");
+        const other = await layout(t, "Other", "other");
+        const [draft] = await unpublishedPages(t, other, 1);
+        // May remove Layouts and read pages, but not edit them.
+        await grant(t, reader, [
+          "read-layouts",
+          "delete-layouts",
+          "read-pages",
+        ]);
+
+        const last = await runMove(await sessionOf(t, reader), other);
+
+        expect(last).toMatchObject({
+          state: "refused",
+          moved: 0,
+          pages: [{ id: draft, title: "Draft 0", reason: CANT_EDIT_PAGE }],
+          unreadable: 0,
+          complete: true,
+        });
+        expect(await layoutRow(t, other)).toBeDefined();
+        expect(await pageLayout(t, String(draft))).toBe(other);
+        expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("refuses a person who may edit pages but not remove the Layout, before any page moves", async () => {
+        const t = await boot();
+        await owner(t);
+        const editor = await person(t, "editor");
+        const other = await layout(t, "Other", "other");
+        const [draft] = await unpublishedPages(t, other, 1);
+        // May edit every page, but may neither delete nor unpublish Layouts.
+        await grant(t, editor, [
+          "read-layouts",
+          "update-layouts",
+          "read-pages",
+          "update-pages",
+        ]);
+        const session = await sessionOf(t, editor);
+
+        const deleting = await tick(session, other, {});
+        const unpublishing = await tick(session, other, {
+          action: "unpublish",
+        });
+
+        expect(deleting.status).toBe(403);
+        expect(unpublishing.status).toBe(403);
+        expect(await pageLayout(t, String(draft))).toBe(other);
+        expect(await layoutRow(t, other)).toBeDefined();
+        expect(await fence().removalOf(other)).toBeNull();
+      });
+
+      it("keeps another author's newer Layout choice over a clear that read the page before it", async () => {
+        const t = await boot();
+        await owner(t);
+        const other = await layout(t, "Other", "other");
+        const chosen = await layout(t, "Chosen", "chosen");
+        const [page] = await unpublishedPages(t, other, 1);
+        // Another author picks a Layout after the clear read "Other".
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: String(page),
+          data: { layout: chosen },
+          overrideAccess: true,
+        });
+
+        // The clear's own write, carrying the Layout it read.
+        const stale = await refusalOf(
+          t.nextly.update({
+            collection: PAGES_SLUG,
+            id: String(page),
+            data: { layout: null },
+            context: { [LAYOUT_CLEAR_CONTEXT_KEY]: other },
+            overrideAccess: true,
+          })
+        );
+
+        expect(stale).toBeDefined();
+        expect(await pageLayout(t, String(page))).toBe(chosen);
+        // The positive control: a clear that read what the page names now.
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: String(page),
+          data: { layout: null },
+          context: { [LAYOUT_CLEAR_CONTEXT_KEY]: chosen },
+          overrideAccess: true,
+        });
+        expect(await pageLayout(t, String(page))).toBeNull();
+      });
+
+      it("leaves plain Remove Layout as strict as before: a live row alone still refuses it", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        await page(t, "Live", { layout: other, status: "published" });
+
+        const answer = await remove(cookie, other, "delete");
+
+        expect(answer.status).toBe(409);
+        expect(told(answer)).toBe(
+          '1 page uses this Layout: "Live". Choose another Layout for it first.'
+        );
+        expect(await layoutRow(t, other)).toBeDefined();
       });
     });
   }

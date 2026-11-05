@@ -19,8 +19,8 @@
 // Returns null when no operations remain (after rename collapsing) and no
 // entity's settings changed: a settings change alone is written as a
 // migration with no table statements, beside its snapshot.
-// CLI exits with code 2 in that case ("no changes detected" — distinct
-// from exit 1 for actual errors so CI scripts can tell apart).
+// The CLI then says "No schema changes detected" and exits 0, since nothing
+// to do is a finished run; a failure exits 1.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -64,6 +64,7 @@ import { KIND_NAMES } from "../../i18n/migration/resolve-entity-table";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
+  LeavingSettingsSpec,
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
 import {
@@ -316,7 +317,7 @@ function operationTableName(op: Operation): string {
 
 /**
  * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot — exit code 2 in the CLI).
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
  */
 export async function generateMigration(
   args: GenerateArgs
@@ -651,11 +652,30 @@ export async function generateMigration(
   //      it, once the main table has the column to copy into.
   //    - A translated field's per-language unique index that goes: first of all, before any
   //      file drops or renames a column it keys on.
+  // A field unique before and after leaving translation has its per-language index dropped by a
+  // file that runs before the move's archive file, so that file carries the move's settings too and
+  // is checked before its drop.
+  const leavingSettingsByTable = new Map(
+    fieldLeavesPlans.map(({ plan, entity, settings }) => [
+      `${entity}|${plan.archive.spec.mainTable}`,
+      settings,
+    ])
+  );
   const beforeMain = [
     ...uniquePlans.flatMap(({ spec, plan, entity }) =>
       plan.drops === null
         ? []
-        : [{ spec, kind: "unique" as const, entity, ...plan.drops }]
+        : [
+            {
+              spec: withLeavingSettings(
+                spec,
+                leavingSettingsByTable.get(`${entity}|${spec.mainTable}`)
+              ),
+              kind: "unique" as const,
+              entity,
+              ...plan.drops,
+            },
+          ]
     ),
     ...disablePlans.map(({ plan, entity }) => ({
       spec: plan.spec,
@@ -664,8 +684,9 @@ export async function generateMigration(
       upSql: plan.upSql,
       downSql: plan.downSql,
     })),
-    ...fieldLeavesPlans.map(({ plan, entity }) => ({
-      spec: plan.archive.spec,
+    ...fieldLeavesPlans.map(({ plan, entity, settings }) => ({
+      // Its header names the settings the move applies, for `nextly migrate`'s pre-check.
+      spec: withLeavingSettings(plan.archive.spec, settings),
       kind: "archive" as const,
       entity,
       upSql: plan.archive.upSql,
@@ -709,9 +730,10 @@ export async function generateMigration(
       },
     });
   });
-  fieldLeavesPlans.forEach(({ plan, entity }, i) => {
+  fieldLeavesPlans.forEach(({ plan, entity, settings }, i) => {
+    // Recorded again here, so a run that stopped between the two files is checked before this one.
     companionFiles.push({
-      spec: plan.shared.spec,
+      spec: withLeavingSettings(plan.shared.spec, settings),
       opts: {
         kind: "shared",
         entity,
@@ -1422,6 +1444,8 @@ interface FieldLeavesEntry {
   entity: I18nTransitionKind;
   /** The settings the main migration leaves off, which the `shared` file applies. */
   held: HeldSettings;
+  /** The same settings by field, for the files' headers; undefined when the fields carry none. */
+  settings: LeavingSettingsSpec | undefined;
 }
 
 /**
@@ -1471,6 +1495,7 @@ function planFieldsLeavingTranslation(
     entries.push({
       entity: kind,
       held,
+      settings: leavingSettingsOf(leaving, held),
       plan: planFieldLeavesTranslationMigration(
         {
           dialect,
@@ -1532,6 +1557,37 @@ function heldSettingsOf(
       index => index.unique && index.columns.some(name => leaving.has(name))
     ),
   };
+}
+
+/**
+ * The held settings by field and column, as the archive and shared files' headers record them:
+ * each Required leaving field, and each one a one-column unique index covers. An index over
+ * several columns is created by the shared file as before, and judged by the database there.
+ */
+function leavingSettingsOf(
+  leaving: readonly LeavingField[],
+  held: HeldSettings
+): LeavingSettingsSpec | undefined {
+  const named = (l: LeavingField) => ({
+    field: l.field.name,
+    column: l.column.name,
+  });
+  const required = leaving.filter(l => held.required.has(l.column.name));
+  const unique = leaving.filter(l =>
+    held.uniqueIndexes.some(
+      index => index.columns.length === 1 && index.columns[0] === l.column.name
+    )
+  );
+  if (required.length === 0 && unique.length === 0) return undefined;
+  return { required: required.map(named), unique: unique.map(named) };
+}
+
+/** A leaving file's spec with the settings its move applies, when there are any. */
+function withLeavingSettings(
+  spec: CompanionMigrationSpec,
+  settings: LeavingSettingsSpec | undefined
+): CompanionMigrationSpec {
+  return settings === undefined ? spec : { ...spec, settings };
 }
 
 /** The main migration's operations with each held setting left off. */

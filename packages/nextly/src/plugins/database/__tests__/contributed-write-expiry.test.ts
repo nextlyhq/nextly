@@ -141,11 +141,21 @@ function surface(
     relationalDb: () => db,
     // better-sqlite3 refuses an async callback, so the transaction is opened
     // and closed by statement, as the adapter's SQLite path does.
+    // What the surface asks to run after commit is held until COMMIT and
+    // dropped on ROLLBACK, as the adapter's `afterCommit` holds it.
     transaction: async fn => {
       sqlite.exec("BEGIN");
+      const held: Array<() => unknown> = [];
       try {
-        const result = await fn({ db, relationalDb: db });
+        const result = await fn({
+          db,
+          relationalDb: db,
+          afterCommit: effect => {
+            held.push(effect);
+          },
+        });
         sqlite.exec("COMMIT");
+        for (const effect of held) await effect();
         return result;
       } catch (error) {
         sqlite.exec("ROLLBACK");

@@ -383,6 +383,20 @@ function insertionProps(
   };
 }
 
+/**
+ * A block's insert presets: its variations that are neither a look (one with
+ * styles, picked for a block already on the page) nor the block's own named
+ * look (`isDefault`). The one reading both the Add panel and the props a block
+ * could have been placed with take, so the two can't disagree.
+ */
+function insertVariations(
+  editor: AnyBlockDefinition["editor"]
+): NonNullable<NonNullable<AnyBlockDefinition["editor"]>["variations"]> {
+  return (editor?.variations ?? []).filter(
+    variation => variation.styles === undefined && variation.isDefault !== true
+  );
+}
+
 /** The props a block is placed with under one of its variations. */
 function variationProps(
   base: Record<string, unknown>,
@@ -402,7 +416,7 @@ export function insertionPropSets(
   const base = insertionProps(definition);
   return [
     base,
-    ...(definition.editor?.variations ?? []).map(variation =>
+    ...insertVariations(definition.editor).map(variation =>
       variationProps(base, variation)
     ),
   ];
@@ -476,7 +490,7 @@ export function catalogFrom(
       props: defaults,
     });
 
-    for (const variation of editor?.variations ?? []) {
+    for (const variation of insertVariations(editor)) {
       entries.push({
         kind: "block",
         id: `${definition.name}#${variation.name}`,
@@ -610,7 +624,7 @@ export function componentEntriesFrom(
 }
 
 /**
- * The rows {@link componentEntriesFrom} offers no entry for, each as an entry
+ * The rows {@link componentEntriesFrom} offered no entry for, each as an entry
  * with nothing in it to place: no roots, and an empty definition.
  *
  * For a surface that lists the library to manage it as well as to place from
@@ -618,14 +632,18 @@ export function componentEntriesFrom(
  * is still one an author can open and fill, so it is listed, refused, rather
  * than left out. Never handed to the offers: there is nothing in it to judge
  * or to place, and the surface says so.
+ *
+ * Given the entries already built rather than the lookup, because building
+ * them walks every definition's roots, and a second walk to learn which rows
+ * were offered would repeat it.
  */
 export function unplaceableComponentEntries(
   components: readonly SavedComponent[],
-  definitions: ComponentLookup
+  entries: readonly InsertEntry[]
 ): ComponentInsertEntry[] {
   const offered = new Set(
-    componentEntriesFrom(components, definitions).map(
-      entry => entry.componentId
+    entries.flatMap(entry =>
+      entry.kind === "component" ? [entry.componentId] : []
     )
   );
   return components

@@ -17,7 +17,11 @@
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { boxInFrameViewport, framePaintedScale } from "./geometry-dom";
+import {
+  boxInFrameViewport,
+  CHROME_BLEED,
+  framePaintedScale,
+} from "./geometry-dom";
 
 /** The words on the cue's tag. */
 const SITE_CHROME_CUE_TAG = "Part of your site’s layout";
@@ -39,8 +43,10 @@ function placeCues(
     const box = boxInFrameViewport(element);
     // An element that draws nothing, such as an empty announcer, gets no cue.
     cue.hidden = box.width === 0 || box.height === 0;
-    cue.style.left = `${String(box.x * scale)}px`;
-    cue.style.top = `${String(box.y * scale)}px`;
+    // The layer starts CHROME_BLEED up and left of the frame's viewport, so
+    // a cue is placed past it by as much to lie over its part.
+    cue.style.left = `${String(box.x * scale + CHROME_BLEED)}px`;
+    cue.style.top = `${String(box.y * scale + CHROME_BLEED)}px`;
     cue.style.width = `${String(box.width * scale)}px`;
     cue.style.height = `${String(box.height * scale)}px`;
   });

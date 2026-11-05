@@ -142,6 +142,8 @@ export interface DocumentActionBindingsInput {
    * action is told when it is chosen.
    */
   currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -246,6 +248,8 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
   /**
    * The Save the document's state calls for, run as its control runs it —
    * every open edit committed and tracked write settled first — wherever that
@@ -291,8 +295,26 @@ export type DocumentSaveState =
       retry?: () => Promise<DocumentActionOutcome>;
     };
 
-/** Run before an action that stores the editor's work; given its id. */
-export type BeforeDocumentAction = (action: string) => void | Promise<void>;
+/**
+ * Run before an action that stores the editor's work; given its id, and how
+ * to wait for the writes the store depends on.
+ */
+export type BeforeDocumentAction = (
+  action: string,
+  store: StoreReadiness
+) => void | Promise<void>;
+
+/** What a before-action handler may ask of the store it runs before. */
+export interface StoreReadiness {
+  /**
+   * Waits for every write the document depends on but does not contain (see
+   * `useTrackedWrite`), and answers whether they all landed. A handler that
+   * acts on the server for the store, beyond committing work to the form,
+   * asks this first and acts only on `true`: on `false` the store is refused,
+   * and anything the handler did would stand without it.
+   */
+  writesSettled(): Promise<boolean>;
+}
 
 const CANCELLED: DocumentActionOutcome = {
   ok: false,
@@ -420,6 +442,7 @@ export function useDocumentActionBindings({
   writesRefused = false,
   contributedActions = [],
   currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -581,7 +604,8 @@ export function useDocumentActionBindings({
     isReadingHistory || writesRefused
       ? []
       : heldUnderLock(contributedActions, documentLocked),
-    currentValues
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>
@@ -612,6 +636,7 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    writesPending: gate.writesPending,
     saveWithoutPublishing: storingWithoutPublishing(
       hasStatus,
       saveWithoutPublishing(runSave, onSaveChanges),
@@ -912,8 +937,13 @@ export function refusalReasons({
   };
 }
 
-/** Why a write is refused while a colleague holds the document. */
-const LOCKED_REASON = "Someone else is editing this document";
+/**
+ * Why a write is refused while the document is held elsewhere.
+ *
+ * Says where, not who: the holder may be a colleague, an API key, or this
+ * person in another tab, and the lock notice above the form names which.
+ */
+const LOCKED_REASON = "This document is being edited elsewhere";
 
 /**
  * The page's contributions, with each way to publish held while a colleague

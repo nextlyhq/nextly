@@ -37,8 +37,13 @@
  * @module canvas-geometry-watch
  */
 
-import { isElement } from "./dom-kind";
-import { overlaySpaceOf } from "./geometry-dom";
+import { isEditableText, isTextEntry } from "./canvas-escape";
+import { isElement, isFormField } from "./dom-kind";
+import {
+  overlaySpaceOf,
+  screenScrollers,
+  scrollEventTarget,
+} from "./geometry-dom";
 import { nodeElements, nodeElementsIn } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -176,10 +181,125 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * geometry rather than following the animation: tracking the frames between
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
+   *
+   * `animation` likewise: an entrance motion or a site's `@keyframes` moves a
+   * block by transform, and its end and cancel bubble the same way. A block
+   * animating FOREVER never ends; its marks follow the geometry of the last
+   * measurement, re-taken whenever anything else re-measures, rather than
+   * chasing every frame — `animationiteration` would re-measure at whatever
+   * point of the motion each loop boundary falls, which moves the ring without
+   * making it right.
    */
   const settled = (): void => moved();
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
+  root.addEventListener("animationend", settled);
+  root.addEventListener("animationcancel", settled);
+  /*
+   * An authored `:hover` or `:focus-visible` rule can move a block — a
+   * transform, a margin — with no transition, so the change of state is the
+   * only signal there is. Pointer and focus entering or leaving a block
+   * bubble, so the root hears every block's. Measured on the next frame,
+   * once the state's styles apply, and once per frame however many changes
+   * arrive in it: a pointer crossing the page enters and leaves many blocks.
+   */
+  let frame: number | undefined;
+  const restated = (): void => {
+    if (frame !== undefined) return;
+    if (view === null || typeof view.requestAnimationFrame !== "function") {
+      moved();
+      return;
+    }
+    frame = view.requestAnimationFrame(() => {
+      frame = undefined;
+      moved();
+    });
+  };
+  /*
+   * Hover and focus entering or leaving a block, and a press ending. The
+   * input modality, which `:focus-visible` can follow with no focus event at
+   * all, is heard by the key and pointer listeners below.
+   */
+  const STATE_EVENTS = [
+    "pointerover",
+    "pointerout",
+    "focusin",
+    "focusout",
+    // A press ending ends an authored `:active` state, with no pointer
+    // leaving and no focus changing.
+    "pointerup",
+    "pointercancel",
+  ];
+  for (const type of STATE_EVENTS) root.addEventListener(type, restated);
+  /*
+   * A value can change with no DOM mutation: a form field's, or a custom
+   * element's kept in script, and either can change what `:valid`,
+   * `:invalid`, `:placeholder-shown` or a custom state styles. So every
+   * `input` and `change` re-measures, with ONE exception: editable text in
+   * the canvas's own tree, whose edits mutate the DOM, which the mutation
+   * watch already measures — hearing its `input` too would measure every
+   * character twice. An edit inside a custom element's shadow root is a
+   * mutation no observer on the root sees, so it is not the exception.
+   *
+   * Read from the composed path, whose first entry is the element the edit
+   * reached: `target` is retargeted to the shadow host by the time the event
+   * reaches the root.
+   */
+  const valueChanged = (event: Event): void => {
+    const origin = event.composedPath()[0] ?? event.target;
+    // The editing host itself, the element carrying `contenteditable`, is
+    // where a browser fires an edit's `input`. A control nested in editable
+    // text that dispatches on itself inherits editability without being one,
+    // and its value can change with no mutation at all.
+    const mutatesOurTree =
+      isElement(origin) &&
+      !isFormField(origin) &&
+      origin.hasAttribute("contenteditable") &&
+      origin.getRootNode() === root.getRootNode() &&
+      isEditableText(origin);
+    if (!mutatesOurTree) restated();
+  };
+  root.addEventListener("input", valueChanged);
+  root.addEventListener("change", valueChanged);
+  /*
+   * The keyboard is heard for what it can change, not for every key: an
+   * author typing would otherwise re-measure every overlay once a frame. A
+   * key changes what a style reads when it is the first after a pointer (the
+   * modality, which `:focus-visible` follows), or when it activates a
+   * control — Space or Enter down and up, outside editable text — which
+   * `:active` follows. A pointer press is always a change: it starts
+   * `:active`, and hands the modality back to the pointer.
+   */
+  let modality: "keyboard" | "pointer" | undefined;
+  const activates = (event: Event): boolean => {
+    // Read by shape: a canvas in a frame dispatches the frame's own
+    // KeyboardEvent, which no `instanceof` against this window matches.
+    const key = "key" in event ? event.key : undefined;
+    if (key !== " " && key !== "Enter") return false;
+    // Text entry is the one place these keys activate nothing; a checkbox,
+    // a radio or a button the keyboard presses is a control, as Escape's
+    // own reading of the canvas already tells them apart.
+    const target = event.target;
+    return !(isElement(target) && isTextEntry(target));
+  };
+  const keyDown = (event: Event): void => {
+    if (modality !== "keyboard") {
+      modality = "keyboard";
+      restated();
+    } else if (activates(event)) {
+      restated();
+    }
+  };
+  const keyUp = (event: Event): void => {
+    if (activates(event)) restated();
+  };
+  const pointerDown = (): void => {
+    modality = "pointer";
+    restated();
+  };
+  root.addEventListener("keydown", keyDown);
+  root.addEventListener("keyup", keyUp);
+  root.addEventListener("pointerdown", pointerDown);
   root.addEventListener("scroll", settled, true);
   /*
    * And the root's DOCUMENT, in the bubble phase, for the viewport itself
@@ -197,6 +317,15 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
+    root.removeEventListener("animationend", settled);
+    root.removeEventListener("animationcancel", settled);
+    for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    root.removeEventListener("input", valueChanged);
+    root.removeEventListener("change", valueChanged);
+    root.removeEventListener("keydown", keyDown);
+    root.removeEventListener("keyup", keyUp);
+    root.removeEventListener("pointerdown", pointerDown);
+    if (frame !== undefined) view?.cancelAnimationFrame(frame);
     root.removeEventListener("scroll", settled, true);
     doc.removeEventListener("scroll", settled);
   };
@@ -358,4 +487,54 @@ function watchCanvasStyleMutations(
     characterData: true,
   });
   return () => styles.disconnect();
+}
+
+/**
+ * Call `moved` whenever what of the canvas is on screen may have changed:
+ * a scroll of the canvas's own scroller or of the host's around its frame,
+ * either one resizing, or a window resizing. Chrome kept to the screen band
+ * (the block toolbar, the marks' tags) re-measures for all of them.
+ *
+ * One subscription rather than each consumer listening for its own share, for
+ * the reason this module exists: an overlay that heard the scrolls and not
+ * the resizes looked complete and stayed where a resized panel had left the
+ * band. A scroller's scroll is heard where it is dispatched
+ * (`scrollEventTarget`): a document's scrolling element scrolls at its
+ * document, never at itself.
+ *
+ * @param root - the canvas root the band is read for
+ * @param frame - the frame the canvas is drawn in, or `null`
+ * @param moved - re-measure; called once per change
+ * @returns unsubscribes everything this installed
+ */
+export function watchScreenBand(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null,
+  moved: () => void
+): () => void {
+  const changed = (): void => moved();
+  const stops: (() => void)[] = [];
+  const views = new Set<Window>();
+  for (const scroller of screenScrollers(root, frame)) {
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", changed, { passive: true });
+    stops.push(() => source.removeEventListener("scroll", changed));
+    const view = scroller.ownerDocument.defaultView;
+    if (view === null) continue;
+    views.add(view);
+    // Absent in jsdom unless a test supplies one, and in older browsers: a
+    // missing observer costs a re-measure, not correctness.
+    const Sizes = view.ResizeObserver;
+    if (typeof Sizes !== "function") continue;
+    const sizes = new Sizes(changed);
+    sizes.observe(scroller);
+    stops.push(() => sizes.disconnect());
+  }
+  for (const view of views) {
+    view.addEventListener("resize", changed);
+    stops.push(() => view.removeEventListener("resize", changed));
+  }
+  return () => {
+    for (const stop of stops) stop();
+  };
 }

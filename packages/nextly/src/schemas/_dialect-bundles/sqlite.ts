@@ -127,6 +127,8 @@ export { nextlyEmailBrandSqlite as nextlyEmailBrand } from "../email-brand/sqlit
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsSqlite as nextlyVersionViews } from "../version-views/sqlite";
+export { nextlyReviewStatesSqlite as nextlyReviewStates } from "../review-states/sqlite";
+export { nextlyWorkflowSettingsSqlite as nextlyWorkflowSettings } from "../workflow-settings/sqlite";
 // The record of content events; in the bundle so freshPushSchema creates the
 // tables on a fresh database, for the reason the release tables above give.
 export {

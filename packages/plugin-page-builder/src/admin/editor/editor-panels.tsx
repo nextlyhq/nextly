@@ -7,13 +7,13 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
+import { spacingModeOf } from "@nextlyhq/blocks-engine";
 import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
 import {
   browserStore,
-  DEFAULT_PREFERENCES,
   type LeftPanel,
   type PreferenceStore,
   type SavedPattern,
@@ -34,14 +34,7 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useMemo,
-  useState,
-  type SetStateAction,
-  type ReactNode,
-  type Dispatch,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
@@ -284,11 +277,9 @@ type PanelRequests = {
   openInsertPanel: (inside?: string) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
-  showEmptyElements: boolean;
-  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
 };
 
-/** Requests to open a panel from the canvas, and the empty-chrome switch. */
+/** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
@@ -337,28 +328,11 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   }
   const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
-  /*
-   * Whether the author wants empty-container chrome showing at all, mirrored
-   * from the shell so the appender mounted below can answer the same question
-   * the dashed placeholder box's own CSS rule already answers.
-   *
-   * Starts at the preference's own default rather than an assumed `true`: the
-   * shell reports the real value once it has read it, but that report lands
-   * one render after this component's first — an assumed value would be a
-   * SECOND declaration of the default that goes stale the day the shell's own
-   * changes and this one does not.
-   */
-  const [showEmptyElements, setShowEmptyElements] = useState(
-    DEFAULT_PREFERENCES.showEmptyElements
-  );
-
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
     insertInside,
-    showEmptyElements,
-    setShowEmptyElements,
   };
 }
 
@@ -492,12 +466,22 @@ export function editorPanelRenderer({
   requestPanel,
   insertInside,
   pages,
+  canvasRender,
+  editedBreakpoint,
+  canvasElement,
+  layerVerbs,
   documentDirty,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** Whether the editor holds work not yet saved, for the Pages panel's copy note. */
   documentDirty: boolean;
   /** The regions of the page's Layout, as read-only rows in Layers. */
   layersRegions?: readonly LayersRegionRow[];
+  /**
+   * The block verbs the verbs provider shares, for the Layers row menu: drawn
+   * in the shell's panel region, outside the provider, so they are handed
+   * across as the inspector's card menu has them.
+   */
+  layerVerbs?: React.ComponentProps<typeof LayersPanel>["verbs"];
   /** "Edit component", which the Components panel offers on each row. */
   componentView: Pick<ComponentView, "onEditComponent">;
 } & Pick<
@@ -510,7 +494,15 @@ export function editorPanelRenderer({
     | "unreadableStoredFonts"
     | "classes"
   > &
-  Pick<CanvasInputs, "drag" | "pageClassBlocks" | "classSummaryContext"> &
+  Pick<
+    CanvasInputs,
+    | "drag"
+    | "pageClassBlocks"
+    | "classSummaryContext"
+    | "canvasRender"
+    | "editedBreakpoint"
+    | "canvasElement"
+  > &
   Pick<
     EditorPanels,
     "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
@@ -588,6 +580,25 @@ export function editorPanelRenderer({
           // Its titles come with the read, so a placement of a component
           // the panel does not offer (the one being edited) is still named.
           componentTitle={offered.titleOf}
+          // The device the eye hides on: the one being edited, against the
+          // breakpoints the canvas is compiled with. Withheld until the
+          // site's stored breakpoints have been read: until then the set in
+          // hand is the config's defaults, and a hide written against it
+          // could resolve differently against the site's own.
+          {...(siteStylePending || siteStyleError !== null
+            ? {}
+            : {
+                device: {
+                  breakpoints: canvasRender.styleContext.breakpoints,
+                  id: editedBreakpoint,
+                },
+              })}
+          // Inside the shell's shortcut provider, so the row keys register
+          // with it and Help lists them.
+          shortcuts
+          // A row chosen there scrolls its block into view here.
+          canvasRoot={canvasElement}
+          {...(layerVerbs === undefined ? {} : { verbs: layerVerbs })}
         />
       ),
       // Read when the panel is drawn, as every other entry reads its inputs,
@@ -607,6 +618,13 @@ export function editorPanelRenderer({
               )}
               supplied={configSiteStyle?.tokens}
               pending={siteStylePending}
+              // Offered once the stored style is read, so the choice shows
+              // the model the canvas is compiled under and nothing earlier.
+              {...(siteStylePending || siteStyleError !== null
+                ? {}
+                : {
+                    spacingMode: spacingModeOf(canvasSiteStyle?.spacingMode),
+                  })}
             >
               {designTabs}
             </TokensStudio>

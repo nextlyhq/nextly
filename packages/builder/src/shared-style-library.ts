@@ -10,8 +10,9 @@
  * @module shared-style-library
  */
 import {
+  classNameOf,
+  isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
-  namedClassName,
   tokenLabelIssue,
   type NamedClass,
   type NodeStyles,
@@ -26,7 +27,7 @@ import {
 } from "./class-library";
 import { EDITOR_WORDS } from "./editor-words";
 import type { TokenMode } from "./font-library";
-import { colourHexOf } from "./style-colour";
+import { colourHexOf, contrastOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */
 export type SharedStyleKind = "pages" | "components" | "patterns" | "layouts";
@@ -45,11 +46,48 @@ export interface SharedStyleReach {
 export interface SharedStylesUsage {
   /** Whether every page has been counted, so counts can be exact. */
   readonly whole: boolean;
+  /**
+   * Whether counts that are not whole may still become whole, so they are
+   * worth asking for again. False when something the index cannot reach
+   * keeps them floors for good.
+   *
+   * Optional, so a host written before it existed still compiles. Absent
+   * means unknown, and the tab asks again as it does while counting: every
+   * 15 seconds while the counts are not whole, until 20 asks in a row change
+   * nothing (`USAGE_RECOUNT_MS` and `USAGE_RECOUNT_IDLE_MAX` in the panel), so
+   * it neither stops while the counts still move nor asks for ever where they
+   * cannot finish.
+   */
+  readonly counting?: boolean;
   /** Whether this author may lock and unlock shared styles. */
   readonly mayLock: boolean;
+  /**
+   * Whether this author may ask for the pages to be counted now
+   * ({@link SharedStylesAccess.count}). Optional, so a host written before it
+   * existed still compiles; absent means no.
+   *
+   * @experimental Settles with the Shared styles tab.
+   */
+  readonly mayCount?: boolean;
   /** Each style asked about, by id. */
   readonly styles: ReadonlyMap<string, SharedStyleReach>;
 }
+
+/**
+ * What asking for the pages to be counted now answered: how far the counting
+ * got, in the usage read's terms, or why it was refused.
+ *
+ * @experimental Settles with the Shared styles tab.
+ */
+export type SharedStylesCount =
+  | {
+      readonly kind: "counted";
+      /** Every page is counted now, so the counts can be exact. */
+      readonly whole: boolean;
+      /** Pages are left that a further count would reach. */
+      readonly counting: boolean;
+    }
+  | { readonly kind: "refused"; readonly reason: string };
 
 /** One document a shared style is used on. */
 export interface SharedStyleUse {
@@ -72,6 +110,28 @@ export interface SharedStyleUsesPage {
   readonly hasNext: boolean;
   /** False while some pages are still being counted. */
   readonly complete: boolean;
+}
+
+/**
+ * A removal the host refused, with whether the route said the style is still
+ * used (its in-use refusal) rather than refusing for another reason, such as
+ * a lock or a count no longer whole.
+ *
+ * @experimental Settles with the Shared styles tab.
+ */
+export interface SharedStyleRefusal {
+  readonly reason: string;
+  readonly inUse: boolean;
+}
+
+/**
+ * A host's answer to a removal as a refusal, or nothing when it was stored.
+ * Words alone are a refusal that does not say the style is used.
+ */
+export function sharedStyleRefusalOf(
+  answer: string | undefined
+): SharedStyleRefusal | undefined {
+  return answer === undefined ? undefined : { reason: answer, inUse: false };
 }
 
 /** One shared style as the tab lists it. */
@@ -101,11 +161,21 @@ export function sharedStyleRows(
     id: entry.id,
     name: sharedStyleName(entry),
     slug: entry.slug,
-    className: `.${namedClassName(entry.slug)}`,
+    // A look's class is written under its own prefix.
+    className: `.${classNameOf(entry)}`,
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     styles: entry.styles,
   }));
+}
+
+/**
+ * The library without its looks: the shared styles an author applies to any
+ * block, as the Shared styles tab and the picker list them. A look is bound
+ * to one block type and is picked from that block's own tiles.
+ */
+export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
+  return library.filter(entry => !isLook(entry));
 }
 
 /** A style's name: its label, or its slug for a style made before labels. */
@@ -271,6 +341,259 @@ export function sharedStylePageTile(
   };
 }
 
+/**
+ * The contrast under which a tile's text counts as hard to read: WCAG AA for
+ * normal text, since the "Aa" is small, regular-weight text.
+ */
+const READABLE_RATIO = 4.5;
+
+/**
+ * The engine's own variables, for readable text when the site's are not to
+ * hand: a colour the tile can always fall back on.
+ */
+const ENGINE_TOKENS: SiteTokenSet = { tokens: [] };
+
+/** One row's tile: the page under the preview, the preview, and a dark-mode flag. */
+export interface SharedStyleTile {
+  /** The page the preview stands on; empty for the neutral tile. */
+  readonly page: { backgroundColor?: string; color?: string };
+  /** The "Aa": the style's own colours, with readable text where it sets none. */
+  readonly specimen: Readonly<Record<string, string>>;
+  /**
+   * The style's text is under 4.5:1 on the site's dark page, so the tile
+   * shows the light page instead and says so.
+   */
+  readonly darkUnreadable: boolean;
+  /**
+   * The "Aa" is not shown to read on its background, a colour this cannot
+   * measure, so it carries an outline in the page's colour: visible on any
+   * background, without measuring it.
+   */
+  readonly outlined: boolean;
+}
+
+/** A canvas 2D context's colour slot, which is all the normaliser reads. */
+interface FillStyleSlot {
+  fillStyle: unknown;
+}
+
+/** The context colours are normalised through, by the constructor it came from. */
+let canvasSlot: { maker: unknown; slot: FillStyleSlot | null } | undefined;
+
+/**
+ * The browser's 2D context, when there is one: an `OffscreenCanvas`, which
+ * needs no document. Absent under a server render and in a test DOM, where
+ * colours stay as written.
+ */
+function fillStyleSlot(): FillStyleSlot | null {
+  if (typeof OffscreenCanvas === "undefined") return null;
+  if (canvasSlot?.maker !== OffscreenCanvas) {
+    canvasSlot = {
+      maker: OffscreenCanvas,
+      slot: new OffscreenCanvas(1, 1).getContext("2d"),
+    };
+  }
+  return canvasSlot.slot;
+}
+
+/**
+ * A colour as the browser resolves it, hex or rgba(), so the contrast verdict
+ * can read a name, hsl() or any other colour CSS takes: a 2D context's
+ * `fillStyle` normalises what it accepts and keeps its old value for what it
+ * does not, so the value is set over two different colours and kept only
+ * when both read back alike. The colour as written where there is no canvas.
+ */
+function resolvedColour(colour: string): string {
+  const slot = fillStyleSlot();
+  if (slot === null) return colour;
+  slot.fillStyle = "#000";
+  slot.fillStyle = colour;
+  const overBlack = slot.fillStyle;
+  slot.fillStyle = "#fff";
+  slot.fillStyle = colour;
+  const overWhite = slot.fillStyle;
+  return typeof overBlack === "string" && overBlack === overWhite
+    ? overBlack
+    : colour;
+}
+
+/**
+ * The contrast between two colours, each resolved by the browser first
+ * ({@link resolvedColour}), by the verdict the colour field shows
+ * ({@link contrastOf}); `undefined` when either still cannot be measured.
+ * Nothing is guessed: two colours either side of a light/dark line can be
+ * all but the same.
+ */
+function ratioOf(fg: string, bg: string): number | undefined {
+  return contrastOf(resolvedColour(fg), resolvedColour(bg), undefined)?.ratio;
+}
+
+/**
+ * Whether text drawn with `fg` on `bg` reads, by a measured ratio; unknown
+ * where the pair cannot be measured, which is never taken as readable.
+ */
+function readability(fg: string, bg: string): boolean | undefined {
+  const ratio = ratioOf(fg, bg);
+  return ratio === undefined ? undefined : ratio >= READABLE_RATIO;
+}
+
+/**
+ * Text that reads on a style's own background when it sets no colour: the
+ * page's, else the site's light or dark text, else the engine's own light or
+ * dark text, the first that reads. The engine's come last so a site whose
+ * text fails on that background in both modes still gets readable text.
+ */
+function readableText(
+  background: string,
+  page: { color?: string },
+  tokens: SiteTokenSet | undefined
+): string | undefined {
+  const candidates = [
+    page.color,
+    sharedStylePageTile(tokens, "light").color,
+    sharedStylePageTile(tokens, "dark").color,
+    sharedStylePageTile(ENGINE_TOKENS, "light").color,
+    sharedStylePageTile(ENGINE_TOKENS, "dark").color,
+  ];
+  return candidates.find(
+    colour => colour !== undefined && readability(colour, background) === true
+  );
+}
+
+/**
+ * A row's tile in the mode the canvas shows. In dark mode a style whose text
+ * (its own, or the page's where it sets none) would be under 4.5:1 on its
+ * background (its own, or the dark page's) is drawn on the light page
+ * instead and marked, since on the site it is hard to read in dark mode. A
+ * style with a background and no text colour gets text that reads on that
+ * background, so it never draws as a blank square.
+ */
+export function sharedStyleTile(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  preview: Readonly<Record<string, string>>
+): SharedStyleTile {
+  const shown = sharedStylePageTile(tokens, mode);
+  const darkUnreadable =
+    mode === "dark" &&
+    unreadablePair(
+      preview.color ?? shown.color,
+      preview.backgroundColor ?? shown.backgroundColor
+    );
+  const page = darkUnreadable ? sharedStylePageTile(tokens, "light") : shown;
+  const background = preview.backgroundColor;
+  const text =
+    background !== undefined && preview.color === undefined
+      ? readableText(background, page, tokens)
+      : undefined;
+  const specimen = text === undefined ? preview : { ...preview, color: text };
+  const outlined = notShownToRead(preview, specimen, page);
+  return {
+    page,
+    specimen: outlined
+      ? outlinedSpecimen(
+          specimen,
+          page,
+          preview.backgroundColor ?? page.backgroundColor
+        )
+      : specimen,
+    darkUnreadable,
+    outlined,
+  };
+}
+
+/**
+ * Whether a style that sets a colour is not shown to read on its tile: its
+ * text (or the page's) against its background (or the page's) is under the
+ * bar, or a pair this cannot judge. A style setting no colour draws as the
+ * page does.
+ */
+function notShownToRead(
+  preview: Readonly<Record<string, string>>,
+  specimen: Readonly<Record<string, string>>,
+  page: { backgroundColor?: string; color?: string }
+): boolean {
+  if (preview.color === undefined && preview.backgroundColor === undefined) {
+    return false;
+  }
+  const fg = specimen.color ?? page.color;
+  const bg = preview.backgroundColor ?? page.backgroundColor;
+  if (fg === undefined || bg === undefined) return true;
+  return readability(fg, bg) !== true;
+}
+
+/**
+ * The "Aa" with an outline it shows by on its own background. Where that
+ * background can be measured, one stroke painted under the fill, in the
+ * colour that measures best against it of the page's background and text and
+ * the engine's light and dark text. Where it cannot, a light and a dark halo
+ * together, which show on any colour.
+ */
+function outlinedSpecimen(
+  specimen: Readonly<Record<string, string>>,
+  page: { backgroundColor?: string; color?: string },
+  background: string | undefined
+): Readonly<Record<string, string>> {
+  const light = sharedStylePageTile(ENGINE_TOKENS, "dark").color;
+  const dark = sharedStylePageTile(ENGINE_TOKENS, "light").color;
+  const outline =
+    background === undefined
+      ? undefined
+      : bestAgainst(background, [
+          page.backgroundColor,
+          page.color,
+          dark,
+          light,
+        ]);
+  if (outline !== undefined) {
+    return {
+      ...specimen,
+      WebkitTextStroke: `2px ${outline}`,
+      paintOrder: "stroke fill",
+    };
+  }
+  return {
+    ...specimen,
+    textShadow: `0 0 1px ${dark ?? "currentcolor"}, 0 0 3px ${light ?? "currentcolor"}`,
+    // No stroke over the halos, whatever a class supplies: one would hide the
+    // inner dark halo, and could be the very colour of a background this
+    // cannot measure.
+    WebkitTextStroke: "0",
+  };
+}
+
+/** The candidate that measures best against `background`, if any measures. */
+function bestAgainst(
+  background: string,
+  candidates: readonly (string | undefined)[]
+): string | undefined {
+  let best: { colour: string; ratio: number } | undefined;
+  for (const colour of candidates) {
+    if (colour === undefined) continue;
+    const ratio = ratioOf(colour, background);
+    if (ratio !== undefined && (best === undefined || ratio > best.ratio)) {
+      best = { colour, ratio };
+    }
+  }
+  return best?.colour;
+}
+
+/**
+ * Whether a pair is not shown to read: under the bar, or one this cannot
+ * judge, which is drawn on the light page rather than risked blank. A pair
+ * missing a colour (no site variables) has nothing to judge.
+ */
+function unreadablePair(
+  fg: string | undefined,
+  bg: string | undefined
+): boolean {
+  if (fg === undefined || bg === undefined) return false;
+  return readability(fg, bg) !== true;
+}
+
+/** What a marked tile says, in its tooltip and the row's accessible name. */
+export const SHARED_STYLE_DARK_UNREADABLE = "Hard to read in dark mode";
+
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {
   pages: ["page", "pages"],
   components: ["component", "components"],
@@ -337,9 +660,37 @@ export function sharedStyleReachSentence(
   return exact ? "Not used anywhere" : "No uses counted yet";
 }
 
-/** A row's count: its documents, with "+" when that is a floor. */
-export function sharedStyleReachChip(reach: SharedStyleReach): string {
-  return `${reach.documents}${reach.complete ? "" : "+"}`;
+/** A row's count in words, and whether it is a zero not counted yet. */
+export interface SharedStyleReachChip {
+  readonly words: string;
+  /** No use found so far on a site not counted in full: drawn muted. */
+  readonly uncounted: boolean;
+}
+
+/**
+ * A row's count: its documents, with "+" when that is a floor, and what they
+ * are. A bare number was read as uses, 17 blocks on 2 pages reading "2", so
+ * the chip names the kind it counts: "4 pages", or "5 places" across several
+ * kinds, which the row's name says one by one. A zero that is a floor says
+ * "Not counted yet" rather than "0+ pages", a number that says nothing.
+ */
+export function sharedStyleReachChip(
+  reach: SharedStyleReach
+): SharedStyleReachChip {
+  if (reach.documents === 0 && !reach.complete) {
+    return { words: "Not counted yet", uncounted: true };
+  }
+  const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[]).filter(
+    kind => reach.byKind[kind] > 0
+  );
+  const [only] = kinds;
+  // Nothing used reads in pages, the kind a style is most often on.
+  const words: readonly [string, string] =
+    kinds.length > 1 ? ["place", "places"] : KIND_WORDS[only ?? "pages"];
+  const plus = reach.complete ? "" : "+";
+  const [one, many] = words;
+  const noun = reach.documents === 1 && plus === "" ? one : many;
+  return { words: `${reach.documents}${plus} ${noun}`, uncounted: false };
 }
 
 /**
@@ -384,25 +735,28 @@ export function isUnused(
   reach: SharedStyleReach
 ): boolean {
   return (
-    sharedStyleUse(blocks, reach) === "unused" &&
     blocks !== undefined &&
     blocks.complete &&
-    reach.complete
+    blocks.count === 0 &&
+    reach.complete &&
+    reach.documents === 0
   );
 }
 
 /**
- * Whether any use of a style has been counted: on a block of the open page or
- * on a document in the index. "unused" says only that none has been counted;
- * it is certain once every count is ({@link isUnused}). Undefined while the
- * style's usage has not been read.
+ * Where a style stands for the Used and Unused filters: "used" once any use
+ * has been counted, on a block of the open page or a document in the index,
+ * complete or not; "unused" only when it certainly is ({@link isUnused}, the
+ * one rule removal also reads). Undefined otherwise: not read yet, or a zero
+ * while some count is incomplete, which is "none counted yet", not unused.
  */
 export function sharedStyleUse(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach | undefined
 ): "used" | "unused" | undefined {
   if (reach === undefined) return undefined;
-  return (blocks?.count ?? 0) > 0 || reach.documents > 0 ? "used" : "unused";
+  if ((blocks?.count ?? 0) > 0 || reach.documents > 0) return "used";
+  return isUnused(blocks, reach) ? "unused" : undefined;
 }
 
 /** Which styles the tab lists: every one, or those used, unused or locked. */
@@ -448,7 +802,7 @@ export function sharedStyleFilterEmpty(
  * the tab says the same before it is asked.
  */
 export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
-  "Some pages are still being counted, so no shared style can be removed yet.";
+  "Some pages haven't been counted yet, so no shared style can be removed.";
 
 /**
  * Why Lock, Remove and Remove unused wait: a rename writes the whole list of
@@ -458,6 +812,31 @@ export const SHARED_STYLE_NOT_WHOLE_REMOVAL =
 export const SHARED_STYLE_RENAME_PENDING =
   "Wait until the name change is saved.";
 
+/**
+ * The one note while the tab's counts are floors and Unused holds rows back:
+ * it covers the minimums, the withheld rows and Remove unused waiting.
+ */
+export const SHARED_STYLE_COUNTING_NOTE =
+  "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed.";
+
+/**
+ * The note while counts are floors for good: content the index cannot reach
+ * keeps them so, so it promises no wait.
+ */
+export const SHARED_STYLE_UNCOUNTABLE_NOTE =
+  "Some pages can't be counted, so these numbers are minimums.";
+
+/** Why Remove unused waits when counts are floors for good. */
+export const SHARED_STYLE_UNCOUNTABLE_REMOVAL =
+  "Some pages can't be counted, so no shared style can be removed.";
+
+/**
+ * What Unused says when every page is counted but some style's count was cut
+ * short, so it holds that style back, beside any rows it does list.
+ */
+export const SHARED_STYLE_UNUSED_UNCERTAIN =
+  "Some uses could not all be counted, so some styles can't be called unused yet.";
+
 /** The note under counts that are floors. */
 export const SHARED_STYLE_NOT_WHOLE_NOTE =
-  "Some pages are still being counted, so these numbers are minimums.";
+  "Some pages haven't been counted yet, so these numbers are minimums.";

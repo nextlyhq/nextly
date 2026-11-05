@@ -64,6 +64,7 @@ export const EDITABLE_EXPOSED_TYPES = [
   "link",
   "visibility",
   "image",
+  "richText",
 ] as const;
 
 /** One exposed property, with everything a row needs to draw itself. */
@@ -269,7 +270,7 @@ export function partOfComponentSentence(
   const where =
     inspection.rows.length === 0
       ? "Its content is edited on the component itself."
-      : "Its exposed fields are in the panel; the rest is edited on the component itself.";
+      : "Its fields are in the panel; the rest is edited on the component itself.";
   return `Part of ${inspection.label}${variant}. ${where}`;
 }
 

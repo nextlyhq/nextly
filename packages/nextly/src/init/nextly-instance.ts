@@ -973,6 +973,21 @@ export interface Nextly {
   principals: NextlyPrincipals;
 
   /**
+   * @experimental In-process access to plugin-contributed services, keyed by
+   * plugin name then service name: the same registry plugins reach as
+   * `ctx.services.plugins`, and the same member the `Nextly` class declares.
+   * Lazily resolved; cast to the service's type, or import it from the
+   * providing plugin.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   * const service = nextly.plugins["@acme/plugin-x"]?.["reader"];
+   * ```
+   */
+  plugins: Record<string, Record<string, unknown>>;
+
+  /**
    * Content releases — batch documents and put them live at one instant.
    *
    * Every operation authorizes: pass `overrideAccess: false` with the acting

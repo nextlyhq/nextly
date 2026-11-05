@@ -15,6 +15,13 @@
 export const DEFAULT_LAYOUT_REFUSAL =
   "This Layout is the site's default. Choose another default first.";
 
+/**
+ * What a move is told while the site has no published default to move its
+ * pages to: they would be left with no header or footer.
+ */
+export const NO_USABLE_DEFAULT =
+  "The site has no published default Layout to move these pages to. Publish one or choose another default first.";
+
 /** The dialog's sentence over the pages that stop a removal. */
 export const PAGES_USE_IT =
   "These pages use this Layout. Choose another Layout for them first.";
@@ -113,11 +120,12 @@ function listed(titles: readonly string[], unreadable: number): string {
 export function pagesUseItRefusal(found: PagesInTheWay): string {
   const total = found.titles.length + found.unreadable;
   if (!found.complete) {
-    const lead =
-      total === 0
-        ? "This site has more pages than one removal can check"
-        : `At least ${pages(total)} use this Layout`;
-    return `${lead}, so it can't be removed yet. Choose another Layout for the pages that use it first.`;
+    // Unfinished: the site has more pages than one removal checks, or a page
+    // that is still there could not be read.
+    if (total === 0) {
+      return "Not every page could be checked, so this Layout can't be removed yet. Choose another Layout for any page that uses it, or try again in a moment.";
+    }
+    return `At least ${pages(total)} use this Layout, so it can't be removed yet. Choose another Layout for the pages that use it first.`;
   }
   const verb = total === 1 ? "uses" : "use";
   return `${pages(total)} ${verb} this Layout: ${listed(found.titles, found.unreadable)}. Choose another Layout for ${total === 1 ? "it" : "them"} first.`;
@@ -147,3 +155,16 @@ export function stillUsedAfterDelete(found: {
     ? `${namedPages(found.titles, found.unreadable)} still uses this Layout. It shows the site default until it is published with another Layout.`
     : `${namedPages(found.titles, found.unreadable)} still use this Layout. They show the site default until they are published with another Layout.`;
 }
+
+/** Why a move left a page the person may not edit, or may not read. */
+export const CANT_EDIT_PAGE = "You can't edit this page.";
+
+/** Why a move left a page whose save failed for a reason it can't name. */
+export const PAGE_NOT_SAVED = "This page couldn't be saved. Try again.";
+
+/**
+ * A move's tick that finds its move gone: stopped, swept after its dialog
+ * closed, or taken up again elsewhere.
+ */
+export const MOVE_STOPPED =
+  "Moving stopped, so the Layout was not removed. Pages already moved stay on the site default.";
