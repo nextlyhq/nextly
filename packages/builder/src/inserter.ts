@@ -499,7 +499,7 @@ export function catalogFrom(
         // A variation without a label is still offerable; naming it by its own
         // `name` beats falling back to the block's label, which would show two
         // identical rows and give the author no way to tell them apart.
-        label: variation.label ?? variation.name,
+        label: variationLabel(variation),
         // Variations carry no description of their own. The block's is the
         // honest answer: it describes what will be inserted, which is a
         // configured instance of that block.
@@ -1512,4 +1512,15 @@ export function registrySlotSource(): SlotSource {
       return declared === undefined ? undefined : Object.keys(declared);
     },
   };
+}
+
+/**
+ * A variation's name as the surfaces show it: its label, or its own `name`
+ * when it has none, so two unlabeled variations of one block stay apart.
+ */
+export function variationLabel(variation: {
+  readonly name: string;
+  readonly label?: string;
+}): string {
+  return variation.label ?? variation.name;
 }
