@@ -28,7 +28,7 @@ import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import type { LanguageDirection } from "../../../schemas/languages/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types/index";
-import { fallbackCodes } from "../config/stored-languages";
+import { fallbackCodes, IMPLICIT_LANGUAGE } from "../config/stored-languages";
 import {
   countPendingChangesIn,
   type DefaultChangeSummary,
@@ -79,16 +79,11 @@ function viewOf(rows: readonly LanguageRow[]): LanguageListView {
   };
 }
 
-/** English, the site's one language while nothing is stored, as Settings shows it. */
-const IMPLICIT_ENGLISH: LanguageView = {
-  code: "en",
-  label: "English",
-  direction: "ltr",
-  fallback: [],
-  position: 0,
-  isDefault: true,
-  active: true,
-};
+/** The site's one language while nothing is stored, as Settings shows it. */
+const IMPLICIT_ENGLISH: LanguageView = toView({
+  ...IMPLICIT_LANGUAGE,
+  revision: 0,
+});
 
 /** A collection or Single as a language change flushes it: its slug, and whether it opted out. */
 export interface CachedContentRef {

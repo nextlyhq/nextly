@@ -151,6 +151,10 @@ import {
 } from "../../i18n/localization-source";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -568,13 +572,13 @@ export class SingleMutationService extends BaseService {
   private translationsOf(
     singleMeta: DynamicSingleRecord
   ): CompanionSchema | null {
-    if (!this.localization || singleMeta.localized !== true) return null;
+    if (!this.localization || !storesPerLanguage(singleMeta)) return null;
     return buildCompanionSchema({
       slug: singleMeta.slug,
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -1787,13 +1791,13 @@ export class SingleMutationService extends BaseService {
     const meta = singleMeta;
     const fieldConfigs = meta.fields ?? [];
     const companion =
-      this.localization && meta.localized === true
+      this.localization && storesPerLanguage(meta)
         ? buildCompanionSchema({
             slug,
             tableName: meta.tableName,
             fields: meta.fields as { name: string; type: string }[],
             dialect: this.adapter.dialect,
-            status: true,
+            status: publishesPerLanguage(meta),
           })
         : null;
     const writeLocale =
@@ -2226,16 +2230,9 @@ export class SingleMutationService extends BaseService {
         autoCreated = true;
       }
 
-      const companion =
-        this.localization && singleMeta.localized === true
-          ? buildCompanionSchema({
-              slug,
-              tableName: singleMeta.tableName,
-              fields: singleMeta.fields as { name: string; type: string }[],
-              dialect: this.adapter.dialect,
-              status: (singleMeta as { status?: boolean }).status === true,
-            })
-          : null;
+      // Where this Single keeps its translatable values, and whether each language publishes on
+      // its own: the same derivation as every other read and write of it.
+      const companion = this.translationsOf(singleMeta);
       const writeLocale =
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
@@ -2956,18 +2953,19 @@ export class SingleMutationService extends BaseService {
             // overwrite, and that row is what a conditional write is judged by.
             let insertedHere = false;
             let didSeedCompanionDefaults = false;
-            // First-write auto-create, committed atomically with the update. A
-            // failed update/component/companion/version write rolls the insert
-            // back rather than orphaning a default row, and no compensating
-            // delete is needed. Idempotent: a `beforeUpdate` hook that read the
-            // Single may already have auto-created the row (via `get`), and a
-            // version-conflict retry re-enters this closure — in both cases the
-            // existing row is reused instead of inserting a duplicate.
+            // First-write auto-create, atomic with the update: a failed write
+            // rolls the insert back, with no compensating delete. Idempotent: a
+            // hook's read (`get`) may have auto-created the row, and a retry
+            // re-enters here; either way the existing row is reused. A
+            // conditional write reads it under locks (see `firstWriteRead`).
             if (autoCreated && pendingAutoCreateValues) {
-              const committed = await tx.selectOne<SingleDocument>(
-                singleMeta.tableName,
-                {}
-              );
+              const committed =
+                await storedFieldRead.firstWriteRead<SingleDocument>(
+                  tx,
+                  singleMeta,
+                  options.context,
+                  () => tx.selectOne<SingleDocument>(singleMeta.tableName, {})
+                );
               if (committed) {
                 existingDoc = committed;
               } else {

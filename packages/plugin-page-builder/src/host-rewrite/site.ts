@@ -213,14 +213,36 @@ export function siteDocuments(
   return cursor => walkDocuments(site, collection, cursorFrom(cursor));
 }
 
+/** The walk over every document, and where it resumes, with one resolver. */
+function walkWith(
+  site: DocumentSite,
+  collection: (slug: string) => Promise<unknown>
+): Pick<HostSource, "documents" | "cursorOf"> {
+  return {
+    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
+    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+  };
+}
+
 /** The walk's hosts on a real site. */
 export function siteHostSource(site: RewriteSite): HostSource {
   const collection = collectionResolver(site);
   return {
-    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
-    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+    ...walkWith(site, collection),
     hinted: () => hintedDocuments(site, collection),
     outside: () => layoutsNaming(site),
+  };
+}
+
+/**
+ * Every document on the site, for a run that has no component to hint at and
+ * nothing outside the walk: a Layout is a document like any other to it.
+ */
+export function siteWalkSource(site: DocumentSite): HostSource {
+  return {
+    ...walkWith(site, collectionResolver(site)),
+    hinted: () => Promise.resolve([]),
+    outside: () => Promise.resolve([]),
   };
 }
 
@@ -509,6 +531,34 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
 }
 
 /**
+ * Whether a document has a pending working draft in any of the site's
+ * languages, read as the system. A document that cannot be read, or that is
+ * not there, answers `true`: the caller then leaves alone what waits on the
+ * draft, rather than acting on a guess.
+ */
+export async function documentHasWorkingDraft(
+  site: Pick<RewriteSite, "nextly" | "locales">,
+  document: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<boolean> {
+  try {
+    const nextly = await site.nextly();
+    const locales = site.locales();
+    for (const locale of locales.length === 0 ? [undefined] : locales) {
+      const host: HostAddress = {
+        ...document,
+        path: [],
+        ...(locale === undefined ? {} : { locale }),
+      };
+      const row = await readRow(nextly, host, "draft");
+      if (row === null || row._isWorkingDraft === true) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * One read of a host's row, or `null` when there is none: `all` reads the
  * main row in any state, `public` only in a state the workflow calls public,
  * and `draft` overlays a pending working draft where there is one.
@@ -607,9 +657,19 @@ function expectationFor(
   };
 }
 
+/** The identity a write made as the system runs as: past every access rule. */
+interface SystemIdentity {
+  readonly overrideAccess: true;
+}
+
+/** Who a writer's writes are made as: a person, or the system. */
+type WriterIdentity = WriteIdentity | SystemIdentity;
+
 /** Writes a host as the person running the rewrite, checked against what was read. */
 export function siteHostWriter(
-  site: Pick<RewriteSite, "nextly" | "identity" | "defaultLocale">
+  site: Pick<RewriteSite, "nextly" | "defaultLocale"> & {
+    readonly identity: () => Promise<WriterIdentity>;
+  }
 ): HostWriter {
   return async write => {
     const field = write.host.path[0];
@@ -658,6 +718,21 @@ export function siteHostWriter(
       return writeFailure(error);
     }
   };
+}
+
+/**
+ * Writes a host as the system, checked against what was read like any other
+ * rewrite's write: for a run that strips what no person may keep, so a host
+ * the person who started it cannot open is stripped too. Every other rule of
+ * the write still applies.
+ */
+export function systemHostWriter(
+  site: Pick<RewriteSite, "nextly" | "defaultLocale">
+): HostWriter {
+  return siteHostWriter({
+    ...site,
+    identity: () => Promise.resolve({ overrideAccess: true as const }),
+  });
 }
 
 /** What a failed write came to; anything this does not recognise is thrown. */

@@ -16,7 +16,10 @@
 import { NextlyError } from "../../errors/nextly-error";
 import type { LanguageDirection } from "../../schemas/languages/types";
 
-import type { StoredLanguage } from "./config/stored-languages";
+import {
+  IMPLICIT_LANGUAGE,
+  type StoredLanguage,
+} from "./config/stored-languages";
 import { validateLocalizationConfig } from "./config/validate";
 import { isReservedLocaleCode } from "./locale-selector";
 
@@ -51,16 +54,7 @@ export type LanguageChange =
 export const MAX_ACTIVE_LANGUAGES = 200;
 
 /** The site's one language while nothing is stored. */
-const IMPLICIT_DEFAULT: LanguageRow = {
-  code: "en",
-  label: "English",
-  direction: "ltr",
-  fallback: "[]",
-  position: 0,
-  isDefault: true,
-  active: true,
-  revision: 0,
-};
+const IMPLICIT_DEFAULT: LanguageRow = { ...IMPLICIT_LANGUAGE, revision: 0 };
 
 /**
  * The stored list after `change`, with each changed row's revision raised.

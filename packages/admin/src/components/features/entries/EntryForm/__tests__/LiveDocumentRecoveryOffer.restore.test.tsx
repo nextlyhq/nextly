@@ -22,11 +22,13 @@ describe("the editor's recovery offer", () => {
         savedAt: new Date(Date.now() - 60_000),
         snapshot: { title: "recovered" },
         olderVersion: false,
+        startingVersionUnknown: false,
       },
       isResolved: true,
       dismiss: vi.fn(),
       restore,
       take: vi.fn(),
+      recheck: vi.fn(),
     } satisfies UseAutosaveRecoveryResult;
     render(
       <LiveDocumentRecoveryOffer recovery={recovery} viewingVersion={null} />

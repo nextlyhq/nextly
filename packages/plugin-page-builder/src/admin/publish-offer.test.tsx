@@ -25,8 +25,13 @@ import type {
   PublishReadinessResponse,
 } from "../publish-readiness-contract";
 
-/** Every mounted handler, in mount order, as the runner holds them. */
-const befores = new Set<(action: string) => Promise<void> | void>();
+/**
+ * Every mounted handler, in mount order, as the runner holds them; each is
+ * given where to leave its check before the write.
+ */
+const befores = new Set<
+  (action: string, checks: (() => boolean)[]) => Promise<void> | void
+>();
 const routes = vi.fn();
 const warnings = vi.fn();
 /** What the store's tracked writes come to, as the runner reports it. */
@@ -38,7 +43,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => {
     useBeforeDocumentAction: (
       handler: (
         action: string,
-        store: { writesSettled(): Promise<boolean> }
+        store: {
+          writesSettled(): Promise<boolean>;
+          checkBeforeWrite(check: () => boolean): void;
+        }
       ) => Promise<void> | void
     ) => {
       const latest = React.useRef(handler);
@@ -46,8 +54,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => {
         latest.current = handler;
       });
       React.useEffect(() => {
-        const run = (action: string) =>
-          latest.current(action, { writesSettled: async () => writesLand });
+        const run = (action: string, checks: (() => boolean)[]) =>
+          latest.current(action, {
+            writesSettled: async () => writesLand,
+            checkBeforeWrite: check => {
+              checks.push(check);
+            },
+          });
         befores.add(run);
         return () => {
           befores.delete(run);
@@ -106,10 +119,19 @@ function server(
   );
 }
 
-/** Start a publish as the runner would; the promise is what it awaits. */
+/**
+ * Start a publish as the runner would; the promise is what it awaits. Like
+ * the runner, it makes each handler's check before the write, and runs the
+ * handlers again while one fails, a few times.
+ */
 async function publish(action = "publish"): Promise<void> {
   if (befores.size === 0) throw new Error("no before-action handler");
-  for (const run of [...befores]) await run(action);
+  for (let pass = 0; pass < 3; pass++) {
+    const checks: (() => boolean)[] = [];
+    for (const run of [...befores]) await run(action, checks);
+    if (checks.every(check => check())) return;
+  }
+  throw new Error("the work kept changing before the write");
 }
 
 const card = {
@@ -135,6 +157,8 @@ describe("before a publish", () => {
       documents: [DOCUMENT],
       layout: null,
     });
+    // The draft is as it was asked about, so it is asked about once.
+    expect(routes).toHaveBeenCalledTimes(1);
   });
 
   it("asks about the site's default Layout for a page that names none", async () => {
@@ -437,5 +461,128 @@ describe("before a publish", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
     await running;
+  });
+});
+
+describe("an edit made while the question is asked", () => {
+  /** A draft the test edits, read as a blocks field reads its form. */
+  let draft: unknown = DOCUMENT;
+  const edited = { ...DOCUMENT, nodes: [{ id: "n1", type: "core/heading" }] };
+
+  function Editing(): JSX.Element {
+    return usePublishOffer({
+      documents: () => [draft],
+      layout: null,
+      subject: "page",
+    });
+  }
+
+  afterEach(() => {
+    draft = DOCUMENT;
+  });
+
+  it("asks again about the draft as edited, before the publish goes ahead", async () => {
+    // The first answer is about the draft before the edit: everything it
+    // placed is live. The edit places an unpublished component.
+    routes.mockImplementation(async (path: string, body: unknown) => {
+      if (path !== "/publish-readiness") throw new Error("not chosen");
+      const [asked] = (body as { documents: unknown[] }).documents;
+      if (asked === DOCUMENT) {
+        draft = edited;
+        return { dependencies: [], missing: 0 };
+      }
+      return { dependencies: [card], missing: 0 };
+    });
+    render(<Editing />);
+    const running = publish();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Pricing card");
+    expect(routes).toHaveBeenLastCalledWith("/publish-readiness", {
+      documents: [edited],
+      layout: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    await expect(running).resolves.toBeUndefined();
+    expect(routes).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes no part for a draft that changed while it was asked about", async () => {
+    // Each question is answered about a draft edited since it was put: the
+    // parts chosen are never published, so the refusal leaves nothing live
+    // without its page.
+    let asks = 0;
+    routes.mockImplementation(async (path: string) => {
+      if (path !== "/publish-readiness") throw new Error("not to publish");
+      asks += 1;
+      return { dependencies: [card], missing: 0 };
+    });
+    render(<Editing />);
+    const running = publish();
+    for (let round = 1; round <= 3; round++) {
+      await waitFor(() => expect(asks).toBe(round));
+      const offer = await screen.findByRole("button", { name: "Publish both" });
+      draft = { ...DOCUMENT, nodes: [{ id: `n${String(round)}` }] };
+      fireEvent.click(offer);
+    }
+    await expect(running).rejects.toThrow("kept changing");
+    expect(
+      routes.mock.calls.some(([path]) => path === "/publish-dependencies")
+    ).toBe(false);
+  });
+
+  it("puts no answer about a draft since edited to the author", async () => {
+    // The first answer names a part the edit took away: asked again, the
+    // draft needs nothing, and the publish goes ahead unasked.
+    routes.mockImplementation(async () => {
+      if (draft === DOCUMENT) {
+        draft = edited;
+        return { dependencies: [card], missing: 0 };
+      }
+      return { dependencies: [], missing: 0 };
+    });
+    render(<Editing />);
+    await expect(publish()).resolves.toBeUndefined();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(routes).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks again about an edit made after it asked, before the store writes", async () => {
+    // A handler after this one gives the author time to edit (a write the
+    // store then waits for): the check before the write finds the change,
+    // and the question is put about the draft as stored.
+    routes.mockImplementation(async (_path: string, body: unknown) => {
+      const [asked] = (body as { documents: unknown[] }).documents;
+      return asked === DOCUMENT
+        ? { dependencies: [], missing: 0 }
+        : { dependencies: [card], missing: 0 };
+    });
+    render(<Editing />);
+    befores.add(() => {
+      draft = edited;
+    });
+    const running = publish();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Pricing card");
+    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    await expect(running).resolves.toBeUndefined();
+    expect(routes).toHaveBeenLastCalledWith("/publish-readiness", {
+      documents: [edited],
+      layout: null,
+    });
+  });
+
+  it("refuses a publish whose draft keeps changing while it is asked about", async () => {
+    let edits = 0;
+    routes.mockImplementation(async () => {
+      edits += 1;
+      draft = { ...DOCUMENT, nodes: [{ id: `n${String(edits)}` }] };
+      return { dependencies: [], missing: 0 };
+    });
+    render(<Editing />);
+    await expect(publish()).rejects.toThrow(
+      "This page kept changing while it was checked, so it wasn't published."
+    );
+    // Bounded: it stops asking rather than chase the author's typing.
+    expect(edits).toBe(3);
   });
 });
