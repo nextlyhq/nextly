@@ -142,6 +142,55 @@ function dataArg(body: string | undefined): string {
   }
 }
 
+/** The key an update sends the version of the read it was made from under. */
+const VERSION_KEY = "_rev";
+/** The key an update chooses to apply whatever the document holds under. */
+const OVERWRITE_KEY = "_overwrite";
+
+/** The body as an object, or `null` when it is not a JSON object. */
+function bodyObject(body: string | undefined): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(body?.trim() ? body : "{}");
+    return parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** An object as an object literal, indented to sit inside the call. */
+function objectLiteral(value: Record<string, unknown>): string {
+  return JSON.stringify(value, null, 2).split("\n").join("\n  ");
+}
+
+/**
+ * The data of an update made from a read: the body as typed when it already
+ * names its version or chooses to overwrite, and otherwise the body with the
+ * version of `current`, which the snippet reads first. An update that sends
+ * a version is refused when the document changed since that read, rather
+ * than writing over the change.
+ */
+function versionedData(body: string | undefined): {
+  data: string;
+  readsFirst: boolean;
+} {
+  const data = bodyObject(body);
+  if (data === null || VERSION_KEY in data || OVERWRITE_KEY in data) {
+    return { data: dataArg(body), readsFirst: false };
+  }
+  const keys = Object.keys(data).length;
+  const version = `"${VERSION_KEY}": current.${VERSION_KEY}`;
+  // `current._rev` is code, not JSON, so it joins the literal as text.
+  const literal =
+    keys === 0
+      ? `{\n  ${version}\n}`
+      : `${JSON.stringify(data, null, 2).slice(0, -2)},\n  ${version}\n}`;
+  return { data: literal.split("\n").join("\n  "), readsFirst: true };
+}
+
 /** The ids a bulk action addresses, read out of its body. */
 function bulkIds(body: string | undefined): string | null {
   if (!body?.trim()) return null;
@@ -178,10 +227,14 @@ export function toSdk(req: CodeRequest): string {
 
   if (req.isSingle) {
     if (req.action === "update") {
+      const { data, readsFirst } = versionedData(req.body);
       return call([
+        ...(readsFirst
+          ? [`const current = await nextly.findSingle({ slug: ${slug} });`]
+          : []),
         `const result = await nextly.updateSingle({`,
         `  slug: ${slug},`,
-        `  data: ${dataArg(req.body)},`,
+        `  data: ${data},`,
         `});`,
       ]);
     }
@@ -203,14 +256,21 @@ export function toSdk(req: CodeRequest): string {
         `});`,
       ]);
 
-    case "update":
+    case "update": {
+      const { data, readsFirst } = versionedData(req.body);
       return call([
+        ...(readsFirst
+          ? [
+              `const current = await nextly.findByID({ collection: ${slug}, id: ${id} });`,
+            ]
+          : []),
         `const { item } = await nextly.update({`,
         `  collection: ${slug},`,
         `  id: ${id},`,
-        `  data: ${dataArg(req.body)},`,
+        `  data: ${data},`,
         `});`,
       ]);
+    }
 
     case "delete":
       return call([
@@ -250,21 +310,20 @@ export function toSdk(req: CodeRequest): string {
 
     case "bulk-update": {
       // No `bulkUpdate` on the SDK: `update` with a `where` is the bulk form,
-      // so the ids the REST body carries become a `where` on id.
+      // so the ids the REST body carries become a `where` on id. An update by
+      // query names no document whose version it could send, so it sets the
+      // values over whatever each document holds, and says so.
       const ids = bulkIds(req.body);
-      let data = "{}";
-      try {
-        const parsed = JSON.parse(req.body ?? "{}") as { data?: unknown };
-        if (parsed.data)
-          data = JSON.stringify(parsed.data, null, 2).split("\n").join("\n  ");
-      } catch {
-        // leave the empty object
-      }
+      const shared = bodyObject(req.body)?.data;
+      const data =
+        shared !== null && typeof shared === "object" && !Array.isArray(shared)
+          ? (shared as Record<string, unknown>)
+          : {};
       return call([
         `const result = await nextly.update({`,
         `  collection: ${slug},`,
         `  where: { id: { in: ${ids ?? '["id-1", "id-2"]'} } },`,
-        `  data: ${data},`,
+        `  data: ${objectLiteral(OVERWRITE_KEY in data ? data : { ...data, [OVERWRITE_KEY]: true })},`,
         `});`,
       ]);
     }

@@ -379,12 +379,16 @@ export function APIPlayground({
   const getBodyPlaceholder = useCallback(() => {
     switch (action) {
       case "create":
-      case "update":
         return `{\n  "title": "Example Entry",\n  "status": "draft"\n}`;
+      // An update sends back the `_rev` its read of the entry gave, and is
+      // refused if the entry changed since. Bulk sets the same values on
+      // every entry it names, so it chooses to overwrite instead.
+      case "update":
+        return `{\n  "title": "Example Entry",\n  "_rev": "the _rev your read of it returned"\n}`;
       case "bulk-delete":
         return `{\n  "ids": ["id1", "id2", "id3"]\n}`;
       case "bulk-update":
-        return `{\n  "ids": ["id1", "id2"],\n  "data": {\n    "status": "published"\n  }\n}`;
+        return `{\n  "ids": ["id1", "id2"],\n  "data": {\n    "status": "published",\n    "_overwrite": true\n  }\n}`;
       default:
         return `{\n  "key": "value"\n}`;
     }

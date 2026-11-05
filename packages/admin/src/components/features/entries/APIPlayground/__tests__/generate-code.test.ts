@@ -258,6 +258,86 @@ describe("sdk — the call matches the action", () => {
   });
 });
 
+// A write made from a read sends that read's `_rev`, and is refused when the
+// entry changed since rather than writing over the change. The snippets are
+// what a developer copies, so they show that, and an update by query, which
+// names no entry whose version it could send, chooses `_overwrite`.
+describe("sdk — the version an update sends", () => {
+  const req = (over: Partial<CodeRequest>): CodeRequest => ({
+    ...base,
+    ...over,
+  });
+
+  it("update reads the entry first and sends the version of that read", () => {
+    const out = toSdk(
+      req({ action: "update", entryId: "abc123", body: '{"title":"New"}' })
+    );
+    expect(out).toContain(
+      'const current = await nextly.findByID({ collection: "posts", id: "abc123" });'
+    );
+    expect(out).toContain('"title": "New",\n    "_rev": current._rev\n  }');
+    expect(out.indexOf("nextly.findByID(")).toBeLessThan(
+      out.indexOf("nextly.update(")
+    );
+  });
+
+  it("an update with an empty body still sends the version", () => {
+    const out = toSdk(req({ action: "update", entryId: "abc123", body: "" }));
+    expect(out).toContain('data: {\n    "_rev": current._rev\n  },');
+  });
+
+  it("a Single update reads the Single first and sends the version of that read", () => {
+    const out = toSdk(
+      req({ isSingle: true, action: "update", body: '{"title":"Home"}' })
+    );
+    expect(out).toContain(
+      'const current = await nextly.findSingle({ slug: "posts" });'
+    );
+    expect(out).toContain('"title": "Home",\n    "_rev": current._rev\n  }');
+  });
+
+  it("an update that already names its version or overwrites is sent as typed, with no read", () => {
+    for (const body of [
+      '{"title":"New","_rev":"7"}',
+      '{"title":"New","_overwrite":true}',
+    ]) {
+      const out = toSdk(req({ action: "update", entryId: "abc123", body }));
+      expect(out).not.toContain("findByID");
+      expect(out).not.toContain("current._rev");
+    }
+  });
+
+  it("an update whose body is not a JSON object adds nothing to it", () => {
+    const out = toSdk(
+      req({ action: "update", entryId: "abc123", body: "{not json" })
+    );
+    expect(out).toContain("{ /* the body above is not valid JSON */ }");
+    expect(out).not.toContain("current._rev");
+  });
+
+  it("bulk update by query chooses to overwrite", () => {
+    const out = toSdk(
+      req({
+        action: "bulk-update",
+        body: '{"ids":["a","b"],"data":{"status":"published"}}',
+      })
+    );
+    expect(out).toContain('"status": "published",\n    "_overwrite": true');
+    expect(out).not.toContain("_rev");
+  });
+
+  it("bulk update keeps an overwrite choice the body already makes", () => {
+    const out = toSdk(
+      req({
+        action: "bulk-update",
+        body: '{"ids":["a"],"data":{"status":"draft","_overwrite":false}}',
+      })
+    );
+    expect(out).toContain('"_overwrite": false');
+    expect(out).not.toContain('"_overwrite": true');
+  });
+});
+
 describe("sdk — numeric arguments", () => {
   const req = (params: Record<string, string>): CodeRequest => ({
     ...base,
