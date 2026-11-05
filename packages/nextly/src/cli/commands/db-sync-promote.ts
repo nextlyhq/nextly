@@ -10,9 +10,12 @@ import { appendFileSync, existsSync } from "node:fs";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
+import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import {
   promoteCollectionNotFound,
@@ -26,6 +29,7 @@ import {
   collectionChangedAfterConsent,
   openCollectionRegistry,
   sameCollectionRecord,
+  syncRefusalOf,
   withCollectionRegistryWrite,
 } from "./db-sync-registry";
 
@@ -55,6 +59,84 @@ export interface PromoteCollectionArgs {
 }
 
 /**
+ * What a promote of one collection changes, read before anything is asked or written: the record
+ * whose row it removes, the code it appends, and the configuration file it appends to.
+ */
+interface PromotionPlan {
+  slug: string;
+  /** The registry record the code is generated from, and whose row is removed. */
+  record: DynamicCollectionRecord;
+  /** The collection as `nextly.config.ts` source. */
+  code: string;
+  /** The configuration file the snippet is appended to; null when none is found, and it is printed. */
+  configPath: string | null;
+}
+
+/**
+ * The plan of a promote of `slug`, from the registry as it stands. A slug the Schema Builder has no
+ * collection under is refused.
+ */
+async function planPromotion(
+  slug: string,
+  registry: CollectionRegistryService,
+  cwd: string
+): Promise<PromotionPlan> {
+  const record = await registry.getCollectionBySlug(slug);
+  if (!record) throw promoteCollectionNotFound(slug);
+  const fields = (record.fields ?? []) as unknown[];
+  return {
+    slug,
+    record,
+    code: serializeCollection({ slug, fields: fields as never[] }),
+    configPath: findConfigFile(cwd),
+  };
+}
+
+/**
+ * The commented snippet a promote appends, stamped with `at`. Commented because the collections
+ * array is not AST-edited: users may have custom imports, env-gated branches, or other machinery
+ * the AST transformer cannot safely preserve.
+ */
+function promotionSnippet(code: string, at: Date): string {
+  return [
+    "",
+    `// Promoted from UI source on ${at.toISOString()}.`,
+    "// Move this entry into your collections array:",
+    ...code.split("\n").map(line => `// ${line}`),
+    "",
+  ].join("\n");
+}
+
+/**
+ * Carry out `plan`: append the snippet to the configuration (or print it where there is none),
+ * then remove the registry row. The deletion's own refusal, such as a record defined in code, is
+ * asked first, so a refused promote leaves the configuration as it was.
+ */
+async function applyPromotion(
+  plan: PromotionPlan,
+  registry: CollectionRegistryService,
+  logger: Logger
+): Promise<void> {
+  await registry.assertDeletable(plan.slug);
+
+  if (!plan.configPath) {
+    logger.warn(
+      "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
+    );
+    logger.info(plan.code);
+  } else {
+    appendFileSync(plan.configPath, promotionSnippet(plan.code, new Date()));
+    logger.info(`Appended commented snippet to ${plan.configPath}.`);
+  }
+
+  // Delete the UI record so there is no collision on next wrapper start. `deleteCollection`
+  // removes the registry row ONLY — it deliberately leaves the data table (and its `_locales`
+  // companion) in place, because promotion hands the same table over to the code-first
+  // definition. Dropping here would destroy the collection's content.
+  await registry.deleteCollection(plan.slug);
+}
+
+/**
  * Promote one Schema Builder collection: append its code as a commented snippet to the config,
  * then remove its registry row.
  *
@@ -67,13 +149,9 @@ export async function promoteCollection(
 ): Promise<"promoted" | "cancelled"> {
   const { slug, logger, registry } = args;
 
-  const confirmed = await registry.getCollectionBySlug(slug);
-  if (!confirmed) throw promoteCollectionNotFound(slug);
+  const plan = await planPromotion(slug, registry, args.cwd);
 
-  const fields = (confirmed.fields ?? []) as unknown[];
-  const code = serializeCollection({ slug, fields: fields as never[] });
-
-  if (!(await args.confirm(code))) {
+  if (!(await args.confirm(plan.code))) {
     logger.info("Promote cancelled.");
     return "cancelled";
   }
@@ -89,41 +167,15 @@ export async function promoteCollection(
       // Read again under the lock: the snippet and the deletion must act on the record the
       // operator confirmed, not on one another process wrote since.
       const current = await registry.getCollectionBySlug(slug);
-      if (!sameCollectionRecord(confirmed, current)) {
+      if (!sameCollectionRecord(plan.record, current)) {
         throw collectionChangedAfterConsent({
           slug,
           command: "nextly db:sync --promote",
-          confirmed,
+          confirmed: plan.record,
           current,
         });
       }
-
-      // Append to config file as a COMMENTED snippet. We do not try to AST-edit the collections
-      // array because users may have custom imports, env-gated branches, or other machinery the
-      // AST transformer cannot safely preserve.
-      const configPath = findConfigFile(args.cwd);
-      if (!configPath) {
-        logger.warn(
-          "Could not locate nextly.config.ts. The snippet is printed below; paste it into the collections array manually."
-        );
-        logger.info(code);
-      } else {
-        const snippet = [
-          "",
-          `// Promoted from UI source on ${new Date().toISOString()}.`,
-          "// Move this entry into your collections array:",
-          ...code.split("\n").map(line => `// ${line}`),
-          "",
-        ].join("\n");
-        appendFileSync(configPath, snippet);
-        logger.info(`Appended commented snippet to ${configPath}.`);
-      }
-
-      // Delete the UI record so there is no collision on next wrapper start. `deleteCollection`
-      // removes the registry row ONLY — it deliberately leaves the data table (and its `_locales`
-      // companion) in place, because promotion hands the same table over to the code-first
-      // definition. Dropping here would destroy the collection's content.
-      await registry.deleteCollection(slug);
+      await applyPromotion(plan, registry, logger);
     }
   );
 
@@ -131,6 +183,55 @@ export async function promoteCollection(
     `Collection '${slug}' removed from UI source. Move the snippet into your collections array, then restart dev server.`
   );
   return "promoted";
+}
+
+/**
+ * What `db:sync --promote <slug> --dry-run` reports: the plan the real promote carries out, with
+ * the refusals it asks along the way, in its order (no collection, a field-group storage migration
+ * in flight, a deletion the registry refuses), and nothing asked, locked or written.
+ */
+async function previewPromotion(args: {
+  slug: string;
+  cwd: string;
+  registry: CollectionRegistryService;
+  adapter: DrizzleAdapter;
+  logger: Logger;
+}): Promise<DryRunPlan> {
+  try {
+    const plan = await planPromotion(args.slug, args.registry, args.cwd);
+    await assertNoMigrationInFlight({
+      adapter: args.adapter,
+      logger: args.logger,
+      action: "db:sync --promote",
+    });
+    await args.registry.assertDeletable(args.slug);
+    return promotionDryRun(plan, new Date());
+  } catch (error) {
+    const refusal = syncRefusalOf(error);
+    if (refusal === undefined) throw error;
+    return { changes: [], refusals: [refusal] };
+  }
+}
+
+/** `plan` as a dry run names it: the snippet and where it goes, then the registry row removed. */
+function promotionDryRun(plan: PromotionPlan, at: Date): DryRunPlan {
+  const changes: DryRunChange[] = [];
+  const notes: string[] = [];
+  if (plan.configPath) {
+    changes.push({
+      action: "edit",
+      target: `${plan.configPath}, appending this commented snippet:${promotionSnippet(plan.code, at).trimEnd()}`,
+    });
+  } else {
+    notes.push(
+      `No nextly.config.ts was found, so a real run prints this code to paste instead of appending it:\n${plan.code}`
+    );
+  }
+  changes.push({
+    action: "remove",
+    target: `the registry row of collection '${plan.slug}' (its table ${plan.record.tableName} and its rows are kept)`,
+  });
+  return { changes, notes };
 }
 
 /** The terminal's confirmation for a promote: a preview on request, then a yes or no. */
@@ -172,7 +273,9 @@ export async function runPromote(
 
   // Database wiring, shared with --demote, so a missing or unreachable database ends with the
   // same errors as the rest of db:sync.
-  const { registry, adapter } = await openCollectionRegistry(context.logger);
+  const opened = await openCollectionRegistry(context.logger);
+  if (opened === undefined) return;
+  const { registry, adapter } = opened;
   try {
     await promoteCollection({
       slug,
@@ -188,6 +291,33 @@ export async function runPromote(
     });
   } finally {
     await adapter.disconnect();
+  }
+}
+
+/**
+ * `db:sync --promote <slug> --dry-run`: the promote's plan, read over a read-only connection,
+ * with no confirmation asked and no lock taken. A database that is not there has been said and
+ * ends the run.
+ */
+export async function runPromoteDryRun(
+  slug: string,
+  context: CommandContext
+): Promise<void> {
+  const opened = await openCollectionRegistry(context.logger, true);
+  if (opened === undefined) return;
+  try {
+    reportDryRun(
+      context.logger,
+      await previewPromotion({
+        slug,
+        cwd: context.cwd,
+        registry: opened.registry,
+        adapter: opened.adapter,
+        logger: context.logger,
+      })
+    );
+  } finally {
+    await opened.adapter.disconnect();
   }
 }
 

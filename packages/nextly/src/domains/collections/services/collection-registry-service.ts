@@ -271,21 +271,100 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getRecordsWithPendingMigrations();
   }
 
+  /**
+   * What `registerCollection` refuses before it writes: a slug another resource holds, or one this
+   * registry already has. Reads only, so a dry run asks the registration's own question.
+   */
+  async assertRegistrable(slug: string): Promise<void> {
+    await assertGlobalResourceSlugAvailable(this.adapter, slug);
+
+    const existing = await this.getCollectionBySlug(slug);
+    if (existing) {
+      // Generic "Resource already exists." from the factory; the slug moves
+      // to logContext (operator only, never wire-bound) per §13.8.
+      throw NextlyError.duplicate({
+        logContext: { reason: "collection-slug-conflict", slug },
+      });
+    }
+  }
+
+  /**
+   * What `updateCollection` refuses before it writes, answering the record it would update: a
+   * missing record, a new pair of sibling fields, a slug another resource holds, or a record
+   * defined in code changed from anywhere but the sync. Reads only, so a dry run asks the update's
+   * own question.
+   */
+  async assertUpdatable(
+    slug: string,
+    data: Partial<DynamicCollectionInsert>,
+    options?: UpdateCollectionOptions
+  ): Promise<DynamicCollectionRecord> {
+    const existing = await this.getCollection(slug);
+    // Every road that rewrites a collection's registry row reaches this write, the schema
+    // endpoint's among them, so the sibling rule is asked here too, before the row changes: only a
+    // pair of sibling fields this update creates is refused, and one already held keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug },
+        data.fields,
+        existing.fields ?? [],
+        // The configuration's and plugins' sync writes `define*` output, with its added
+        // system fields; every other caller writes fields as it was sent.
+        isPipelineSource(options?.source) ? { definedInCode: "collection" } : {}
+      );
+    }
+
+    const targetSlug = data.slug ?? slug;
+    await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+      currentResourceType: "collection",
+      currentResourceId: existing.id,
+    });
+
+    if (existing.locked && !isPipelineSource(options?.source)) {
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "change",
+        logContext: {
+          reason: "collection-locked",
+          slug,
+          source: options?.source,
+        },
+      });
+    }
+    return existing;
+  }
+
+  /**
+   * What `deleteCollection` refuses before it deletes, answering the record it would delete: a
+   * missing record, or one defined in code without `force`. Reads only, so a dry run asks the
+   * deletion's own question.
+   */
+  async assertDeletable(
+    slug: string,
+    options?: { force?: boolean }
+  ): Promise<DynamicCollectionRecord> {
+    const existing = await this.getCollection(slug);
+
+    if (existing.locked && !options?.force) {
+      // Defined in code, as the caller is told; the slug goes to the log.
+      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "delete",
+        logContext: { reason: "collection-locked-delete", slug },
+      });
+    }
+    return existing;
+  }
+
   async registerCollection(
     data: DynamicCollectionInsert
   ): Promise<DynamicCollectionRecord> {
     this.logger.debug("Registering collection", { slug: data.slug });
 
-    await assertGlobalResourceSlugAvailable(this.adapter, data.slug);
-
-    const existing = await this.getCollectionBySlug(data.slug);
-    if (existing) {
-      // Generic "Resource already exists." from the factory; the slug moves
-      // to logContext (operator only, never wire-bound) per §13.8.
-      throw NextlyError.duplicate({
-        logContext: { reason: "collection-slug-conflict", slug: data.slug },
-      });
-    }
+    await this.assertRegistrable(data.slug);
 
     const now = this.formatDateForDb();
     const tableName = this.ensureTableNamePrefix(data.tableName);
@@ -397,40 +476,7 @@ export class CollectionRegistryService extends BaseRegistryService<
   ): Promise<DynamicCollectionRecord> {
     this.logger.debug("Updating collection", { slug });
 
-    const existing = await this.getCollection(slug);
-    // Every road that rewrites a collection's registry row reaches this write, the schema
-    // endpoint's among them, so the sibling rule is asked here too, before the row changes: only a
-    // pair of sibling fields this update creates is refused, and one already held keeps working.
-    if (data.fields !== undefined) {
-      assertNoNewSiblingClashes(
-        { kind: "collection", slug },
-        data.fields,
-        existing.fields ?? [],
-        // The configuration's and plugins' sync writes `define*` output, with its added
-        // system fields; every other caller writes fields as it was sent.
-        isPipelineSource(options?.source) ? { definedInCode: "collection" } : {}
-      );
-    }
-
-    const targetSlug = data.slug ?? slug;
-    await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
-      currentResourceType: "collection",
-      currentResourceId: existing.id,
-    });
-
-    if (existing.locked && !isPipelineSource(options?.source)) {
-      // Defined in code: the caller is told so, which is a fact about the
-      // thing and not about their permissions; slug and source go to the log.
-      throw NextlyError.definedInCode({
-        thing: "collection",
-        change: "change",
-        logContext: {
-          reason: "collection-locked",
-          slug,
-          source: options?.source,
-        },
-      });
-    }
+    const existing = await this.assertUpdatable(slug, data, options);
 
     const updateData: Record<string, unknown> = {
       updated_at: this.formatDateForDb(),
@@ -641,17 +687,7 @@ export class CollectionRegistryService extends BaseRegistryService<
   ): Promise<void> {
     this.logger.debug("Deleting collection", { slug });
 
-    const existing = await this.getCollection(slug);
-
-    if (existing.locked && !options?.force) {
-      // Defined in code, as the caller is told; the slug goes to the log.
-      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
-      throw NextlyError.definedInCode({
-        thing: "collection",
-        change: "delete",
-        logContext: { reason: "collection-locked-delete", slug },
-      });
-    }
+    await this.assertDeletable(slug, options);
 
     try {
       // Recovery points and version pins go with the collection, in the SAME

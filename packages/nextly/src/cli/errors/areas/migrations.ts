@@ -491,6 +491,21 @@ export const MIGRATION_CODES = defineCodes({
         reason: PLAN_CHANGED_AFTER_CONSENT,
         describe: planChangedParts,
       },
+      {
+        // `nextly migrate` judged what each file deletes from the file as it read it under the
+        // lock, and reads the files again to run them: one edited or added in between is the
+        // judged plan changing before the run could act on it.
+        code: "INVALID_INPUT",
+        reason: "file-changed-after-judgement",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "The run judged what each migration file deletes from the file as it read it, and this one was edited or added before it ran, so its deletions were never judged.",
+            next,
+          };
+        },
+      },
     ],
   },
   DATA_LOSS_DECLINED: {

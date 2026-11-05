@@ -441,58 +441,24 @@ export async function ensureCoreTables(
   }
 }
 
-// ============================================================================
-// Collection Schema Auto-Sync (Push Mode)
-// ============================================================================
-
 /**
- * Perform auto-sync of schema changes to database
+ * The schema a sync pushes: every collection and Single the configuration declares, merged with
+ * what the Schema Builder registered (collections, Singles and components), leaving out what was
+ * removed from code. Also the schema registry holding each declared table's runtime schema, for
+ * the rest of the run to address them.
  *
- * This implements the "push mode" synchronization where schema changes
- * are applied directly to the database without creating migration files.
- *
- * Only runs in development mode (NODE_ENV !== 'production').
+ * The one builder of it: the real sync pushes this schema, and its dry run previews the push of
+ * this same schema. Reads the registry and changes nothing.
  */
-export async function performAutoSync(
+export async function desiredSchemaForSync(
   config: LoadConfigResult["config"],
-  adapter: CLIDatabaseAdapter,
-  syncResult: CollectionSyncResultWithValidation,
-  options: ResolvedDevOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
-  // routed through SchemaPushService.syncSchema and controlled drop+
-  // recreate behavior. The new pipeline owns destructive-op handling
-  // via the Classifier + PromptDispatcher: ambiguous renames trigger
-  // confirmations, real drops require explicit prompts. The flag is
-  // kept on the CLI surface for backward compatibility but emits a
-  // deprecation warning so users know it has no effect today.
-  if (options.force) {
-    logger.warn(
-      "[schema] --force has no effect with the new pipeline. " +
-        "Destructive ops are handled by interactive prompts; non-interactive " +
-        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
-    );
-  }
-
-  // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:create` + `nextly migrate`.
-  if (process.env.NODE_ENV === "production") {
-    const pendingCollections = [
-      ...syncResult.sync.created,
-      ...syncResult.sync.updated,
-    ];
-
-    if (pendingCollections.length > 0) {
-      exitWithError(logger, schemaSyncInProduction(pendingCollections));
-    }
-    return;
-  }
-
-  const start = Date.now();
-  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  drizzleAdapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<{
+  desired: DesiredSchema;
+  desiredCollections: Record<string, DesiredCollection>;
+  schemaRegistry: SchemaRegistry;
+}> {
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // Build a SchemaRegistry with static + dynamic tables. Even though the
@@ -649,6 +615,66 @@ export async function performAutoSync(
       logger
     ),
   };
+
+  return { desired, desiredCollections, schemaRegistry };
+}
+
+// ============================================================================
+// Collection Schema Auto-Sync (Push Mode)
+// ============================================================================
+
+/**
+ * Perform auto-sync of schema changes to database
+ *
+ * This implements the "push mode" synchronization where schema changes
+ * are applied directly to the database without creating migration files.
+ *
+ * Only runs in development mode (NODE_ENV !== 'production').
+ */
+export async function performAutoSync(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  syncResult: CollectionSyncResultWithValidation,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+
+  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
+  // routed through SchemaPushService.syncSchema and controlled drop+
+  // recreate behavior. The new pipeline owns destructive-op handling
+  // via the Classifier + PromptDispatcher: ambiguous renames trigger
+  // confirmations, real drops require explicit prompts. The flag is
+  // kept on the CLI surface for backward compatibility but emits a
+  // deprecation warning so users know it has no effect today.
+  if (options.force) {
+    logger.warn(
+      "[schema] --force has no effect with the new pipeline. " +
+        "Destructive ops are handled by interactive prompts; non-interactive " +
+        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
+    );
+  }
+
+  // Production guard: never auto-apply schema in production. Users must
+  // explicitly run `nextly migrate:create` + `nextly migrate`.
+  if (process.env.NODE_ENV === "production") {
+    const pendingCollections = [
+      ...syncResult.sync.created,
+      ...syncResult.sync.updated,
+    ];
+
+    if (pendingCollections.length > 0) {
+      exitWithError(logger, schemaSyncInProduction(pendingCollections));
+    }
+    return;
+  }
+
+  const start = Date.now();
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
+
+  const { desired, desiredCollections, schemaRegistry } =
+    await desiredSchemaForSync(config, drizzleAdapter, logger);
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
   // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point

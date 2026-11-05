@@ -134,6 +134,7 @@ describe("the flag vocabulary", () => {
 const WRITES = [
   "add",
   "build",
+  "db:sync",
   "generate:manifest",
   "generate:types",
   "generate:widget",
@@ -159,7 +160,6 @@ const WRITES = [
  * may only shrink: a command leaves it in the change that gives it the flag.
  */
 const WRITES_WITHOUT_DRY_RUN_YET = [
-  "db:sync",
   "media reindex-usage",
   "plugins install",
   "plugins uninstall",
@@ -283,6 +283,31 @@ describe("--dry-run and --apply by what a command does", () => {
     });
     expect(written).toContain(
       "option '--dry-run' cannot be used with option '--check'"
+    );
+    expect(ran).toBe(false);
+  });
+
+  it("refuses db:sync --dry-run together with --watch, which never ends", async () => {
+    const run = createProgram();
+    const command = commandAt(run, ["db:sync"]);
+    let written = "";
+    command
+      .exitOverride()
+      .configureOutput({ writeErr: text => void (written += text) });
+    // The action is replaced, so reaching it would show the run went on.
+    let ran = false;
+    command.action(() => {
+      ran = true;
+    });
+
+    await expect(
+      run.parseAsync(["node", "nextly", "db:sync", "--watch", "--dry-run"])
+    ).rejects.toMatchObject({
+      code: "commander.conflictingOption",
+      exitCode: 1,
+    });
+    expect(written).toContain(
+      "option '--dry-run' cannot be used with option '-w, --watch'"
     );
     expect(ran).toBe(false);
   });
