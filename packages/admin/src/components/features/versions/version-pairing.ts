@@ -140,9 +140,21 @@ export function defaultPair(
 ): PairResolution {
   const newest = versions.find(v => v.versionNo !== null);
   if (newest?.versionNo == null) return { kind: "no-history" };
-  const previous = predecessorOf(versions, newest.versionNo, hasMore);
+  return pairEndingAt(versions, newest.versionNo, hasMore);
+}
+
+/**
+ * `versionNo` and what precedes it, within its own locale: the change that
+ * version made.
+ */
+export function pairEndingAt(
+  versions: readonly PairableVersion[],
+  versionNo: number,
+  hasMore: boolean
+): PairResolution {
+  const previous = predecessorOf(versions, versionNo, hasMore);
   if (previous.kind === "version") {
-    return { kind: "pair", from: previous.versionNo, to: newest.versionNo };
+    return { kind: "pair", from: previous.versionNo, to: versionNo };
   }
   if (previous.kind !== "first") {
     // `unknown`: the predecessor is beyond the loaded pages, and Load more

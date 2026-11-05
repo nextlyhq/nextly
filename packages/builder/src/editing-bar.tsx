@@ -73,6 +73,23 @@ export interface EditingBarProps {
   readonly onRemove?: (id: string) => void;
   /** Keep the style's look on this block only. Absent withholds the item. */
   readonly onDetach?: (id: string) => void;
+  /**
+   * The look the block wears, and what the line about it says: that an edit
+   * here changes this block only, and how to edit the look for every block
+   * wearing it. Absent when the block wears no look.
+   */
+  readonly wornLook?: {
+    readonly id: string;
+    /** "Changes this button only". */
+    readonly here: string;
+    /** "Edit Outline for all 9 buttons". */
+    readonly everywhere: string;
+  };
+  /**
+   * Why one style can't be detached, when its look can't be kept exactly:
+   * asked as its menu opens, so the item is held with the reason beside it.
+   */
+  readonly detachHeld?: (id: string) => string | undefined;
   /** Why the chip's actions are held (the block's lock), shown in its menu. */
   readonly chipActionsHeld?: string;
   /**
@@ -109,6 +126,8 @@ export function EditingBar({
   onTargetChange,
   onRemove,
   onDetach,
+  detachHeld,
+  wornLook,
   chipActionsHeld,
   targetHeld,
   actions,
@@ -177,6 +196,7 @@ export function EditingBar({
                   chip={chip}
                   onRemove={onRemove}
                   onDetach={onDetach}
+                  detachHeld={detachHeld}
                   held={chipActionsHeld}
                 />
               </span>
@@ -198,6 +218,12 @@ export function EditingBar({
             }
           />
         ) : null}
+        <LookLine
+          target={target}
+          look={wornLook}
+          onTargetChange={onTargetChange}
+          held={targetHeld}
+        />
         <BarContext device={device} state={state} stateControl={stateControl} />
         <p className="nx-sr-only" role="status">
           {announced}
@@ -405,11 +431,13 @@ function ChipMenu({
   chip,
   onRemove,
   onDetach,
+  detachHeld,
   held,
 }: {
   chip: EditingBarChip;
   onRemove: ((id: string) => void) | undefined;
   onDetach: ((id: string) => void) | undefined;
+  detachHeld: ((id: string) => string | undefined) | undefined;
   held: string | undefined;
 }): React.JSX.Element | null {
   if (onRemove === undefined && onDetach === undefined) return null;
@@ -428,17 +456,19 @@ function ChipMenu({
         </button>
       </DropdownMenuTrigger>
       {/* Kept clear of the window's edge. */}
-      <DropdownMenuContent align="start" collisionPadding={8}>
+      <DropdownMenuContent
+        align="start"
+        collisionPadding={8}
+        className="nx-editing-bar__menu"
+      >
         {onDetach === undefined ? null : (
-          <DropdownMenuItem
-            disabled={held !== undefined}
+          <DetachItem
+            held={held}
+            whyHeld={
+              detachHeld === undefined ? undefined : () => detachHeld(chip.id)
+            }
             onSelect={() => onDetach(chip.id)}
-          >
-            Detach: keep the look on this block only
-            {held === undefined ? null : (
-              <span className="nx-block-card__reason"> — {held}</span>
-            )}
-          </DropdownMenuItem>
+          />
         )}
         {onRemove === undefined ? null : (
           <DropdownMenuItem
@@ -450,6 +480,82 @@ function ChipMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * "Detach", or why it is held: the block's lock, or a look that can't be
+ * kept exactly. Its own component, so the reason is asked only while the
+ * menu is open.
+ */
+function DetachItem({
+  held,
+  whyHeld,
+  onSelect,
+}: {
+  /** The block's lock, known already. */
+  held: string | undefined;
+  /** Why this style can't be detached, asked here, as the menu opens. */
+  whyHeld: (() => string | undefined) | undefined;
+  onSelect: () => void;
+}): React.JSX.Element {
+  // Asked while drawing the open menu only: answering plans the detach,
+  // which the bar's every render need not pay for.
+  const reason = held ?? whyHeld?.();
+  return (
+    <DropdownMenuItem disabled={reason !== undefined} onSelect={onSelect}>
+      <span className="nx-editing-bar__item-words">
+        <span>Detach: keep the look on this block only</span>
+        {reason === undefined ? null : (
+          <span className="nx-editing-bar__item-reason">
+            {/* Heard as one sentence; read as a line of its own. */}
+            <span className="nx-sr-only"> — </span>
+            {reason}
+          </span>
+        )}
+      </span>
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * The line a worn look adds while the block is the target: an edit here
+ * changes this block only, and the look is shared, so the way to change it
+ * for every block wearing it is one press away.
+ */
+function LookLine({
+  target,
+  look,
+  onTargetChange,
+  held,
+}: {
+  target: EditTarget;
+  look: EditingBarProps["wornLook"];
+  onTargetChange: ((id: string | null) => void) | undefined;
+  held: string | undefined;
+}): React.JSX.Element | null {
+  // Only while the block is the target: a look that is the target says
+  // where it reaches in its own banner.
+  if (target.kind !== "block" || look === undefined) return null;
+  const onEdit =
+    onTargetChange === undefined || held !== undefined
+      ? undefined
+      : () => onTargetChange(look.id);
+  return (
+    <p className="nx-editing-bar__look-line">
+      <span>{look.here}</span>
+      {/* On a line of its own: the action reads apart from the statement
+          rather than wrapping onto it after a separator. */}
+      {onEdit === undefined ? null : (
+        <button
+          type="button"
+          className="nx-editing-bar__leave"
+          onClick={onEdit}
+        >
+          {look.everywhere}
+        </button>
+      )}
+    </p>
   );
 }
 

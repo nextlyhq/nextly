@@ -174,9 +174,9 @@ ${ROOT} [data-nx-selected]:empty { min-height: 2px; }
    see EMPTY_TEXT_SELECTOR. */
 ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
-/* An empty container has an area to aim at, unless the author asked to see the
-   page as a visitor will. Drawn in the page's own text colour, faint, so it
-   reads on a light page and a dark section alike. */
+/* An empty container always has an area to aim at, since without one it has
+   no height and cannot be clicked. Drawn in the page's own text colour, faint,
+   so it reads on a light page and a dark section alike. */
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
   min-height: 2.75rem;

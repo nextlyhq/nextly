@@ -359,12 +359,12 @@ export class MediaService extends BaseService {
         "../domains/media/media-library-query"
       );
       const unused = view === "unused" ? await this.unusedSources() : null;
-      const whereClause = mediaQueryCondition(media, unused, {
-        folderId,
-        search,
-        type,
-        view,
-      });
+      const whereClause = mediaQueryCondition(
+        media,
+        unused,
+        { folderId, search, type, view },
+        this.dialect
+      );
 
       const orderFn = sortOrder === "asc" ? asc : desc;
       const orderByClause = orderFn(media[sortBy]);

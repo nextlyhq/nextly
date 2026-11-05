@@ -18,13 +18,17 @@ import {
   PAGES_SEARCH_MAX,
   PAGES_SEARCH_ROUTE_PATH,
   PAGES_UNTITLED,
+  pageAddressPath,
   pagesSearchPath,
   type PagesSearchOrder,
 } from "./pages-search-contract";
 import {
+  parsePageAddressQuery,
   parsePagesSearchQuery,
+  readPageAddress,
   readPagesSearch,
   type PagesFindArgs,
+  type PageAddressReads,
   type PagesSearchReads,
   type PagesSearchRequest,
   findPageCollection,
@@ -482,6 +486,27 @@ describe("the merged answer", () => {
       landing: "Landing pages",
       pages: undefined,
     });
+  });
+
+  it("gives each page the version it was read at, for a rename to send back", async () => {
+    const { reads } = readsOver(
+      [record("pages", { label: "Page" })],
+      async () =>
+        rows(
+          [
+            { id: "p1", title: "About", _rev: "6" },
+            { id: "p2", title: "Contact" },
+          ],
+          2
+        )
+    );
+
+    const answer = await readPagesSearch(request({ limit: 5 }), reads);
+    const revs = Object.fromEntries(
+      answer.items.map(item => [item.id, item.rev])
+    );
+    // A row a server without versions answers carries none.
+    expect(revs).toEqual({ p1: "6", p2: undefined });
   });
 
   it("merges two collections by title, capped at the limit, with the total of both", async () => {
@@ -1420,5 +1445,98 @@ describe("what a page write cannot supply", () => {
     );
     expect(found?.needsMore).toBeUndefined();
     expect(found?.uncopyable).toBeUndefined();
+  });
+});
+
+describe("one page's address", () => {
+  const FIELDS = [
+    { name: "title", type: "text" },
+    { name: "slug", type: "text" },
+    { name: "section", type: "text" },
+    { name: "content", type: "blocks" },
+  ];
+
+  /** The search's reads over `records`, and the saved-page read recorded. */
+  function addressReads(
+    records: unknown[],
+    saved: Record<string, unknown> | null
+  ): { reads: PageAddressReads; readSaved: ReturnType<typeof vi.fn> } {
+    const { reads } = readsOver(records, async () => rows([]));
+    const readSaved = vi.fn(async () => saved);
+    return { reads: { ...reads, readSaved }, readSaved };
+  }
+
+  it("resolves the saved page's path as the search does, reading only what it names", async () => {
+    const { reads, readSaved } = addressReads(
+      [record("pages", { fields: FIELDS })],
+      { id: "p-1", title: "Pricing", slug: "pricing", section: "plans" }
+    );
+
+    const answer = await readPageAddress(
+      { page: { collection: "pages", id: "p-1" }, locale: "fr" },
+      { ...reads, pagePath: () => "/{section}/{slug}" }
+    );
+
+    expect(answer).toEqual({ path: "/plans/pricing" });
+    expect(readSaved).toHaveBeenCalledWith({
+      collection: "pages",
+      id: "p-1",
+      select: { id: true, section: true, slug: true },
+      locale: "fr",
+    });
+  });
+
+  it("has none for another collection's page, nor where the host states no path", async () => {
+    const { reads, readSaved } = addressReads(
+      [
+        record("pages", { fields: FIELDS }),
+        record("landing", { fields: FIELDS }),
+      ],
+      { id: "l-1", title: "Promo", slug: "promo" }
+    );
+
+    await expect(
+      readPageAddress(
+        { page: { collection: "landing", id: "l-1" } },
+        { ...reads, pagePath: () => "/{slug}" }
+      )
+    ).resolves.toEqual({ path: null });
+    await expect(
+      readPageAddress({ page: { collection: "pages", id: "p-1" } }, reads)
+    ).resolves.toEqual({ path: null });
+    // Neither is read: there is no address to make.
+    expect(readSaved).not.toHaveBeenCalled();
+  });
+
+  it("has none for a page the caller cannot read, or one with no slug yet", async () => {
+    const gone = addressReads([record("pages", { fields: FIELDS })], null);
+    await expect(
+      readPageAddress(
+        { page: { collection: "pages", id: "gone" } },
+        { ...gone.reads, pagePath: () => "/{slug}" }
+      )
+    ).resolves.toEqual({ path: null });
+
+    const unslugged = addressReads([record("pages", { fields: FIELDS })], {
+      id: "p-2",
+      title: "Draft",
+    });
+    await expect(
+      readPageAddress(
+        { page: { collection: "pages", id: "p-2" } },
+        { ...unslugged.reads, pagePath: () => "/{slug}" }
+      )
+    ).resolves.toEqual({ path: null });
+  });
+
+  it("reads the client's path at the boundary, and refuses a page it does not name", () => {
+    const written = pageAddressPath({ collection: "pages", id: "p:1" }, "fr");
+    expect(parsePageAddressQuery(`http://nextly.test${written}`)).toEqual({
+      page: { collection: "pages", id: "p:1" },
+      locale: "fr",
+    });
+    expect(() =>
+      parsePageAddressQuery("http://nextly.test/pages/address?collection=pages")
+    ).toThrow();
   });
 });

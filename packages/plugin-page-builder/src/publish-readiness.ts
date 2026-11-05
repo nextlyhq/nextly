@@ -37,6 +37,7 @@
 import {
   componentIdsIn,
   countNodes,
+  documentBytes,
   type BlockDocument,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
@@ -54,7 +55,8 @@ import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
-import { storeIsLocalized } from "./component-facts-route";
+import { componentStoreShape } from "./component-facts-route";
+import { asOverwrite } from "./document-version";
 import {
   AS_THE_SYSTEM,
   asDocument,
@@ -63,6 +65,11 @@ import {
   type SystemReading,
 } from "./component-store-source";
 import { asCaller } from "./composition-route-kit";
+import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
+import {
+  readLayoutSettings,
+  type DefaultLayoutDirectApi,
+} from "./default-layout/store";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import { readingAsUser, type ComponentStore } from "./library-route";
@@ -106,6 +113,13 @@ export async function planPublishReadiness(
     documents: readonly BlockDocument[];
     layout: string | null;
     /**
+     * Whether `layout` is the site's default, which the page names none of
+     * and falls to: drawn only while it is published, so an unpublished one
+     * puts no regions around the page, and a page's publish offers nothing
+     * for the Layout every page without one is drawn in.
+     */
+    siteDefault?: boolean;
+    /**
      * False where components cannot be judged (a localized store publishes
      * per language): the Layout's own state is still answered.
      */
@@ -113,7 +127,11 @@ export async function planPublishReadiness(
   },
   reads: ReadinessReads
 ): Promise<ReadinessPlan> {
-  const named = await namedLayout(request.layout, reads);
+  const named = await namedLayout(
+    request.layout,
+    request.siteDefault === true,
+    reads
+  );
   if (request.judgeComponents === false) {
     return { components: [], layout: named.unpublished, missing: 0 };
   }
@@ -129,10 +147,17 @@ export async function planPublishReadiness(
  */
 async function namedLayout(
   id: string | null,
+  siteDefault: boolean,
   reads: ReadinessReads
 ): Promise<{ documents: BlockDocument[]; unpublished: string | null }> {
   const named = id === null ? null : await reads.layout(id);
   if (named === null) return { documents: [], unpublished: null };
+  if (siteDefault) {
+    return {
+      documents: named.published ? [layoutAreasDocument(named.components)] : [],
+      unpublished: null,
+    };
+  }
   return {
     documents: [layoutAreasDocument(named.components)],
     unpublished: named.published ? null : id,
@@ -237,15 +262,18 @@ async function askedFor(
 }
 
 /** The Direct API reads the routes make. */
-type Reader = StoreSourceDirectApi<SystemReading> & {
-  find(args: Record<string, unknown>): Promise<{ items: unknown[] }>;
-};
+type Reader = StoreSourceDirectApi<SystemReading> &
+  Pick<DefaultLayoutDirectApi, "findSingle"> & {
+    find(args: Record<string, unknown>): Promise<{ items: unknown[] }>;
+  };
 
 /** The resolved slugs and store a request is answered against. */
 interface Stores {
   readonly components: string;
   readonly componentField: string;
   readonly layouts: string;
+  /** The settings Single naming the site's default Layout. */
+  readonly settings: string;
 }
 
 function storesOf(
@@ -259,6 +287,9 @@ function storesOf(
       COMPONENTS_SLUG,
     componentField: store.field,
     layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+    settings:
+      ctx.self.singles[PAGE_BUILDER_SETTINGS_SLUG] ??
+      PAGE_BUILDER_SETTINGS_SLUG,
   };
 }
 
@@ -403,6 +434,7 @@ const READINESS_BODY = z
     // Bounded by the work they ask for, not by how many: see `documentsWithin`.
     documents: z.array(z.unknown()),
     layout: z.string().trim().min(1).max(256).nullable().optional(),
+    siteDefault: z.boolean().optional(),
   })
   .strict();
 
@@ -464,23 +496,29 @@ const READINESS_BUDGET_IN_DOCUMENTS = 8;
 
 /**
  * The request's block documents, refused past the work one request may ask
- * for: as many nodes as `READINESS_BUDGET_IN_DOCUMENTS` documents of the
- * largest size the site allows. Bounded by nodes rather than by documents,
- * because a form may hold any number of blocks fields, each one document, and
- * every one of them is asked about; each counts as at least one node, so a
- * flood of empty ones is bounded too.
+ * for: as many nodes, and as many bytes, as `READINESS_BUDGET_IN_DOCUMENTS`
+ * documents of the largest size the site allows. Bounded by size rather than
+ * by documents, because a form may hold any number of blocks fields, each one
+ * document, and every one of them is asked about; each counts as at least one
+ * node, so a flood of empty ones is bounded too, and bytes as well as nodes,
+ * so a few nodes carrying large props are bounded as well. Exported for its
+ * tests.
  */
-function documentsWithin(
+export function documentsWithin(
   values: readonly unknown[],
   limits: DocumentLimits
 ): BlockDocument[] {
-  const budget = READINESS_BUDGET_IN_DOCUMENTS * limits.maxNodes;
+  const nodeBudget = READINESS_BUDGET_IN_DOCUMENTS * limits.maxNodes;
+  const byteBudget = READINESS_BUDGET_IN_DOCUMENTS * limits.maxBytes;
   const documents: BlockDocument[] = [];
-  let spent = 0;
+  let nodes = 0;
+  let bytes = 0;
   for (const value of values) {
     const document = asDocument(value);
-    spent += Math.max(1, document === null ? 0 : nodesIn(document));
-    if (spent > budget) {
+    const size = document === null ? null : sizeOf(document);
+    nodes += Math.max(1, size?.nodes ?? 0);
+    bytes += size?.bytes ?? 0;
+    if (nodes > nodeBudget || bytes > byteBudget) {
       throw NextlyError.invalidInput({
         message: "The request asks about more than one request may.",
         logContext: { reason: "publish-readiness-over-budget" },
@@ -491,13 +529,22 @@ function documentsWithin(
   return documents;
 }
 
-/** A document's nodes, or more than any budget when it is too large to walk. */
-function nodesIn(document: BlockDocument): number {
+/**
+ * A document's nodes and serialized bytes, or more than any budget when it is
+ * too large to measure.
+ */
+function sizeOf(document: BlockDocument): { nodes: number; bytes: number } {
   try {
-    return countNodes(document.nodes);
+    return {
+      nodes: countNodes(document.nodes),
+      bytes: documentBytes(document),
+    };
   } catch {
-    // `countNodes` refuses only a forest too large to measure.
-    return Number.POSITIVE_INFINITY;
+    // Both refuse only a document too large to measure.
+    return {
+      nodes: Number.POSITIVE_INFINITY,
+      bytes: Number.POSITIVE_INFINITY,
+    };
   }
 }
 
@@ -530,22 +577,43 @@ export function publishReadinessRoute(setup: PublishReadinessSetup): {
       const plan = await planPublishReadiness(
         {
           documents,
-          layout: body.layout ?? null,
+          ...(await layoutAsked(body, nextly, stores)),
           // A localized store publishes per language, and a published read
           // answers for none in particular: components are not judged there,
           // as the readiness notice does not judge them, rather than named
           // as missing while live. The Layout's own state still is.
-          judgeComponents: !(await storeIsLocalized(
-            ctx.services.collections,
-            stores.components,
-            ctx.user
-          )),
+          // Read through the store's one shape reader, which says whether it
+          // is localized, as the component facts route reads it.
+          judgeComponents: !(
+            await componentStoreShape(
+              ctx.services.collections,
+              stores.components,
+              ctx.user
+            )
+          ).localized,
         },
         systemReads(nextly, stores, limits)
       );
       return Response.json(await describePlan(ctx, nextly, stores, plan));
     },
   };
+}
+
+/**
+ * The Layout a request asks about: the one the page names, or, for a page
+ * that names none and still draws its header and footer, the site's default,
+ * read as the published page reads it.
+ */
+async function layoutAsked(
+  body: { layout?: string | null; siteDefault?: boolean },
+  nextly: Reader,
+  stores: Stores
+): Promise<{ layout: string | null; siteDefault: boolean }> {
+  if (typeof body.layout === "string" || body.siteDefault !== true) {
+    return { layout: body.layout ?? null, siteDefault: false };
+  }
+  const { defaultLayout } = await readLayoutSettings(nextly, stores);
+  return { layout: defaultLayout, siteDefault: true };
 }
 
 /** The plan in the author's terms: titles they may read, and their rights. */
@@ -621,7 +689,9 @@ function refusalReason(error: unknown): string {
  * may publish a Layout without reading any component, and a permission on
  * one collection would refuse a write core allows on the other. One refusal
  * does not stop the rest: the author asked for each of them, and the page
- * publishes regardless.
+ * publishes regardless. Nothing here reads the documents it publishes, so
+ * each write chooses to publish whatever is stored (`_overwrite`) rather than
+ * sending a version.
  */
 export function publishDependenciesRoute(setup: PublishReadinessSetup): {
   method: "POST";
@@ -645,7 +715,7 @@ export function publishDependenciesRoute(setup: PublishReadinessSetup): {
           await ctx.services.collections.updateEntry(
             kind === "component" ? stores.components : stores.layouts,
             id,
-            { status: "published" },
+            asOverwrite({ status: "published" }),
             asCaller(ctx)
           );
           published.push({ kind, id });

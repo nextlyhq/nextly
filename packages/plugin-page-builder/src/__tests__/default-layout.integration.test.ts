@@ -152,10 +152,15 @@ describe.each(getConfiguredTestDialects())(
       if (seededLayout !== null) {
         await deleteSkippingHooks(t, seededLayout, asUser);
       }
-      await writeLayoutSettings(t.nextly, SLUGS, {
-        defaultLayout: null,
-        seededLayout: null,
-      });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        {
+          defaultLayout: null,
+          seededLayout: null,
+        }
+      );
       expect(await allLayouts(t)).toHaveLength(0);
     }
 
@@ -170,8 +175,13 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
-    function settingsOf(t: TestNextly) {
-      return readLayoutSettings(t.nextly, SLUGS);
+    /** What the settings say, without the read's version, which every write moves. */
+    async function settingsOf(t: TestNextly) {
+      const { rev: _rev, ...settings } = await readLayoutSettings(
+        t.nextly,
+        SLUGS
+      );
+      return settings;
     }
 
     async function layout(
@@ -973,7 +983,12 @@ describe.each(getConfiguredTestDialects())(
           const original = (context as { originalData?: unknown }).originalData;
           if (!armed || relationId(original) !== target) return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: target });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: target }
+          );
         });
 
         const answer = await removeLayout(cookie, target, "unpublish");
@@ -1007,7 +1022,12 @@ describe.each(getConfiguredTestDialects())(
           const doomed = (context as { data?: unknown }).data;
           if (!armed || relationId(doomed) !== target) return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: target });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: target }
+          );
         });
 
         const answer = await removeLayout(cookie, target, "delete");

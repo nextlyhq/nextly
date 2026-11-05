@@ -12,6 +12,7 @@ import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schem
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
@@ -165,6 +166,13 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
+  collectAdminPlaces(plugins);
 }
 
 /**

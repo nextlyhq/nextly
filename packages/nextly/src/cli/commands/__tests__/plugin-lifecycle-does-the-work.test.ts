@@ -123,7 +123,13 @@ function depsWithout(
             : `DROP TABLE IF EXISTS fx__${moduleName}`,
         ],
         transaction: true,
-        destructive: true,
+        deletions: [
+          {
+            kind: "table" as const,
+            table:
+              moduleName === "0001_init" ? "fx__notes" : `fx__${moduleName}`,
+          },
+        ],
       }))
     ),
     runDown: vi.fn(async () => 2),
@@ -147,9 +153,68 @@ function depsWithout(
         ])
     ),
     recordLifecycle: vi.fn(async () => {}),
+    // No pending module deletes data, unless a test says so.
+    installDeletions: vi.fn(async () => []),
     ...over,
   };
 }
+
+describe("plugins install over a pending module that deletes data", () => {
+  // The modules an install applies are judged as `nextly migrate` judges
+  // them, one run, before anything changes.
+  const pruning = () =>
+    vi.fn(async () => [
+      {
+        label: "plugin:@acme/fx/0002_prune",
+        text: "DELETE FROM fx__notes",
+        deletions: [{ kind: "rows" as const, table: "fx__notes" }],
+      },
+    ]);
+  const watchedInstall = (over: Partial<PluginLifecycleDeps> = {}) => {
+    const reached: string[] = [];
+    const d = deps({
+      installDeletions: pruning(),
+      interactive: false,
+      underMigrateLock: async <T>(work: () => Promise<T>) => {
+        reached.push("lock");
+        return work();
+      },
+      ...over,
+    });
+    return { reached, d };
+  };
+
+  it("is refused without consent before the lock, naming the module and its deletion, and applies nothing", async () => {
+    const { reached, d } = watchedInstall();
+    await expect(runPluginInstallCommand("@acme/fx", d)).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /plugin:@acme\/fx\/0002_prune[\s\S]*fx__notes/
+      ),
+    });
+    expect(reached).toEqual([]);
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("applies with consent covering the deletion, judged again under the lock", async () => {
+    const { reached, d } = watchedInstall();
+    await runPluginInstallCommand("@acme/fx", d, {
+      consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+    });
+    expect(reached).toEqual(["lock"]);
+    expect(d.applyMigrations).toHaveBeenCalledWith(plugin);
+    expect(d.installDeletions).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops with nothing changed when the person at the terminal declines", async () => {
+    const askToDelete = vi.fn(async () => false);
+    const { reached, d } = watchedInstall({ interactive: true, askToDelete });
+    await expect(runPluginInstallCommand("@acme/fx", d)).rejects.toMatchObject({
+      code: "DATA_LOSS_DECLINED",
+    });
+    expect(askToDelete).toHaveBeenCalledTimes(1);
+    expect(reached).toEqual([]);
+  });
+});
 
 describe("plugins install", () => {
   it("applies the plugin's migrations", async () => {
@@ -836,7 +901,8 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
             filename: `plugin:@acme/fx/${moduleName}`,
             statements: statements[at] ?? [],
             transaction: true,
-            destructive: true,
+            // Covered by EVERY_DELETION whatever it names.
+            deletions: [{ kind: "table" as const, table: "fx__notes" }],
           }))
         ),
         ...over,
@@ -1595,9 +1661,20 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
       moduleNames.map(moduleName => ({
         moduleName,
         filename: `plugin:@acme/fx/${moduleName}`,
-        statements: [`ALTER TABLE dep__notes DROP COLUMN fx_${moduleName}`],
+        statements: destructive
+          ? ["ALTER TABLE dep__notes DROP COLUMN fx_flag"]
+          : [],
         transaction: true,
-        destructive,
+        // What the reader names the DOWN's drop as.
+        deletions: destructive
+          ? [
+              {
+                kind: "column" as const,
+                table: "dep__notes",
+                column: "fx_flag",
+              },
+            ]
+          : [],
       }))
     );
 
@@ -1615,8 +1692,9 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
     expect(runDown).not.toHaveBeenCalled();
   });
 
-  it("takes only the consent without targets for a drop no owner row names", async () => {
-    // Nothing names the column, so no list of targets can be said to cover it.
+  it("names a drop no owner row names from the DOWN itself, and takes a consent covering it", async () => {
+    // No owner row names the column; the reader names it from the DOWN, so
+    // only a consent covering that column, or every deletion, lets it run.
     const runDown = vi.fn(async () => 1);
     await expect(
       runPluginUninstallCommand(
@@ -1624,14 +1702,12 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
         {
           keepData: false,
           yes: false,
-          consent: resolveDataLossConsent({ flag: "dep__notes", env: {} }),
+          consent: resolveDataLossConsent({ flag: "other__table", env: {} }),
         },
         deps({ prepareDowns: prepared(true), runDown })
       )
     ).rejects.toMatchObject({
-      publicMessage: expect.stringContaining(
-        "plugin:@acme/fx/0002_more's DOWN, which drops a table or column"
-      ),
+      publicMessage: expect.stringContaining("column dep__notes.fx_flag"),
     });
     expect(runDown).not.toHaveBeenCalled();
     await runPluginUninstallCommand(
@@ -1695,6 +1771,59 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
     );
   });
 
+  it("lists a deletion the DOWN makes beyond what the owner records name, so consent naming those alone does not cover it", async () => {
+    const ownTable = {
+      tableName: "fx__notes",
+      elementKind: "table",
+      elementName: null,
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const ownsTable = {
+      select: () => ({
+        from: () => Object.assign([ownTable], { where: () => [ownTable] }),
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const alsoDeletesUsers = vi.fn(
+      async (_plugin, moduleNames: readonly string[]) =>
+        moduleNames.map(moduleName => ({
+          moduleName,
+          filename: `plugin:@acme/fx/${moduleName}`,
+          statements: ["DROP TABLE fx__notes", "DELETE FROM users"],
+          transaction: true,
+          deletions: [
+            { kind: "table" as const, table: "fx__notes" },
+            { kind: "rows" as const, table: "users" },
+          ],
+        }))
+    );
+    const runDown = vi.fn(async () => 1);
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        {
+          keepData: false,
+          yes: false,
+          consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+        },
+        deps({
+          db: ownsTable as never,
+          prepareDowns: alsoDeletesUsers,
+          runDown,
+        })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("rows of users"),
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
   it("lists no column whose record outlived it, nor any when no DOWN loses data", async () => {
     // The column an earlier `migrate:down --plugin` already removed: its
     // ownership row stays as history, and the column is gone.
@@ -1717,14 +1846,31 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
       insert: () => ({ values: () => Promise.resolve() }),
     };
     const runDown = vi.fn(async () => 1);
-    // Gone from the table, so a DOWN that loses data still deletes nothing named.
+    // The DOWN drops another column, so the refusal lists that one only.
+    const dropsAnotherColumn = vi.fn(
+      async (_plugin, moduleNames: readonly string[]) =>
+        moduleNames.map(moduleName => ({
+          moduleName,
+          filename: `plugin:@acme/fx/${moduleName}`,
+          statements: ["ALTER TABLE dep__notes DROP COLUMN fx_other"],
+          transaction: true,
+          deletions: [
+            {
+              kind: "column" as const,
+              table: "dep__notes",
+              column: "fx_other",
+            },
+          ],
+        }))
+    );
+    // Gone from the table, so the record of fx_flag names nothing to delete.
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
         { keepData: false, yes: false },
         deps({
           db: ownsColumn as never,
-          prepareDowns: prepared(true),
+          prepareDowns: dropsAnotherColumn,
           runDown,
           liveColumns: async () => new Map([["dep__notes", new Set(["id"])]]),
         })
@@ -1732,6 +1878,7 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
     ).rejects.toMatchObject({
       publicMessage: expect.not.stringContaining("dep__notes.fx_flag"),
     });
+    expect(runDown).not.toHaveBeenCalled();
     // DOWNs that lose no data (dropping an index, say) need no consent at all.
     await runPluginUninstallCommand(
       "@acme/fx",
@@ -1841,17 +1988,22 @@ describe("plugins uninstall decides before it takes the lock", () => {
     const { reached, deps: d } = watched();
     const listed = vi.mocked(d.logger.warn);
     listed.mockClear();
+    // The owner records name fx__notes; 0002's DOWN also drops fx__0002_more.
     await runPluginUninstallCommand(
       "@acme/fx",
       {
         keepData: false,
         yes: false,
-        consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+        consent: resolveDataLossConsent({
+          flag: "fx__notes,fx__0002_more",
+          env: {},
+        }),
       },
       d
     );
     expect(reached).toEqual(["lock", "hook", "down", "down"]);
     expect(listed).toHaveBeenCalledWith("  - table fx__notes");
+    expect(listed).toHaveBeenCalledWith("  - table fx__0002_more");
   });
 
   it("refuses consent that names another table, naming the one it leaves out", async () => {

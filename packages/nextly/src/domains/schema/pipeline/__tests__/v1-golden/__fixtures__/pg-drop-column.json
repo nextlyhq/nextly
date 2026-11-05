@@ -1,6 +1,4 @@
 {
-  "sqlStatements": [
-    "ALTER TABLE \"vg1\" DROP COLUMN \"extra\";"
-  ],
+  "sqlStatements": ["ALTER TABLE \"vg1\" DROP COLUMN \"extra\";"],
   "hints": []
 }

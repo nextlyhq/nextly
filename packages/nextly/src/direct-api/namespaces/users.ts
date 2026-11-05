@@ -14,9 +14,11 @@ import {
 } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
+import { assertNoHiddenFieldQueried } from "../../shared/lib/filterable-fields";
 import type {
   CreateUserArgs,
   DeleteUserArgs,
+  DirectAPIConfig,
   FindOneUserArgs,
   FindUserByIDArgs,
   FindUsersArgs,
@@ -34,6 +36,7 @@ import {
   mergeConfig,
   toListResult,
 } from "./helpers";
+import { hiddenUserFieldPaths, withoutHiddenPaths } from "./hidden-fields";
 
 /**
  * Users namespace API, bound to a Nextly context.
@@ -54,17 +57,46 @@ export interface UsersNamespace {
  * Build the `users` namespace for a `Nextly` instance.
  */
 export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
+  /**
+   * The custom user fields this read leaves out, judged by the fields the
+   * user services read and write; none unless it passes
+   * `showHiddenFields: false`.
+   */
+  const hiddenUserFields = (args: DirectAPIConfig): ReadonlySet<string> =>
+    hiddenUserFieldPaths(mergeConfig(ctx.defaultConfig, args), () =>
+      ctx.userService.customFieldConfigs()
+    );
+
+  /** The search option for a read leaving `hidden` out: none when it keeps them. */
+  const unsearched = (
+    hidden: ReadonlySet<string>
+  ): { unsearchedFields?: ReadonlySet<string> } =>
+    hidden.size === 0 ? {} : { unsearchedFields: hidden };
+
   return {
     async find(args: FindUsersArgs = {}): Promise<ListResult<User>> {
       // Checked as REST's user list is, before anything is read.
       await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
+      // Past the read check: a sort by a field this read leaves out is
+      // refused, since the order would reveal the value, and the search does
+      // not match one, since which users match would.
+      const hidden = hiddenUserFields(args);
+      assertNoHiddenFieldQueried(
+        {
+          sort: args.sortBy === undefined ? [] : [args.sortBy],
+          // Reported under the argument the caller sorted with.
+          labels: { sort: "sortBy" },
+        },
+        hidden
+      );
 
       const result = await ctx.userService.listUsers(
         {
           pagination: { limit, page },
           search: args.search,
+          ...unsearched(hidden),
           emailVerified: args.emailVerified,
           hasPassword: args.hasPassword,
           sortBy: args.sortBy,
@@ -76,23 +108,33 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       // The limit the service ACTUALLY paginated by, not the one requested. It bounds the page
       // size it will honour, and deriving `totalPages` from the request instead would report a
       // page count for a page size that was never used.
-      return toListResult(result, result.pagination.limit, page);
+      return toListResult(
+        {
+          ...result,
+          data: result.data.map(user => withoutHiddenPaths(user, hidden)),
+        },
+        result.pagination.limit,
+        page
+      );
     },
 
     async findOne(args: FindOneUserArgs = {}): Promise<User | null> {
       // A search of the list, so it asks what the list asks.
       await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
+      const hidden = hiddenUserFields(args);
       const result = await ctx.userService.listUsers(
         {
           pagination: { limit: 1, page: 1 },
           search: args.search,
+          ...unsearched(hidden),
           emailVerified: args.emailVerified,
           hasPassword: args.hasPassword,
         },
         createRequestContext(args)
       );
 
-      return result.data[0] ?? null;
+      const user = result.data[0];
+      return user === undefined ? null : withoutHiddenPaths(user, hidden);
     },
 
     async findByID(args: FindUserByIDArgs): Promise<User | null> {
@@ -106,7 +148,7 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
           args.id,
           createRequestContext(args)
         );
-        return user;
+        return withoutHiddenPaths(user, hiddenUserFields(args));
       } catch (error) {
         if (config.disableErrors && isNotFoundError(error)) {
           return null;

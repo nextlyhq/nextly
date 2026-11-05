@@ -11,18 +11,26 @@
  * @module site-settings
  */
 import {
+  breakpointContexts,
+  type BreakpointSet,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
+import {
   getCachedNextly,
   NextlyError,
   respondMutation,
+  type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { asOverwrite } from "./document-version";
 import {
   SITE_BREAKPOINTS_ROUTE_PATH,
   SITE_SETTINGS_ROUTE_PATH,
@@ -31,7 +39,11 @@ import {
   type SiteSettingsRead,
 } from "./library-contract";
 import { walkPages } from "./paged-walk";
-import type { SiteStyleData } from "./site-style";
+import {
+  resolveSiteStyle,
+  siteBreakpoints,
+  type SiteStyleData,
+} from "./site-style";
 import { checkStoredBreakpoints } from "./site-style-record";
 import {
   loadSiteStyle,
@@ -69,7 +81,11 @@ export interface SiteSettingsDirectApi {
   }): Promise<unknown>;
 }
 
-const BreakpointsBody = z.strictObject({ breakpoints: z.unknown() });
+const BreakpointsBody = z.strictObject({
+  breakpoints: z.unknown(),
+  // Count what saving this set would drop, and save nothing.
+  dryRun: z.boolean().optional(),
+});
 
 /** A refusal naming what is wrong with the breakpoints sent. */
 function invalidBreakpoints(messages: readonly string[]): NextlyError {
@@ -83,9 +99,10 @@ function invalidBreakpoints(messages: readonly string[]): NextlyError {
 }
 
 /** The body, parsed at the boundary: a set the site may store, or refused. */
-async function readBreakpoints(
-  req: Request
-): Promise<SiteBreakpointsRequest["breakpoints"]> {
+async function readBreakpoints(req: Request): Promise<{
+  breakpoints: SiteBreakpointsRequest["breakpoints"];
+  dryRun: boolean;
+}> {
   let raw: unknown;
   try {
     raw = JSON.parse(await req.text()) as unknown;
@@ -101,7 +118,80 @@ async function readBreakpoints(
   // site's configured breakpoints apply again.
   const { value, issues } = checkStoredBreakpoints(parsed.data.breakpoints);
   if (issues.length > 0) throw invalidBreakpoints(issues);
-  return value ?? null;
+  return { breakpoints: value ?? null, dryRun: parsed.data.dryRun === true };
+}
+
+/**
+ * The breakpoints `after` no longer defines that `before` does, by id, with
+ * the name the author knows each by. Both are the sets the stylesheet is
+ * emitted under, so a definition the compiler drops is in neither.
+ */
+export function removedBreakpoints(
+  before: BreakpointSet | undefined,
+  after: BreakpointSet | undefined
+): Map<string, string> {
+  const kept = new Set(breakpointContexts(after).map(context => context.id));
+  const labels = new Map(
+    [...(before?.viewport ?? []), ...(before?.container ?? [])].map(def => [
+      def.id,
+      def.label ?? def.id,
+    ])
+  );
+  const removed = new Map<string, string>();
+  for (const { id } of breakpointContexts(before)) {
+    if (!kept.has(id)) removed.set(id, labels.get(id) ?? id);
+  }
+  return removed;
+}
+
+/** How the installed plugin counts what a removal would drop. */
+export interface BreakpointRemoval {
+  /** The site's style as it is now, the configured defaults under it. */
+  readonly current: (ctx: SiteSettingsRouteContext) => Promise<SiteStyleData>;
+  /** The configured site style, which a stored `null` gives back. */
+  readonly defaults?: SiteStyleData;
+  /** Walk the site for what removing each of these would drop. */
+  readonly count: (
+    removed: ReadonlyMap<string, string>,
+    classes: readonly NamedClass[],
+    ctx: BreakpointsRouteContext
+  ) => Promise<RemovalDryRun>;
+}
+
+/** What the breakpoints route is handed: the settings context, and who asks. */
+export type BreakpointsRouteContext = SiteSettingsRouteContext &
+  Pick<PluginRouteContext, "caller">;
+
+/** What a dry run answers with. */
+interface SiteBreakpointsDryRun extends RemovalDryRun {
+  readonly dryRun: true;
+  readonly breakpoints: SiteBreakpointsRequest["breakpoints"];
+}
+
+/**
+ * What saving `breakpoints` would drop, with nothing saved: the breakpoints it
+ * removes from the set the site emits now, and every style and hide stored
+ * under them.
+ */
+async function dryRunBreakpoints(
+  breakpoints: SiteBreakpointsRequest["breakpoints"],
+  ctx: BreakpointsRouteContext,
+  removal: BreakpointRemoval
+): Promise<Response> {
+  const current = await removal.current(ctx);
+  // The set saving this would leave: a stored `null` gives the configured
+  // defaults back, as the resolved style reads it.
+  const after = siteBreakpoints(
+    resolveSiteStyle(removal.defaults, {
+      breakpoints: breakpoints ?? undefined,
+    })
+  );
+  const removed = removedBreakpoints(siteBreakpoints(current), after);
+  const counted = await removal.count(removed, current.classes ?? [], ctx);
+  return respondMutation<SiteBreakpointsDryRun>(
+    "Nothing was saved: this is what saving these breakpoints would drop.",
+    { dryRun: true, breakpoints, ...counted }
+  );
 }
 
 /**
@@ -114,13 +204,25 @@ async function readBreakpoints(
  */
 export async function writeSiteBreakpoints(
   req: Request,
-  ctx: SiteSettingsRouteContext,
-  nextly: SiteSettingsDirectApi
+  ctx: BreakpointsRouteContext,
+  nextly: SiteSettingsDirectApi,
+  removal?: BreakpointRemoval
 ): Promise<Response> {
-  const breakpoints = await readBreakpoints(req);
+  const { breakpoints, dryRun } = await readBreakpoints(req);
+  if (dryRun) {
+    // Counted only where the installed plugin can walk the site.
+    if (removal === undefined) {
+      throw NextlyError.internal({
+        logContext: { reason: "breakpoint-dry-run-not-installed" },
+      });
+    }
+    return dryRunBreakpoints(breakpoints, ctx, removal);
+  }
+  // The Settings screen saves the whole set it shows, and this route reads
+  // nothing before writing it: it sets the breakpoints whatever is stored.
   await nextly.updateSingle({
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    data: { breakpoints },
+    data: asOverwrite({ breakpoints }),
     overrideAccess: true,
     context: { ...SITE_SETTINGS_WRITE_CONTEXT },
     ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
@@ -131,19 +233,22 @@ export async function writeSiteBreakpoints(
   );
 }
 
-/** The route Settings writes the site's breakpoints through. */
-export function siteBreakpointsRoute(): {
+/**
+ * The route Settings writes the site's breakpoints through, and asks first
+ * what a removal would drop (`dryRun`), under the same permission.
+ */
+export function siteBreakpointsRoute(removal?: BreakpointRemoval): {
   method: "POST";
   path: string;
   requiredPermission: string;
-  handler: (req: Request, ctx: SiteSettingsRouteContext) => Promise<Response>;
+  handler: (req: Request, ctx: BreakpointsRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: SITE_BREAKPOINTS_ROUTE_PATH,
     requiredPermission: MANAGE_SITE_PERMISSION,
     handler: async (req, ctx) =>
-      writeSiteBreakpoints(req, ctx, await getCachedNextly()),
+      writeSiteBreakpoints(req, ctx, await getCachedNextly(), removal),
   };
 }
 

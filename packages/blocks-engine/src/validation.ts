@@ -317,6 +317,8 @@ const DOCUMENT_ISSUE_CODES = {
   "token-kind-mismatch":
     "A design token is not the kind of value its property accepts.",
   "unknown-class": "A node lists a class id the site does not define.",
+  "look-for-another-block":
+    "A node lists a look that belongs to another block type.",
   "invalid-class-name":
     "A named class in the site library has a name that cannot be written to CSS.",
   "invalid-class":

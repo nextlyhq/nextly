@@ -72,14 +72,20 @@ import {
   type BlockDocument,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
-import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginCollectionTransaction,
+  PluginRouteContext,
+  PluginRoutePermissionScope,
+} from "@nextlyhq/plugin-sdk";
 import { respondMutation, slugify } from "nextly";
 import { NextlyError } from "nextly/errors";
 
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { JUDGEMENT_CONTEXT, judgeInTransaction } from "./judged-writes";
 import {
   SAVE_PATTERN_ROUTE_PATH,
   type SavePatternFields,
+  type SavePatternDryRun,
   type SavePatternRequest,
   type SavePatternResponse,
 } from "./library-contract";
@@ -147,7 +153,7 @@ const SETTABLE_FIELDS: ReadonlySet<string> = new Set(
 /** The capabilities this route uses, named rather than imported whole. */
 export interface SavePatternRouteContext {
   self: { collections: Record<string, string | undefined> };
-  user: unknown;
+  user: PluginRouteContext["user"];
   services: {
     collections: {
       createEntry(
@@ -158,6 +164,9 @@ export interface SavePatternRouteContext {
         item: unknown;
         warnings?: SavePatternResponse["warnings"];
       }>;
+      /** For a dry run: the save is made in a transaction and rolled back. */
+      withTransaction: PluginRouteContext["services"]["collections"]["withTransaction"];
+      createEntryInTransaction: PluginRouteContext["services"]["collections"]["createEntryInTransaction"];
     };
   };
 }
@@ -188,18 +197,46 @@ export async function savePattern(
   );
   if (plan.problem !== undefined) throw refusal(plan);
 
+  const data = {
+    ...plan.create.fields,
+    slug: plan.create.fields.slug ?? derivedSlug(plan.create.fields.title),
+    [PATTERN_DOCUMENT_FIELD]: plan.create.document,
+    status: SAVED_PATTERN_STATUS,
+  };
+  // AS THE USER. A write with the instance's own identity would let any
+  // authenticated caller create a pattern whatever the collection's
+  // permissions say — and would record the wrong author on the version.
+  const asUser = { as: "user" as const, user: ctx.user ?? undefined };
+  // A dry run answers the pattern it would store and stores nothing. The save
+  // is made as the caller and rolled back, so the row's own rules (a unique
+  // slug, the caller's right to create and publish a pattern) answer it.
+  if (request.dryRun === true) {
+    const collections = ctx.services.collections;
+    const judged = await judgeInTransaction(
+      run => collections.withTransaction(run),
+      (tx: PluginCollectionTransaction) =>
+        collections.createEntryInTransaction(tx, plan.create.collection, data, {
+          ...asUser,
+          context: { [JUDGEMENT_CONTEXT]: true },
+        })
+    );
+    const result: SavePatternDryRun = {
+      dryRun: true,
+      pattern: judged.refusal === null ? asStored(data, judged.written) : data,
+      refusals: judged.refusal?.messages ?? [],
+    };
+    return respondMutation(
+      judged.refusal === null
+        ? "Nothing was written: this is the pattern it would save."
+        : "Nothing was written: the site would refuse this pattern.",
+      result
+    );
+  }
+
   const written = await ctx.services.collections.createEntry(
     plan.create.collection,
-    {
-      ...plan.create.fields,
-      slug: plan.create.fields.slug ?? derivedSlug(plan.create.fields.title),
-      [PATTERN_DOCUMENT_FIELD]: plan.create.document,
-      status: SAVED_PATTERN_STATUS,
-    },
-    // AS THE USER. A write with the instance's own identity would let any
-    // authenticated caller create a pattern whatever the collection's
-    // permissions say — and would record the wrong author on the version.
-    { as: "user" as const, user: ctx.user ?? undefined }
+    data,
+    asUser
   );
 
   // The canonical envelope, BUILT rather than assembled. `respondMutation`
@@ -210,6 +247,26 @@ export async function savePattern(
   return respondMutation("Pattern created.", writtenRow(written.item), {
     status: 201,
   });
+}
+
+/**
+ * The pattern a dry run would store: each value it would write, as the save
+ * stored it after its hooks where the save's answer shows it. Only the fields
+ * written are taken, so the row's own id and timestamps, which belong to a
+ * row that was rolled back, are not offered as the pattern's.
+ */
+function asStored(
+  data: Record<string, unknown>,
+  written: unknown
+): Record<string, unknown> {
+  if (typeof written !== "object" || written === null) return data;
+  const row = written as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      key in row ? row[key] : value,
+    ])
+  );
 }
 
 /**
@@ -315,10 +372,14 @@ function refusal(refused: PlanRefusal): NextlyError {
  */
 async function readRequest(req: Request): Promise<SavePatternRequest> {
   const body = objectAt(await readJson(req), "body");
+  if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
+    throw malformed("dryRun");
+  }
   return {
     document: documentAt(body.document),
     selectedIds: selectionAt(body.selectedIds),
     fields: settableFields(objectAt(body.fields, "fields")),
+    ...(body.dryRun === true ? { dryRun: true } : {}),
   };
 }
 
