@@ -229,6 +229,10 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     // leaving and no focus changing.
     "pointerup",
     "pointercancel",
+    // A form field's value changes with no DOM mutation, and can change what
+    // `:valid`, `:invalid` or `:placeholder-shown` styles.
+    "input",
+    "change",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   /*

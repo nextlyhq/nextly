@@ -81,12 +81,13 @@ export function isTextEntry(element: Element | null): boolean {
    * "no" for most of the time an author is actually typing. `closest` follows
    * the inheritance the same way the browser does.
    */
-  // `plaintext-only` too: it is how the canvas's own line editor is editable.
-  if (
-    element.closest(
-      '[contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
-    )
-  ) {
+  // The NEAREST `contenteditable` decides, as it does for the browser: a
+  // `false` island inside editable text makes a control inside it a control
+  // again. `plaintext-only` is editable too: it is how the canvas's own line
+  // editor is.
+  const editable = element.closest("[contenteditable]");
+  const value = editable?.getAttribute("contenteditable");
+  if (value === "" || value === "true" || value === "plaintext-only") {
     return true;
   }
   if (!isInput(element)) return false;

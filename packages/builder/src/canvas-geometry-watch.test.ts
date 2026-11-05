@@ -134,6 +134,15 @@ describe("a block an authored state rule moves", () => {
       press(" ", text);
     }
     expect(moved).toHaveBeenCalledTimes(1);
+    // A form field's value changes with no mutation, and can change what
+    // :valid or :placeholder-shown styles: its input event is heard.
+    const field = block.ownerDocument.createElement("input");
+    block.append(field);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(2);
+    moved.mockClear();
+    moved.mockImplementation(() => undefined);
     // A control the keyboard toggles is not text entry: Space on a checkbox
     // can move what an authored :checked rule styles.
     const box = block.ownerDocument.createElement("input");
@@ -141,7 +150,7 @@ describe("a block an authored state rule moves", () => {
     block.append(box);
     press(" ", box);
     // Down and up, measured once in the frame they share.
-    expect(moved).toHaveBeenCalledTimes(2);
+    expect(moved).toHaveBeenCalledTimes(1);
     stop?.();
     vi.unstubAllGlobals();
   });
