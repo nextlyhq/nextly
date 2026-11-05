@@ -186,6 +186,7 @@ import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
+  forgetGoneSingles,
   usageBackfillDeps,
   type BackfillHost,
 } from "./usage-backfill-wiring";
@@ -1615,6 +1616,8 @@ export const pageBuilder = (
           state: () => usageBackfillDeps(requireInstalled()).state(),
           rebuild: (scope, walk) =>
             usageBackfillDeps(requireInstalled()).rebuild(scope, walk),
+          forgetGone: (scopes, fenced) =>
+            forgetGoneSingles(requireInstalled(), scopes, fenced),
         }),
         // The default-Layout repair. A sweep, so the runner keeps one queued
         // and every jobs pass confirms the site still has a published default,

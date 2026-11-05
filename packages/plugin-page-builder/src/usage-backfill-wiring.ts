@@ -31,14 +31,18 @@ import type { BackfillStateStore } from "./usage-backfill";
 import type { UsageBackfillDeps } from "./usage-backfill-job";
 import {
   backfillGeneration,
+  backfillScopeKey,
   backfillScopesFor,
   type BackfillScope,
 } from "./usage-backfill-scope";
 import type { UsageBookkeeping, UsageRun } from "./usage-bookkeeping";
 import {
   fencedUsageTableStore,
+  forgetUsageRows,
   usageTableOf,
+  usageTableRows,
   type UsageDb,
+  type UsageTable,
 } from "./usage-index-tables";
 
 /** What the wiring must be able to ask of the host, named structurally. */
@@ -304,6 +308,87 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
       return { finished };
     },
   };
+}
+
+/** How many pages of a Single's rows one sweep reads; a runaway guard. */
+const MOST_SINGLE_ROW_PAGES = 100;
+
+/**
+ * Remove the rows filed under a Single that no scope existing now names: a
+ * Single removed from the configuration, one that no longer stores blocks
+ * in that field, language or form. No walk visits those rows, so without
+ * this they would keep counting towards their components and classes, and a
+ * component a Single that is gone once placed could never be deleted.
+ *
+ * Asked only once every scope has been walked, from the scopes that pass
+ * read, so a Single the registry could not list is never taken for gone:
+ * reading the registry failed the pass before this point. Each removal is
+ * fenced by the run, as a walk's writes are.
+ */
+export async function forgetGoneSingles(
+  host: BackfillHost,
+  scopes: readonly BackfillScope[],
+  fenced: BackfillStateStore["fenced"]
+): Promise<void> {
+  const live = new Set(
+    scopes.filter(scope => scope.scope === "single").map(backfillScopeKey)
+  );
+  for (const table of [
+    usageTableOf(classUsageIndex),
+    usageTableOf(componentUsageIndex),
+  ]) {
+    for (const scope of await goneSingleScopes(host.db, table, live)) {
+      await fenced(tx =>
+        forgetUsageRows(tx, table, {
+          scope: { equals: "single" },
+          entity: { equals: scope.entity },
+          field: { equals: scope.field },
+          locale: { equals: scope.locale },
+          variant: { equals: scope.variant },
+        })
+      );
+    }
+  }
+}
+
+/**
+ * The Single scopes one table holds rows for that are not among `live`.
+ * Collected whole before any is removed, so a removal cannot move a row the
+ * listing has yet to reach across a page boundary.
+ */
+async function goneSingleScopes(
+  db: UsageDb,
+  table: UsageTable,
+  live: ReadonlySet<string>
+): Promise<BackfillScope[]> {
+  const rows = usageTableRows(db, table);
+  const gone = new Map<string, BackfillScope>();
+  for (let page = 1; page <= MOST_SINGLE_ROW_PAGES; page += 1) {
+    const found = await rows({ where: { scope: { equals: "single" } }, page });
+    for (const scope of found.items.map(singleScopeOf)) {
+      if (scope !== null && !live.has(backfillScopeKey(scope))) {
+        gone.set(backfillScopeKey(scope), scope);
+      }
+    }
+    if (!found.hasNext) break;
+  }
+  return [...gone.values()];
+}
+
+/** The Single scope a stored row is filed under, or `null` for one this cannot read. */
+function singleScopeOf(item: unknown): BackfillScope | null {
+  if (typeof item !== "object" || item === null) return null;
+  const row = item as Record<string, unknown>;
+  const { entity, field, locale, variant } = row;
+  if (
+    typeof entity !== "string" ||
+    typeof field !== "string" ||
+    typeof locale !== "string" ||
+    (variant !== "published" && variant !== "draft")
+  ) {
+    return null;
+  }
+  return { scope: "single", entity, field, locale, variant };
 }
 
 /**

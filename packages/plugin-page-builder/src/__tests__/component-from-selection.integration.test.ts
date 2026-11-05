@@ -265,7 +265,9 @@ describe.each(getConfiguredTestDialects())(
       const hosts = await t.adapter.select<{ entityKey: string }>(
         "page_builder__component_usage",
         {
-          and: [{ column: "componentId", op: "=", value: item.component.id }],
+          where: {
+            and: [{ column: "componentId", op: "=", value: item.component.id }],
+          },
         }
       );
       expect(hosts.map(row => row.entityKey)).toContain(pageId);

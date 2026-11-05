@@ -233,10 +233,7 @@ async function pageOf(
  * `db` is `ctx.db`, or the transaction a fenced write runs in, so a write the
  * fence checks lands in the same transaction as the check.
  */
-export function usageTableStore(
-  db: UsageDb,
-  table: UsageTable
-): ClassUsageIndexStore {
+function usageTableStore(db: UsageDb, table: UsageTable): ClassUsageIndexStore {
   return {
     find: async args => {
       // The cursor every caller pages by. Ordering by anything else would let
@@ -294,6 +291,18 @@ export function usageIndexStores(db: UsageDb): UsageIndexStores {
     classIndex: usageTableStore(db, usageTableOf(classUsageIndex)),
     componentIndex: usageTableStore(db, usageTableOf(componentUsageIndex)),
   };
+}
+
+/** Remove every row of one table a predicate matches; how many. */
+export async function forgetUsageRows(
+  db: UsageDb,
+  table: UsageTable,
+  where: UsageWhere
+): Promise<number> {
+  const condition = conditionOf(table, db, where);
+  // No predicate is no question: refused rather than read as "every row".
+  if (condition === null || condition === undefined) return 0;
+  return table.remove(db, condition);
 }
 
 /** How many rows one page of a batch read takes. */

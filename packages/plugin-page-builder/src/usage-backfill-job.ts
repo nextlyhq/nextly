@@ -78,6 +78,16 @@ export interface UsageBackfillDeps {
    * is what makes the budget a budget.
    */
   clock?: () => number;
+  /**
+   * Remove the rows no scope that exists now can own, once every scope has
+   * been walked: those of a Single removed from the configuration, or of one
+   * that no longer stores blocks where it did. No walk visits them, so
+   * nothing else would. Its writes go through `fenced`, as a walk's do.
+   */
+  forgetGone?: (
+    scopes: readonly BackfillScope[],
+    fenced: BackfillStateStore["fenced"]
+  ) => Promise<void>;
 }
 
 /**
@@ -129,6 +139,9 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
           // Every scope walked under this run: the dirty mark a failed
           // maintenance write left can go, since this run started after it.
           if (pass.complete) {
+            // Before the dirty mark clears, so a run is finished only once
+            // the rows of content that is gone are gone too.
+            await deps.forgetGone?.(scopes, write => state.fenced(write));
             await state.finish();
             return;
           }

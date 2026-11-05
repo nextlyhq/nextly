@@ -248,10 +248,12 @@ describe.each(getConfiguredTestDialects())(
       const rows = await t.adapter.select<Record<string, unknown>>(
         COMPONENT_ROWS,
         {
-          and: [
-            { column: "componentId", op: "=", value: componentId },
-            { column: "kind", op: "=", value: "reference" },
-          ],
+          where: {
+            and: [
+              { column: "componentId", op: "=", value: componentId },
+              { column: "kind", op: "=", value: "reference" },
+            ],
+          },
         }
       );
       return [
@@ -281,6 +283,48 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await placers(t, header)).toEqual([`single:${SINGLE}:`]);
         // Whole: the Single's scopes were walked like a collection's.
+        expect(await count(header)).toEqual({ documents: 1, complete: true });
+      });
+
+      it("forgets the rows of a Single that is gone, and keeps a live one's", async () => {
+        const { t, tick, count } = await boot();
+        const header = await component(t, "header", [text("h")]);
+        await single(t, [placing("i1", header)]);
+        await tick();
+
+        // As a Single removed from the configuration leaves them: rows no
+        // scope that exists now names, so no walk visits them.
+        for (const [entity, field] of [
+          ["retired", "content"],
+          [SINGLE, "sidebar"],
+        ] as const) {
+          await t.adapter.insert(COMPONENT_ROWS, {
+            id: globalThis.crypto.randomUUID(),
+            scope: "single",
+            entity,
+            entityKey: "",
+            field,
+            locale: "",
+            variant: "published",
+            kind: "reference",
+            componentId: header,
+          });
+        }
+        const sidebar = () =>
+          t.adapter.select(COMPONENT_ROWS, {
+            where: { and: [{ column: "field", op: "=", value: "sidebar" }] },
+          });
+        expect(await placers(t, header)).toEqual([
+          "single:home:",
+          "single:retired:",
+        ]);
+        expect(await sidebar()).toHaveLength(1);
+
+        await tick();
+
+        // CONTROL: the live Single's row, in the field it does store, stays.
+        expect(await placers(t, header)).toEqual([`single:${SINGLE}:`]);
+        expect(await sidebar()).toHaveLength(0);
         expect(await count(header)).toEqual({ documents: 1, complete: true });
       });
 
@@ -315,16 +359,7 @@ describe.each(getConfiguredTestDialects())(
 
         // Nothing stored in the page or in `picker` names `deep`; the page's
         // override does.
-        const named = (keys: string[]) =>
-          keys.map(key =>
-            key
-              .replace(deep, "deep")
-              .replace(plain, "plain")
-              .replace(picker, "picker")
-          );
-        expect(named(await placers(t, deep))).toEqual([
-          `collection:pages:${home}`,
-        ]);
+        expect(await placers(t, deep)).toEqual([`collection:pages:${home}`]);
         // CONTROL: the components the documents store are recorded too.
         expect(await placers(t, picker)).toEqual([`collection:pages:${home}`]);
 

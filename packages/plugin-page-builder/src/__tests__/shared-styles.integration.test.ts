@@ -510,7 +510,7 @@ describe.each(getConfiguredTestDialects())(
       const spareRows = {
         and: [{ column: "classId", op: "=" as const, value: "c-spare" }],
       };
-      const rows = await t.adapter.select(CLASS_ROWS, spareRows);
+      const rows = await t.adapter.select(CLASS_ROWS, { where: spareRows });
       expect(rows.length).toBeGreaterThan(0);
       await t.adapter.delete(CLASS_ROWS, spareRows);
       const designer = await holding(t, ...DESIGN, "read-pages");

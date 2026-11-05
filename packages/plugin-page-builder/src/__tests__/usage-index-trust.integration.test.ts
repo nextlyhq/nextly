@@ -203,10 +203,12 @@ describe.each(getConfiguredTestDialects())(
         entityKey: string;
         componentId: string;
       }>(COMPONENT_ROWS, {
-        and: [
-          { column: "entity", op: "=", value: "pages" },
-          { column: "kind", op: "=", value: "reference" },
-        ],
+        where: {
+          and: [
+            { column: "entity", op: "=", value: "pages" },
+            { column: "kind", op: "=", value: "reference" },
+          ],
+        },
       });
       const found: Record<string, string[]> = {};
       for (const id of pageIds) found[id] = [];
