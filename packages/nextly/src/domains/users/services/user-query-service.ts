@@ -88,6 +88,11 @@ export interface ListUsersOptions {
   limit?: number;
   // Search
   search?: string;
+  /**
+   * Custom fields the search does not match: those a read leaves out of the
+   * users it returns, whose values which users match would otherwise reveal.
+   */
+  unsearchedFields?: ReadonlySet<string>;
   // Filters
   emailVerified?: boolean;
   hasPassword?: boolean;
@@ -171,8 +176,11 @@ export class UserQueryService extends BaseService {
    * Prefers merged fields from `UserExtSchemaService` (code + UI sources,
    * loaded via `loadMergedFields()` at startup) and falls back to
    * `userConfig.fields` (code-only from `defineConfig()`).
+   *
+   * Public so a read that leaves hidden user fields out judges them by the
+   * same fields this service reads and writes.
    */
-  private getEffectiveFields(): UserFieldConfig[] {
+  getEffectiveFields(): UserFieldConfig[] {
     if (this.userExtSchemaService?.hasMergedFields()) {
       return this.userExtSchemaService.getMergedFieldConfigs();
     }
@@ -284,11 +292,13 @@ export class UserQueryService extends BaseService {
 
   /**
    * Build search conditions for custom text-type fields.
-   * Only text, textarea, and email fields are included in LIKE search.
+   * Only text, textarea, and email fields are included in LIKE search, and
+   * none of `unsearched`.
    */
   private buildCustomSearchConditions(
     userExtTable: DrizzleRuntimeTable,
-    searchTerm: string
+    searchTerm: string,
+    unsearched: ReadonlySet<string> | undefined
   ): SQL[] {
     const conditions: SQL[] = [];
     const fields = this.getEffectiveFields();
@@ -297,6 +307,7 @@ export class UserQueryService extends BaseService {
     for (const field of fields) {
       if (!("name" in field) || !field.name) continue;
       if (!SEARCHABLE_FIELD_TYPES.has(field.type)) continue;
+      if (unsearched?.has(field.name) === true) continue;
 
       const column = userExtTable[field.name];
       if (column) {
@@ -397,6 +408,7 @@ export class UserQueryService extends BaseService {
       page = 1,
       limit: requestedLimit = 10,
       search,
+      unsearchedFields,
       emailVerified,
       hasPassword,
       sortBy = "email",
@@ -426,7 +438,8 @@ export class UserQueryService extends BaseService {
       try {
         const customSearchConditions = this.buildCustomSearchConditions(
           userExtTable,
-          search
+          search,
+          unsearchedFields
         );
         if (customSearchConditions.length > 0) {
           // Safe pattern: FROM users LEFT JOIN user_ext WHERE (custom field conditions)

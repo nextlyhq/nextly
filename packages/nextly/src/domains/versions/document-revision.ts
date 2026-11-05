@@ -24,6 +24,7 @@ import { inArray, sql } from "drizzle-orm";
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import {
+  DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_VERSION_KEY,
   MIGRATE_STEP_COLUMN_NAMES,
 } from "../../lib/system-columns";
@@ -36,16 +37,7 @@ import {
   systemColumnDriverValue,
 } from "../schema/services/runtime-schema-generator";
 
-export { DOCUMENT_VERSION_KEY };
-
-/**
- * The key an update names to save over whatever was saved since the version
- * it read. Read at the write path's boundary (`versionCheckFor`) and never
- * stored: it says how to write, not what.
- *
- * @experimental
- */
-export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
+export { DOCUMENT_OVERWRITE_KEY, DOCUMENT_VERSION_KEY };
 
 /** The column holding a row's counter, on every content and translation table. */
 export const DOCUMENT_REVISION_COLUMN = "_revision";
