@@ -116,7 +116,15 @@ export function VersionConflictDialog({
             </p>
             {compareHref ? (
               <p className="text-sm">
-                <Link href={compareHref} className="underline">
+                {/* In a tab of its own: the edits on screen are not saved,
+                    and leaving the editor for the comparison would ask to
+                    discard them. */}
+                <Link
+                  href={compareHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
                   {who ? `See what ${who} changed` : "See what changed"}
                 </Link>
               </p>

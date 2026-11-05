@@ -107,6 +107,8 @@ describe("the conflict of a save made from an older version", () => {
       "href",
       "/admin/collections/posts/e1/versions?from=previous&to=13"
     );
+    // In a tab of its own, so the unsaved edits stay where they are.
+    expect(screen.getByRole("link")).toHaveAttribute("target", "_blank");
   });
 
   it("offers no comparison without one", () => {
