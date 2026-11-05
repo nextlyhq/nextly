@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import { STORED_FORMS, showsUnpublished } from "../stored-form";
+import { STORED_FORMS, showsUnpublished } from "../stored-field-read";
 
 describe("showsUnpublished", () => {
   it("shows unpublished work for the draft form alone", () => {

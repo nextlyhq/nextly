@@ -41,13 +41,11 @@ import {
   expectStoredValue,
   prepareStoredRead,
   readStoredFieldsOn,
+  showsUnpublished,
+  STORED_FORMS,
   type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
-import {
-  STORED_FORMS,
-  showsUnpublished,
-} from "../domains/collections/services/stored-form";
 import { appLocalization } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import { getFieldType } from "../domains/schema/field-types/field-type-registry";
