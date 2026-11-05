@@ -59,6 +59,7 @@ function setup(
     reload: vi.fn(async () => void calls.push("reload")),
     keepsEdits: () => true,
     release: vi.fn(() => void calls.push("release")),
+    stopLoading: vi.fn(() => void calls.push("stopLoading")),
     ...overrides,
   };
   const hook = renderHook(
@@ -218,6 +219,63 @@ describe("someone else's change to a document this editor holds", () => {
         /so it now shows the latest version\.$/
       )
     );
+  });
+
+  it("asks before trying again over edits typed since the failed refresh", async () => {
+    // 🔴 The form unlocks under the Try again strip: what is typed there is
+    // unsaved work, which a reload would replace.
+    let typed = false;
+    const { result, options, calls, tell } = setup(false, {
+      dirty: () => typed,
+      reload: vi.fn(async () => {
+        calls.push("reload");
+        throw new Error("offline");
+      }),
+    });
+    tell(notice());
+    await waitFor(() =>
+      expect(result.current.notice?.choices).toEqual([
+        { choice: "try-again", label: "Try again" },
+      ])
+    );
+
+    typed = true;
+    calls.length = 0;
+    await act(async () => result.current.choose("try-again"));
+
+    expect(calls).not.toContain("release");
+    expect(calls).not.toContain("reload");
+    expect(options.hold).toHaveBeenLastCalledWith(notice().change);
+    expect(result.current.notice?.message).toMatch(
+      /^Ana changed this document at .+\. Your unsaved edits are still here\.$/
+    );
+    expect(result.current.notice?.choices).toEqual([
+      { choice: "load-current", label: "Load current version" },
+      { choice: "keep-editing", label: "Keep editing" },
+    ]);
+  });
+
+  it("stops waiting for the current version once the editor keeps editing after a failed load", async () => {
+    // 🔴 The load may already wait for the current version when its read
+    // fails: left waiting, that version replaces the edits on arrival.
+    const { result, options, tell } = setup(true, {
+      reload: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    });
+    tell(notice());
+    await waitFor(() => expect(result.current.notice).not.toBeNull());
+    await act(async () => result.current.choose("load-current"));
+    await waitFor(() =>
+      expect(result.current.notice?.choices).toContainEqual({
+        choice: "keep-editing",
+        label: "Keep editing",
+      })
+    );
+
+    act(() => result.current.choose("keep-editing"));
+    expect(options.stopLoading).toHaveBeenCalledTimes(1);
+    expect(result.current.notice).toBeNull();
   });
 
   it("leaves the copy's version to the read it applies, never to the change told", async () => {

@@ -260,6 +260,7 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   ScheduledTask,
+  PluginWebhookEventType,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
