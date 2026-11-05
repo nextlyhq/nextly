@@ -9467,6 +9467,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The entry picker takes the row under the operator, named for a screen
+   reader by the field it chooses for, as the row already shows it. */
+.nx-list-filter__body [data-content-control="relation"] {
+  flex-basis: 100%;
+}
+
+.nx-list-filter__body .nx-inspector__field > .nx-inspector__field-name,
 .nx-list-filter__body .nx-inspector__field > label {
   position: absolute;
   width: 1px;

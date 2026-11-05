@@ -893,7 +893,7 @@ function EntryValue(props: ValueProps): React.JSX.Element {
   const pick = (
     <RelationControl
       id={id}
-      label={many ? "Add an entry" : "Entry"}
+      label={many ? `Add to ${field.label}` : field.label}
       prop={{
         name: "value",
         schema: { type: "relation", relationTo: field.relationTo },
