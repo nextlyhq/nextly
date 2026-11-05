@@ -181,7 +181,7 @@ function raceSeam(
  * create it; and inside it, right after its first read of the Single's own
  * table (the read that adopts a row another writer created), so a competing
  * write can run before the write reaches its row lock. Records when, after
- * that read, the author's chain asks for a write transaction of its own.
+ * that read, the author's chain asks for a transaction of its own.
  */
 function adoptSeam(t: TestNextly) {
   const adapter = t.adapter as unknown as {
@@ -205,10 +205,13 @@ function adoptSeam(t: TestNextly) {
   const proceed = { begin: gate(), lock: gate() };
   const seen = { claimed: false, adopted: false, read: false };
   vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
-    if (isSnapshot(rest)) return original(work, ...rest);
+    // Any transaction the author's chain asks for once the plugin's write
+    // holds what it read, a conditional write's stored-read snapshot among
+    // them: on SQLite each waits behind the held write.
     if (writerOf.getStore() === "author" && seen.read) {
       reached.authorAsked.open();
     }
+    if (isSnapshot(rest)) return original(work, ...rest);
     if (writerOf.getStore() !== "plugin" || seen.claimed) {
       return original(work, ...rest);
     }
@@ -247,8 +250,8 @@ function adoptSeam(t: TestNextly) {
 /**
  * What a competing write did once started while the seam holds the plugin's
  * write: it `settled`, nothing having held it back, or it is `waiting` on a
- * lock the held write took. On SQLite, where one writer holds the database,
- * asking for its write transaction is waiting. Fails the test when it does
+ * lock the held write took. On SQLite, where the held write holds the
+ * database, asking for a transaction of its own is waiting. Fails the test when it does
  * neither in time, rather than taking either for granted.
  */
 async function competingProgress(
