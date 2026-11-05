@@ -260,6 +260,68 @@ describe("writing one section", () => {
     expect(Object.keys(writes[0] ?? {})).toEqual(["tokens"]);
   });
 
+  it("sends the version the style was read at, then the version each save answered", async () => {
+    // A save is refused when the Single changed since the version it sends, so
+    // a second save must send the version the first answered, or the
+    // studio's own earlier save would refuse it.
+    readAnswer = {
+      data: {
+        tokens: null,
+        fonts: null,
+        classes: null,
+        breakpoints: null,
+        _rev: "3",
+      },
+      isPending: false,
+      error: null,
+    };
+    writeBehaviour = async () => ({ id: "1", _rev: "4" });
+    const { result } = renderHook(() => useSaveSiteStyle());
+
+    await act(async () => {
+      await result.current.save("tokens", { tokens: [] });
+    });
+    await act(async () => {
+      await result.current.save("fonts", []);
+    });
+
+    expect(writes).toEqual([
+      { tokens: { tokens: [] }, _rev: "3" },
+      { fonts: [], _rev: "4" },
+    ]);
+  });
+
+  it("says who changed the style since, against the section a refused save was for", async () => {
+    writeBehaviour = () =>
+      Promise.reject(
+        Object.assign(
+          new Error("This document changed since the version you gave."),
+          {
+            status: 409,
+            code: "STALE_VERSION",
+            data: {
+              currentVersion: "5",
+              changedBy: { kind: "person", name: "Ana Ruiz" },
+            },
+          }
+        )
+      );
+    const { result } = renderHook(() => useSaveSiteStyle());
+
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("tokens", { tokens: [] });
+    });
+
+    expect(verdict).toEqual({
+      saved: false,
+      issues: {
+        tokens:
+          "Ana Ruiz changed the site style since you opened it. Reload to see their change; yours was not saved.",
+      },
+    });
+  });
+
   it("writes the breakpoints through Settings' route, and reads the document again", async () => {
     // The one write the site style lets change them; the Single's own update
     // would be refused.

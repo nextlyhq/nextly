@@ -204,6 +204,47 @@ export interface SiteStyleSaveResult {
 }
 
 /**
+ * The key the Single's version travels under, as the admin reads and sends
+ * it. Spelled here because the plugin reaches the admin only through the
+ * SDK, which does not publish it.
+ */
+const DOCUMENT_VERSION_KEY = "_rev";
+
+/** The version a read or a save of the Single carries, where it carries one. */
+function versionOfStored(doc: unknown): string | undefined {
+  if (typeof doc !== "object" || doc === null) return undefined;
+  const version = (doc as Record<string, unknown>)[DOCUMENT_VERSION_KEY];
+  return typeof version === "string" && version.length > 0
+    ? version
+    : undefined;
+}
+
+/**
+ * What a save refused because the Single changed since says, against its
+ * section: who changed it, where the refusal names them. Null for any other
+ * failure.
+ */
+function staleChangeOf(reason: unknown): string | null {
+  const refusal = reason as {
+    status?: unknown;
+    code?: unknown;
+    data?: { changedBy?: { name?: unknown } };
+  } | null;
+  if (
+    refusal === null ||
+    typeof refusal !== "object" ||
+    refusal.status !== 409 ||
+    refusal.code !== "STALE_VERSION"
+  ) {
+    return null;
+  }
+  const name = refusal.data?.changedBy?.name;
+  const who =
+    typeof name === "string" && name.trim() !== "" ? name.trim() : "Someone";
+  return `${who} changed the site style since you opened it. Reload to see their change; yours was not saved.`;
+}
+
+/**
  * Why a write was refused, keyed by the section the validator named.
  *
  * A refused write REJECTS by the time it reaches here, and the path there is
@@ -590,6 +631,16 @@ export function useSaveSiteStyle(): SiteStyleWrite {
   const { data, refetch } = useStoredSiteStyle();
   const stored = useRef(data);
   stored.current = data;
+  // The Single's version the next save sends: the one a read gave, then the
+  // one each save answered, so a studio's second save is not refused for its
+  // own first one. A newer read takes over when it arrives.
+  const readVersion = versionOfStored(data);
+  const lastRead = useRef(readVersion);
+  const startedFrom = useRef(readVersion);
+  if (lastRead.current !== readVersion) {
+    lastRead.current = readVersion;
+    startedFrom.current = readVersion;
+  }
   const history = useContext(SiteStyleHistoryContext);
   // The entry form's storing gate, which every write in turn is tracked with.
   const track = useTrackedWrite();
@@ -614,7 +665,13 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           });
           await refetch();
         } else {
-          await mutation.mutateAsync({ [section]: value });
+          const saved: unknown = await mutation.mutateAsync({
+            [section]: value,
+            ...(startedFrom.current === undefined
+              ? {}
+              : { [DOCUMENT_VERSION_KEY]: startedFrom.current }),
+          });
+          startedFrom.current = versionOfStored(saved) ?? startedFrom.current;
           // The editor reads the style through the plugin's route, which the
           // Single's own write does not invalidate, so it is asked again.
           // Not awaited, as the Single's own invalidation is not: the save has
@@ -623,6 +680,12 @@ export function useSaveSiteStyle(): SiteStyleWrite {
         }
         return { saved: true, issues: {} };
       } catch (reason) {
+        // Refused because someone saved the site style since: said against
+        // the section, naming them, with what to do.
+        const changedSince = staleChangeOf(reason);
+        if (changedSince !== null) {
+          return { saved: false, issues: { [section]: changedSince } };
+        }
         // Caught rather than propagated, because a studio needs the reason
         // beside the section that produced it. Letting this reject would push
         // the same decision onto four surfaces, and the one that forgot would

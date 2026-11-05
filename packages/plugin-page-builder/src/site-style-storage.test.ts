@@ -198,4 +198,16 @@ describe("reading the stored Site Style document", () => {
       { slug: "site-style", overrideAccess: true },
     ]);
   });
+
+  it("carries the Single's version as read, for a save of one section to send back", async () => {
+    const read = (doc: unknown) =>
+      readStoredSiteStyle({
+        nextly: { findSingle: () => Promise.resolve(doc) },
+      });
+    await expect(
+      read({ id: "s1", tokens: null, _rev: "7" })
+    ).resolves.toMatchObject({ _rev: "7" });
+    // Absent, not invented, where the read carries none.
+    expect(await read({ id: "s1", tokens: null })).not.toHaveProperty("_rev");
+  });
 });

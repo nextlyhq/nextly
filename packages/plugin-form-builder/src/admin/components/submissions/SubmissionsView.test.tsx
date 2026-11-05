@@ -19,7 +19,11 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SubmissionsView } from "./SubmissionsView";
+import {
+  SubmissionsView,
+  submissionPatch,
+  type SubmissionRow,
+} from "./SubmissionsView";
 
 /** The page size the entries API answers with when a request names none. */
 const SERVER_DEFAULT_LIMIT = 10;
@@ -131,5 +135,31 @@ describe("SubmissionsView reads past the server's default page", () => {
       screen.queryAllByText(/person-25@example\.com/).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText(/person-26@example\.com/)).toBeNull();
+  });
+});
+
+describe("a change to a submission", () => {
+  const row = (rev?: string): SubmissionRow => ({
+    id: "submission-1",
+    form: "form-1",
+    data: {},
+    status: "spam",
+    ...(rev === undefined ? {} : { _rev: rev }),
+  });
+
+  it("sends the version its row had when the list read it", () => {
+    expect(submissionPatch(row("4"), { status: "new" })).toEqual({
+      status: "new",
+      _rev: "4",
+    });
+  });
+
+  it("sends the change alone for a row read without one", () => {
+    expect(submissionPatch(row(), { status: "new" })).toEqual({
+      status: "new",
+    });
+    expect(submissionPatch(undefined, { status: "new" })).toEqual({
+      status: "new",
+    });
   });
 });

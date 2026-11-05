@@ -56,6 +56,13 @@ import {
   type FormNotification,
 } from "./context/FormBuilderContext";
 
+/**
+ * The key a form's version travels under, as the admin reads and sends it.
+ * Spelled here because the plugin reaches the admin only through the SDK,
+ * which does not publish it.
+ */
+const DOCUMENT_VERSION_KEY = "_rev";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -76,6 +83,11 @@ export interface FormBuilderViewProps {
     fields?: unknown[];
     settings?: Record<string, unknown>;
     notifications?: unknown[];
+    /**
+     * The form's version as read, which a save sends back so one made from an
+     * older version is refused rather than replacing what someone saved since.
+     */
+    _rev?: string;
   };
   onSave?: (data: unknown) => void;
   onSuccess?: (entry?: Record<string, unknown>) => void;
@@ -117,6 +129,7 @@ function FormBuilderViewInner({
   onSuccess,
   onCancel,
   documentLock,
+  version,
 }: Pick<
   FormBuilderViewProps,
   | "isCreating"
@@ -126,7 +139,13 @@ function FormBuilderViewInner({
   | "onSuccess"
   | "onCancel"
   | "documentLock"
->) {
+> & {
+  /** The form's version as read; see `initialData._rev`. */
+  version?: string;
+}) {
+  // The version the next save sends: the one read, then the one each save
+  // answered, so a second save is not refused for this editor's first.
+  const startedFrom = useRef(version);
   const {
     fields,
     activeTab,
@@ -320,7 +339,11 @@ function FormBuilderViewInner({
         method: isCreating ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(saveData),
+        body: JSON.stringify(
+          isCreating || startedFrom.current === undefined
+            ? saveData
+            : { ...saveData, [DOCUMENT_VERSION_KEY]: startedFrom.current }
+        ),
       });
       if (!response.ok) {
         throw new Error(
@@ -336,6 +359,8 @@ function FormBuilderViewInner({
         item?: Record<string, unknown>;
       } & Record<string, unknown>;
       const savedEntry: Record<string, unknown> = result.item ?? result;
+      const answered = savedEntry[DOCUMENT_VERSION_KEY];
+      if (typeof answered === "string") startedFrom.current = answered;
       void queryClient.invalidateQueries({
         queryKey: ["entries", "list", collectionSlug],
       });
@@ -696,11 +721,24 @@ export function saveErrorMessage(body: unknown, statusText: string): string {
   const error = (
     body as {
       error?: {
+        code?: string;
         message?: string;
-        data?: { errors?: { message?: string }[] };
+        data?: {
+          errors?: { message?: string }[];
+          changedBy?: { name?: unknown };
+        };
       };
     }
   )?.error;
+
+  // Refused because someone saved the form since: who, where the refusal
+  // names them, and what to do. The edits stay in the editor.
+  if (error?.code === "STALE_VERSION") {
+    const name = error.data?.changedBy?.name;
+    const who =
+      typeof name === "string" && name.trim() !== "" ? name.trim() : "Someone";
+    return `${who} changed this form since you opened it. Reload to see their change; your edits are still here, not saved.`;
+  }
 
   const fieldIssues = (error?.data?.errors ?? [])
     .map(issue => issue.message)
@@ -754,6 +792,7 @@ export function FormBuilderView({
         onSuccess={onSuccess}
         onCancel={onCancel}
         documentLock={documentLock}
+        version={initialData?._rev}
       />
     </FormBuilderProvider>
   );
