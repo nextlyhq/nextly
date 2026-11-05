@@ -1997,6 +1997,7 @@ function BoundField({
   words,
   stored,
   fallback,
+  unsetValue,
   disabled,
   problem: storedProblem,
   onBound,
@@ -2008,6 +2009,12 @@ function BoundField({
   stored: unknown;
   /** What the list reads when nothing is stored, shown as the placeholder. */
   fallback?: unknown;
+  /**
+   * What the list reads when nothing is stored, shown as the field's value:
+   * for a number an author reads as a plain fact (skip 0) rather than a hint.
+   * Sending it unchanged writes nothing, so nothing is stored for it.
+   */
+  unsetValue?: number;
   disabled: boolean;
   problem: string | undefined;
   onBound: (value: number | undefined) => void;
@@ -2015,7 +2022,9 @@ function BoundField({
   const text =
     typeof stored === "number" || typeof stored === "string"
       ? String(stored)
-      : "";
+      : unsetValue === undefined
+        ? ""
+        : String(unsetValue);
   const [draft, setDraft] = React.useState(text);
   const [problem, setProblem] = React.useState<string | undefined>();
   React.useEffect(() => {
@@ -2030,7 +2039,12 @@ function BoundField({
       return;
     }
     setProblem(undefined);
-    if (read.value !== stored) onBound(read.value);
+    // The shown unset value, sent back unchanged, is what the list already
+    // reads, so it is no edit.
+    const unchanged =
+      read.value === stored ||
+      (stored === undefined && read.value === unsetValue);
+    if (!unchanged) onBound(read.value);
   };
   const shown = problem ?? storedProblem;
   const errorId = `${id}-error`;
@@ -2120,6 +2134,7 @@ function HowManyGroup({
         prop="offset"
         words={{ label: "Skip the first", suffix: "entries" }}
         stored={values.offset}
+        unsetValue={0}
         disabled={disabled}
         problem={issuesAt(issues, ["offset"])[0]}
         // Skipping none stores nothing, as a list that skips none always did.

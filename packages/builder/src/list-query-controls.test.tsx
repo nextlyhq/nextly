@@ -480,6 +480,21 @@ describe("how many entries a list shows", () => {
     fireEvent.blur(field);
     expect(writes(editor)).toEqual([{ collection: "posts", offset: 3 }]);
   });
+
+  it("shows 0 to skip when none is stored, and stores nothing for it", async () => {
+    const editor = mount({ collection: "posts" });
+    const field = (await screen.findByLabelText(
+      "Skip the first"
+    )) as HTMLInputElement;
+    // The value a list reads, as a value rather than a hint.
+    expect(field.value).toBe("0");
+    fireEvent.blur(field);
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(editor.apply).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "2" } });
+    fireEvent.blur(field);
+    expect(writes(editor)).toEqual([{ collection: "posts", offset: 2 }]);
+  });
 });
 
 describe("what the canvas shows", () => {
