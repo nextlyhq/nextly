@@ -121,15 +121,8 @@ async function handle(
       ctx.logger.warn(message, meta),
     now: () => new Date(),
     newToken: () => globalThis.crypto.randomUUID(),
-    // The grants core judges the final write by: a delete, or an update that
-    // unpublishes. Asked of the caller before a move writes any page.
-    mayRemove: async (action: RemovalAction) => {
-      const asked = action === "delete" ? ["delete"] : ["update", "unpublish"];
-      for (const grant of asked) {
-        if (!(await ctx.caller?.can(grant, slugs.layouts))) return false;
-      }
-      return true;
-    },
+    mayRemove: (action: RemovalAction) =>
+      holdsRemovalGrants(ctx.caller, action, slugs.layouts),
   };
   const layoutId = ctx.params.id ?? "";
   const answer =
@@ -152,6 +145,28 @@ async function handle(
     ...answer.item,
     by,
   });
+}
+
+/**
+ * Whether the caller holds the grants core judges a removal's final write by:
+ * `delete`, or `update` and `unpublish` for an unpublish. Asked before a move
+ * writes any page, so a caller without them changes nothing.
+ *
+ * Asked as `anyEntry`: a right expressed as a rule over Layout rows answers
+ * yes here, as it must with no row named, and the final write, made as the
+ * caller, still judges this Layout against that rule.
+ */
+export async function holdsRemovalGrants(
+  caller: Pick<NonNullable<PluginRouteContext["caller"]>, "can"> | null,
+  action: RemovalAction,
+  layouts: string
+): Promise<boolean> {
+  if (caller === null) return false;
+  const asked = action === "delete" ? ["delete"] : ["update", "unpublish"];
+  for (const grant of asked) {
+    if (!(await caller.can(grant, layouts, { anyEntry: true }))) return false;
+  }
+  return true;
 }
 
 /** The route declaration. */
