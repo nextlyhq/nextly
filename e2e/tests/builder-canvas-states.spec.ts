@@ -394,7 +394,7 @@ for (const theme of ["light", "dark"] as const) {
           behindWords.own ?? behindWords.page,
           behindWords.page
         ),
-        "the empty section's prompt"
+        `the empty section's prompt: ${wordsColour} on ${behindWords.own ?? behindWords.page} over ${behindWords.page}`
       ).toBeGreaterThanOrEqual(4.5);
 
       // The + in a gap the pointer is near.
@@ -417,11 +417,11 @@ for (const theme of ["light", "dark"] as const) {
       const behindPlus = await groundBehind(page, add);
       expect(
         await contrast(page, plus.icon, plus.button, behindPlus.page),
-        "the gap's + against its button"
+        `the gap's +: ${plus.icon} on ${plus.button}`
       ).toBeGreaterThanOrEqual(3);
       expect(
         await contrast(page, plus.button, behindPlus.page),
-        "the gap's button against the page beneath it"
+        `the gap's button: ${plus.button} on ${behindPlus.page}`
       ).toBeGreaterThanOrEqual(3);
       await attachAxeUndecided(page, testInfo);
     });
