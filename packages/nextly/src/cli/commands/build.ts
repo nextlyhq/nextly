@@ -41,17 +41,12 @@ import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
-import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
 import { reportDryRun, type DryRunChange } from "../dry-run";
-import {
-  configDeclarationError,
-  exitWithError,
-  type CliError,
-} from "../errors";
+import { exitWithError, type CliError } from "../errors";
 import {
   buildDeclarationsInvalid,
   buildFailed,
@@ -69,7 +64,7 @@ import {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfigOrExit } from "../utils/command-prerequisites";
+import { loadDeclaredConfigOrExit } from "../utils/command-prerequisites";
 import type { LoadConfigResult } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration, formatCount } from "../utils/logger";
@@ -254,35 +249,19 @@ export async function runBuild(
   // Step 1: Load configuration
   logger.info("Loading configuration...");
 
-  const configResult = await loadConfigOrExit(
+  // The configuration with its plugin field declarations checked. A dry run
+  // names an invalid declaration as its refusal; a real run reports it and
+  // exits, so it reads like every other build failure.
+  const configResult = await loadDeclaredConfigOrExit(
     {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
     },
-    logger
+    logger,
+    error => reportedAsRefusal(logger, error, options.dryRun === true)
   );
-
-  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
-  // first moment an unknown field type can be told apart from one a plugin had
-  // not contributed yet: the `define*` validators defer that question because
-  // the config bundle is evaluated before any plugin registers. Asked here, a
-  // misspelled or wrong-surface token fails the command instead of silently
-  // generating primitive fallback types and a snapshot that production boot
-  // then refuses.
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
-    });
-  } catch (error) {
-    // A dry run names the refusal; a real run reports it and exits rather
-    // than throwing, so an invalid declaration reads like every other build
-    // failure instead of an unhandled crash.
-    if (reportedAsRefusal(logger, error, options.dryRun === true)) return;
-    exitWithError(logger, configDeclarationError(error) ?? error);
-  }
+  if (configResult === undefined) return;
 
   // A workflow that cannot be attached fails the build rather than the
   // deploy, and the types this build generates carry the workflows' names.

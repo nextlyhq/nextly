@@ -51,6 +51,10 @@ let storedRead: { data: unknown; isPending: boolean; error: unknown };
 let saveResult: { success: boolean } | Error;
 /** When set, every save blocks on this until the test releases it. */
 let holdSaves: Promise<void> | null;
+/**
+ * The bodies the Single was handed, each saved over whatever the style holds
+ * and saying so with `_overwrite: true`, which the expectations state.
+ */
 const saved: Array<Record<string, unknown>> = [];
 /** The shared-style routes: what was read and written. */
 const routeReads: string[] = [];
@@ -421,6 +425,7 @@ describe("the Shared styles tab reaching an author", () => {
     commitName(await details("card"), "Promo card");
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [{ ...CARD, label: "Promo card", slug: "promo-card" }],
     });
   });
