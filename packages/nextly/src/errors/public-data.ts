@@ -147,7 +147,9 @@ export type SampleContentPublicData = {
  * needs (`approve-posts`, as stored), or for an assignment the permissions any one of which each
  * refused part needed; that the person accountable for the part's stage may not approve it; the
  * parts whose stage the step does not leave from, and the stage each is in; or the parts whose
- * review state moved since the caller saw it. A part is a language, or null for the shared part.
+ * review state moved since the caller saw it; or the changed fields an approval would cover that
+ * a read rule hides from the reviewer, with who could approve instead. A part is a language, or
+ * null for the shared part.
  *
  * @experimental
  */
@@ -166,7 +168,12 @@ export type WorkflowRefusalPublicData =
         reason: "not-from-stage";
       }>;
     }
-  | { reason: "stale"; parts: Array<string | null> };
+  | { reason: "stale"; parts: Array<string | null> }
+  | {
+      reason: "field-hidden";
+      fields: string[];
+      approvers: Array<{ kind: "user"; id: string; name: string | null }>;
+    };
 
 export type PublicData =
   | ValidationPublicData

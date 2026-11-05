@@ -66,6 +66,11 @@ export interface WriteEventInput {
   /** The version the write produced or points at. */
   versionNo?: number | null;
   payload?: Record<string, unknown> | null;
+  /**
+   * The hash of the definition a feature acted under, where it has one: a workflow's, for the
+   * withdrawal of an approval a save caused.
+   */
+  definitionHash?: string | null;
 }
 
 /**
@@ -156,6 +161,8 @@ export async function recordWriteEvent(
       toState: input.toState ?? null,
       versionNo: input.versionNo ?? null,
       payload: input.payload ?? null,
+      // Passed through as given: only a feature with a definition names one.
+      definitionHash: input.definitionHash ?? null,
     },
     { principals }
   );

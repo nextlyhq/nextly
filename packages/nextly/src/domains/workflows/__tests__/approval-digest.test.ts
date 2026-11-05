@@ -60,6 +60,32 @@ describe("approvalDigest", () => {
     ).not.toBe(base);
   });
 
+  it("leaves out the exempt fields it is given, and only those", () => {
+    const exempt = ["seoTitle"];
+    const base = approvalDigest(
+      { ...CONTENT, seoTitle: "One" },
+      "collection",
+      exempt
+    );
+    // An exempt field's value, or its absence, does not move the digest.
+    expect(
+      approvalDigest({ ...CONTENT, seoTitle: "Two" }, "collection", exempt)
+    ).toBe(base);
+    expect(approvalDigest(CONTENT, "collection", exempt)).toBe(base);
+    // Without the exemption the same edit is a change.
+    expect(
+      approvalDigest({ ...CONTENT, seoTitle: "One" }, "collection")
+    ).not.toBe(approvalDigest({ ...CONTENT, seoTitle: "Two" }, "collection"));
+    // Another field still counts.
+    expect(
+      approvalDigest(
+        { ...CONTENT, title: "Other", seoTitle: "One" },
+        "collection",
+        exempt
+      )
+    ).not.toBe(base);
+  });
+
   it("reads a snapshot stored as JSON text as the value it holds", () => {
     expect(approvalDigest(JSON.stringify(CONTENT), "collection")).toBe(
       approvalDigest(CONTENT, "collection")
