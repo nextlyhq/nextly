@@ -488,7 +488,7 @@ const MARKER_ACTIONABLE_CLASS =
  * truncated "chan…" is the fact an author needed. `min-w-0` is what lets a flex child shrink
  * below its content at all; without it the strip reports its content width and nothing gives.
  */
-const MARKER_STRIP_CLASS = "flex min-w-0 shrink items-center gap-2";
+const MARKER_STRIP_CLASS = "flex shrink-0 items-center gap-2";
 
 /**
  * The markers a language row shows, in a FIXED order.
@@ -565,15 +565,14 @@ function LanguageRow({
   navigationDisabled: boolean;
 }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
-      {/* The describing half SHRINKS and the acting half does not. This row
-          lives in a 320px rail, and with a long label, a `default`/`rtl` badge
-          and a state to report there is not always room for both buttons —
-          measured, the "Open" of an untranslated RTL language sat 38px past the
-          row's own right edge, unreachable by pointer. Truncating the state text
-          costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
-          and the language button's accessible name carries it in words. */}
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
+      {/* The row WRAPS rather than truncating. In a 320px rail a long label,
+          its markers and a state do not always leave room for both buttons,
+          and truncating them to fit left "REV", "R" and "not…", which say
+          nothing. The describing half keeps its natural width, so when the
+          row is short of room the buttons move to a line of their own under
+          it instead of pushing past the row's edge or squeezing the words. */}
+      <div className="flex grow basis-auto flex-wrap items-center gap-x-2 gap-y-1">
         {/* No state is claimed where the states were not read. */}
         {metaKnown ? <StateDot state={state} /> : null}
         {/* The language NAME does not yield. It is the row's identity, and a
@@ -598,7 +597,7 @@ function LanguageRow({
         </span>
         {metaKnown && (
           <span
-            className="min-w-0 truncate text-xs text-muted-foreground"
+            className="whitespace-nowrap text-xs text-muted-foreground"
             title={languageStateLabel(state, { pendingChange, stale })}
           >
             {LANGUAGE_STATE_LABEL[state]}
@@ -612,11 +611,11 @@ function LanguageRow({
           "English", and 120px for "Brazilian Portuguese". The row's describing
           half is already the part that gives way, and it had no more to give. */}
       {isActive ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           editing now
         </span>
       ) : (
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Offered on EVERY language, not only an empty one. Filling a
               language that already has content is an overwrite rather than a
               start, which is what the verb reports and what the confirm step
@@ -734,8 +733,7 @@ export function LanguagePanel({
   const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
 
   const { offersFilter, shown } = filteredLanguages(locales, filter);
