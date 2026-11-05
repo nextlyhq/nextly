@@ -1012,6 +1012,19 @@ export function SingleForm({
   // A write of the status alone, as a reader's publish or unpublish sends it:
   // it names no field, so the server judges it by that permission alone, and
   // it does not read the form, which a reader cannot change.
+  // A save the server stored: counted, its version adopted as the copy's,
+  // and no change told before held over it, since the copy is now current.
+  const adoptSaved = useCallback(
+    (stored: Awaited<ReturnType<typeof onSubmit>>) => {
+      setSavedCount(n => n + 1);
+      if (stored) {
+        ownSave.current.storedKey = singleResetKey(stored, locale);
+        version.adoptAnswered(stored);
+      }
+      version.release();
+    },
+    [locale, version]
+  );
   const writeStatus = useCallback(
     async (status: "published" | "draft"): Promise<SubmitOutcome> => {
       if (busy || submissionLatch.current) return submitBusy;
@@ -1023,14 +1036,7 @@ export function SingleForm({
             throw error;
           }
         );
-        setSavedCount(n => n + 1);
-        if (stored) {
-          ownSave.current.storedKey = singleResetKey(stored, locale);
-          version.adoptAnswered(stored);
-        }
-        // Saved, so the copy is the current version: nothing a change told
-        // before still holds it.
-        version.release();
+        adoptSaved(stored);
         return { ok: true, item: { id: document.id } };
       } catch (error) {
         return submitFailed(error);
@@ -1038,7 +1044,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [busy, onSubmit, locale, document.id, submissionLatch, version]
+    [busy, onSubmit, document.id, submissionLatch, version, adoptSaved]
   );
 
   // Recovery points for this author, the same mechanism the entry editor uses.
@@ -1184,12 +1190,7 @@ export function SingleForm({
     ownSave.current.inFlight = true;
     try {
       const stored = await onSubmit(payload, refusedForm);
-      setSavedCount(n => n + 1);
-      if (stored) {
-        ownSave.current.storedKey = singleResetKey(stored, locale);
-        version.adoptAnswered(stored);
-      }
-      version.release();
+      adoptSaved(stored);
       form.reset(
         stored ? singleFormDefaults(schema, stored) : form.getValues()
       );
@@ -1202,7 +1203,15 @@ export function SingleForm({
       ownSave.current.inFlight = false;
       submissionLatch.current = false;
     }
-  }, [version, submissionLatch, onSubmit, refusedForm, locale, form, schema]);
+  }, [
+    version,
+    submissionLatch,
+    onSubmit,
+    refusedForm,
+    form,
+    schema,
+    adoptSaved,
+  ]);
 
   // Load the current version: the edits are first kept as a recovery point
   // that remembers the version they began from; only then does the form take
