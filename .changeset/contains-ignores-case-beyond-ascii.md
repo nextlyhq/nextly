@@ -30,3 +30,5 @@
 ---
 
 On SQLite, `contains` and the search box now ignore case for letters outside ASCII, as on PostgreSQL and MySQL, so searching "CRÈME" finds "crème brûlée".
+
+In the media library, permission, role and user searches, a typed `%` or `_` is now matched literally rather than as a wildcard.
