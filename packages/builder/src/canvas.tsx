@@ -1049,28 +1049,31 @@ function useSiteSurfaceMarks(
   opaqueByTokens: boolean
 ): void {
   useNearestThemeMarker(rootRef);
+  const tokens = useRef(opaqueByTokens);
+  tokens.current = opaqueByTokens;
+  // On every render: a render is what brings new site styles.
   useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root !== null) markGround(root, tokens.current);
+  });
+  /*
+   * And on what changes the ground with no render, subscribed once for the
+   * root rather than on every render:
+   *
+   * - the site's mode: the theme marker rewrites the root's
+   *   `data-nx-site-theme` from an observer of its own, and the device's
+   *   colour scheme changes on its own. A light ground and a dark one can
+   *   differ in whether they are opaque;
+   * - the canvas's window resizing, or the canvas itself: a site can override
+   *   the ground under a width or height query, which a resized frame
+   *   crosses, and under a container query, which a canvas drawn without a
+   *   frame crosses as the layout around it changes.
+   */
+  useEffect(() => {
     const root = rootRef.current;
     if (root === null) return;
     const view = root.ownerDocument.defaultView;
-    const mark = (): void => {
-      const resolved = (
-        view?.getComputedStyle(root).backgroundColor ?? ""
-      ).trim();
-      const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
-      setFlag(
-        root,
-        "data-nx-site-ground-opaque",
-        alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
-      );
-    };
-    mark();
-    /*
-     * And again when the site's mode changes with no render: the theme marker
-     * rewrites the root's `data-nx-site-theme` from an observer of its own,
-     * and the device's colour scheme changes on its own. A light ground and a
-     * dark one can differ in whether they are opaque.
-     */
+    const mark = (): void => markGround(root, tokens.current);
     const Observer = view?.MutationObserver;
     const theme =
       typeof Observer === "function" ? new Observer(() => mark()) : null;
@@ -1080,15 +1083,33 @@ function useSiteSurfaceMarks(
     });
     const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
     scheme?.addEventListener("change", mark);
-    // And when the canvas's window resizes: a site can override the ground
-    // under a width or height query, which a resized frame crosses.
     view?.addEventListener("resize", mark);
+    const Sizes = view?.ResizeObserver;
+    const size = typeof Sizes === "function" ? new Sizes(() => mark()) : null;
+    size?.observe(root);
     return () => {
       theme?.disconnect();
       scheme?.removeEventListener("change", mark);
       view?.removeEventListener("resize", mark);
+      size?.disconnect();
     };
-  });
+  }, [rootRef]);
+}
+
+/**
+ * Mark whether the site's ground is fully opaque, from the colour the root's
+ * background resolves to; the token set's answer where that says nothing.
+ */
+function markGround(root: HTMLElement, opaqueByTokens: boolean): void {
+  const resolved = (
+    root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ?? ""
+  ).trim();
+  const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
+  setFlag(
+    root,
+    "data-nx-site-ground-opaque",
+    alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+  );
 }
 
 function setFlag(element: Element, attribute: string, wanted: boolean): void {

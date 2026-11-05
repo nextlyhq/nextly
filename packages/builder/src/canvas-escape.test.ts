@@ -56,6 +56,10 @@ describe("isTextEntry", () => {
     expect(isTextEntry(mount("<input />"))).toBe(true);
     const editable = mount('<div contenteditable="true"></div>');
     expect(isTextEntry(editable)).toBe(true);
+    // The canvas's own line editor is plain-text-only editable.
+    expect(
+      isTextEntry(mount('<span contenteditable="plaintext-only"></span>'))
+    ).toBe(true);
   });
 
   it("follows editability down to the node the caret is actually in", () => {

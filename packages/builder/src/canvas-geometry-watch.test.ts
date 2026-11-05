@@ -125,11 +125,61 @@ describe("a block an authored state rule moves", () => {
     expect(moved).toHaveBeenCalledTimes(1);
     for (const key of ["b", "c", "Shift", "Backspace"]) press(key);
     expect(moved).toHaveBeenCalledTimes(1);
-    // A space typed into editable text activates nothing either.
-    const text = block.ownerDocument.createElement("p");
-    text.setAttribute("contenteditable", "true");
-    block.append(text);
-    press(" ", text);
+    // A space typed into editable text activates nothing either, the
+    // canvas's own plain-text editor included.
+    for (const editable of ["true", "plaintext-only"]) {
+      const text = block.ownerDocument.createElement("p");
+      text.setAttribute("contenteditable", editable);
+      block.append(text);
+      press(" ", text);
+    }
+    expect(moved).toHaveBeenCalledTimes(1);
+    // A control the keyboard toggles is not text entry: Space on a checkbox
+    // can move what an authored :checked rule styles.
+    const box = block.ownerDocument.createElement("input");
+    box.type = "checkbox";
+    block.append(box);
+    press(" ", box);
+    // Down and up, measured once in the frame they share.
+    expect(moved).toHaveBeenCalledTimes(2);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("measures a typed character once, for the text it changed", async () => {
+    // Typing changes a text node, which can wrap a line and grow the block:
+    // that change is measured. The key that typed it adds nothing of its own.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const words = block.ownerDocument.createElement("p");
+    words.setAttribute("contenteditable", "plaintext-only");
+    words.textContent = "Some words";
+    block.append(words);
+    await delivered();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    // The modality is already the keyboard's.
+    words.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", bubbles: true })
+    );
+    for (const run of frames.splice(0)) run(0);
+    moved.mockClear();
+
+    words.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "s", bubbles: true })
+    );
+    const typed = words.firstChild;
+    if (!(typed instanceof Text)) throw new Error("no text node");
+    typed.appendData("s");
+    words.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "s", bubbles: true })
+    );
+    await delivered();
+    for (const run of frames.splice(0)) run(0);
     expect(moved).toHaveBeenCalledTimes(1);
     stop?.();
     vi.unstubAllGlobals();

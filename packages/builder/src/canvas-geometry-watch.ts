@@ -37,6 +37,7 @@
  * @module canvas-geometry-watch
  */
 
+import { isTextEntry } from "./canvas-escape";
 import { isElement } from "./dom-kind";
 import {
   overlaySpaceOf,
@@ -245,13 +246,11 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     // KeyboardEvent, which no `instanceof` against this window matches.
     const key = "key" in event ? event.key : undefined;
     if (key !== " " && key !== "Enter") return false;
+    // Text entry is the one place these keys activate nothing; a checkbox,
+    // a radio or a button the keyboard presses is a control, as Escape's
+    // own reading of the canvas already tells them apart.
     const target = event.target;
-    return !(
-      isElement(target) &&
-      target.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
-      ) !== null
-    );
+    return !(isElement(target) && isTextEntry(target));
   };
   const keyDown = (event: Event): void => {
     if (modality !== "keyboard") {
