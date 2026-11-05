@@ -696,6 +696,9 @@ function offlineFacts(
     // judges the ones a removal reaches.
     triggered: () => false,
     descendantsOf: () => [],
+    // The tables the schema before the section holds, from its snapshot.
+    liveTable: table =>
+      schema === undefined ? undefined : columnTypes.has(table.toLowerCase()),
     userFunctions: functions,
     unseenRebuild: "deferred",
     // Derived from the one reading of the types, so the two agree on which

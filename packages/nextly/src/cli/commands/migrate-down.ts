@@ -150,6 +150,7 @@ function unreadFacts(liveColumns: LiveColumns | undefined): DeletionFacts {
     nulledBy: () => undefined,
     triggered: () => undefined,
     descendantsOf: () => undefined,
+    liveTable: () => undefined,
     liveColumns: liveColumns ?? new Map(),
   };
 }

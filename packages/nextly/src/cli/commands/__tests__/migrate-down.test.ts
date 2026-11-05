@@ -193,6 +193,7 @@ const quietFacts = async () => ({
   nulledBy: () => [],
   triggered: () => false,
   descendantsOf: () => [],
+  liveTable: () => undefined,
   liveColumns: new Map(),
 });
 

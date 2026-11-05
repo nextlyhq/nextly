@@ -914,6 +914,24 @@ export async function previewMigrate(args: {
     "Pending",
     formatCount(pendingModules.length + pendingFiles.length, "migration")
   );
+  // The modules a real run applies, then its files, judged as that run's
+  // consent judges them: one run, modules first (`judgeFileDeletions`).
+  const moduleRuns = pluginModuleUnits(
+    pluginMigrationSets,
+    appliedPluginShas(rows),
+    args.step,
+    dialect
+  );
+  const judged = await pendingRunDeletions(
+    [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
+    db,
+    dialect
+  );
+  const moduleDeletions = new Map(
+    judged
+      .slice(0, moduleRuns.length)
+      .map(({ unit, deletions }) => [unit.label, deletions])
+  );
   for (const module of modules) {
     logger.info(
       `  • ${module.filename}${module.recorded ? " (applied)" : ""}${module.transaction ? "" : " (runs outside a transaction)"}`
@@ -921,13 +939,9 @@ export async function previewMigrate(args: {
     for (const refusal of module.refusals) {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
+    previewDeletions(moduleDeletions.get(module.filename) ?? [], logger);
   }
-  const pendingDeletions = await pendingRunDeletions(
-    pendingFiles.map(file => fileUnit(file, dialect)),
-    db,
-    dialect
-  );
-  for (const [at, { deletions }] of pendingDeletions.entries()) {
+  for (const [at, { deletions }] of judged.slice(moduleRuns.length).entries()) {
     const m = pendingFiles[at];
     if (m === undefined) continue;
     previewPendingFile(m, deletions, dialect, logger);
@@ -1033,14 +1047,21 @@ function previewPendingFile(
   })) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
-  if (deletions.length > 0) {
-    logger.info(
-      `    ⚠ deletes data: ${deletions.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletions)}.`
-    );
-  }
+  previewDeletions(deletions, logger);
   // The file's own UP section. A run that finds the schema already at the file's target adopts it
   // without running these, and one that finds it at neither end refuses it for drift.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
+}
+
+/** A unit's deletions as the dry run lists them, with the consent a real run needs; nothing when none. */
+function previewDeletions(
+  deletions: readonly Deletion[],
+  logger: Pick<CommandContext["logger"], "info">
+): void {
+  if (deletions.length === 0) return;
+  logger.info(
+    `    ⚠ deletes data: ${deletions.map(describeDeletion).join("; ")}. A real run needs ${consentToCover(deletions)}.`
+  );
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -2044,9 +2065,23 @@ async function moduleUnits(deps: MigrateCoreDeps): Promise<RunUnit[]> {
   const applied = await (
     deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
   )();
-  return pendingPluginModules(lists, applied, deps.step).map(
+  return pluginModuleUnits(lists, applied, deps.step, deps.dialect);
+}
+
+/**
+ * The pending plugin modules over `applied`, within `step`, as units of the
+ * run (`pendingPluginModules`): what the consent gate and `migrate --dry-run`
+ * both judge, so the two cannot read different modules.
+ */
+function pluginModuleUnits(
+  lists: readonly PluginMigrationSet[],
+  applied: ReadonlyMap<string, string | null>,
+  step: number | undefined,
+  dialect: SupportedDialect
+): RunUnit[] {
+  return pendingPluginModules(lists, applied, step).map(
     ({ filename, migration }) => {
-      const statements = pluginModuleStatements(migration, deps.dialect, "up");
+      const statements = pluginModuleStatements(migration, dialect, "up");
       return { label: filename, text: statements.join("\n;\n"), statements };
     }
   );

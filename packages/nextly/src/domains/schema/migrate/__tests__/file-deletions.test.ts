@@ -44,6 +44,8 @@ interface Facts {
   >;
   /** Per table, its inheritance descendants and partitions; none when left out. Undefined: unreadable. */
   descendants?: Record<string, readonly string[] | undefined>;
+  /** The tables the database has before the run, beyond those `columns` names; "unreadable" for none known. */
+  live?: readonly string[] | "unreadable";
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -65,6 +67,10 @@ function fake(facts: Facts = {}): DeletionFacts {
         ? triggers[table]?.includes(event)
         : false,
     descendantsOf: answer(facts.descendants),
+    liveTable: table =>
+      facts.live === "unreadable"
+        ? undefined
+        : (facts.live ?? []).includes(table) || table in (facts.columns ?? {}),
     ...(facts.functions === "unreadable"
       ? {}
       : { userFunctions: new Set(facts.functions ?? []) }),
@@ -588,10 +594,14 @@ describe("foreign keys and columns the list itself adds", () => {
       })
     ).toEqual([rows("authors"), column("posts", "author_id")]);
     expect(
-      read("postgresql", [
-        "ALTER TABLE posts ADD COLUMN editor_id integer REFERENCES authors (id) ON DELETE SET NULL",
-        "DELETE FROM authors",
-      ])
+      read(
+        "postgresql",
+        [
+          "ALTER TABLE posts ADD COLUMN editor_id integer REFERENCES authors (id) ON DELETE SET NULL",
+          "DELETE FROM authors",
+        ],
+        { columns: { posts: { id: "integer" } } }
+      )
     ).toEqual([rows("authors")]);
     expect(
       read("mysql", [
@@ -623,13 +633,17 @@ describe("foreign keys and columns the list itself adds", () => {
 
   it("asks nothing for a column the list adds and drops again, renamed or not", () => {
     expect(
-      read("postgresql", [
-        "ALTER TABLE posts ADD COLUMN tmp text",
-        "ALTER TABLE posts RENAME COLUMN tmp TO scratch",
-        "ALTER TABLE posts DROP COLUMN scratch",
-        "ALTER TABLE posts ADD COLUMN other text",
-        "ALTER TABLE posts ALTER COLUMN other TYPE integer",
-      ])
+      read(
+        "postgresql",
+        [
+          "ALTER TABLE posts ADD COLUMN tmp text",
+          "ALTER TABLE posts RENAME COLUMN tmp TO scratch",
+          "ALTER TABLE posts DROP COLUMN scratch",
+          "ALTER TABLE posts ADD COLUMN other text",
+          "ALTER TABLE posts ALTER COLUMN other TYPE integer",
+        ],
+        { columns: { posts: { id: "integer", title: "text" } } }
+      )
     ).toEqual([]);
     expect(read("postgresql", ["ALTER TABLE posts DROP COLUMN tmp"])).toEqual([
       column("posts", "tmp"),
@@ -665,6 +679,108 @@ describe("foreign keys and columns the list itself adds", () => {
         "DELETE FROM posts WHERE id = 1",
       ])
     ).toEqual([rows("posts")]);
+  });
+});
+
+describe("what the run cannot be sure it created, or where a name points", () => {
+  it("credits no creation of a table that already exists, since the file creating it may be adopted rather than run", () => {
+    expect(
+      read(
+        "postgresql",
+        ["CREATE TABLE posts (id integer)", "DROP TABLE posts"],
+        {
+          live: ["posts"],
+        }
+      )
+    ).toEqual([table("posts")]);
+    // Nor when whether it exists could not be read.
+    expect(
+      read(
+        "postgresql",
+        ["CREATE TABLE posts (id integer)", "DROP TABLE posts"],
+        {
+          live: "unreadable",
+        }
+      )
+    ).toEqual([table("posts")]);
+  });
+
+  it("credits no added column a live table may already hold, or whose table's columns are unknown", () => {
+    const steps = [
+      "ALTER TABLE posts ADD COLUMN summary text",
+      "ALTER TABLE posts DROP COLUMN summary",
+    ];
+    expect(
+      read("postgresql", steps, {
+        columns: { posts: { id: "integer", summary: "text" } },
+      })
+    ).toEqual([column("posts", "summary")]);
+    expect(read("postgresql", steps, { live: ["posts"] })).toEqual([
+      column("posts", "summary"),
+    ]);
+  });
+
+  it("stands for a deletion through an unqualified name once the search path changed, as one it cannot place", () => {
+    const remove = "DELETE FROM posts WHERE id = 1";
+    expect(
+      read("postgresql", ["SET LOCAL search_path TO archive", remove])
+    ).toEqual([
+      unreadAs(
+        "DELETE FROM POSTS WHERE ID = 1 (search path changed, not read, may delete data)",
+        remove
+      ),
+    ]);
+  });
+
+  it("reads MERGE as the writes and the removal of rows it makes", () => {
+    const merge =
+      "MERGE INTO posts p USING drafts d ON p.id = d.id WHEN MATCHED AND d.gone THEN DELETE WHEN MATCHED THEN UPDATE SET title = d.title WHEN NOT MATCHED THEN INSERT (id) VALUES (d.id)";
+    expect(
+      read("postgresql", [merge], { triggers: { posts: ["update"] } })
+    ).toEqual([
+      rows("posts"),
+      unnamed(
+        "rows written to posts fire an UPDATE trigger, which may delete other data"
+      ),
+    ]);
+  });
+
+  it("records a MySQL function or trigger created with a DEFINER", () => {
+    const call = "SELECT purge_old()";
+    expect(
+      read("mysql", [
+        "CREATE DEFINER = 'root'@'%' FUNCTION purge_old() RETURNS integer DETERMINISTIC RETURN 1",
+        call,
+      ])
+    ).toEqual([
+      unreadAs("SELECT PURGE_OLD (calls a function, may delete data)", call),
+    ]);
+    expect(
+      read("mysql", [
+        "CREATE DEFINER = 'root'@'%' TRIGGER audit_trg AFTER INSERT ON audit FOR EACH ROW SET @x = 1",
+        "INSERT INTO audit (id) VALUES (1)",
+      ])
+    ).toEqual([
+      unnamed(
+        "rows written to audit fire an INSERT trigger, which may delete other data"
+      ),
+    ]);
+  });
+
+  it("follows a partition attached or a table made to inherit earlier in the run into a later removal", () => {
+    expect(
+      read("postgresql", [
+        "ALTER TABLE events ATTACH PARTITION events_2024 FOR VALUES FROM (0) TO (10)",
+        "ALTER TABLE archive_events INHERIT events",
+        "DELETE FROM events",
+      ])
+    ).toEqual([rows("events"), rows("events_2024"), rows("archive_events")]);
+    expect(
+      read("postgresql", [
+        "ALTER TABLE events ATTACH PARTITION events_2024 FOR VALUES FROM (0) TO (10)",
+        "DELETE FROM ONLY events",
+      ])
+    ).toEqual([rows("events")]);
   });
 });
 

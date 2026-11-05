@@ -337,7 +337,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       filename: down.filename,
       statements: down.statements,
       transaction: down.transaction,
-      destructive: (deletions[at]?.length ?? 0) > 0,
+      deletions: deletions[at] ?? [],
     }));
   };
 

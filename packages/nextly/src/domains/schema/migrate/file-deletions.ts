@@ -86,6 +86,11 @@ export interface DeletionFacts {
    */
   descendantsOf(table: string): readonly string[] | undefined;
   /**
+   * Whether `table` exists before the run: a file that creates a table already there may be
+   * adopted rather than run, so the table is not the run's own. Undefined when unreadable.
+   */
+  liveTable(table: string): boolean | undefined;
+  /**
    * The functions a SELECT may call that run code the statement does not show: lower-cased names
    * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
    * a SELECT calling anything is judged as one that may delete.
@@ -120,6 +125,7 @@ interface FactSource {
   nulledBy(table: string): readonly NulledColumn[] | undefined;
   triggered(table: string, event: TriggerEvent): boolean | undefined;
   descendantsOf(table: string): readonly string[] | undefined;
+  liveTable(table: string): boolean | undefined;
   /** Whether a SELECT calling `name` may run code that deletes. */
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
@@ -157,6 +163,8 @@ type Step =
   | { kind: "create-function"; name: string }
   /** A trigger the list creates, on `table` (undefined when its table cannot be read). */
   | { kind: "create-trigger"; table: string | undefined }
+  /** `child` made a descendant of `parent` (ATTACH PARTITION, INHERIT): a later removal from `parent` reaches it. */
+  | { kind: "inherit"; parent: string; child: string }
   /** Rows written to `table`, firing the triggers of each event. */
   | { kind: "writes"; table: string; events: ("insert" | "update")[] }
   | {
@@ -378,6 +386,7 @@ function readData(
   first: string
 ): Step[] | null {
   if (cursor.accept("DELETE")) return readDelete(cursor, tokens);
+  if (cursor.accept("MERGE")) return readMerge(cursor, tokens);
   if (cursor.accept("TRUNCATE")) return readTruncate(cursor, tokens, dialect);
   const dialectForm = readDialectForm(cursor, tokens, dialect);
   if (dialectForm !== null) return dialectForm;
@@ -457,24 +466,35 @@ function readSqliteReplace(
  */
 function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   const replacing = cursor.accept("OR", "REPLACE");
+  // MySQL may name the definer first: `CREATE DEFINER = user FUNCTION …`.
+  if (cursor.isWord("DEFINER")) return readDefinedCode(tokens);
   if (cursor.accept("FUNCTION")) return readCreateFunction(cursor);
   if (tokens.slice(1, 6).includes("TRIGGER")) return readCreateTrigger(tokens);
-  if (replacing) {
-    // A temporary table replaces only a temporary one of the same name.
-    if (cursor.accept("TEMPORARY")) return readCreateTemporary(cursor);
-    if (!cursor.accept("TABLE")) return [];
-    const table = cursor.name();
-    return table === undefined
-      ? [unread(tokens)]
-      : [
-          { kind: "drop", table },
-          { kind: "create", table },
-        ];
-  }
+  if (replacing) return readCreateOrReplace(cursor, tokens);
   if (cursor.accept("TEMPORARY") || cursor.accept("TEMP")) {
     return readCreateTemporary(cursor);
   }
   return readCreateTable(cursor, false);
+}
+
+/**
+ * `CREATE OR REPLACE [TEMPORARY] TABLE t`, after `OR REPLACE`: MariaDB drops a
+ * live t first, then t is the list's own. Anything else replaced deletes nothing now.
+ */
+function readCreateOrReplace(
+  cursor: StatementCursor,
+  tokens: readonly Token[]
+): Step[] {
+  // A temporary table replaces only a temporary one of the same name.
+  if (cursor.accept("TEMPORARY")) return readCreateTemporary(cursor);
+  if (!cursor.accept("TABLE")) return [];
+  const table = cursor.name();
+  return table === undefined
+    ? [unread(tokens)]
+    : [
+        { kind: "drop", table },
+        { kind: "create", table },
+      ];
 }
 
 /**
@@ -511,6 +531,16 @@ function readCreateTrigger(tokens: readonly Token[]): Step[] {
   const table =
     on === -1 ? undefined : new StatementCursor(tokens.slice(on + 1)).name();
   return [{ kind: "create-trigger", table }];
+}
+
+/** MySQL's `CREATE DEFINER = … FUNCTION | TRIGGER …`: the function or trigger it creates; nothing for any other. */
+function readDefinedCode(tokens: readonly Token[]): Step[] {
+  const kind = tokens.findIndex(
+    token => token === "FUNCTION" || token === "TRIGGER"
+  );
+  if (kind === -1) return [];
+  if (tokens[kind] === "TRIGGER") return readCreateTrigger(tokens);
+  return readCreateFunction(new StatementCursor(tokens.slice(kind + 1)));
 }
 
 /** A function the run defines, which a later SELECT may call. */
@@ -715,6 +745,28 @@ function readRowsInto(
       ];
 }
 
+/**
+ * PostgreSQL's MERGE: a removal of the target's rows when a branch deletes,
+ * and the writes its UPDATE and INSERT branches make, which fire the target's
+ * triggers.
+ */
+function readMerge(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
+  cursor.accept("INTO");
+  cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return [unread(tokens)];
+  const steps: Step[] = [];
+  if (tokens.includes("DELETE")) {
+    steps.push({ kind: "rows", table, reach: "delete", removal: "delete" });
+  }
+  const events = (["update", "insert"] as const).filter(event =>
+    tokens.includes(event.toUpperCase())
+  );
+  if (events.length > 0)
+    steps.push({ kind: "writes", table, events: [...events] });
+  return steps;
+}
+
 /** Upper-cased words of a MySQL INSERT or UPDATE that may stand before its table. */
 const WRITE_MODIFIERS = ["LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "IGNORE"];
 
@@ -820,11 +872,37 @@ function readAlterClause(
   if (clause.accept("DROP")) return readDropClause(clause, table);
   if (clause.accept("RENAME")) return readRenameClause(clause, table, dialect);
   if (clause.accept("ALTER")) return readAlterColumn(clause, table);
+  const inherit = readInheritClause(clause, table);
+  if (inherit !== null) return inherit;
   if (dialect === "mysql") {
     const mysql = readMysqlAlterClause(clause, table);
     if (mysql !== null) return mysql;
   }
   return saysDelete(clause.rest()) ? undefined : [];
+}
+
+/**
+ * PostgreSQL's `ATTACH PARTITION child` and `INHERIT parent`: a table made a
+ * descendant, whose rows a later removal from its parent reaches. Undefined
+ * when the other table cannot be named, null for any other clause.
+ */
+function readInheritClause(
+  clause: StatementCursor,
+  table: string
+): Step[] | undefined | null {
+  if (clause.accept("ATTACH", "PARTITION")) {
+    const child = clause.name();
+    return child === undefined
+      ? undefined
+      : [{ kind: "inherit", parent: table, child }];
+  }
+  if (clause.accept("INHERIT")) {
+    const parent = clause.name();
+    return parent === undefined
+      ? undefined
+      : [{ kind: "inherit", parent, child: table }];
+  }
+  return null;
 }
 
 /** What may follow `ADD` that is not a column. */
@@ -1322,6 +1400,8 @@ class FileWalk {
   private readonly madeColumns = new Map<string, Set<string>>();
   /** Each temporary table's name, with what the name reached before it. */
   private readonly shadowed = new Map<string, string | null | undefined>();
+  /** Per table, the tables the list made its descendants. */
+  private readonly attached = new Map<string, Set<string>>();
   /** The functions the list defines. */
   private readonly functions = new Set<string>();
   /** The tables the list puts a trigger on, `*` for one it cannot name. */
@@ -1411,6 +1491,9 @@ class FileWalk {
       case "add-key":
         this.addKey(step);
         return true;
+      case "inherit":
+        this.inherit(step.parent, step.child);
+        return true;
       default:
         return false;
     }
@@ -1472,6 +1555,13 @@ class FileWalk {
   private create(table: string, temporary: boolean): void {
     // A temporary table shadows the name until it is dropped again.
     if (temporary) this.shadowed.set(table, this.origins.get(table));
+    // A table already there is not the run's: its file may be adopted rather
+    // than run, and the live rows stay. Unknown counts as there.
+    else if (
+      this.origin(table) !== null &&
+      this.facts.liveTable(table) !== false
+    )
+      return;
     this.origins.set(table, null);
   }
 
@@ -1517,6 +1607,9 @@ class FileWalk {
   private addColumn(name: string, column: string): void {
     const table = this.origin(name);
     if (table === null) return;
+    // A column the live table may already hold is not the run's own.
+    const live = this.facts.liveColumns(table);
+    if (live === undefined || live.has(column)) return;
     const made = this.madeColumns.get(table) ?? new Set<string>();
     made.add(column);
     this.madeColumns.set(table, made);
@@ -1637,10 +1730,31 @@ class FileWalk {
         kind: "unnamed",
         description: `rows removed from tables that inherit from ${table} or partition it, which could not be read`,
       });
-      return [];
     }
-    for (const other of found) this.emit({ kind: "rows", table: other });
-    return found;
+    const all = [...(found ?? []), ...this.attachedTo(table)];
+    for (const other of all) this.emit({ kind: "rows", table: other });
+    return all;
+  }
+
+  /** The live tables the list made descendants of `table`, followed through their own. */
+  private attachedTo(table: string): string[] {
+    const found: string[] = [];
+    const queue = [table];
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      for (const child of this.attached.get(next) ?? []) {
+        if (found.includes(child)) continue;
+        found.push(child);
+        queue.push(child);
+      }
+    }
+    return found.filter(child => this.origin(child) !== null);
+  }
+
+  private inherit(parent: string, child: string): void {
+    const key = this.identity(parent);
+    const children = this.attached.get(key) ?? new Set<string>();
+    children.add(this.identity(child));
+    this.attached.set(key, children);
   }
 
   /**
@@ -1920,6 +2034,7 @@ function walk(
   const byDrop = new Map(rebuilds.map(rebuild => [rebuild.dropAt, rebuild]));
   // The twin's creation, its copies and its rename back are the rebuild's
   // own, judged with it at its drop.
+  let pathMoved = false;
   const owned = new Set(
     rebuilds.flatMap(rebuild => [
       rebuild.createAt,
@@ -1932,14 +2047,63 @@ function walk(
     const rebuild = byDrop.get(at);
     if (rebuild !== undefined) file.rebuild(rebuild, statements);
     else if (!owned.has(at)) {
-      for (const step of readStatement(statement, dialect)) {
+      const tokens = tokensOf(statement, dialect);
+      for (const step of placed(
+        readStatement(statement, dialect),
+        tokens,
+        pathMoved
+      )) {
         file.apply(fingerprinted(step, statement));
       }
-      const call = readCalls(tokensOf(statement, dialect));
+      const call = readCalls(tokens);
       if (call !== undefined) file.apply(fingerprinted(call, statement));
+      pathMoved ||= movesPath(tokens);
     }
   });
   return file.found;
+}
+
+/**
+ * Whether a statement changes where an unqualified name points: PostgreSQL's
+ * `SET search_path` (or a `set_config` call, which may set it) and MySQL's
+ * `USE`. The live facts were read for the names as they pointed before.
+ */
+function movesPath(tokens: readonly Token[]): boolean {
+  if (tokens[0] === "USE") return true;
+  if (tokens[0] === "SET" && tokens.includes("SEARCH_PATH")) return true;
+  return tokens.some(
+    (token, at) =>
+      (token === "SET_CONFIG" || token === "PG_CATALOG.SET_CONFIG") &&
+      tokens[at + 1] === "("
+  );
+}
+
+/** The kinds of step that place data in a table by its name. */
+const PLACING = new Set<Step["kind"]>([
+  "rows",
+  "drop",
+  "drop-column",
+  "column",
+  "writes",
+]);
+
+/**
+ * A statement's steps once the path may have moved: one that places data by a
+ * name stands as a statement that could not be read, which only the consent
+ * without targets covers.
+ */
+function placed(
+  steps: Step[],
+  tokens: readonly Token[],
+  pathMoved: boolean
+): Step[] {
+  if (!pathMoved || !steps.some(step => PLACING.has(step.kind))) return steps;
+  return [
+    {
+      kind: "unread",
+      description: `${labelOf(tokens)} (search path changed, not read, may delete data)`,
+    },
+  ];
 }
 
 /** Functions every database has that change no table's rows. */
@@ -1968,6 +2132,7 @@ function factSource(facts: DeletionFacts): FactSource {
     nulledBy: table => facts.nulledBy(table),
     triggered: (table, event) => facts.triggered(table, event),
     descendantsOf: table => facts.descendantsOf(table),
+    liveTable: table => facts.liveTable(table),
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
@@ -2112,6 +2277,8 @@ interface Questions {
   /** `table` and removal, joined by a NUL. */
   triggers: Set<string>;
   descendants: Set<string>;
+  /** Tables the list creates, asked whether they exist already. */
+  live: Set<string>;
   calls: boolean;
 }
 
@@ -2130,6 +2297,7 @@ function answered(asked: Questions): boolean {
       asked.rebuilt,
       asked.triggers,
       asked.descendants,
+      asked.live,
     ].every(set => set.size === 0)
   );
 }
@@ -2154,6 +2322,9 @@ class FactReading {
   private readonly cascades = new Map<string, Reached | undefined>();
   private readonly truncates = new Map<string, readonly string[] | undefined>();
   private readonly triggered = new Map<string, boolean | undefined>();
+  private readonly liveTables = new Map<string, boolean | undefined>();
+  /** Set once the tables could not be read: whether one exists is then unknown. */
+  private spellFailed = false;
   private readonly descendants = new Map<
     string,
     readonly string[] | undefined
@@ -2179,6 +2350,7 @@ class FactReading {
       rebuilt: new Set(),
       triggers: new Set(),
       descendants: new Set(),
+      live: new Set(),
       calls: false,
     };
     walk(statements, this.dialect, this.answering(asked));
@@ -2211,6 +2383,10 @@ class FactReading {
         const known = lookup(this.descendants, table, asked.descendants);
         return known === undefined ? [] : known.value;
       },
+      liveTable: table => {
+        const known = lookup(this.liveTables, table, asked.live);
+        return known === undefined ? false : known.value;
+      },
       mayDeleteThrough: name => {
         if (this.userFunctions !== null)
           return mayDeleteThrough(name, this.userFunctions);
@@ -2236,8 +2412,15 @@ class FactReading {
       ...asked.truncate,
       ...asked.rebuilt,
       ...asked.descendants,
+      ...asked.live,
       ...triggers.map(([table]) => table),
     ]);
+    for (const table of asked.live) {
+      this.liveTables.set(
+        table,
+        this.spellFailed ? undefined : this.spellings.has(table)
+      );
+    }
     for (const table of asked.cascade)
       this.cascades.set(table, await this.readCascade(table));
     for (const table of asked.truncate)
@@ -2267,6 +2450,7 @@ class FactReading {
     const live = await settle(() =>
       introspectTableNames(this.db, this.dialect, unspelled)
     );
+    if (live === undefined) this.spellFailed = true;
     for (const name of live ?? []) this.spellings.set(name.toLowerCase(), name);
   }
 
@@ -2368,6 +2552,7 @@ class FactReading {
       triggered: (table, event) =>
         this.triggered.get(`${table.toLowerCase()}\u0000${event}`),
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
+      liveTable: table => this.liveTables.get(table.toLowerCase()),
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,

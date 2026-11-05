@@ -19,7 +19,12 @@ import { previewMigrate } from "../migrate";
 
 /** A blank, sealed module: the shape `migrate:create --plugin --blank` writes. */
 function blankModule(name: string): PluginMigration {
-  const statements = { up: [`-- ${name}`], down: [] };
+  return sealedModule(name, [`-- ${name}`]);
+}
+
+/** A sealed module whose UP runs `up` on every dialect. */
+function sealedModule(name: string, up: string[]): PluginMigration {
+  const statements = { up, down: [] };
   const content = {
     name,
     schemaVersion: 1,
@@ -76,7 +81,10 @@ describe("migrate --dry-run", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function preview(step?: number): Promise<void> {
+  function preview(
+    step?: number,
+    planned: Parameters<typeof previewMigrate>[0]["plugins"] = plugins
+  ): Promise<void> {
     const record = (message: string) => {
       lines.push(message);
     };
@@ -87,7 +95,7 @@ describe("migrate --dry-run", () => {
       db: testDb.db,
       dialect: "sqlite",
       migrationsDir: dir,
-      plugins,
+      plugins: planned,
       step,
       logger: {
         info: record,
@@ -141,6 +149,42 @@ describe("migrate --dry-run", () => {
       // The file's UP section, as `migrate:down --dry-run` prints a rollback's SQL.
       "    UP, as written in the file:\nSELECT 1;",
     ]);
+  });
+
+  it("lists what a pending module deletes, and judges the app's files after it", async () => {
+    // A real run judges the modules and the files as one run, modules first:
+    // the dry run shows the same deletions and consent.
+    testDb.sqlite.exec("CREATE TABLE app_notes (id INTEGER)");
+    testDb.sqlite.exec("INSERT INTO app_notes (id) VALUES (1)");
+    writeFileSync(
+      join(dir, "20260101_000000_000_init.sql"),
+      "-- UP\nDELETE FROM acme_notes;"
+    );
+    const deleting = [
+      {
+        name: "acme",
+        version: "1.0.0",
+        contributes: {
+          schema: {
+            migrations: [
+              sealedModule("001_init", [
+                "CREATE TABLE acme_notes (id INTEGER)",
+              ]),
+              sealedModule("002_more", ["DROP TABLE app_notes"]),
+            ],
+          },
+        },
+      },
+    ] as unknown as Parameters<typeof previewMigrate>[0]["plugins"];
+
+    await preview(undefined, deleting);
+
+    const more = lines.indexOf("  • plugin:acme/002_more");
+    expect(lines[more + 1]).toMatch(
+      /^ {4}⚠ deletes data: table app_notes\. A real run needs .*app_notes/
+    );
+    // The file deletes rows only from the table the module before it creates.
+    expect(lines.join("\n")).not.toMatch(/deletes data:.*acme_notes/);
   });
 
   it("reads an absent ledger as nothing applied, and creates none", async () => {

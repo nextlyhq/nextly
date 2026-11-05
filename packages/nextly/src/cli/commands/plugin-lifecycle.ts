@@ -21,6 +21,7 @@
 
 import {
   countDeletions,
+  deletionKey,
   judgeDataLoss,
   NO_CONSENT,
   type DataLossConsent,
@@ -89,12 +90,12 @@ export interface PreparedModuleDown {
   /** False when the module is marked `transaction: false`. */
   transaction: boolean;
   /**
-   * Whether it deletes data (drops a table or column, removes rows, converts a
-   * column, or calls code that may), judged the way `migrate:down` judges one
-   * (`rollbackDeletions`). A module that drops only
-   * a column it added to another table loses data no table count shows.
+   * What it deletes (a table or column dropped, rows removed, a column
+   * converted, code that may delete), named the way `migrate:down` names a
+   * DOWN's deletions (`rollbackDeletions`). A module that drops only a column
+   * it added to another table loses data no table count shows.
    */
-  destructive: boolean;
+  deletions: Deletion[];
 }
 
 export interface PluginLifecycleDeps {
@@ -696,7 +697,8 @@ function uninstallDeletions(
   downs: readonly PreparedModuleDown[]
 ): Deletion[] {
   if (plan.downModules.length === 0) return [];
-  if (!downs.some(down => down.destructive)) return [];
+  const fromDowns = downs.flatMap(down => down.deletions);
+  if (fromDowns.length === 0) return [];
   const dropped = new Set(plan.tablesDropped);
   const named: Deletion[] = [
     ...plan.tablesDropped.map(table => ({ kind: "table" as const, table })),
@@ -713,13 +715,16 @@ function uninstallDeletions(
         column: row.elementName ?? "",
       })),
   ];
-  if (named.length > 0) return named;
-  return downs
-    .filter(down => down.destructive)
-    .map(down => ({
-      kind: "unnamed" as const,
-      description: `${down.filename}'s DOWN, which drops a table or column`,
-    }));
+  // Every deletion the DOWNs make is listed: what the owner records name,
+  // then what the reader names beyond it, so a DOWN deleting another
+  // owner's rows is never covered by consent naming the plugin's tables.
+  const listed = new Set(named.map(deletionKey));
+  for (const deletion of fromDowns) {
+    if (listed.has(deletionKey(deletion))) continue;
+    listed.add(deletionKey(deletion));
+    named.push(deletion);
+  }
+  return named;
 }
 
 /**
