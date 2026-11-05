@@ -422,6 +422,80 @@ describe("Enter on a selected block, on a canvas in a frame", () => {
     expect(result.current.editing).toBeNull();
   });
 
+  /** A passage edit whose page is replaced while the next editor is loading. */
+  async function carriedWhileLoading(): Promise<{
+    result: { current: ReturnType<typeof useInlineRichText> };
+    editor: EditorState;
+  }> {
+    registerArticle();
+    const first = framedPage();
+    let frame = first.frame;
+    function Wrapper({ children }: { children?: React.ReactNode }) {
+      return (
+        <CanvasFrameProvider frame={frame}>{children}</CanvasFrameProvider>
+      );
+    }
+    const stored = { root: { type: "root", children: [] } };
+    const typed = {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "Typed" }] },
+        ],
+      },
+    };
+    let reads = 0;
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "attached",
+      session: {
+        focus: () => {},
+        read: () => (reads++ === 0 ? stored : typed),
+        detach: () => {},
+        hold: () => {},
+      },
+    }));
+    const load = vi
+      .fn()
+      .mockImplementationOnce(async () => ({ attach }))
+      .mockImplementation(() => new Promise(() => {}));
+    const editor = editorState();
+    editor.apply = vi.fn(() => editor.document);
+    const { result, rerender } = renderHook(
+      () => useInlineRichText(editor, load as never),
+      { wrapper: Wrapper }
+    );
+    await act(async () => {
+      result.current.begin("a", "content");
+    });
+    frame = framedPage().frame;
+    await act(async () => {
+      rerender();
+    });
+    return { result, editor };
+  }
+
+  it("writes carried typing when the host finishes the edit while the editor loads", async () => {
+    // A save or a navigation asks for the edit's outcome before closing; the
+    // carried words are that outcome, written now, not after it closed.
+    const { result, editor } = await carriedWhileLoading();
+    let outcome: unknown;
+    act(() => {
+      outcome = result.current.commit();
+    });
+    expect(outcome).toEqual(expect.objectContaining({ status: "written" }));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops carried typing when the edit is cancelled while the editor loads", async () => {
+    // Cancel means the words go, as it does for an open passage.
+    const { result, editor } = await carriedWhileLoading();
+    await act(async () => {
+      result.current.cancel();
+    });
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(result.current.editing).toBeNull();
+  });
+
   it("takes the caret into the frame's new page when the frame replaces its document mid-edit", () => {
     registerArticle();
     const first = framedPage();

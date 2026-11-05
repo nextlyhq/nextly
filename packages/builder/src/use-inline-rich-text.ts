@@ -449,9 +449,18 @@ export function useInlineRichText(
     const live = mounted.current;
     if (live === null) {
       // No session, but possibly a pending one: `editing` is set from the
-      // moment the passage is requested and the editor arrives later.
+      // moment the passage is requested and the editor arrives later. A
+      // passage carried across a page replacement is the edit's outcome
+      // while its editor loads, and is settled NOW: a host asking before it
+      // saves or closes must not be told nothing changed.
+      const pending = carried.current;
+      carried.current = null;
       letGo();
-      return report(INLINE_EDIT_UNCHANGED);
+      return report(
+        pending === null
+          ? INLINE_EDIT_UNCHANGED
+          : settleCarried(editorRef.current, pending)
+      );
     }
     /*
      * Let go only once the write is SETTLED, never before.
@@ -546,6 +555,8 @@ export function useInlineRichText(
   }, [letGo, report]);
 
   const cancel = useCallback(() => {
+    // Cancelling lets the words go, carried ones included.
+    carried.current = null;
     letGo();
   }, [letGo]);
 

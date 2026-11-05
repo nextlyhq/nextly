@@ -72,7 +72,6 @@ import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
   outermostElementsOf,
-  nodeElement,
 } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
@@ -137,6 +136,31 @@ function fadedAside(
  * the scroller's, the bar being drawn at its own size over a frame painted at
  * another. The scroller's own value comes back after.
  */
+/**
+ * The elements the bar is placed against for the selected blocks: every
+ * outermost element each one draws, not its first — a placement whose
+ * definition draws a headline and an intro is both, and a bar placed under the
+ * headline alone would sit over the intro's line. Only those that draw a box
+ * (`drawnBoxes`), so a part hidden on this device adds no zero rectangle at
+ * the canvas origin; a block none of whose elements draws one keeps its
+ * elements, as it had before. One list for the measurement and for what is
+ * watched for a change of size, so the two cannot disagree.
+ */
+function measuredPartsOf(
+  root: HTMLElement,
+  selectedIds: readonly string[]
+): Element[] {
+  const parts: Element[] = [];
+  for (const elements of outermostElementsOf(
+    root,
+    new Set(selectedIds)
+  ).values()) {
+    const drawn = elements.flatMap(drawnBoxes);
+    parts.push(...(drawn.length > 0 ? drawn : elements));
+  }
+  return parts;
+}
+
 function useScrollClearance(
   bar: React.RefObject<HTMLDivElement | null>,
   hidden: boolean,
@@ -334,22 +358,9 @@ export function BlockToolbar({
      * of them describes an action about to happen to the other, which the
      * author cannot see. The union is the shape the selection occupies.
      */
-    // Every element each selected block draws, not its first: a placement
-    // whose definition draws a headline and an intro is both, and a bar
-    // placed under the headline alone would sit over the intro's line. Only
-    // the ones that draw a box (`drawnBoxes`), so a part hidden on this
-    // device adds no zero rectangle at the canvas origin; a block none of
-    // whose elements draws one keeps its elements, as it had before.
-    const rects: Rect[] = [];
-    for (const elements of outermostElementsOf(
-      root,
-      new Set(selectedIds)
-    ).values()) {
-      const drawn = elements.flatMap(drawnBoxes);
-      for (const part of drawn.length > 0 ? drawn : elements) {
-        rects.push(space.place(canvasContentRect(part, root)));
-      }
-    }
+    const rects = measuredPartsOf(root, selectedIds).map(part =>
+      space.place(canvasContentRect(part, root))
+    );
     const block = unionRect(rects);
     if (block === undefined) {
       setPlacement(null);
@@ -425,9 +436,10 @@ export function BlockToolbar({
      * bar stale whenever a secondary block reflowed — which is most of what
      * happens while an image loads or a webfont swaps.
      */
-    for (const id of selectedIds) {
-      const block = nodeElement(root, id);
-      if (block !== null) observer.observe(block);
+    // The very elements the bar is placed against, so a placement's later
+    // part resizing on its own (an image arriving, a font swapping) is heard.
+    for (const part of measuredPartsOf(root, selectedIds)) {
+      observer.observe(part);
     }
     observer.observe(root);
     return () => observer.disconnect();

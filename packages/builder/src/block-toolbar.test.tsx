@@ -666,6 +666,65 @@ describe("BlockToolbar", () => {
     }
   });
 
+  it("watches every part a placement draws for a change of size", () => {
+    // An image or a webfont can resize a placement's later part alone; the
+    // bar is placed against all of them, so each one is watched.
+    registerBlocks(
+      [
+        {
+          name: "acme/two-parts",
+          version: 1,
+          description: "A block drawn as two parts.",
+          example: { props: {} },
+          editor: { label: "Two parts" },
+          render: () =>
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement("h2", {
+                "data-nx-node": "card-title",
+                "data-nx-instance": "card",
+              }),
+              React.createElement("p", {
+                "data-nx-node": "card-intro",
+                "data-nx-instance": "card",
+              })
+            ),
+        },
+      ] as never,
+      { source: "block-toolbar-test" }
+    );
+    const watched: Element[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(element: Element) {
+          watched.push(element);
+        }
+        disconnect() {}
+        unobserve() {}
+      }
+    );
+    try {
+      const doc = documentOf([
+        {
+          id: "card",
+          type: "acme/two-parts",
+          version: 1,
+          props: {},
+        } as BlockNode,
+      ]);
+      render(tree(editorSpy(doc, "card"), {}));
+      const names = watched.map(element =>
+        element.getAttribute("data-nx-node")
+      );
+      expect(names).toContain("card-title");
+      expect(names).toContain("card-intro");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("moves when the window resizes the part of the page on screen", () => {
     // A block 10px down a scroller: the bar goes below it while that fits on
     // screen, and to the screen's top once the window is too short for it.
