@@ -6022,8 +6022,31 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /* The words shorten in a narrow container, and the "+" stays whole. */
-.nx-empty-container-appenders__button > svg {
+/*
+ * The words and the "+" sit on a plate of the editor's raised surface, never
+ * on the box's own ground: the box is drawn over the site's page, whose colour
+ * the editor does not choose, and its muted text holds its contrast only
+ * against the editor's own surface, in either theme. Opaque for that reason.
+ */
+.nx-empty-container-appenders__plate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+}
+.nx-empty-container-appenders__plate > svg {
   flex: none;
+}
+.nx-empty-container-appenders__button:hover
+  .nx-empty-container-appenders__plate,
+.nx-empty-container-appenders__button:focus-visible
+  .nx-empty-container-appenders__plate {
+  color: var(--nx-builder-text);
 }
 
 .nx-empty-container-appenders__words {

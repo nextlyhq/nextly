@@ -250,10 +250,15 @@ async function groundBehind(
   const zoom = frameBox.width / laidOutWidth;
   const x = (box.x + box.width / 2 - frameBox.x) / zoom;
   const y = (box.y + box.height / 2 - frameBox.y) / zoom;
+  // Every background from the element at that point out to the root, each
+  // possibly translucent (an editor tint over the page's own), composited
+  // over white in the order they are painted, so the ground is the colour
+  // the eye sees rather than the innermost layer alone.
   const beneath = await canvasFrame(page)
     .locator("body")
     .evaluate(
       (_body, [px, py]) => {
+        const layers: string[] = [];
         for (
           let at: Element | null = document.elementFromPoint(px, py);
           at !== null;
@@ -261,10 +266,24 @@ async function groundBehind(
         ) {
           const colour = getComputedStyle(at).backgroundColor;
           if (colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") {
-            return colour;
+            layers.push(colour);
           }
         }
-        return "rgb(255, 255, 255)";
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (context === null) throw new Error("no 2d context");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, 1, 1);
+        for (const colour of layers.reverse()) {
+          context.fillStyle = colour;
+          context.fillRect(0, 0, 1, 1);
+        }
+        const [r = 0, g = 0, b = 0] = Array.from(
+          context.getImageData(0, 0, 1, 1).data
+        );
+        return `rgb(${r}, ${g}, ${b})`;
       },
       [x, y] as const
     );
@@ -387,6 +406,25 @@ for (const theme of ["light", "dark"] as const) {
         element => getComputedStyle(element).color
       );
       const behindWords = await groundBehind(page, words);
+      // On a plate of its own, opaque: the site's ground beneath, whatever
+      // colour a site gives it, cannot then change what the words are read
+      // against.
+      expect(behindWords.own, "the prompt's plate").not.toBeNull();
+      expect(
+        await words.evaluate(element => {
+          const plate = element.closest(".nx-empty-container-appenders__plate");
+          if (plate === null) return 0;
+          const canvas = document.createElement("canvas");
+          canvas.width = 1;
+          canvas.height = 1;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          if (context === null) return 0;
+          context.fillStyle = getComputedStyle(plate).backgroundColor;
+          context.fillRect(0, 0, 1, 1);
+          return context.getImageData(0, 0, 1, 1).data[3] ?? 0;
+        }),
+        "the plate's opacity"
+      ).toBe(255);
       expect(
         await contrast(
           page,
