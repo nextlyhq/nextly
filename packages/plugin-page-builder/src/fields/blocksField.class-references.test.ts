@@ -47,14 +47,20 @@ function write(stored: {
 const SITE_CLASSES = new Set(["c-card"]);
 
 function setup() {
-  const siteClassIds = vi.fn(async () => SITE_CLASSES);
+  const siteDefinitions = vi.fn(async () => ({
+    classIds: SITE_CLASSES,
+    breakpointIds: new Set(["base"]),
+  }));
   const composition: CompositionSetup = {
     store: { collection: "components", field: "definition" },
     limits: DEFAULT_LIMITS,
     composesDocuments: false,
-    siteClassIds,
+    siteDefinitions,
   };
-  return { siteClassIds, field: blocksFieldType(undefined, () => composition) };
+  return {
+    siteDefinitions,
+    field: blocksFieldType(undefined, () => composition),
+  };
 }
 
 async function validate(
@@ -127,7 +133,7 @@ describe("a page write's references to the site's shared styles", () => {
   });
 
   it("asks nothing of a value judged on its own, with no write behind it", async () => {
-    const { field, siteClassIds } = setup();
+    const { field, siteDefinitions } = setup();
     expect(
       await field.validate?.(page(["c-gone"]), {
         path: "content",
@@ -135,6 +141,6 @@ describe("a page write's references to the site's shared styles", () => {
         mode: "update",
       } as never)
     ).toBe(true);
-    expect(siteClassIds).not.toHaveBeenCalled();
+    expect(siteDefinitions).not.toHaveBeenCalled();
   });
 });

@@ -84,7 +84,7 @@ import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import {
   breakpointQueries,
-  liveBreakpointsFor,
+  editedTierLive,
   matchedBreakpoints,
 } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
@@ -2162,7 +2162,7 @@ function provenanceReader({
      */
     const beneath = provenanceBeneath({
       ...query,
-      liveBreakpoints: liveBreakpointsFor(breakpoints, breakpoint),
+      liveBreakpoints: editedTierLive(breakpoints, breakpoint, live),
     });
     return {
       provenance,

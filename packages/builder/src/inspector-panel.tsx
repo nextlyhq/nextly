@@ -96,8 +96,8 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
-import { commitLinkChanges, LinkGroupField } from "./link-control";
-import { linkGroupOf } from "./link-group";
+import { commitLinkChanges } from "./link-control";
+import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -1282,7 +1282,7 @@ function ContentFields({
 }: {
   inspection: BlockInspection;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
-  /** Several props written as one edit, for a block's link group. */
+  /** Several props written as one edit, for a block's prop groups. */
   onCommitMany: (
     changes: Readonly<Record<string, unknown>>
   ) => BlockDocument | null | void;
@@ -1311,36 +1311,63 @@ function ContentFields({
       </p>
     );
   }
-  // A link and the props that qualify it are drawn as one group, where the
-  // link prop sits; the others it draws get no row of their own. Built from
+  // What the block holds, for a control whose choices depend on another of
+  // its props: a loop's sort offers its collection's fields.
+  const values = Object.fromEntries(
+    inspection.props.map(prop => [prop.name, prop.value])
+  );
+  // Props an author reads as one thing (a link and what qualifies it, an
+  // image's source, its alt text) are drawn as one group, where the group's
+  // lead prop sits; the others it draws get no row of their own. Built from
   // the props the block offers, so a sibling its own `onlyWithout` hides is
-  // neither drawn nor written by the group.
-  const link = linkGroupOf(inspection.props.filter(prop => prop.offered));
+  // neither drawn nor written by a group.
+  const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
+  const leads = new Map(groups.map(group => [group.lead, group]));
+  const grouped = new Set(groups.flatMap(group => [...group.drawn]));
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
-        if (link?.drawn.has(prop.name) === true && prop.name !== link.link) {
-          return null;
-        }
-        const grouped =
-          link?.link === prop.name ? (
-            <LinkGroupField
+        const group = leads.get(prop.name);
+        if (group === undefined && grouped.has(prop.name)) {
+          // Drawn inside its group, but in a component's view still a prop of
+          // its own to expose: named, with its icon, as a prop the inspector
+          // leaves out is, so a placement may still set it.
+          return fields === undefined ? null : (
+            <div
               key={`${inspection.nodeId}:${prop.name}`}
-              group={link}
-              props={inspection.props}
-              writable={writable}
-              reasonId={reasonId}
-              services={services}
-              onCommitMany={onCommitMany}
-            />
-          ) : undefined;
+              className="nx-inspector__prop"
+            >
+              <p className="nx-inspector__note">
+                {propLabel(prop.name, prop.schema)}
+              </p>
+              <PropExposeControl
+                binding={fields}
+                nodeId={inspection.nodeId}
+                prop={prop}
+              />
+            </div>
+          );
+        }
+        const groupField =
+          group === undefined ? undefined : (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {group.render({
+                props: inspection.props,
+                writable,
+                reasonId,
+                services,
+                placedWith: inspection.placedWith,
+                onCommitMany,
+              })}
+            </React.Fragment>
+          );
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
             {propLabel(prop.name, prop.schema)}
           </p>
         ) : (
-          (grouped ?? (
+          (groupField ?? (
             <HeldByLock
               // Keyed by node AND prop: a bare prop name would let React reuse
               // one block's field for the next block's same-named prop, so the
@@ -1354,6 +1381,7 @@ function ContentFields({
                 disabled={!writable(prop.name)}
                 onCommit={onCommit}
                 services={services}
+                values={values}
               />
             </HeldByLock>
           ))
@@ -1385,11 +1413,14 @@ function PropField({
   disabled,
   onCommit,
   services,
+  values,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
+  /** The block's props as stored, for a control that reads another of them. */
+  values: Readonly<Record<string, unknown>>;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -1407,6 +1438,7 @@ function PropField({
       disabled={disabled}
       onCommit={onCommit}
       services={services}
+      values={values}
     />
   );
 }
