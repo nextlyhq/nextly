@@ -243,8 +243,7 @@ because the renewal timer cannot fire during a stall either.
 A plugin can run one of its own jobs on a cron schedule. Declare the schedule beside the job:
 
 ```ts
-import { definePlugin } from "@nextlyhq/plugin-sdk";
-import { defineJob } from "nextly";
+import { defineJob, definePlugin } from "@nextlyhq/plugin-sdk";
 
 export const reportsPlugin = definePlugin({
   name: "@acme/reports",

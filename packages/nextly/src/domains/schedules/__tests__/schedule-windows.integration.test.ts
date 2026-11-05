@@ -320,73 +320,89 @@ describe.each(getConfiguredTestDialects())(
       expect(await jobsOf(t)).toHaveLength(2);
     });
 
-    it("past its deadline a pass sweeps one schedule, the next minute's another, though each is a fresh process", async () => {
-      const t = await boot(dialect, "0 * * * *");
-      const first = defined("0 * * * *", "first");
-      const second = defined("0 * * * *", "second");
-      const seen = async () => {
+    it.each([5, 7, 60])(
+      "past its deadline each pass sweeps one schedule, and passes every %i minutes reach them all",
+      async minutes => {
+        const t = await boot(dialect, "0 * * * *");
+        const schedules = Array.from({ length: 10 }, (_, index) =>
+          defined("0 * * * *", `s${index}`)
+        );
+        // Every schedule seen at 10:30, so 10:00 is each one's latest window.
+        await scheduleWindows(t.adapter, schedules).sweep(
+          new Date("2026-11-05T10:30:00.000Z")
+        );
+        // From 11:00 each pass, a fresh process, has time for one schedule.
+        for (let step = 0; step < schedules.length; step += 1) {
+          await scheduleWindows(t.adapter, schedules).sweep(
+            new Date(
+              Date.parse("2026-11-05T11:00:00.000Z") + step * minutes * 60_000
+            ),
+            Date.now() - 1
+          );
+        }
         const rows = await t.adapter.select<WindowRow>(
           "nextly_schedule_windows"
         );
-        return new Set(rows.map(row => String(row.scheduleKey))).size;
-      };
-      await scheduleWindows(t.adapter, [first, second]).sweep(
-        new Date("2026-11-05T10:30:00.000Z"),
-        Date.now() - 1
+        const run = new Set(
+          rows
+            .filter(row => row.jobId !== null)
+            .map(row => String(row.scheduleKey))
+        );
+        expect(run).toEqual(new Set(schedules.map(schedule => schedule.key)));
+      }
+    );
+
+    it("two runners sweeping several schedules at once enqueue each window once", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const schedules = Array.from({ length: 3 }, (_, index) =>
+        defined("0 * * * *", `s${index}`)
       );
-      expect(await seen()).toBe(1);
-      await scheduleWindows(t.adapter, [first, second]).sweep(
-        new Date("2026-11-05T10:31:00.000Z"),
-        Date.now() - 1
-      );
-      expect(await seen()).toBe(2);
+      const errors: unknown[] = [];
+      const runner = () =>
+        scheduleWindows(t.adapter, schedules, {
+          onError: error => errors.push(error),
+        });
+      await runner().sweep(new Date("2026-11-05T10:30:00.000Z"));
+      // Both read the same schedules as due, in the same order.
+      await Promise.all([
+        runner().sweep(new Date("2026-11-05T11:05:00.000Z")),
+        runner().sweep(new Date("2026-11-05T11:05:00.000Z")),
+      ]);
+      expect(errors).toEqual([]);
+      expect(await jobsOf(t)).toHaveLength(3);
     });
 
-    it("prunes every schedule in turn, however small the bound", async () => {
+    it("prunes the oldest windows first, whichever schedule they belong to", async () => {
       const t = await boot(dialect, "0 * * * *");
-      const second: CollectedSchedule = {
-        ...hourly(),
-        key: `${PLUGIN}:second`,
-        slug: "second",
-      };
-      // The first schedule has more old windows than two passes of one row
-      // each can remove; the second has one.
+      const second = defined("30 * * * *", "second");
       const first = scheduleWindows(t.adapter, [hourly()]);
       for (const at of [
-        "2026-09-01T10:30:00.000Z",
-        "2026-09-01T11:30:00.000Z",
-        "2026-09-01T12:30:00.000Z",
-        "2026-09-01T13:30:00.000Z",
-        "2026-11-04T12:30:00.000Z",
+        "2026-09-01T10:05:00.000Z",
+        "2026-09-01T11:05:00.000Z",
+        "2026-09-01T12:05:00.000Z",
+        "2026-09-01T13:05:00.000Z",
+        "2026-11-04T12:05:00.000Z",
       ]) {
         await first.sweep(new Date(at));
       }
       const other = scheduleWindows(t.adapter, [second]);
-      await other.sweep(new Date("2026-09-01T10:30:00.000Z"));
-      await other.sweep(new Date("2026-11-04T12:30:00.000Z"));
+      await other.sweep(new Date("2026-09-01T11:40:00.000Z"));
+      await other.sweep(new Date("2026-11-04T12:40:00.000Z"));
 
-      // Two passes, each a fresh process, a minute apart.
-      await scheduleWindows(t.adapter, [hourly(), second]).prune(
-        new Date("2026-10-05T00:00:00.000Z"),
-        1
+      // Two passes an hour apart, each a fresh process with room for two:
+      // the first takes 10:00 and 11:00, the second 11:30 and 12:00.
+      const both = () => scheduleWindows(t.adapter, [hourly(), second]);
+      expect(await both().prune(new Date("2026-10-05T00:00:00.000Z"), 2)).toBe(
+        2
       );
-      await scheduleWindows(t.adapter, [hourly(), second]).prune(
-        new Date("2026-10-05T00:01:00.000Z"),
-        1
+      expect(await both().prune(new Date("2026-10-05T01:00:00.000Z"), 2)).toBe(
+        2
       );
-      // Without turns the first schedule would spend both passes.
-      const left = await t.adapter.select<WindowRow>(
-        "nextly_schedule_windows",
-        {
-          where: {
-            and: [
-              { column: "scheduleKey", op: "=", value: `${PLUGIN}:second` },
-            ],
-          },
-        }
-      );
-      expect(left.map(row => iso(row.windowAt))).toEqual([
+      const left = await t.adapter.select<WindowRow>("nextly_schedule_windows");
+      expect(left.map(row => iso(row.windowAt)).sort()).toEqual([
+        "2026-09-01T13:00:00.000Z",
         "2026-11-04T12:00:00.000Z",
+        "2026-11-04T12:30:00.000Z",
       ]);
     });
 

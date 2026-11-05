@@ -154,6 +154,21 @@ describe("collecting plugin schedules", () => {
     expect(error.message).toContain("bytes");
   });
 
+  it("refuses a key with a control character, which PostgreSQL cannot store, naming the plugin", () => {
+    const name = "@acme/plug\u0000in";
+    const error = refusal(
+      plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }], {
+        name,
+        contributes: {
+          jobs: [tick],
+          schedules: [{ slug: "tick", cron: "@daily", job: "acme:tick" }],
+        },
+      })
+    );
+    expect(error.message).toContain(name);
+    expect(error.message).toContain("control character");
+  });
+
   it("refuses to start on a duplicate slug, naming the plugin", () => {
     const error = refusal(
       plugin([

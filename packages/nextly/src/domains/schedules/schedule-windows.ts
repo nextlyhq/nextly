@@ -26,6 +26,12 @@
  * and never one older than a window already recorded, which a runner whose
  * clock is behind would otherwise claim.
  *
+ * A pass sweeps only the schedules with a window to claim, the longest
+ * waiting first, as the windows recorded say: a pass cut short by its
+ * deadline leaves the rest to the next, which reaches them before any it
+ * has just swept, however often passes run. Pruning takes the oldest windows
+ * first, whichever schedule they belong to, for the same reason.
+ *
  * @module domains/schedules/schedule-windows
  * @experimental
  */
@@ -33,7 +39,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, asc, desc, eq, lt, lte, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, lte, max, or } from "drizzle-orm";
 
 import { scheduleWindowsTables } from "../../schemas/schedule-windows";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
@@ -52,20 +58,21 @@ export interface ScheduleWindowsDatabase {
 /** The enqueue a window's transaction runs: `enqueueInTransaction` unless a test stands in. */
 type Enqueue = typeof enqueueInTransaction;
 
-/** A read the windows make through a handle's Drizzle builders. */
-interface WindowReadDb {
+/** A read of each schedule's latest window, grouped by schedule. */
+interface LatestReadDb {
   select(fields: Record<string, unknown>): {
     from(table: unknown): {
       where(condition: unknown): {
-        orderBy(order: unknown): {
-          limit(count: number): PromiseLike<{ windowAt: Date }[]>;
-        };
+        groupBy(column: unknown): PromiseLike<
+          // MySQL hands a binary key back as bytes.
+          { scheduleKey: unknown; latest: Date | null }[]
+        >;
       };
     };
   };
 }
 
-/** A read of windows with the schedule they belong to. */
+/** A read of windows with the schedule they belong to, oldest first. */
 interface KeyedReadDb {
   select(fields: Record<string, unknown>): {
     from(table: unknown): {
@@ -73,7 +80,7 @@ interface KeyedReadDb {
         orderBy(order: unknown): {
           limit(
             count: number
-          ): PromiseLike<{ scheduleKey: string; windowAt: Date }[]>;
+          ): PromiseLike<{ scheduleKey: unknown; windowAt: Date }[]>;
         };
       };
     };
@@ -81,7 +88,7 @@ interface KeyedReadDb {
 }
 
 /** The writes the windows make through a handle's Drizzle builders. */
-interface WindowWriteDb extends WindowReadDb {
+interface WindowWriteDb {
   update(table: unknown): {
     set(values: Record<string, unknown>): {
       where(condition: unknown): PromiseLike<unknown>;
@@ -140,31 +147,96 @@ async function insertIfAbsent(
   return written.length > 0;
 }
 
-/** The latest window recorded for `scheduleKey`, if any. */
-async function latestWindowOf(
-  drizzle: WindowReadDb,
+/**
+ * The latest window recorded for each of `keys`, in one read on the table's
+ * key. A key never seen has none.
+ */
+async function latestWindowsOf(
+  tx: TransactionContext,
   dialect: SupportedDialect,
-  scheduleKey: string
-): Promise<Date | undefined> {
+  keys: readonly string[]
+): Promise<Map<string, Date>> {
+  const latest = new Map<string, Date>();
+  if (keys.length === 0) return latest;
   const table = tableOf(dialect);
-  const [latest] = await drizzle
-    .select({ windowAt: table.windowAt })
+  const rows = await tx
+    .getDrizzle<LatestReadDb>()
+    .select({ scheduleKey: table.scheduleKey, latest: max(table.windowAt) })
     .from(table)
-    .where(eq(table.scheduleKey, scheduleKey))
-    .orderBy(desc(table.windowAt))
-    .limit(1);
-  return latest?.windowAt;
+    .where(inArray(table.scheduleKey, [...keys]))
+    .groupBy(table.scheduleKey);
+  for (const row of rows) {
+    // MySQL hands a binary key back as bytes: keyed by its text.
+    if (row.latest !== null) latest.set(String(row.scheduleKey), row.latest);
+  }
+  return latest;
 }
 
-/** Claim `schedule`'s latest window at `now`, and enqueue its job if this claim is the one. */
+/** A schedule with a window to claim, and the window. */
+interface DueSchedule {
+  readonly schedule: CollectedSchedule;
+  readonly windowAt: Date;
+  readonly waitingSince: number;
+}
+
+/**
+ * The schedules with a window to claim at `now`: never seen, or with a
+ * window later than their latest recorded. The longest waiting come first,
+ * never-seen ones before all, so a schedule swept goes behind every one
+ * still waiting. A pass sweeps the first it has time for; the next pass,
+ * reading again, reaches the rest before any it swept, however often passes
+ * run.
+ */
+async function dueSchedules(
+  db: ScheduleWindowsDatabase,
+  schedules: readonly CollectedSchedule[],
+  now: Date
+): Promise<DueSchedule[]> {
+  const latest = await db.transaction(tx =>
+    latestWindowsOf(
+      tx,
+      db.dialect,
+      schedules.map(schedule => schedule.key)
+    )
+  );
+  const due: DueSchedule[] = [];
+  for (const schedule of schedules) {
+    const windowAt = latestFireAtOrBefore(
+      schedule.cron,
+      now,
+      schedule.timeZone
+    );
+    const known = latest.get(schedule.key);
+    if (windowAt === null || (known !== undefined && windowAt <= known)) {
+      continue;
+    }
+    due.push({
+      schedule,
+      windowAt,
+      waitingSince: known?.getTime() ?? Number.NEGATIVE_INFINITY,
+    });
+  }
+  // Stable: schedules waiting as long keep their declared order.
+  return due.sort((a, b) =>
+    a.waitingSince === b.waitingSince
+      ? 0
+      : a.waitingSince < b.waitingSince
+        ? -1
+        : 1
+  );
+}
+
+/**
+ * Claim `due`'s window, and enqueue its job if this claim is the one. The
+ * read that found it due is checked again here, in the claim's transaction:
+ * another runner may have claimed since.
+ */
 async function sweepOne(
   db: ScheduleWindowsDatabase,
-  schedule: CollectedSchedule,
+  { schedule, windowAt }: DueSchedule,
   now: Date,
   enqueue: Enqueue
 ): Promise<void> {
-  const windowAt = latestFireAtOrBefore(schedule.cron, now, schedule.timeZone);
-  if (windowAt === null) return;
   const table = tableOf(db.dialect);
   await db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
@@ -172,7 +244,9 @@ async function sweepOne(
       eq(table.scheduleKey, schedule.key),
       eq(table.windowAt, windowAt)
     );
-    const known = await latestWindowOf(drizzle, db.dialect, schedule.key);
+    const known = (await latestWindowsOf(tx, db.dialect, [schedule.key])).get(
+      schedule.key
+    );
     const row = {
       scheduleKey: schedule.key,
       windowAt,
@@ -206,53 +280,15 @@ async function sweepOne(
 }
 
 /**
- * Remove up to `limit` of `schedule`'s windows from before `before`, keeping
- * its latest, however old: under "latest window only" an older window can
- * never come due again, but the latest can, for a schedule that fires less
- * often than the retention.
+ * Remove up to `limit` windows from before `before`, oldest first, whichever
+ * schedule they belong to, so every old window goes in turn however passes
+ * fall. A declared schedule keeps its latest, however old: under "latest
+ * window only" an older window can never come due again, but the latest can,
+ * for a schedule that fires less often than the retention. A schedule no
+ * longer declared keeps nothing: should it come back it is seen for the
+ * first time.
  */
-async function pruneOne(
-  db: ScheduleWindowsDatabase,
-  schedule: CollectedSchedule,
-  before: Date,
-  limit: number
-): Promise<number> {
-  const table = tableOf(db.dialect);
-  return db.transaction(async tx => {
-    const drizzle = tx.getDrizzle<WindowWriteDb>();
-    // The latest window is kept: it is what stops that window being
-    // enqueued again.
-    const latest = await latestWindowOf(drizzle, db.dialect, schedule.key);
-    const cutoff = latest !== undefined && latest < before ? latest : before;
-    const old = await drizzle
-      .select({ windowAt: table.windowAt })
-      .from(table)
-      .where(
-        and(eq(table.scheduleKey, schedule.key), lt(table.windowAt, cutoff))
-      )
-      .orderBy(asc(table.windowAt))
-      .limit(limit);
-    const last = old.at(-1);
-    if (last === undefined) return 0;
-    // Bounded by the oldest `limit` windows: the newest of them is the edge.
-    await drizzle
-      .delete(table)
-      .where(
-        and(
-          eq(table.scheduleKey, schedule.key),
-          lte(table.windowAt, last.windowAt)
-        )
-      );
-    return old.length;
-  });
-}
-
-/**
- * Remove up to `limit` windows from before `before` of schedules no longer
- * declared, which no sweep will look at again. Should one come back, it is
- * seen for the first time, so none of its windows needs keeping.
- */
-async function pruneRemoved(
+async function pruneOldest(
   db: ScheduleWindowsDatabase,
   declared: readonly string[],
   before: Date,
@@ -260,37 +296,40 @@ async function pruneRemoved(
 ): Promise<number> {
   const table = tableOf(db.dialect);
   return db.transaction(async tx => {
-    const drizzle = tx.getDrizzle<WindowWriteDb>();
-    const old = lt(table.windowAt, before);
-    const stale = await tx
+    const latest = await latestWindowsOf(tx, db.dialect, declared);
+    // Each declared schedule's latest may be among the oldest, and is
+    // skipped: read past them so the bound is still met.
+    const oldest = await tx
       .getDrizzle<KeyedReadDb>()
       .select({ scheduleKey: table.scheduleKey, windowAt: table.windowAt })
       .from(table)
-      .where(
-        declared.length === 0
-          ? old
-          : and(old, notInArray(table.scheduleKey, [...declared]))
-      )
+      .where(lt(table.windowAt, before))
       .orderBy(asc(table.windowAt))
-      .limit(limit);
-    // Each key's newest among the oldest `limit` windows is its edge.
+      .limit(limit + latest.size);
+    const doomed = oldest
+      .filter(
+        row =>
+          latest.get(String(row.scheduleKey))?.getTime() !==
+          row.windowAt.getTime()
+      )
+      .slice(0, limit);
+    // Each schedule's newest doomed window is its edge: its older windows
+    // come earlier in age order, so they are among the doomed too.
     const edges = new Map<string, Date>();
-    // MySQL hands a binary key back as bytes: keyed by its text.
-    for (const row of stale) edges.set(String(row.scheduleKey), row.windowAt);
-    for (const [scheduleKey, edge] of edges) {
-      await drizzle
-        .delete(table)
-        .where(
-          and(eq(table.scheduleKey, scheduleKey), lte(table.windowAt, edge))
-        );
-    }
-    return stale.length;
+    for (const row of doomed) edges.set(String(row.scheduleKey), row.windowAt);
+    if (edges.size === 0) return 0;
+    await tx
+      .getDrizzle<WindowWriteDb>()
+      .delete(table)
+      .where(
+        or(
+          ...[...edges].map(([scheduleKey, edge]) =>
+            and(eq(table.scheduleKey, scheduleKey), lte(table.windowAt, edge))
+          )
+        )
+      );
+    return doomed.length;
   });
-}
-
-/** Which of `count` turns the minute of `at` starts at. */
-function turnOf(at: Date, count: number): number {
-  return count === 0 ? 0 : Math.floor(at.getTime() / 60_000) % count;
 }
 
 /**
@@ -310,56 +349,40 @@ export function scheduleWindows(
   const enqueue = options.enqueue ?? enqueueInTransaction;
   return {
     async sweep(now, deadline) {
-      // Each minute starts one schedule later, so a pass cut short by its
-      // deadline leaves different schedules to the next, even when every
-      // pass is a fresh process with nothing remembered.
-      const start = turnOf(now, schedules.length);
-      for (let step = 0; step < schedules.length; step += 1) {
-        const schedule = schedules[(start + step) % schedules.length];
+      let due: DueSchedule[];
+      try {
+        due = await dueSchedules(db, schedules, now);
+      } catch (error) {
+        options.onError?.(error, "every schedule");
+        return;
+      }
+      for (const [step, next] of due.entries()) {
         // The pass's time is shared with the drain that follows. One schedule
-        // is always swept, so every pass moves the turn on.
+        // is always swept, so every pass leaves one fewer waiting.
         if (step > 0 && deadline !== undefined && Date.now() >= deadline) {
           return;
         }
         try {
-          await sweepOne(db, schedule, now, enqueue);
+          await sweepOne(db, next, now, enqueue);
         } catch (error) {
-          options.onError?.(error, schedule.key);
+          options.onError?.(error, next.schedule.key);
         }
       }
     },
     async prune(before, limit) {
-      // One bound for the whole pass, shared out in turn, so many schedules
-      // cannot make the pass a long delete.
-      // Turns start from the minute, as the sweep's do, removed schedules
-      // taking a turn too, so a bound spent early on one pass reaches the
-      // rest on the next however the passes run.
-      const turns = [
-        ...schedules.map(
-          schedule => (left: number) => pruneOne(db, schedule, before, left)
-        ),
-        (left: number) =>
-          pruneRemoved(
-            db,
-            schedules.map(schedule => schedule.key),
-            before,
-            left
-          ),
-      ];
-      const start = turnOf(before, turns.length);
-      let pruned = 0;
-      for (let step = 0; step < turns.length && pruned < limit; step += 1) {
-        const index = (start + step) % turns.length;
-        try {
-          pruned += await turns[index](limit - pruned);
-        } catch (error) {
-          options.onError?.(
-            error,
-            schedules[index]?.key ?? "removed schedules"
-          );
-        }
+      // One bound for the whole pass, so many schedules cannot make the pass
+      // a long delete.
+      try {
+        return await pruneOldest(
+          db,
+          schedules.map(schedule => schedule.key),
+          before,
+          limit
+        );
+      } catch (error) {
+        options.onError?.(error, "every schedule");
+        return 0;
       }
-      return pruned;
     },
   };
 }

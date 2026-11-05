@@ -164,7 +164,7 @@ export function scheduleKeyOf(
   return `${plugin}:${slug}@${definitionTag(cron, timeZone)}`;
 }
 
-/** The schedule's key, refused when it is too long to store. */
+/** The schedule's key, refused when it is too long to store or cannot be stored at all. */
 function keyOf(
   plugin: string,
   slug: string,
@@ -181,6 +181,12 @@ function keyOf(
       slug,
       `its key "${key}" is longer than ${MAX_PORTABLE_KEY_LENGTH} bytes`
     );
+  }
+  // PostgreSQL text cannot hold NUL, so such a key's every sweep would fail;
+  // the other control characters are refused with it, as no plugin name or
+  // slug means one.
+  if (/\p{Cc}/u.test(key)) {
+    throw refuse(plugin, slug, "its key has a control character in it");
   }
   return key;
 }
