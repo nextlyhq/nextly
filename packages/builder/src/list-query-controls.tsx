@@ -2036,6 +2036,77 @@ function SortGroup({
   );
 }
 
+/** The text a bound field opens with: the stored number, or the unset one. */
+function boundText(stored: unknown, unsetValue: number | undefined): string {
+  if (typeof stored === "number" || typeof stored === "string") {
+    return String(stored);
+  }
+  return unsetValue === undefined ? "" : String(unsetValue);
+}
+
+/**
+ * A bound field's draft: the text typed, the problem with it, and the send
+ * that writes it once a save would take it. The shown unset value, sent back
+ * unchanged, is what the list already reads, so it is no edit.
+ */
+function useBoundDraft(
+  prop: "limit" | "offset",
+  stored: unknown,
+  unsetValue: number | undefined,
+  onBound: (value: number | undefined) => void
+): {
+  draft: string;
+  setDraft: (text: string) => void;
+  problem: string | undefined;
+  send: () => void;
+} {
+  const text = boundText(stored, unsetValue);
+  const [draft, setDraft] = React.useState(text);
+  const [problem, setProblem] = React.useState<string | undefined>();
+  React.useEffect(() => {
+    setDraft(text);
+    setProblem(undefined);
+  }, [text]);
+  const send = () => {
+    const read = readBound(prop, draft);
+    if ("problem" in read) {
+      // Refused here rather than written: the canvas keeps the last list.
+      setProblem(read.problem);
+      return;
+    }
+    setProblem(undefined);
+    const unchanged =
+      read.value === stored ||
+      (stored === undefined && read.value === unsetValue);
+    if (!unchanged) onBound(read.value);
+  };
+  return { draft, setDraft, problem, send };
+}
+
+/** Under a bound field: its problem, or, with none, its hint. */
+function BoundFoot({
+  errorId,
+  problem,
+  hint,
+}: {
+  errorId: string;
+  problem: string | undefined;
+  hint: string | undefined;
+}): React.JSX.Element | null {
+  if (problem !== undefined) {
+    return <FieldError id={errorId}>{problem}</FieldError>;
+  }
+  if (hint === undefined) return null;
+  return (
+    <p
+      className="nx-inspector__note nx-list-query__hint nx-list-query__indented"
+      role="status"
+    >
+      {hint}
+    </p>
+  );
+}
+
 /** A number of entries typed, written once a save would take it. */
 function BoundField({
   id,
@@ -2068,33 +2139,12 @@ function BoundField({
   hint?: string | undefined;
   onBound: (value: number | undefined) => void;
 }): React.JSX.Element {
-  const text =
-    typeof stored === "number" || typeof stored === "string"
-      ? String(stored)
-      : unsetValue === undefined
-        ? ""
-        : String(unsetValue);
-  const [draft, setDraft] = React.useState(text);
-  const [problem, setProblem] = React.useState<string | undefined>();
-  React.useEffect(() => {
-    setDraft(text);
-    setProblem(undefined);
-  }, [text]);
-  const send = () => {
-    const read = readBound(prop, draft);
-    if ("problem" in read) {
-      // Refused here rather than written: the canvas keeps the last list.
-      setProblem(read.problem);
-      return;
-    }
-    setProblem(undefined);
-    // The shown unset value, sent back unchanged, is what the list already
-    // reads, so it is no edit.
-    const unchanged =
-      read.value === stored ||
-      (stored === undefined && read.value === unsetValue);
-    if (!unchanged) onBound(read.value);
-  };
+  const { draft, setDraft, problem, send } = useBoundDraft(
+    prop,
+    stored,
+    unsetValue,
+    onBound
+  );
   const shown = problem ?? storedProblem;
   const errorId = `${id}-error`;
   return (
@@ -2132,17 +2182,7 @@ function BoundField({
           </span>
         )}
       </div>
-      {shown === undefined ? null : (
-        <FieldError id={errorId}>{shown}</FieldError>
-      )}
-      {shown !== undefined || hint === undefined ? null : (
-        <p
-          className="nx-inspector__note nx-list-query__hint nx-list-query__indented"
-          role="status"
-        >
-          {hint}
-        </p>
-      )}
+      <BoundFoot errorId={errorId} problem={shown} hint={hint} />
     </div>
   );
 }
