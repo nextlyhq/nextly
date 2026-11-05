@@ -28,6 +28,9 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
+/** A collection list drawing its empty state while that state holds nothing. */
+const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
+
 /**
  * The attribute on the root element of the editor's blank page, which a page
  * the site serves never carries.
@@ -242,20 +245,24 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
   );
 }
 
-/* A list drawing its empty state is tagged above its top edge, in the
-   editing colour, with why: the author chose to see it, nothing matched, or
-   its read failed. Positioned for its tag on the canvas only. */
-${ROOT} [data-nx-list-shows] {
-  position: relative;
-}
-
+/* A list drawing its empty state is tagged, in the editing colour, with why:
+   the author chose to see it, nothing matched, or its read failed. The tag
+   is the first thing in the list's own flow, so it covers nothing: lifted
+   above the list's top edge it lay over whatever the page draws there, and
+   a page with no gap above the list lost that line. It spans a grid's row
+   from its start, sits first in a flex row, and is as wide as its words.
+   On the canvas only. */
 ${ROOT} [data-nx-list-shows]::before {
-  position: absolute;
-  z-index: 2;
-  inset-block-end: 100%;
-  inset-inline-start: 0;
+  display: block;
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  flex: none;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin-block-end: 0.375rem;
   padding: 0.0625rem 0.375rem;
-  border-radius: 0.1875rem 0.1875rem 0 0;
+  border-radius: 0.1875rem;
   background: var(--nx-builder-select, Highlight);
   color: var(--nx-builder-select-text, HighlightText);
   font-family: system-ui, sans-serif;
@@ -263,6 +270,44 @@ ${ROOT} [data-nx-list-shows]::before {
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
+/* A list whose empty state holds nothing yet: a roomy area, at the admin's
+   size whatever the zoom, so the "+" drawn over its centre, the line below
+   it and the spacing badges on its edges never meet. The tag sits at the
+   inside of its top edge, clear of the centred words. Written on the empty
+   container's own selector, so it outweighs that rule's smaller box. */
+${EMPTY_LIST} {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(7.5rem / var(--nx-canvas-zoom, 1));
+}
+
+${EMPTY_LIST}::before {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  margin: 0;
+  border-radius: 0 0 0.1875rem 0;
+}
+
+/* What the area is for, under the "+" and its words, faint in the page's
+   own ink so it reads on any section. */
+${EMPTY_LIST}::after {
+  content: "Visitors see this when no entry matches. Left empty, the list shows nothing.";
+  max-inline-size: 100%;
+  margin-block-start: 2.5rem;
+  padding-inline: 0.75rem;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  font-family: system-ui, sans-serif;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-align: center;
   pointer-events: none;
   zoom: calc(1 / var(--nx-canvas-zoom, 1));
 }

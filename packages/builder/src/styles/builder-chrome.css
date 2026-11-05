@@ -9260,15 +9260,17 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-top: 1px solid var(--nx-border);
 }
 
+/* Inset as the list below it is, so its heading, set in from there as a
+   group's heading is, lines up with "Collections". */
 .nx-list-query__menu-note {
-  padding-inline: 0;
+  padding-inline: 0.25rem;
   border-bottom: 1px solid var(--nx-border);
 }
 
-/* The note's words, under its heading as a group's rows sit. */
+/* The note's words, set in from the inset as an option's words are. */
 .nx-list-query__menu-note > p:not(.nx-font-pick__heading) {
   margin: 0;
-  padding-inline: 0.75rem;
+  padding-inline: 0.5rem;
 }
 
 .nx-list-query__kbd {

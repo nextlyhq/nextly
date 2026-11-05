@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
+import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.
@@ -588,6 +589,70 @@ describe("a collection list's notes and tag in the canvas frame", () => {
     expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
     expect(declared(tag, "background")).toBe(
       "var(--nx-builder-select, Highlight)"
+    );
+  });
+
+  it("keeps the tag inside the list, so it covers nothing above it", () => {
+    const tag = ruleIn(
+      CANVAS_FRAME_SHEET,
+      ".nx-canvas [data-nx-list-shows]::before"
+    );
+    // In the list's own flow, first, spanning a grid's row from its start
+    // and sized to its words: never lifted out above the list's top edge,
+    // where it lay over whatever the page draws there.
+    expect(declared(tag, "position")).toBeUndefined();
+    expect(declared(tag, "inset-block-end")).toBeUndefined();
+    expect(declared(tag, "grid-column")).toBe("1 / -1");
+    expect(declared(tag, "justify-self")).toBe("start");
+    expect(declared(tag, "inline-size")).toBe("max-content");
+    // Over an empty list's area, whose words are centred, it sits at the
+    // inside of the top edge.
+    const over = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]::before`
+    );
+    expect(declared(over, "position")).toBe("absolute");
+    expect(declared(over, "inset-block-start")).toBe("0");
+    expect(declared(over, "inset-inline-start")).toBe("0");
+  });
+
+  it("draws an empty list's empty state as a roomy area that says what it is for", () => {
+    const area = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`
+    );
+    // Room at the admin's size, whatever the zoom, so the words centred in
+    // it and the spacing badges on its edges never meet.
+    expect(declared(area, "min-height")).toBe(
+      "calc(7.5rem / var(--nx-canvas-zoom, 1))"
+    );
+    expect(declared(area, "position")).toBe("relative");
+    expect(declared(area, "justify-content")).toBe("center");
+    const line = ruleIn(
+      CANVAS_FRAME_SHEET,
+      `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]::after`
+    );
+    expect(declared(line, "content")).toBe(
+      '"Visitors see this when no entry matches. Left empty, the list shows nothing."'
+    );
+    expect(declared(line, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+  });
+});
+
+describe("the Source menu's note where no related source is offered", () => {
+  it("sets its heading where the list's group headings sit", () => {
+    // The list's rows sit inside its own padding, and a group's heading
+    // inside that; the note, drawn above the list, takes the same two
+    // steps, so "Related entries" lines up with "Collections".
+    const list = ruleFor(".nx-font-pick__list");
+    const note = ruleFor(".nx-list-query__menu-note");
+    expect(declared(note, "padding-inline")).toBe(declared(list, "padding"));
+    const words = ruleFor(
+      ".nx-list-query__menu-note > p:not(.nx-font-pick__heading)"
+    );
+    // The words under it start where an option's words do.
+    expect(declared(words, "padding-inline")).toBe(
+      declared(ruleFor(".nx-font-pick__option"), "padding")?.split(" ")[1]
     );
   });
 });
