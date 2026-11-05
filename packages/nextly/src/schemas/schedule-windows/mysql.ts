@@ -8,18 +8,19 @@ import {
   index,
   mysqlTable,
   primaryKey,
-  text,
+  varbinary,
   varchar,
 } from "drizzle-orm/mysql-core";
 
 export const nextlyScheduleWindowsMysql = mysqlTable(
   "nextly_schedule_windows",
   {
-    // 191 characters: the portable key cap, so the key fits an index.
-    scheduleKey: varchar("schedule_key", { length: 191 }).notNull(),
+    // Bytes, so keys compare exactly whatever the table's collation: a case-
+    // or accent-insensitive one would make two schedules one. 191 bytes is
+    // the portable key cap.
+    scheduleKey: varbinary("schedule_key", { length: 191 }).notNull(),
     windowAt: datetime("window_at", { fsp: 3 }).notNull(),
     jobId: varchar("job_id", { length: 36 }),
-    definition: text("definition").notNull(),
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())
       .notNull(),

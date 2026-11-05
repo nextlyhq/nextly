@@ -30,6 +30,25 @@ describe("isJsonValue", () => {
     ["a map", new Map()],
     ["a nested class instance", { at: new Date() }],
     ["an undefined property", { a: undefined }],
+    ["undefined in an array", [1, undefined]],
+    [
+      "a class instance",
+      new (class Point {
+        x = 1;
+      })(),
+    ],
+    [
+      "a getter",
+      Object.defineProperty({}, "computed", { enumerable: true, get: () => 1 }),
+    ],
+    ["an array with a named property", Object.assign([1], { note: "kept" })],
+    ["a symbol key", { [Symbol("s")]: 1 }],
+    [
+      "a property JSON does not write",
+      Object.defineProperty({}, "hidden", { enumerable: false, value: 1 }),
+    ],
+    ["negative zero", -0],
+    ["a nested bigint", { n: [1n] }],
   ])("refuses %s", (_case, value) => {
     expect(isJsonValue(value)).toBe(false);
   });

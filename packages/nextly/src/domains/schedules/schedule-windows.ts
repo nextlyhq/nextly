@@ -17,11 +17,14 @@
  * A schedule's first window is the one that opens after a pass first sees
  * it: on first sight its latest window is recorded with no job, so a yearly
  * schedule deployed in November waits for January rather than running at
- * once for a January already gone. A schedule whose cron or time zone
- * changed is seen for the first time again, for the same reason. Windows
- * missed while no pass ran are not run later; only the latest is, and never
- * one older than a window already recorded, which a runner whose clock is
- * behind would otherwise claim.
+ * once for a January already gone. A schedule's key carries its cron and
+ * time zone, so each definition keeps windows of its own: a changed one is
+ * seen for the first time, a reverted one still within the retention
+ * resumes (running its latest window once if one opened in between), and
+ * during a rolling deploy whose versions differ each definition runs its own.
+ * Windows missed while no pass ran are not run later; only the latest is,
+ * and never one older than a window already recorded, which a runner whose
+ * clock is behind would otherwise claim.
  *
  * @module domains/schedules/schedule-windows
  * @experimental
@@ -55,9 +58,7 @@ interface WindowReadDb {
     from(table: unknown): {
       where(condition: unknown): {
         orderBy(order: unknown): {
-          limit(
-            count: number
-          ): PromiseLike<{ windowAt: Date; definition: string }[]>;
+          limit(count: number): PromiseLike<{ windowAt: Date }[]>;
         };
       };
     };
@@ -139,51 +140,20 @@ async function insertIfAbsent(
   return written.length > 0;
 }
 
-/**
- * The latest window recorded for `scheduleKey` under `definition`: windows
- * read with another cron or time zone say nothing about this one's.
- */
+/** The latest window recorded for `scheduleKey`, if any. */
 async function latestWindowOf(
   drizzle: WindowReadDb,
   dialect: SupportedDialect,
-  scheduleKey: string,
-  definition: string
+  scheduleKey: string
 ): Promise<Date | undefined> {
   const table = tableOf(dialect);
   const [latest] = await drizzle
-    .select({ windowAt: table.windowAt, definition: table.definition })
+    .select({ windowAt: table.windowAt })
     .from(table)
-    .where(
-      and(eq(table.scheduleKey, scheduleKey), eq(table.definition, definition))
-    )
+    .where(eq(table.scheduleKey, scheduleKey))
     .orderBy(desc(table.windowAt))
     .limit(1);
   return latest?.windowAt;
-}
-
-/**
- * The definition the schedule was last seen with: that of its most recently
- * recorded row. A definition changed and changed back is seen afresh, since
- * the row recorded in between is the newer.
- */
-async function currentDefinitionOf(
-  drizzle: WindowReadDb,
-  dialect: SupportedDialect,
-  scheduleKey: string
-): Promise<string | undefined> {
-  const table = tableOf(dialect);
-  const [latest] = await drizzle
-    .select({ windowAt: table.windowAt, definition: table.definition })
-    .from(table)
-    .where(eq(table.scheduleKey, scheduleKey))
-    .orderBy(desc(table.createdAt))
-    .limit(1);
-  return latest?.definition;
-}
-
-/** What a window is read with: the schedule's cron and its time zone. */
-function definitionOf(schedule: CollectedSchedule): string {
-  return JSON.stringify([schedule.cron.source.trim(), schedule.timeZone]);
 }
 
 /** Claim `schedule`'s latest window at `now`, and enqueue its job if this claim is the one. */
@@ -198,50 +168,28 @@ async function sweepOne(
   const table = tableOf(db.dialect);
   await db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
-    const definition = definitionOf(schedule);
     const atWindow = and(
       eq(table.scheduleKey, schedule.key),
       eq(table.windowAt, windowAt)
     );
-    const seenWith = await currentDefinitionOf(
-      drizzle,
-      db.dialect,
-      schedule.key
-    );
-    const known =
-      seenWith === definition
-        ? await latestWindowOf(drizzle, db.dialect, schedule.key, definition)
-        : undefined;
+    const known = await latestWindowOf(drizzle, db.dialect, schedule.key);
+    const row = {
+      scheduleKey: schedule.key,
+      windowAt,
+      jobId: null,
+      createdAt: now,
+    };
     if (known === undefined) {
-      // First sight, of the schedule or of its current definition: the
-      // window is recorded with no job, so the first job is for the next.
-      const recorded = await insertIfAbsent(tx, db.dialect, {
-        scheduleKey: schedule.key,
-        windowAt,
-        jobId: null,
-        definition,
-        createdAt: now,
-      });
-      // The same instant recorded under the earlier definition was had
-      // already; it becomes this definition's first window, recorded now.
-      if (!recorded) {
-        await drizzle
-          .update(table)
-          .set({ definition, createdAt: now })
-          .where(atWindow);
-      }
+      // First sight of this schedule, as now defined (its key carries its
+      // cron and time zone): the window is recorded with no job, so the
+      // first job is for the next.
+      await insertIfAbsent(tx, db.dialect, row);
       return;
     }
     // Never a window at or before one already recorded: a clock behind
     // another runner's would reach back for one the others have passed.
     if (windowAt <= known) return;
-    const claimed = await insertIfAbsent(tx, db.dialect, {
-      scheduleKey: schedule.key,
-      windowAt,
-      jobId: null,
-      definition,
-      createdAt: now,
-    });
+    const claimed = await insertIfAbsent(tx, db.dialect, row);
     if (!claimed) return;
     const { id } = await enqueue(tx, db.dialect, {
       slug: schedule.job,
@@ -272,15 +220,9 @@ async function pruneOne(
   const table = tableOf(db.dialect);
   return db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
-    // The latest window of the current definition is kept: it is what stops
-    // that window being enqueued again. Earlier definitions' windows can
-    // never come due again.
-    const latest = await latestWindowOf(
-      drizzle,
-      db.dialect,
-      schedule.key,
-      definitionOf(schedule)
-    );
+    // The latest window is kept: it is what stops that window being
+    // enqueued again.
+    const latest = await latestWindowOf(drizzle, db.dialect, schedule.key);
     const cutoff = latest !== undefined && latest < before ? latest : before;
     const old = await drizzle
       .select({ windowAt: table.windowAt })
@@ -333,7 +275,8 @@ async function pruneRemoved(
       .limit(limit);
     // Each key's newest among the oldest `limit` windows is its edge.
     const edges = new Map<string, Date>();
-    for (const row of stale) edges.set(row.scheduleKey, row.windowAt);
+    // MySQL hands a binary key back as bytes: keyed by its text.
+    for (const row of stale) edges.set(String(row.scheduleKey), row.windowAt);
     for (const [scheduleKey, edge] of edges) {
       await drizzle
         .delete(table)
@@ -343,6 +286,11 @@ async function pruneRemoved(
     }
     return stale.length;
   });
+}
+
+/** Which of `count` turns the minute of `at` starts at. */
+function turnOf(at: Date, count: number): number {
+  return count === 0 ? 0 : Math.floor(at.getTime() / 60_000) % count;
 }
 
 /**
@@ -360,14 +308,19 @@ export function scheduleWindows(
   } = {}
 ): JobSchedules {
   const enqueue = options.enqueue ?? enqueueInTransaction;
-  // Where the next prune starts, kept for the life of the process.
-  let pruneTurn = 0;
   return {
     async sweep(now, deadline) {
-      for (const schedule of schedules) {
-        // The pass's time is shared with the drain that follows: a sweep that
-        // ran out of it leaves the rest to the next pass, as a drain does.
-        if (deadline !== undefined && Date.now() >= deadline) return;
+      // Each minute starts one schedule later, so a pass cut short by its
+      // deadline leaves different schedules to the next, even when every
+      // pass is a fresh process with nothing remembered.
+      const start = turnOf(now, schedules.length);
+      for (let step = 0; step < schedules.length; step += 1) {
+        const schedule = schedules[(start + step) % schedules.length];
+        // The pass's time is shared with the drain that follows. One schedule
+        // is always swept, so every pass moves the turn on.
+        if (step > 0 && deadline !== undefined && Date.now() >= deadline) {
+          return;
+        }
         try {
           await sweepOne(db, schedule, now, enqueue);
         } catch (error) {
@@ -378,8 +331,9 @@ export function scheduleWindows(
     async prune(before, limit) {
       // One bound for the whole pass, shared out in turn, so many schedules
       // cannot make the pass a long delete.
-      // Each pass starts one turn later, removed schedules taking a turn too,
-      // so a bound spent early on one pass reaches the rest on the next.
+      // Turns start from the minute, as the sweep's do, removed schedules
+      // taking a turn too, so a bound spent early on one pass reaches the
+      // rest on the next however the passes run.
       const turns = [
         ...schedules.map(
           schedule => (left: number) => pruneOne(db, schedule, before, left)
@@ -392,8 +346,7 @@ export function scheduleWindows(
             left
           ),
       ];
-      const start = pruneTurn % turns.length;
-      pruneTurn += 1;
+      const start = turnOf(before, turns.length);
       let pruned = 0;
       for (let step = 0; step < turns.length && pruned < limit; step += 1) {
         const index = (start + step) % turns.length;

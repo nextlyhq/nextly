@@ -12,6 +12,8 @@
  * @module domains/schedules/collect-schedules
  * @experimental
  */
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import { NextlyError } from "../../errors";
@@ -25,7 +27,11 @@ import { isTimeZone, parseCron, type CronExpression } from "./cron";
 
 /** One schedule, read and checked. */
 export interface CollectedSchedule {
-  /** `<plugin name>:<schedule slug>`, unique across the installation. */
+  /**
+   * `<plugin name>:<schedule slug>@<definition>`, unique across the
+   * installation: the definition is a short hash of the cron as parsed and
+   * the time zone, so each definition keeps windows of its own.
+   */
   readonly key: string;
   readonly plugin: string;
   readonly slug: string;
@@ -122,9 +128,50 @@ function readShape(plugin: string, entry: unknown) {
   );
 }
 
+/**
+ * What a schedule's windows are read with, as one short, stable tag: the
+ * cron as parsed (so `@daily` and `0 0 * * *`, or a change of spacing, are
+ * one definition) and the time zone. Any change to either is another tag,
+ * and so a schedule seen for the first time.
+ */
+function definitionTag(cron: CronExpression, timeZone: string): string {
+  const field = (values: ReadonlySet<number>) =>
+    [...values].sort((a, b) => a - b).join(",");
+  const parsed = [
+    field(cron.minutes),
+    field(cron.hours),
+    field(cron.daysOfMonth),
+    field(cron.months),
+    field(cron.daysOfWeek),
+    // Which day fields were written from `*`: it decides how they combine.
+    `${cron.anyDayOfMonth ? 1 : 0}${cron.anyDayOfWeek ? 1 : 0}`,
+    timeZone,
+  ].join(" ");
+  return createHash("sha256").update(parsed).digest("base64url").slice(0, 12);
+}
+
+/**
+ * The key of `plugin`'s schedule `slug` read with `cron` in `timeZone`.
+ *
+ * @experimental
+ */
+export function scheduleKeyOf(
+  plugin: string,
+  slug: string,
+  cron: CronExpression,
+  timeZone: string
+): string {
+  return `${plugin}:${slug}@${definitionTag(cron, timeZone)}`;
+}
+
 /** The schedule's key, refused when it is too long to store. */
-function keyOf(plugin: string, slug: string): string {
-  const key = `${plugin}:${slug}`;
+function keyOf(
+  plugin: string,
+  slug: string,
+  cron: CronExpression,
+  timeZone: string
+): string {
+  const key = scheduleKeyOf(plugin, slug, cron, timeZone);
   if (key.length > MAX_PORTABLE_KEY_LENGTH) {
     throw refuse(
       plugin,
@@ -174,18 +221,20 @@ function collectOne(
   entry: unknown,
   ownJobs: ReadonlySet<string>
 ): CollectedSchedule {
-  const { slug, cron, job, tz, input } = readShape(plugin, entry);
+  const { slug, cron: source, job, tz, input } = readShape(plugin, entry);
   // Stored as JSON with each job: anything a JSON round trip would change or
   // refuse would reach the handler reshaped, or fail every window's enqueue.
   if (input !== undefined && !isJsonValue(input)) {
     throw refuse(plugin, slug, "its input is not plain JSON");
   }
+  const cron = cronOf(source, plugin, slug);
+  const timeZone = timeZoneOf(plugin, slug, tz);
   return {
-    key: keyOf(plugin, slug),
+    key: keyOf(plugin, slug, cron, timeZone),
     plugin,
     slug,
-    cron: cronOf(cron, plugin, slug),
-    timeZone: timeZoneOf(plugin, slug, tz),
+    cron,
+    timeZone,
     job: jobOf(plugin, slug, job, ownJobs),
     input: input ?? {},
   };
@@ -203,8 +252,8 @@ export function collectSchedules(
   jobs: readonly CollectedJob[]
 ): CollectedSchedule[] {
   const out: CollectedSchedule[] = [];
-  // Keys across the installation, compared without case: two plugins whose
-  // name and slug join to one key would share each other's windows.
+  // Keys across the installation, compared as stored, byte for byte: two
+  // schedules with one key would share each other's windows.
   const keys = new Set<string>();
   for (const plugin of plugins) {
     // `enabled` is optional and absent means enabled, as for jobs.
@@ -227,15 +276,14 @@ export function collectSchedules(
         );
       }
       seen.add(schedule.slug);
-      const folded = schedule.key.toLowerCase();
-      if (keys.has(folded)) {
+      if (keys.has(schedule.key)) {
         throw refuse(
           plugin.name,
           schedule.slug,
           `another plugin's schedule has the same key "${schedule.key}"`
         );
       }
-      keys.add(folded);
+      keys.add(schedule.key);
       out.push(schedule);
     }
   }

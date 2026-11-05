@@ -63,8 +63,9 @@ describe("collecting plugin schedules", () => {
       },
     ]);
     const [collected] = collectSchedules([p], jobsOf(p));
+    // The plugin, the slug and a short tag of the definition.
+    expect(collected.key).toMatch(/^@acme\/plugin:tick@[\w-]{12}$/);
     expect(collected).toMatchObject({
-      key: "@acme/plugin:tick",
       plugin: "@acme/plugin",
       slug: "tick",
       job: "acme:tick",
@@ -174,14 +175,25 @@ describe("collecting plugin schedules", () => {
     expect(error.message).toContain("cron");
   });
 
-  it("refuses two plugins whose schedules join to one key, naming the second", () => {
+  it("keys a schedule by its definition: the cron and the time zone change it, spacing and alias spelling do not", () => {
+    const keyOf = (cron: string, tz?: string) => {
+      const p = plugin([
+        { slug: "tick", cron, job: "acme:tick", ...(tz ? { tz } : {}) },
+      ]);
+      return collectSchedules([p], jobsOf(p))[0].key;
+    };
+    const daily = keyOf("@daily");
+    expect(keyOf("0 0 * * *")).toBe(daily);
+    expect(keyOf("  0   0 * *  * ")).toBe(daily);
+    expect(keyOf("@midnight")).toBe(daily);
+    expect(keyOf("0 0 * * *", "UTC")).toBe(daily);
+    expect(keyOf("0 1 * * *")).not.toBe(daily);
+    expect(keyOf("@daily", "Europe/Berlin")).not.toBe(daily);
+  });
+
+  it("refuses two plugins whose schedules have one key, naming the second", () => {
     const first = plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }]);
-    const second = plugin(
-      [{ slug: "tick", cron: "@hourly", job: "acme:tick" }],
-      {
-        name: "@ACME/plugin",
-      }
-    );
+    const second = plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }]);
     let thrown: unknown;
     try {
       collectSchedules([first, second], jobsOf(first, second));
@@ -189,7 +201,8 @@ describe("collecting plugin schedules", () => {
       thrown = error;
     }
     expect(NextlyError.is(thrown)).toBe(true);
-    expect((thrown as NextlyError).message).toContain("@ACME/plugin");
+    expect((thrown as NextlyError).message).toContain("@acme/plugin");
+    expect((thrown as NextlyError).message).toContain("same key");
   });
 
   it("leaves a schedule in the earlier shape unexecuted, as before", () => {

@@ -19,13 +19,7 @@ import {
 } from "../../../__tests__/helpers/migrate-core";
 
 const WINDOWS = "nextly_schedule_windows";
-const COLUMNS = [
-  "created_at",
-  "definition",
-  "job_id",
-  "schedule_key",
-  "window_at",
-];
+const COLUMNS = ["created_at", "job_id", "schedule_key", "window_at"];
 
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-schedules-");
 afterAll(remove);
@@ -52,14 +46,20 @@ describe.each(availableDialects())(
         const at =
           fresh.dialect === "sqlite" ? "1767225600" : "'2026-01-01 00:00:00'";
         const record = (key: string) =>
-          `INSERT INTO ${WINDOWS} (schedule_key, window_at, job_id, definition, created_at) ` +
-          `VALUES ('${key}', ${at}, NULL, '["@hourly","UTC"]', ${at})`;
+          `INSERT INTO ${WINDOWS} (schedule_key, window_at, job_id, created_at) ` +
+          `VALUES ('${key}', ${at}, NULL, ${at})`;
         await fresh.exec(record("@acme/plugin:tick"));
         // The same window again is refused by the database, on the upgraded
         // table as on a fresh one.
         await expect(fresh.exec(record("@acme/plugin:tick"))).rejects.toThrow();
         // Another schedule's record of the same instant is its own window.
         await fresh.exec(record("@acme/plugin:other"));
+        // Keys compare byte for byte on every dialect: case and accents make
+        // different schedules, whatever the database's collation.
+        await fresh.exec(record("@acme/café:tick"));
+        await fresh.exec(record("@acme/cafe:tick"));
+        await fresh.exec(record("@acme/Case:tick"));
+        await fresh.exec(record("@acme/case:tick"));
 
         expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
       });

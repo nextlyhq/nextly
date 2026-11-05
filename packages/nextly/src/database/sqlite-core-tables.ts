@@ -498,7 +498,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "schedule_key" TEXT NOT NULL,
       "window_at" INTEGER NOT NULL,
       "job_id" TEXT,
-      "definition" TEXT NOT NULL,
       "created_at" INTEGER NOT NULL,
       PRIMARY KEY ("schedule_key", "window_at")
     )`,

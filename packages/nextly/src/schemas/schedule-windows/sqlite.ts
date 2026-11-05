@@ -17,7 +17,6 @@ export const nextlyScheduleWindowsSqlite = sqliteTable(
     scheduleKey: text("schedule_key").notNull(),
     windowAt: integer("window_at", { mode: "timestamp" }).notNull(),
     jobId: text("job_id"),
-    definition: text("definition").notNull(),
     createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
       .notNull(),

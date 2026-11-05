@@ -20,7 +20,8 @@ import {
 export const nextlyScheduleWindowsPg = pgTable(
   "nextly_schedule_windows",
   {
-    // `<plugin name>:<schedule slug>`.
+    // `<plugin name>:<schedule slug>@<definition>`: each cron and time zone
+    // a schedule is declared with keeps windows of its own.
     scheduleKey: text("schedule_key").notNull(),
     // When the window opens: the time its schedule fired, to the minute.
     windowAt: timestamp("window_at", { withTimezone: true }).notNull(),
@@ -28,9 +29,6 @@ export const nextlyScheduleWindowsPg = pgTable(
     // first seen in, which is recorded without a job so a schedule deployed
     // after its window opened waits for the next one.
     jobId: text("job_id"),
-    // The cron and time zone the window was read with: a schedule whose
-    // definition changed starts again from its next window.
-    definition: text("definition").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .$defaultFn(() => new Date())
       .notNull(),

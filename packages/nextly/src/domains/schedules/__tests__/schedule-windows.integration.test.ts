@@ -26,7 +26,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { parseCron } from "../cron";
-import type { CollectedSchedule } from "../collect-schedules";
+import { scheduleKeyOf, type CollectedSchedule } from "../collect-schedules";
 import { scheduleWindows } from "../schedule-windows";
 
 let current: TestNextly | undefined;
@@ -108,7 +108,7 @@ function jobsOf(t: TestNextly): Promise<JobRow[]> {
 function windowsOf(t: TestNextly): Promise<WindowRow[]> {
   return t.adapter.select<WindowRow>("nextly_schedule_windows", {
     where: {
-      and: [{ column: "scheduleKey", op: "=", value: `${PLUGIN}:tick` }],
+      and: [{ column: "scheduleKey", op: "=", value: hourly().key }],
     },
   });
 }
@@ -128,16 +128,23 @@ function inputOf(row: JobRow): unknown {
 }
 
 /** The plugin's hourly schedule, as collection would give it. */
-function hourly(): CollectedSchedule {
+/** The plugin's schedule `slug` read with `cron`, keyed as collection keys it. */
+function defined(cron: string, slug = "tick"): CollectedSchedule {
+  const parsed = parseCron(cron);
   return {
-    key: `${PLUGIN}:tick`,
+    key: scheduleKeyOf(PLUGIN, slug, parsed, "UTC"),
     plugin: PLUGIN,
-    slug: "tick",
-    cron: parseCron("0 * * * *"),
+    slug,
+    cron: parsed,
     timeZone: "UTC",
     job: JOB,
     input: {},
   };
+}
+
+/** The plugin's hourly schedule, as the booted plugin declares it. */
+function hourly(): CollectedSchedule {
+  return defined("0 * * * *");
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -214,9 +221,7 @@ describe.each(getConfiguredTestDialects())(
       );
       // Moved to half past: 10:30 is later than the 10:00 recorded, but it
       // was read with another cron, so it is a first sight, not a window.
-      const halfPast = scheduleWindows(t.adapter, [
-        { ...hourly(), cron: parseCron("30 * * * *") },
-      ]);
+      const halfPast = scheduleWindows(t.adapter, [defined("30 * * * *")]);
       await halfPast.sweep(new Date("2026-11-05T10:45:00.000Z"));
       expect(await jobsOf(t)).toHaveLength(0);
       await halfPast.sweep(new Date("2026-11-05T11:35:00.000Z"));
@@ -235,9 +240,7 @@ describe.each(getConfiguredTestDialects())(
       // Hourly to yearly in November: the yearly window of January 2026
       // lies before the hourly ones recorded, and is this definition's first
       // sight; January 2027 is its first job.
-      const yearly = scheduleWindows(t.adapter, [
-        { ...hourly(), cron: parseCron("@yearly") },
-      ]);
+      const yearly = scheduleWindows(t.adapter, [defined("@yearly")]);
       await yearly.sweep(new Date("2026-11-05T11:30:00.000Z"));
       expect(await jobsOf(t)).toHaveLength(1);
       await yearly.sweep(new Date("2027-01-01T00:05:00.000Z"));
@@ -250,9 +253,7 @@ describe.each(getConfiguredTestDialects())(
         new Date("2026-11-05T10:30:00.000Z")
       );
       // Every two hours: its window at 10:00 is the instant already recorded.
-      const everyTwo = scheduleWindows(t.adapter, [
-        { ...hourly(), cron: parseCron("0 */2 * * *") },
-      ]);
+      const everyTwo = scheduleWindows(t.adapter, [defined("0 */2 * * *")]);
       await everyTwo.sweep(new Date("2026-11-05T10:45:00.000Z"));
       expect(await jobsOf(t)).toHaveLength(0);
       await everyTwo.sweep(new Date("2026-11-05T12:05:00.000Z"));
@@ -287,34 +288,58 @@ describe.each(getConfiguredTestDialects())(
       expect(left).toEqual([]);
     });
 
-    it("a schedule changed and changed back waits for its next window", async () => {
+    it("a definition reverted to within the retention resumes, running its latest window once", async () => {
       const t = await boot(dialect, "0 * * * *");
-      const halfPast = { ...hourly(), cron: parseCron("30 * * * *") };
       await scheduleWindows(t.adapter, [hourly()]).sweep(
         new Date("2026-11-05T10:05:00.000Z")
       );
-      await scheduleWindows(t.adapter, [halfPast]).sweep(
+      await scheduleWindows(t.adapter, [defined("30 * * * *")]).sweep(
         new Date("2026-11-05T10:40:00.000Z")
       );
-      // Back to on the hour: 11:00 is later than its 10:00, but the schedule
-      // was last seen half past, so this is a first sight again.
-      await scheduleWindows(t.adapter, [hourly()]).sweep(
-        new Date("2026-11-05T11:10:00.000Z")
-      );
-      expect(await jobsOf(t)).toHaveLength(0);
-      await scheduleWindows(t.adapter, [hourly()]).sweep(
-        new Date("2026-11-05T12:10:00.000Z")
-      );
+      // Back to on the hour: its windows are its own, kept, so it resumes
+      // and runs 11:00, the latest that opened, once.
+      const back = scheduleWindows(t.adapter, [hourly()]);
+      await back.sweep(new Date("2026-11-05T11:10:00.000Z"));
+      await back.sweep(new Date("2026-11-05T11:40:00.000Z"));
       expect(await jobsOf(t)).toHaveLength(1);
     });
 
-    it("stops sweeping once the pass's deadline has passed", async () => {
+    it("two definitions of one schedule, live at once in a rolling deploy, each run their own windows", async () => {
       const t = await boot(dialect, "0 * * * *");
-      await scheduleWindows(t.adapter, [hourly()]).sweep(
+      const oldVersion = scheduleWindows(t.adapter, [hourly()]);
+      const newVersion = scheduleWindows(t.adapter, [defined("30 * * * *")]);
+      for (const [version, at] of [
+        [oldVersion, "2026-11-05T10:05:00.000Z"],
+        [newVersion, "2026-11-05T10:40:00.000Z"],
+        [oldVersion, "2026-11-05T11:05:00.000Z"],
+        [newVersion, "2026-11-05T11:40:00.000Z"],
+      ] as const) {
+        await version.sweep(new Date(at));
+      }
+      // Neither suppresses the other: 11:00 under one, 11:30 under the other.
+      expect(await jobsOf(t)).toHaveLength(2);
+    });
+
+    it("past its deadline a pass sweeps one schedule, the next minute's another, though each is a fresh process", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const first = defined("0 * * * *", "first");
+      const second = defined("0 * * * *", "second");
+      const seen = async () => {
+        const rows = await t.adapter.select<WindowRow>(
+          "nextly_schedule_windows"
+        );
+        return new Set(rows.map(row => String(row.scheduleKey))).size;
+      };
+      await scheduleWindows(t.adapter, [first, second]).sweep(
         new Date("2026-11-05T10:30:00.000Z"),
         Date.now() - 1
       );
-      expect(await windowsOf(t)).toEqual([]);
+      expect(await seen()).toBe(1);
+      await scheduleWindows(t.adapter, [first, second]).sweep(
+        new Date("2026-11-05T10:31:00.000Z"),
+        Date.now() - 1
+      );
+      expect(await seen()).toBe(2);
     });
 
     it("prunes every schedule in turn, however small the bound", async () => {
@@ -340,9 +365,15 @@ describe.each(getConfiguredTestDialects())(
       await other.sweep(new Date("2026-09-01T10:30:00.000Z"));
       await other.sweep(new Date("2026-11-04T12:30:00.000Z"));
 
-      const both = scheduleWindows(t.adapter, [hourly(), second]);
-      await both.prune(new Date("2026-10-05T00:00:00.000Z"), 1);
-      await both.prune(new Date("2026-10-05T00:00:00.000Z"), 1);
+      // Two passes, each a fresh process, a minute apart.
+      await scheduleWindows(t.adapter, [hourly(), second]).prune(
+        new Date("2026-10-05T00:00:00.000Z"),
+        1
+      );
+      await scheduleWindows(t.adapter, [hourly(), second]).prune(
+        new Date("2026-10-05T00:01:00.000Z"),
+        1
+      );
       // Without turns the first schedule would spend both passes.
       const left = await t.adapter.select<WindowRow>(
         "nextly_schedule_windows",
