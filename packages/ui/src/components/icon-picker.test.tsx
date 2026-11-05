@@ -16,6 +16,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { IconGlyph, type IconSource, type IconSourceIcon } from "./icon-glyph";
@@ -87,15 +88,28 @@ const icon = (name: string): IconSourceIcon => ({
 const matching = (query: string): IconSourceIcon[] =>
   NAMES.filter(name => name.includes(query.trim().toLowerCase())).map(icon);
 
+/** What the fake set answers for an id: the icon, or `null` for one it does not draw. */
+const resolveFake = async (
+  id: string,
+  aliases: Readonly<Record<string, string>> = {}
+): Promise<IconSourceIcon | null> => {
+  const stored = id.replace(/^fake:/, "");
+  const name = aliases[stored] ?? stored;
+  return id.startsWith("fake:") && NAMES.includes(name) ? icon(name) : null;
+};
+
 /**
  * A fresh fake source per test, with its calls recorded. `aliases` maps a
  * former name to the name the set draws it by now, as a set that renamed an
- * icon resolves it; `search` replaces the substring search.
+ * icon resolves it; `search` replaces the substring search, `resolve` the
+ * lookup by id, and `load` the loader, which is handed the source.
  */
 function fakeSource(
   options: {
     aliases?: Readonly<Record<string, string>>;
     search?: (query: string) => Promise<readonly IconSourceIcon[]>;
+    resolve?: (id: string) => Promise<IconSourceIcon | null>;
+    load?: (source: IconSource) => Promise<IconSource>;
   } = {}
 ): {
   load: () => Promise<IconSource>;
@@ -108,13 +122,13 @@ function fakeSource(
     prefix: "fake",
     label: "Fake set",
     search,
-    resolve: async id => {
-      const stored = id.replace(/^fake:/, "");
-      const name = options.aliases?.[stored] ?? stored;
-      return id.startsWith("fake:") && NAMES.includes(name) ? icon(name) : null;
-    },
+    resolve: options.resolve ?? (id => resolveFake(id, options.aliases)),
   };
-  return { load: async () => source, search };
+  const load = options.load;
+  return {
+    load: load === undefined ? async () => source : () => load(source),
+    search,
+  };
 }
 
 /**
@@ -436,6 +450,80 @@ describe("IconField", () => {
     expect(button.getAttribute("aria-describedby")).toBe(
       warning.closest("p")?.id
     );
+  });
+
+  it("says an icon whose lookup failed could not be loaded, not that it is gone", async () => {
+    // As a set's data does when the chunk holding it fails to download: no
+    // answer at all, which says nothing about whether the set draws the icon.
+    const resolve = vi
+      .fn<(id: string) => Promise<IconSourceIcon | null>>()
+      .mockRejectedValue(new Error("The data could not be fetched."));
+    renderField({ value: "fake:star" }, fakeSource({ resolve }));
+    const button = await screen.findByRole("button", {
+      name: "Badge: Star, could not be loaded",
+    });
+    expect(screen.getByText("Fake set · could not load")).not.toBeNull();
+    expect(screen.queryByText(/no longer available/)).toBeNull();
+    expect(button.getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("looks a failed icon up again when the picker opens", async () => {
+    const resolve = vi
+      .fn<(id: string) => Promise<IconSourceIcon | null>>()
+      .mockRejectedValueOnce(new Error("The data could not be fetched."))
+      .mockImplementation(id => resolveFake(id));
+    renderField({ value: "fake:star" }, fakeSource({ resolve }));
+    await screen.findByRole("button", {
+      name: "Badge: Star, could not be loaded",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Badge/ }));
+    expect(
+      await screen.findByRole("button", { name: "Badge: Star" })
+    ).not.toBeNull();
+    expect(screen.queryByText("Fake set · could not load")).toBeNull();
+  });
+
+  it("loads a set that failed to load again when the picker opens", async () => {
+    let loads = 0;
+    const source = fakeSource({
+      load: async loadedSource => {
+        loads += 1;
+        if (loads === 1) throw new Error("The set could not be fetched.");
+        return loadedSource;
+      },
+    });
+    renderField({ value: "fake:star" }, source);
+    await screen.findByRole("button", {
+      name: "Badge: Star, could not be loaded",
+    });
+    expect(screen.queryByText(/no longer available/)).toBeNull();
+    await openPicker(/^Badge/);
+    expect(
+      await screen.findByRole("button", { name: "Badge: Star" })
+    ).not.toBeNull();
+  });
+
+  it("chooses nothing by click until the query typed is answered", async () => {
+    const held = heldSearch();
+    const { onChange } = renderField({}, fakeSource({ search: held.search }));
+    const box = await openPicker(/^Badge/);
+    fireEvent.change(box, { target: { value: "pack" } });
+    // Heart is drawn, from the browse results, but is not an answer to "pack".
+    fireEvent.click(screen.getByRole("option", { name: "Heart" }));
+    expect(onChange).not.toHaveBeenCalled();
+
+    await held.answer("pack");
+    fireEvent.click(screen.getByRole("option", { name: "Package check" }));
+    expect(onChange).toHaveBeenCalledWith("fake:package-check");
+  });
+
+  it("hands its button to a ref, and still takes focus back after a clear", async () => {
+    const ref = React.createRef<HTMLButtonElement>();
+    renderField({ value: "fake:star", ref });
+    const button = await screen.findByRole("button", { name: "Badge: Star" });
+    expect(ref.current).toBe(button);
+    fireEvent.click(screen.getByRole("button", { name: "Clear icon" }));
+    expect(document.activeElement).toBe(button);
   });
 
   it("opens no picker and offers no clear when read-only", async () => {

@@ -96,21 +96,32 @@ function useIconSource(
   return [state, () => setAttempt(n => n + 1)];
 }
 
+/**
+ * What a stored id draws as. `missing` is the source's answer that it draws no
+ * such icon; `failed` is no answer at all, the set or its data not arriving,
+ * which says nothing about the icon and is tried again.
+ */
 type Resolved =
   | { readonly status: "none" }
   | { readonly status: "loading" }
   | { readonly status: "found"; readonly icon: IconSourceIcon }
-  | { readonly status: "missing" };
+  | { readonly status: "missing" }
+  | { readonly status: "failed" };
 
-/** What a stored id draws as, once the source can say. */
+/**
+ * What a stored id draws as, once the source can say, and a way to ask again
+ * after the asking failed.
+ */
 function useResolvedIcon(
   source: SourceState,
   id: string | null | undefined
-): Resolved {
+): [Resolved, () => void] {
   const [resolved, setResolved] = React.useState<{
     readonly id: string;
+    readonly attempt: number;
     readonly answer: Resolved;
   } | null>(null);
+  const [attempt, setAttempt] = React.useState(0);
   const ready = source.status === "ready" ? source.source : null;
   React.useEffect(() => {
     if (ready === null || !id) return;
@@ -120,24 +131,33 @@ function useResolvedIcon(
         if (!current) return;
         setResolved({
           id,
+          attempt,
           answer:
             icon === null ? { status: "missing" } : { status: "found", icon },
         });
       },
       () => {
-        if (current) setResolved({ id, answer: { status: "missing" } });
+        if (current) setResolved({ id, attempt, answer: { status: "failed" } });
       }
     );
     return () => {
       current = false;
     };
-  }, [ready, id]);
-  if (!id) return { status: "none" };
-  // An answer for an earlier value is not this value's answer.
-  if (resolved?.id === id) return resolved.answer;
-  return source.status === "failed"
-    ? { status: "missing" }
-    : { status: "loading" };
+  }, [ready, id, attempt]);
+  const retry = (): void => setAttempt(n => n + 1);
+  if (!id) return [{ status: "none" }, retry];
+  // An answer for an earlier value is not this value's answer, and a failure
+  // from an earlier attempt is not this attempt's.
+  if (
+    resolved?.id === id &&
+    (resolved.answer.status !== "failed" || resolved.attempt === attempt)
+  ) {
+    return [resolved.answer, retry];
+  }
+  return [
+    source.status === "failed" ? { status: "failed" } : { status: "loading" },
+    retry,
+  ];
 }
 
 /** The set and name an id carries, read without the set: `lucide:star`. */
@@ -490,7 +510,7 @@ export function IconPicker({
    * a former name, and the grid lists it by its current id, so the grid is
    * compared with the id the stored one resolves to.
    */
-  const current = useResolvedIcon(sourceState, value);
+  const [current] = useResolvedIcon(sourceState, value);
   const currentId = current.status === "found" ? current.icon.id : value;
   const {
     results,
@@ -535,6 +555,14 @@ export function IconPicker({
       align: start.centred ? "center" : "start",
     });
   }, [start, virtualizer]);
+
+  /*
+   * A click chooses only from answered results, as Enter does: while the query
+   * typed is unanswered the icons drawn are an earlier query's, dimmed.
+   */
+  const chooseAnswered = (icon: IconSourceIcon): void => {
+    if (!pending) onChoose(icon);
+  };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (pending) {
@@ -631,7 +659,7 @@ export function IconPicker({
                       isActive={index === active}
                       isCurrent={icon.id === currentId}
                       onHighlight={setActive}
-                      onChoose={onChoose}
+                      onChoose={chooseAnswered}
                     />
                   );
                 })}
@@ -685,6 +713,14 @@ function valueTextFor(
       spoken: `${label}: ${parts.name}, not found`,
     };
   }
+  if (resolved.status === "failed") {
+    const name = iconDisplayName(parts.name);
+    return {
+      name,
+      set: setName === "" ? "Could not load" : `${setName} · could not load`,
+      spoken: `${label}: ${name}, could not be loaded`,
+    };
+  }
   const name = iconDisplayName(
     resolved.status === "found" ? resolved.icon.name : parts.name
   );
@@ -708,6 +744,11 @@ function IconSwatch({ resolved }: { resolved: Resolved }): React.JSX.Element {
         <IconGlyph icon={resolved.icon} className="size-[18px]" />
       ) : resolved.status === "missing" ? (
         <CircleHelp
+          className="size-[18px] text-muted-foreground"
+          aria-hidden="true"
+        />
+      ) : resolved.status === "failed" ? (
+        <TriangleAlert
           className="size-[18px] text-muted-foreground"
           aria-hidden="true"
         />
@@ -802,6 +843,29 @@ function IconFieldButton({
   );
 }
 
+/** The bordered row the field's two buttons sit in. */
+function IconFieldFrame({
+  invalid,
+  disabled,
+  children,
+}: {
+  invalid: boolean;
+  disabled: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div
+      className={cn(
+        "flex w-full items-center rounded-md border border-input bg-background",
+        invalid && "border-destructive",
+        disabled && "opacity-50"
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 /** A button that clears the field. */
 function ClearIconButton({
   onClear,
@@ -822,7 +886,8 @@ function ClearIconButton({
 
 /**
  * What a field's value draws as and is called, loading the set when there is
- * an icon to draw or a picker to fill.
+ * an icon to draw or a picker to fill. Opening the picker asks again for
+ * whichever failed to arrive, the set or the value's icon.
  */
 function useIconFieldValue(
   loadIcons: () => Promise<IconSource>,
@@ -830,10 +895,46 @@ function useIconFieldValue(
   label: string,
   open: boolean
 ): { resolved: Resolved; text: ValueText } {
-  const [sourceState] = useIconSource(loadIcons, Boolean(value) || open);
-  const resolved = useResolvedIcon(sourceState, value);
+  const [sourceState, retryLoad] = useIconSource(
+    loadIcons,
+    Boolean(value) || open
+  );
+  const [resolved, retryResolve] = useResolvedIcon(sourceState, value);
   const source = sourceState.status === "ready" ? sourceState.source : null;
+  // A new source resolves the value afresh by itself, so a failed load is
+  // retried and a failed resolve only once the set is in hand. Read when the
+  // picker opens rather than watched: a failure is no reason to retry at once.
+  const retryFailed = React.useEffectEvent((): void => {
+    if (sourceState.status === "failed") retryLoad();
+    else if (resolved.status === "failed") retryResolve();
+  });
+  React.useEffect(() => {
+    if (open) retryFailed();
+  }, [open]);
   return { resolved, text: valueTextFor(value, resolved, source, label) };
+}
+
+/**
+ * A button the field keeps a handle on and hands to the caller's ref too: the
+ * field takes focus back to it after a clear, and a form focuses it from
+ * outside. One callback ref gives the node to both.
+ */
+function useSharedButtonRef(
+  ref: React.Ref<HTMLButtonElement> | undefined
+): [
+  React.RefObject<HTMLButtonElement | null>,
+  (node: HTMLButtonElement | null) => void,
+] {
+  const own = React.useRef<HTMLButtonElement | null>(null);
+  const share = React.useCallback(
+    (node: HTMLButtonElement | null): void => {
+      own.current = node;
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref]
+  );
+  return [own, share];
 }
 
 /** Joins the ids describing an element, or `undefined` when there are none. */
@@ -872,6 +973,11 @@ export interface IconFieldProps {
   "aria-describedby"?: string;
   /** The picker closed, or the value was cleared: the field was left. */
   onBlur?: () => void;
+  /**
+   * The button that opens the picker, for a form that focuses a field it
+   * rejected or is asked to focus.
+   */
+  ref?: React.Ref<HTMLButtonElement>;
   className?: string;
 }
 
@@ -896,10 +1002,11 @@ export function IconField({
   invalid = false,
   "aria-describedby": describedBy,
   onBlur,
+  ref,
   className,
 }: IconFieldProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
-  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const [triggerRef, setTrigger] = useSharedButtonRef(ref);
   const warningId = React.useId();
   const { resolved, text } = useIconFieldValue(loadIcons, value, label, open);
   const missing = resolved.status === "missing";
@@ -913,17 +1020,11 @@ export function IconField({
 
   return (
     <div className={cn("w-full", className)}>
-      <div
-        className={cn(
-          "flex w-full items-center rounded-md border border-input bg-background",
-          invalid && "border-destructive",
-          disabled && "opacity-50"
-        )}
-      >
+      <IconFieldFrame invalid={invalid} disabled={disabled}>
         <Popover open={open} onOpenChange={setOpenAndReport}>
           <PopoverTrigger asChild>
             <IconFieldButton
-              ref={triggerRef}
+              ref={setTrigger}
               id={id}
               aria-describedby={describedByIds(
                 describedBy,
@@ -963,7 +1064,7 @@ export function IconField({
             }}
           />
         ) : null}
-      </div>
+      </IconFieldFrame>
       {missing ? <MissingIconWarning id={warningId} /> : null}
     </div>
   );
