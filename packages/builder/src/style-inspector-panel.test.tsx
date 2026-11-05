@@ -39,6 +39,7 @@ import { NoticeSinkProvider } from "./builder-notices";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
+  describedWithUnit,
   describeProvenance,
   StyleInspectorPanel,
 } from "./style-inspector-panel";
@@ -262,6 +263,8 @@ describe("the shared style target", () => {
       supports?: Record<string, boolean>;
       /** Where a refusal that outlives its field is raised. */
       raise?: (message: string) => void;
+      /** The site's breakpoints, which Detach weighs. */
+      breakpoints?: BreakpointSet;
     } = {}
   ) {
     register(options.supports ?? { effects: true });
@@ -289,6 +292,9 @@ describe("the shared style target", () => {
     const panelFor = (current: EditorState) => (
       <InspectorPanel
         editor={current}
+        {...(options.breakpoints === undefined
+          ? {}
+          : { breakpoints: options.breakpoints })}
         classLibrary={options.library ?? [hero, card, promo]}
         sharedStyles={{
           mayChange: options.mayChange ?? true,
@@ -679,6 +685,47 @@ describe("the shared style target", () => {
     expect(raise).toHaveBeenCalledWith(
       "Card could not be detached from this block: the page could not take the change."
     );
+  });
+
+  it("holds Detach, saying why, when the look can't be kept on the block exactly", () => {
+    // Card's small-container value shows only where Promo's tablet value
+    // does not: a combined query the block's own rules can't say.
+    const early = {
+      ...card,
+      orderIndex: 0,
+      styles: { base: { "cq-sm": { color: "#aaaa00" } } } as NodeStyles,
+    };
+    const late = {
+      ...promo,
+      label: "Promo",
+      styles: { base: { md: { color: "#0000aa" } } } as NodeStyles,
+    };
+    const { editor } = mountTarget({
+      classes: ["c-card", "c-promo"],
+      library: [early, late],
+      breakpoints: {
+        viewport: [
+          { id: BASE_BREAKPOINT, label: "Desktop" },
+          { id: "md", label: "Tablet", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      } as BreakpointSet,
+    });
+    fireEvent.pointerDown(
+      within(bar()).getByRole("button", {
+        name: "Actions for shared style Card",
+      }),
+      { button: 0, ctrlKey: false }
+    );
+    const item = screen.getByRole("menuitem", {
+      name: /^Detach: keep the look/,
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "This look depends on screen and container width together, so it can't be detached yet."
+    );
+    fireEvent.click(item);
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
   it("raises a refusal through the shell once the author has switched target", async () => {
@@ -2171,6 +2218,268 @@ describe("the numeric affordances a simple measurement earns", () => {
   });
 });
 
+describe("dragging a number field's label", () => {
+  const withPadding = (value: string): NodeStyles =>
+    ({
+      base: { [BASE_BREAKPOINT]: { padding: { blockStart: value } } },
+    }) as NodeStyles;
+
+  /** A pointer event carrying the fields the gesture and React read. */
+  function pointer(
+    type: string,
+    init: {
+      clientX?: number;
+      pointerType?: string;
+      shiftKey?: boolean;
+      altKey?: boolean;
+    } = {}
+  ): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      pointerId: 1,
+      button: 0,
+      clientX: init.clientX ?? 0,
+      clientY: 0,
+      pointerType: init.pointerType ?? "mouse",
+      shiftKey: init.shiftKey ?? false,
+      altKey: init.altKey ?? false,
+    });
+    return event;
+  }
+
+  /** The label naming one of padding's sides, and its field. */
+  function side(name: string): { label: HTMLElement; field: HTMLInputElement } {
+    const field = fieldsOf("padding").getByLabelText(name) as HTMLInputElement;
+    const label = document.querySelector(`label[for="${field.id}"]`);
+    if (!(label instanceof HTMLElement))
+      throw new Error(`no label for ${name}`);
+    return { label, field };
+  }
+
+  /** Press on the label, move through `xs`, and optionally release. */
+  function drag(
+    label: HTMLElement,
+    xs: readonly number[],
+    modifiers: { shiftKey?: boolean; altKey?: boolean } = {},
+    release = true
+  ): void {
+    act(() => {
+      label.dispatchEvent(pointer("pointerdown", { clientX: 100 }));
+    });
+    for (const x of xs) {
+      act(() => {
+        document.dispatchEvent(
+          pointer("pointermove", { clientX: 100 + x, ...modifiers })
+        );
+      });
+    }
+    if (!release) return;
+    act(() => {
+      document.dispatchEvent(
+        pointer("pointerup", { clientX: 100 + (xs.at(-1) ?? 0) })
+      );
+    });
+  }
+
+  const written = (editor: ReturnType<typeof mount>) =>
+    editor.applyAll.mock.calls.map(
+      call => JSON.stringify(call[0]).match(/"blockStart":("[^"]*")/)?.[1]
+    );
+
+  it("marks the label as draggable on a field holding one measurement", () => {
+    mount({ spacing: true }, withPadding("12px"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(true);
+  });
+
+  it("does not mark a label whose value is not one measurement", () => {
+    mount({ spacing: true }, withPadding("clamp(1rem, 2vw, 3rem)"));
+    expect(side("Block start").label.hasAttribute("data-scrub")).toBe(false);
+  });
+
+  it("shows the value live while dragging and writes it ONCE, on release", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [6, 10, 20], {}, false);
+    // Live in the field, and nothing in the document yet.
+    expect(field.value).toBe("32");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
+  it("treats a press that stays inside the dead zone as a click, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [2, 3]);
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(field.value).toBe("12");
+  });
+
+  it("steps by ten with Shift and by a tenth with Alt", () => {
+    const shifted = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { shiftKey: true });
+    expect(written(shifted)).toEqual(['"62px"']);
+
+    cleanup();
+    clearBlocks();
+    const fine = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [5], { altKey: true });
+    expect(written(fine)).toEqual(['"12.5px"']);
+  });
+
+  it("keeps the field's unit, and rests at what the property takes", () => {
+    const editor = mount({ spacing: true }, withPadding("2rem"));
+    // Padding takes no negative length: dragged far left it rests at zero.
+    drag(side("Block start").label, [-40]);
+    expect(written(editor)).toEqual(['"0rem"']);
+  });
+
+  it("restores the value on Escape and writes nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true })
+      );
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("writes the value at the release, where the last move fell short of it", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    drag(side("Block start").label, [10], {}, false);
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 125 }));
+    });
+    expect(written(editor)).toEqual(['"37px"']);
+  });
+
+  it("puts the value back when the pointer is cancelled mid-drag, writing nothing", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+
+    drag(label, [30], {}, false);
+    expect(field.value).toBe("42");
+    act(() => {
+      document.dispatchEvent(pointer("pointercancel", { clientX: 130 }));
+    });
+
+    expect(field.value).toBe("12");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing from the focused field while the drag owns its value", () => {
+    // Focus stays in the field through the press, so its blur can come
+    // mid-drag: it must not write the preview, leaving the release to write
+    // once.
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label, field } = side("Block start");
+    field.focus();
+
+    drag(label, [20], {}, false);
+    act(() => {
+      field.blur();
+    });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    act(() => {
+      document.dispatchEvent(pointer("pointerup", { clientX: 120 }));
+    });
+    expect(written(editor)).toEqual(['"32px"']);
+  });
+
+  it("ends a drag unwritten when another block is selected under it", () => {
+    // The drag's value came from the old block, so neither block is
+    // written and the field shows the new one's, whether the row is drawn
+    // afresh for it (sections are keyed by block) or reused.
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("12px"),
+        },
+        {
+          id: "b",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: withPadding("40px"),
+        },
+      ],
+    } as unknown as BlockDocument;
+    const first = editorFor(document, "a");
+    const { rerender } = render(<StyleInspectorPanel editor={first} />);
+    drag(side("Block start").label, [10], {}, false);
+    expect(side("Block start").field.value).toBe("22");
+
+    const second = editorFor(document, "b");
+    rerender(<StyleInspectorPanel editor={second} />);
+    act(() => {
+      window.document.dispatchEvent(pointer("pointerup", { clientX: 110 }));
+    });
+
+    expect(first.applyAll).not.toHaveBeenCalled();
+    expect(second.applyAll).not.toHaveBeenCalled();
+    expect(side("Block start").field.value).toBe("40");
+  });
+
+  it("does not scrub on touch, so a tap still reaches the field", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    const { label } = side("Block start");
+
+    const press = pointer("pointerdown", {
+      clientX: 100,
+      pointerType: "touch",
+    });
+    act(() => {
+      label.dispatchEvent(press);
+    });
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", { clientX: 140 }));
+      document.dispatchEvent(pointer("pointerup", { clientX: 140 }));
+    });
+
+    // Not prevented, so the browser's tap and scroll go on as they would.
+    expect(press.defaultPrevented).toBe(false);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("starts an empty field from zero in the field's unit", () => {
+    const editor = mount({ spacing: true });
+    drag(side("Block start").label, [8]);
+    expect(written(editor)).toEqual(['"8px"']);
+  });
+
+  it("steps by a tenth with Alt on the arrow keys too", () => {
+    const editor = mount({ spacing: true }, withPadding("12px"));
+    fireEvent.keyDown(side("Block start").field, {
+      key: "ArrowUp",
+      altKey: true,
+    });
+    expect(written(editor)).toEqual(['"12.1px"']);
+  });
+});
+
 describe("what the arrow keys do and do not claim", () => {
   const withPadding = (value: string): NodeStyles =>
     ({
@@ -2212,12 +2521,13 @@ describe("what the arrow keys do and do not claim", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it.each(["altKey", "ctrlKey", "metaKey"])(
+  it.each(["ctrlKey", "metaKey"])(
     "leaves %s+Arrow to the platform",
     modifier => {
       // These chords are OS, browser and assistive-navigation shortcuts.
       // Claiming one mutates a style and adds an undo entry from a keystroke
-      // the author aimed somewhere else entirely.
+      // the author aimed somewhere else entirely. Alt is a field's fine step,
+      // as on a label drag: see "dragging a number field's label".
       const editor = mount({ spacing: true }, withPadding("12px"));
       const field = fieldsOf("padding").getByLabelText("Block start");
 
@@ -2781,6 +3091,258 @@ describe("where a control's value came from", () => {
     document.querySelector(
       `[data-property="${property}"] .nx-style-inspector__provenance-source`
     )?.textContent;
+
+  it("lays out a shared target's controls by its own display, not the block's", () => {
+    // Card stores `display: flex`; this block overrides it to `block`. While
+    // Card is the target, its flex controls are the ones being edited, so
+    // they show, though the block on the canvas is not a flex container.
+    register({ layout: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { [BASE_BREAKPOINT]: { display: "block" } } },
+        },
+      ],
+    } as never);
+    const cardStyles = {
+      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+    } as NodeStyles;
+    const target = {
+      kind: "shared" as const,
+      worn: [],
+      style: { id: "cls-1", name: "Card", styles: cardStyles } as never,
+      readOnly: undefined,
+      write: async () => undefined,
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "display", value: "flex" }),
+              entry({ property: "display", value: "block" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.queryByRole("radiogroup", { name: "Justify" })
+    ).not.toBeNull();
+  });
+
+  it("says a block's tablet value overrides its style's wider value", () => {
+    // Card sets opacity for every width; this block sets its own at tablet.
+    // At tablet the block's value covers Card's, so the line names Card,
+    // though Card stores nothing at the tablet address itself.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: { base: { tablet: { opacity: 0.2 } } },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      document.querySelector('[data-shared-line="override"]')?.textContent
+    ).toContain("overrides\u00a0Card");
+  });
+
+  it("keeps the canvas's viewport tier when weighing Reset at a container tier", () => {
+    // Editing the small-container tier while the canvas is at tablet width:
+    // Reset there shows the block's own tablet value, not Card's, so the
+    // line names no style.
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: { tablet: { opacity: 0.3 }, "cq-sm": { opacity: 0.2 } },
+          },
+        },
+      ],
+    } as never);
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+          } as never
+        }
+        breakpoint={"cq-sm" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({ property: "opacity", value: "0.5" }),
+              entry({
+                property: "opacity",
+                value: "0.3",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.2", breakpoint: "cq-sm" }),
+            ],
+          } as never
+        }
+      />
+    );
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
+
+  it("names no style when the block's own wider value is what Reset would show", () => {
+    register({ effects: true });
+    const editor = editorFor({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          classes: ["cls-1"],
+          styles: {
+            base: {
+              [BASE_BREAKPOINT]: { opacity: 0.4 },
+              tablet: { opacity: 0.2 },
+            },
+          },
+        },
+      ],
+    } as never);
+    // Card stores a tablet value too, which the exact address would find:
+    // the block's own base value sits between them in the cascade.
+    const target = {
+      kind: "block" as const,
+      worn: [
+        {
+          id: "cls-1",
+          name: "Card",
+          styles: { base: { tablet: { opacity: 0.5 } } },
+        } as never,
+      ],
+    };
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        target={target}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [],
+          } as never
+        }
+        breakpoint={"tablet" as never}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [
+              fromCard({
+                property: "opacity",
+                value: "0.5",
+                breakpoint: "tablet",
+              }),
+              entry({ property: "opacity", value: "0.4" }),
+              entry({
+                property: "opacity",
+                value: "0.2",
+                breakpoint: "tablet",
+              }),
+            ],
+          } as never
+        }
+      />
+    );
+    // Reset would show the block's own base value, so naming Card, with a
+    // Reset "showing Card's value", would say something untrue.
+    // The control is drawn, so the absence below is the line's own.
+    expect(
+      screen.getByRole("slider", { name: "Opacity slider" })
+    ).toBeDefined();
+    expect(document.querySelector('[data-shared-line="override"]')).toBeNull();
+  });
 
   it("shows an inherited value in its field, and where it came from beside the label", () => {
     // The value an author sees on the canvas, where a generic hint said
@@ -4785,6 +5347,21 @@ describe("opacity in percent", () => {
     expect(submitted).not.toHaveBeenCalled();
   });
 
+  it("says in its label's tooltip that it is in percent", () => {
+    // The catalog's summary reads "0 to 1", which the field no longer takes.
+    mount({ effects: true });
+    const title = screen.getByText("Opacity").closest("label")?.title ?? "";
+    expect(title).toMatch(/percent/);
+    expect(title).not.toMatch(/0 to 1/);
+  });
+
+  it("names its unit for a screen reader, which hears no % sign", () => {
+    mount({ effects: true });
+    expect(
+      screen.getByRole("textbox", { name: "Opacity", description: "percent" })
+    ).toBeDefined();
+  });
+
   it("passes a CSS-wide keyword through, unscaled", () => {
     const editor = mount({ effects: true });
     const field = screen.getByRole("textbox", { name: "Opacity" });
@@ -4830,6 +5407,96 @@ describe("an image's fit", () => {
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
     expect(screen.getByText("Fit").closest("label")?.title).toMatch(
       /^Object fit/
+    );
+  });
+});
+
+describe("opacity's unit in words", () => {
+  /** The ids describing the opacity field. */
+  const described = () =>
+    (
+      screen
+        .getByRole("textbox", { name: /^Opacity/ })
+        .getAttribute("aria-describedby") ?? ""
+    )
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("says percent while the value is a number", () => {
+    mount({ effects: true }, { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } });
+    expect(described()).toContain("percent");
+  });
+
+  it("decides from what the field shows, an inherited keyword included", () => {
+    // Unset here, the field shows what reaches it as its hint; a keyword
+    // there has no unit either, and a number there does.
+    expect(describedWithUnit(undefined, "unit", "", "inherit")).toBeUndefined();
+    expect(describedWithUnit("err", "unit", "", "50")).toBe("err unit");
+    expect(describedWithUnit(undefined, "unit", "", undefined)).toBe("unit");
+    expect(describedWithUnit(undefined, "unit", "40", "inherit")).toBe("unit");
+  });
+
+  it("says no unit for a keyword, which has none", () => {
+    mount(
+      { effects: true },
+      { base: { [BASE_BREAKPOINT]: { opacity: "inherit" } } }
+    );
+    expect(described()).not.toContain("percent");
+  });
+});
+
+describe("text decoration", () => {
+  it("is drawn as icons where the stored value is one it can read", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(
+      row.getByRole("radio", { name: "Underline" }).getAttribute("aria-checked")
+    ).toBe("true");
+    expect(row.getByRole("button", { name: /style$/ })).toBeDefined();
+  });
+
+  it("keeps the text field for a value the icons cannot draw", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const row = fieldsOf("textDecoration");
+    expect(row.queryByRole("radio")).toBeNull();
+    expect(row.getByRole("textbox")).toBeDefined();
+  });
+
+  it("focuses the icons from the label without choosing or clearing a line", () => {
+    // A label's `for` would CLICK the tab stop's radio, clearing the line
+    // chosen or writing the first.
+    const editor = mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline dotted" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe("");
+    fireEvent.click(label);
+    expect(document.activeElement?.getAttribute("role")).toBe("radio");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Underline"
+    );
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("keeps the label's `for` on the text field the icons give way to", () => {
+    mount(
+      { typography: true },
+      { base: { [BASE_BREAKPOINT]: { textDecoration: "underline overline" } } }
+    );
+    const label = document.querySelector(
+      '[data-property="textDecoration"] label'
+    ) as HTMLLabelElement;
+    expect(label.htmlFor).toBe(
+      fieldsOf("textDecoration").getByRole("textbox").id
     );
   });
 });

@@ -18,6 +18,7 @@ import {
   bindingKindOf,
   DEFAULT_LIMITS,
   deriveSeoFromDocument,
+  hashId,
   isFetchableUrl,
   DOCUMENT_FORMAT_VERSION,
   regionDocument,
@@ -186,7 +187,11 @@ export interface SiteStylesProvider {
     | undefined
     | Promise<SiteStylesInput | undefined>;
   /**
-   * The single slugs `read` consults, so a write to one busts this page.
+   * The single slugs `read` consults, so a write to one busts this page. On a
+   * public route the read is cached, tagged with these, and named by the route
+   * and by this provider: these slugs and the source text of `read`. Two
+   * providers one function makes over different inputs, on routes over the
+   * same content, need their own `cacheScope`.
    *
    * Nextly's write path revalidates `nextly:single:<slug>`; naming the slug
    * here is what puts that tag on the route, exactly as `mediaCollection` does
@@ -502,10 +507,17 @@ function readerFor(config: BlocksPageConfig): NextlyContentReader {
  * The public reader a page's lists read through, for one render.
  *
  * Each read is cached like the page around it, keyed by the route's cache
- * scope and the whole read, and tagged with its collection so a write there
- * refreshes the page. The read is the same for every visitor (anonymous,
- * published), so one entry serves them all. A change to an access rule is
- * not a write and refreshes nothing until the entry revalidates.
+ * scope, the page's language and the whole read, and tagged with its
+ * collection or Single so a write there refreshes the page. The read is the
+ * same for every visitor (anonymous, published), so one entry serves them all.
+ * A change to an access rule is not a write and refreshes nothing until the
+ * entry revalidates.
+ *
+ * The cache holds the public reader's whole answer, not the instance's row:
+ * the reader then judges which fields the public may see inside the cached
+ * read. Under Cache Components a page is prerendered, and a prerender refuses
+ * a read outside the cache that takes the current time, as that judgement
+ * does when it checks the access rules are current.
  */
 function publicReaderFor(
   config: BlocksPageConfig,
@@ -514,28 +526,61 @@ function publicReaderFor(
 ): BlocksPublicReader {
   const nextly = readerFor(config);
   const singles = singleReaderOf(nextly);
-  return createPublicReader(
+  const reader = createPublicReader(
     {
-      find: async args =>
-        await cachedFind(async () => await nextly.find(args), {
-          tags: nextlyTags(args.collection),
-          keyParts: [
-            "nextly-public-list",
-            config.cacheScope ?? "",
-            JSON.stringify(args),
-          ],
-          // The route's own window bounds it too, so a list read never
-          // outlives the page around it.
-          revalidate: await releaseBoundedRevalidate(window),
-        }),
-      // The instance's own Single read, which the reader holds to the
-      // public's rules; it is cached where a page reads it (`readSingle`).
+      find: async args => await nextly.find(args),
       ...(singles === undefined
         ? {}
         : { findSingle: singles.findSingle.bind(singles) }),
     },
     locale === undefined ? {} : { locale }
   );
+  const cached = async <T>(
+    kind: string,
+    tags: string[],
+    query: object,
+    read: () => Promise<T>
+  ): Promise<T> =>
+    await cachedFind(read, {
+      tags,
+      keyParts: [
+        kind,
+        config.cacheScope ?? "",
+        locale ?? "",
+        JSON.stringify(query),
+      ],
+      // The route's own window bounds it too, so a read never outlives the
+      // page around it.
+      revalidate: await releaseBoundedRevalidate(window),
+    });
+  const findSingle = reader.findSingle.bind(reader);
+  return {
+    find: async query =>
+      await cached(
+        "nextly-public-list",
+        nextlyTags(query.collection),
+        query,
+        async () => await reader.find(query)
+      ),
+    count: async query =>
+      await cached(
+        "nextly-public-count",
+        nextlyTags(query.collection),
+        query,
+        async () => await reader.count(query)
+      ),
+    ...(singles === undefined
+      ? {}
+      : {
+          findSingle: async query =>
+            await cached(
+              "nextly-public-single",
+              nextlySingleTags(query.slug),
+              query,
+              async () => await findSingle(query)
+            ),
+        }),
+  };
 }
 
 /** The instance's Single read, when the reader the route holds has one. */
@@ -1754,12 +1799,13 @@ interface SourceReads {
   readonly reader: BlocksPublicReader;
   readonly budget: QueryBudget;
   readonly shapes: BlocksFieldShapes;
-  /** How a read is cached: the route's scope, language and window. */
-  readonly cache: {
-    readonly scope: string;
-    readonly locale: string | undefined;
-    readonly window: number | false | undefined;
-  };
+}
+
+/** How a read is cached: the route's scope, the page's language and window. */
+interface ReadCache {
+  readonly scope: string;
+  readonly locale: string | undefined;
+  readonly window: number | false | undefined;
 }
 
 /** A record as the public reads it; `null` for none, `undefined` for unread. */
@@ -1800,22 +1846,9 @@ async function readSingle(
     return undefined;
   }
   try {
-    // Cached like the page around it and tagged with the Single, so a write
+    // The route's public reader caches it, tagged with the Single, so a write
     // to it refreshes the pages that bind it.
-    return await cachedFind(
-      async () => await findSingle({ slug, select: fields }),
-      {
-        tags: nextlySingleTags(slug),
-        keyParts: [
-          "nextly-public-single",
-          reads.cache.scope,
-          reads.cache.locale ?? "",
-          slug,
-          JSON.stringify(fields),
-        ],
-        revalidate: await releaseBoundedRevalidate(reads.cache.window),
-      }
-    );
+    return await findSingle({ slug, select: fields });
   } catch {
     return undefined;
   }
@@ -1954,17 +1987,52 @@ function refKey(ref: BlocksFieldShapeRef): string {
 }
 
 /**
+ * One source's field shapes, as `bindingFieldShapes` answers them in the
+ * page's language, cached like the page and tagged with the source.
+ *
+ * Cached because the answer judges which fields the public may read, and that
+ * judgement takes the current time to check the access rules are current: a
+ * prerender under Cache Components refuses that outside the cache. `null`
+ * stands for "no shapes" inside the cache, which keeps values as JSON.
+ */
+async function cachedFieldShapes(
+  ref: BlocksFieldShapeRef,
+  cache: ReadCache
+): Promise<readonly BindingFieldShape[] | undefined> {
+  const shapes = await cachedFind(
+    async () =>
+      (await bindingFieldShapes(
+        ref,
+        cache.locale === undefined ? {} : { locale: cache.locale }
+      )) ?? null,
+    {
+      tags:
+        "collection" in ref
+          ? nextlyTags(ref.collection)
+          : nextlySingleTags(ref.single),
+      keyParts: [
+        "nextly-binding-field-shapes",
+        cache.scope,
+        cache.locale ?? "",
+        refKey(ref),
+      ],
+      revalidate: await releaseBoundedRevalidate(cache.window),
+    }
+  );
+  return shapes ?? undefined;
+}
+
+/**
  * The field shapes every binding on the page is checked against: the entry's,
  * each Single's, each collection a path follows into, and each list's items'.
- * Read through `bindingFieldShapes` in the page's language, as the visitor
- * sees them; a source it cannot answer for has none, and its bindings are
- * judged by their values.
+ * Read in the page's language, as the visitor sees them; a source it cannot
+ * answer for has none, and its bindings are judged by their values.
  */
 async function readFieldShapes(
   entryRef: BlocksFieldShapeRef,
   demand: BindingDemand,
   documents: readonly BlockDocument[],
-  locale: string | undefined
+  cache: ReadCache
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
   const fetch = async (ref: BlocksFieldShapeRef) => {
@@ -1972,10 +2040,7 @@ async function readFieldShapes(
     if (known.has(key)) return known.get(key);
     let shapes: readonly BindingFieldShape[] | undefined;
     try {
-      shapes = await bindingFieldShapes(
-        ref,
-        locale === undefined ? {} : { locale }
-      );
+      shapes = await cachedFieldShapes(ref, cache);
     } catch {
       shapes = undefined;
     }
@@ -2052,21 +2117,15 @@ async function readPageBindings(args: {
     args.entrySource === "single"
       ? { single: context.collection }
       : { collection: context.collection };
-  const shapes = await readFieldShapes(
-    entryRef,
-    demand,
-    args.documents,
-    context.locale
-  );
+  const shapes = await readFieldShapes(entryRef, demand, args.documents, {
+    scope: config.cacheScope ?? "",
+    locale: context.locale,
+    window: args.window,
+  });
   const reads: SourceReads = {
     reader: args.reader,
     budget: args.budget,
     shapes,
-    cache: {
-      scope: config.cacheScope ?? "",
-      locale: context.locale,
-      window: args.window,
-    },
   };
   const entry =
     demand.entry === undefined
@@ -2269,6 +2328,55 @@ function bindingIssueLog(context: RenderContext): BindingIssuesHandler {
   };
 }
 
+/**
+ * The site style inputs the config states, for one render.
+ *
+ * Resolved per render when the config states a provider, so style inputs
+ * living in storage reach the next page view rather than the next deploy; a
+ * plain value passes through unchanged. A public route caches the provider's
+ * read, tagged with the Singles it names, as it caches its other reads: the
+ * page is prerendered, and under Cache Components a prerender refuses a read
+ * outside the cache that takes the current time, as a Single's read does.
+ */
+async function configuredSiteStylesFor(
+  config: BlocksPageConfig,
+  isPublic: boolean,
+  window: number | false | undefined
+): Promise<SiteStylesInput | undefined> {
+  const provider = config.siteStyles;
+  if (!isSiteStylesProvider(provider)) return provider;
+  if (!isPublic) return await provider.read();
+  // `null` stands for "none" inside the cache, which keeps values as JSON.
+  const read = await cachedFind(async () => (await provider.read()) ?? null, {
+    tags: provider.singles.flatMap(slug => nextlySingleTags(slug)),
+    keyParts: siteStylesKey(config, provider),
+    revalidate: await releaseBoundedRevalidate(window),
+  });
+  return read ?? undefined;
+}
+
+/**
+ * What names a public route's cached site style read: the route, by its scope
+ * and the content it serves, and the provider, by the Singles it declares and
+ * the source text of its `read`. Every part is the same on every server
+ * instance of one build, which a function's identity is not, and two
+ * providers that read differently differ in at least one part, unless one
+ * function made both over different inputs; such routes over the same
+ * content set their own `cacheScope`.
+ */
+function siteStylesKey(
+  config: BlocksPageConfig,
+  provider: SiteStylesProvider
+): string[] {
+  return [
+    "nextly-public-site-styles",
+    config.cacheScope ?? "",
+    JSON.stringify([config.collections, config.field]),
+    JSON.stringify([...provider.singles].sort()),
+    hashId(String(provider.read)),
+  ];
+}
+
 function blocksRouteConfig(
   config: BlocksPageConfig,
   isPublic: boolean,
@@ -2430,12 +2538,11 @@ function blocksRouteConfig(
         resolveEntryPath,
       });
 
-      // Resolved per render when the config states a provider, so style
-      // inputs living in storage reach the next page view rather than the
-      // next deploy; a plain value passes through unchanged.
-      const configuredSiteStyles = isSiteStylesProvider(config.siteStyles)
-        ? await config.siteStyles.read()
-        : config.siteStyles;
+      const configuredSiteStyles = await configuredSiteStylesFor(
+        config,
+        isPublic,
+        listWindow
+      );
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is

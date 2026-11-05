@@ -20,7 +20,10 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
+import { publishedSummary } from "@admin/components/features/entries/publishAllOutcomes";
 import { toast } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
+import type { PublishAllLanguageOutcome } from "@admin/services/publishAllPreview";
 import { singleApi } from "@admin/services/singleApi";
 
 import {
@@ -42,22 +45,27 @@ export function usePublishAllSingleLocales({
   {
     id: string;
     status?: string;
+    languages?: PublishAllLanguageOutcome[];
   },
   Error,
   void,
   unknown
 > {
   const queryClient = useQueryClient();
+  const { locales } = useLocalization();
+  const labelOf = (code: string) =>
+    locales.find(locale => locale.code === code)?.label ?? code;
 
   return useMutation({
     mutationFn: () => singleApi.publishAllLocales(slug),
-    onSuccess: () => {
+    onSuccess: data => {
       // Every locale-keyed variant of this document changed status, so the
       // whole detail key goes rather than one language's entry.
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.detail(slug),
       });
-      if (!silent) toast.success("All languages published.");
+      // Each language's outcome, as the publish reports it.
+      if (!silent) toast.success(publishedSummary(data.languages, labelOf));
     },
     onError: error => {
       // A Single removed from code refuses in a sentence that says what to do

@@ -7,7 +7,7 @@
  * The request goes through the real hook and API client to a stubbed
  * `fetch`, so what is asserted is what the server would receive.
  *
- * @module components/features/releases/__tests__/SchedulePublishDialog.test
+ * @module components/features/releases/__tests__/ScheduleDocumentDialog.test
  */
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 import { SCHEDULE_OUTCOME_ATTRIBUTE } from "../dialog-opener";
 import { instantFor, readerZone, wallTimeIn } from "../release-timezone";
 import { defaultScheduleWall } from "../schedule-publish";
-import { SchedulePublishDialog } from "../SchedulePublishDialog";
+import { ScheduleDocumentDialog } from "../ScheduleDocumentDialog";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const DOCUMENT = {
@@ -78,7 +78,7 @@ function open(
 ) {
   const onOpenChange = over.onOpenChange ?? vi.fn();
   render(
-    <SchedulePublishDialog
+    <ScheduleDocumentDialog
       open
       onOpenChange={onOpenChange}
       document={DOCUMENT}
@@ -92,8 +92,11 @@ function open(
 
 const dateField = () =>
   screen.getByLabelText("Date and time") as HTMLInputElement;
+/** The confirm button on its own, which names the moment it schedules for. */
 const submit = () =>
-  screen.getByRole("button", { name: "Schedule publish" }) as HTMLButtonElement;
+  screen.getByRole("button", {
+    name: /^Schedule( for .+)?$/,
+  }) as HTMLButtonElement;
 const setWall = (value: string) =>
   fireEvent.change(dateField(), { target: { value } });
 
@@ -136,7 +139,7 @@ describe("what the dialog opens on", () => {
   it("names the release after the document", () => {
     open();
     expect(
-      screen.getByText("Spring launch", { selector: "span" })
+      screen.getByRole("heading", { name: "Schedule “Spring launch”" })
     ).toBeTruthy();
   });
 
@@ -209,7 +212,7 @@ describe("the request", () => {
     await userEvent.click(submit());
 
     expect((await screen.findByRole("alert")).textContent).toMatch(
-      /may have been scheduled\. Check the Publishing section/
+      /may have been scheduled\. Check the releases listed on this document/
     );
   });
 
@@ -326,7 +329,7 @@ describe("focus on close", () => {
     document.body.append(opener);
     const onOpenChange = vi.fn();
     const { rerender } = render(
-      <SchedulePublishDialog
+      <ScheduleDocumentDialog
         open
         onOpenChange={onOpenChange}
         document={DOCUMENT}
@@ -338,7 +341,7 @@ describe("focus on close", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     rerender(
-      <SchedulePublishDialog
+      <ScheduleDocumentDialog
         open={false}
         onOpenChange={onOpenChange}
         document={DOCUMENT}
@@ -370,7 +373,7 @@ describe("focus on close", () => {
   ) {
     const onOpenChange = vi.fn();
     const dialog = (open: boolean) => (
-      <SchedulePublishDialog
+      <ScheduleDocumentDialog
         open={open}
         onOpenChange={onOpenChange}
         document={DOCUMENT}
@@ -411,5 +414,273 @@ describe("focus on close", () => {
 
     await waitFor(() => expect(document.activeElement).toBe(opener));
     section.remove();
+  });
+});
+
+describe("whether it goes live or comes down", () => {
+  const goesLive = () => screen.getByRole("radio", { name: "Goes live" });
+  const comesDown = () => screen.getByRole("radio", { name: "Comes down" });
+
+  it("goes live unless the reader chooses otherwise", () => {
+    open();
+    expect(goesLive()).toBeChecked();
+  });
+
+  it("sends Comes down as taking the document down at that moment, and reads it back so", async () => {
+    const { onOpenChange } = open();
+    setWall("2026-11-02T09:00");
+    await userEvent.click(comesDown());
+    expect(screen.getByTestId("schedule-readback").textContent).toMatch(
+      /^Comes down/
+    );
+    await userEvent.click(submit());
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(requests()[0]?.body).toMatchObject({
+      into: "own",
+      document: { ...DOCUMENT, action: "unpublish" },
+    });
+  });
+
+  it("holds each one back, with the reason beside it, without the document's own grant", () => {
+    grants.missing = ["publish-posts"];
+    open();
+    expect(goesLive()).toBeDisabled();
+    expect(comesDown()).not.toBeDisabled();
+    // Opens on the one the reader may take.
+    expect(comesDown()).toBeChecked();
+    expect(
+      screen.getByText("You do not have permission to publish this document.")
+    ).toBeTruthy();
+  });
+});
+
+describe("the ways out", () => {
+  /** A release in the list reads, of this kind and state. */
+  const listed = (title: string, kind: string, state: string) => ({
+    id: title,
+    title,
+    description: null,
+    kind,
+    state,
+    scheduledAt: state === "scheduled" ? "2026-11-05T09:00:00.000Z" : null,
+    timezone: "UTC",
+    publishedAt: null,
+    createdBy: "u1",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    memberCounts: { total: 3, goLive: 3, comeDown: 0 },
+    can: {
+      schedule: true,
+      cancel: true,
+      addMember: true,
+      removeMember: true,
+      publishNow: true,
+      update: true,
+      delete: true,
+    },
+  });
+
+  /** Every list read answers every kind and state; a write answers as given. */
+  function serve(write: () => Response = () => answer(201, SCHEDULED)) {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") return Promise.resolve(write());
+      return Promise.resolve(
+        answer(200, {
+          items: [
+            listed("Autumn launch", "release", "draft"),
+            listed("Winter launch", "release", "scheduled"),
+            listed("Hello on its own", "single", "draft"),
+            listed("Goodbye on its own", "single", "scheduled"),
+            listed("Old launch", "release", "cancelled"),
+            listed("Stuck launch", "release", "blocked"),
+            listed("Past launch", "release", "published"),
+          ],
+          meta: {
+            total: 7,
+            page: 1,
+            limit: 20,
+            totalPages: 1,
+            hasNext: false,
+            hasPrev: false,
+          },
+        })
+      );
+    });
+  }
+
+  const writes = () => requests().filter(request => request.method !== "GET");
+
+  it("offers only ordinary releases in draft or scheduled, each with when and how many", async () => {
+    // Every read answers every kind, so only a guard on the rows themselves
+    // keeps a single, or a release that will never ship, out.
+    serve();
+    open();
+    await userEvent.click(
+      screen.getByRole("radio", { name: "With an existing release" })
+    );
+
+    expect(
+      await screen.findByRole("radio", { name: /Autumn launch/ })
+    ).toBeTruthy();
+    expect(screen.getByRole("radio", { name: /Winter launch/ })).toBeTruthy();
+    expect(
+      screen.getByRole("radio", { name: /Winter launch/ }).closest("div")
+        ?.textContent
+    ).toMatch(/3 documents/);
+    for (const name of [
+      /Hello on its own/,
+      /Goodbye on its own/,
+      /Old launch/,
+      /Stuck launch/,
+      /Past launch/,
+    ]) {
+      expect(screen.queryByRole("radio", { name })).toBeNull();
+    }
+    // And asked for as such: ordinary releases, from Upcoming and Drafts.
+    const reads = fetchMock.mock.calls
+      .filter(
+        call =>
+          ((call[1] as RequestInit | undefined)?.method ?? "GET") === "GET"
+      )
+      .map(call => new URL(String(call[0]), "http://x"));
+    expect(reads.length).toBeGreaterThan(0);
+    for (const url of reads) {
+      expect(url.searchParams.get("kind")).toBe("release");
+      expect(["upcoming", "drafts"]).toContain(url.searchParams.get("tab"));
+    }
+  });
+
+  it("adds the document to the release chosen, in one step", async () => {
+    serve();
+    const { onOpenChange } = open();
+    await userEvent.click(
+      screen.getByRole("radio", { name: "With an existing release" })
+    );
+    await userEvent.click(
+      await screen.findByRole("radio", { name: /Autumn launch/ })
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add to Autumn launch" })
+    );
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(writes()).toEqual([
+      {
+        path: expect.stringMatching(/\/releases\/schedule-document$/),
+        method: "POST",
+        body: {
+          into: "existing",
+          document: { ...DOCUMENT, action: "publish" },
+          releaseId: "Autumn launch",
+        },
+      },
+    ]);
+  });
+
+  it("makes a new release named here, with its description, and adds the document", async () => {
+    serve();
+    const { onOpenChange } = open();
+    await userEvent.click(
+      screen.getByRole("radio", { name: "In a new release" })
+    );
+    // Refused in place without a name, and nothing is sent.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create release and add" })
+    );
+    expect(screen.getByText("Name the new release.")).toBeTruthy();
+    expect(writes()).toEqual([]);
+
+    await userEvent.type(screen.getByLabelText("Name"), "Autumn launch");
+    await userEvent.type(
+      screen.getByLabelText(/Description/),
+      "Everything for autumn"
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create release and add" })
+    );
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(writes()[0]?.body).toEqual({
+      into: "new",
+      document: { ...DOCUMENT, action: "publish" },
+      title: "Autumn launch",
+      description: "Everything for autumn",
+    });
+  });
+
+  it("holds On its own, with the reason, for a person who may not schedule releases", () => {
+    grants.missing = ["publish-content-releases"];
+    serve();
+    open();
+    expect(
+      screen.getByRole("radio", { name: "On its own, at a time" })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Scheduling on its own needs permission to schedule releases."
+      )
+    ).toBeTruthy();
+  });
+});
+
+describe("a refusal for the document's hard problems", () => {
+  it("is said in the dialog, one line per problem, and the dialog stays open", async () => {
+    fetchMock.mockResolvedValue(
+      answer(409, {
+        error: {
+          code: "CONFLICT",
+          message:
+            "This document cannot be scheduled until the problems blocking it are fixed. Nothing was scheduled.",
+          requestId: "r",
+          data: {
+            problems: [
+              {
+                memberId: null,
+                code: "REQUIRED_FIELD_MISSING",
+                document: DOCUMENT,
+              },
+            ],
+            hidden: [],
+          },
+        },
+      })
+    );
+    const { onOpenChange } = open();
+    setWall("2026-11-02T09:00");
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Schedule for/ })
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "This document cannot be scheduled until the problems blocking it are fixed."
+    );
+    expect(alert.textContent).toContain("Missing a required field");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+});
+
+describe("every language", () => {
+  it("is said to move together where the document is translated, and not otherwise", () => {
+    const { unmount } = render(
+      <ScheduleDocumentDialog
+        open
+        onOpenChange={vi.fn()}
+        document={DOCUMENT}
+        documentTitle="Spring launch"
+        savesGoLive={false}
+        opener={null}
+        languages={["English", "Spanish"]}
+      />
+    );
+    expect(
+      screen.getByText(
+        "Every language moves together: English and Spanish, and the shared fields."
+      )
+    ).toBeTruthy();
+    unmount();
+    open();
+    expect(screen.queryByText(/Every language moves together/)).toBeNull();
   });
 });

@@ -41,8 +41,31 @@ const CTX: EntryLocaleContextValue = {
   rtl: false,
   collectionLocalized: true,
   isNonDefaultLocale: false,
-  publishAllLanguages: { slug: "pages", publish, pending: false },
+  publishAllLanguages: {
+    slug: "pages",
+    publish,
+    pending: false,
+    preview: () =>
+      Promise.resolve({
+        languages: [
+          { locale: "en", outcome: "goes-live-with-pending-change" },
+          { locale: "de", outcome: "goes-live" },
+        ],
+        blockers: [],
+      }),
+    previewKey: ["publish-all-preview", "pages", "entry-1"],
+  },
 };
+
+/** Confirm in the open "Publish all" dialog, once its preview is read. */
+async function confirmPublishAll() {
+  const dialog = await screen.findByRole("alertdialog");
+  await screen.findByRole("list", { name: "What happens to each language" });
+  const confirm = Array.from(dialog.querySelectorAll("button")).find(
+    button => button.textContent === "Publish all"
+  );
+  await userEvent.click(confirm!);
+}
 
 function renderButton(
   over: Partial<EntryLocaleContextValue> = {},
@@ -82,12 +105,24 @@ describe("PublishAllLanguagesButton", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("publishes all languages on click", async () => {
+  // The rail confirms through the same dialog as the language panel: a click
+  // says what publishing does to each language, and only the confirm
+  // publishes. The plausible broken implementation publishes on the click,
+  // with nothing said first.
+  it("says what publishing does to each language, and publishes on confirm", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     renderButton();
     await userEvent.click(
       screen.getByRole("button", { name: /publish all languages/i })
     );
+    expect(publish).not.toHaveBeenCalled();
+    const list = await screen.findByRole("list", {
+      name: "What happens to each language",
+    });
+    expect(list).toHaveTextContent("EnglishIts unpublished changes go live.");
+    expect(list).toHaveTextContent("GermanGoes live for the first time.");
+
+    await confirmPublishAll();
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
@@ -102,9 +137,10 @@ describe("PublishAllLanguagesButton", () => {
         value={{
           ...CTX,
           publishAllLanguages: {
+            ...CTX.publishAllLanguages!,
             slug: "homepage",
             publish: singlePublish,
-            pending: false,
+            previewKey: ["publish-all-preview", "single", "homepage"],
           },
         }}
       >
@@ -115,6 +151,7 @@ describe("PublishAllLanguagesButton", () => {
     await userEvent.click(
       screen.getByRole("button", { name: /publish all languages/i })
     );
+    await confirmPublishAll();
     expect(singlePublish).toHaveBeenCalledTimes(1);
     expect(canFor).toHaveBeenCalledWith("publishEveryLanguage:homepage");
   });

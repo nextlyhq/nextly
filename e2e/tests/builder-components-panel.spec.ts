@@ -39,6 +39,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { settleTransitions } from "./support/axe-scan.mjs";
+import { canvasBlock } from "./support/canvas-frame";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { storedPageNodes } from "./support/stored-page";
 import { fileAccount, test } from "./support/test";
@@ -440,6 +441,79 @@ test.describe("the Components panel", () => {
       .toBe("1");
   });
 
+  test("keeps the + after a section styled display: contents", async ({
+    page,
+  }) => {
+    // A section with `display: contents` draws no box of its own while its
+    // children are on the page. A browser's `checkVisibility()` answers false
+    // for it, which jsdom cannot show: the gap after it must still be there.
+    const t = stamp();
+    const created = await page.request.post(PAGES, {
+      data: {
+        title: `Contents section ${t}`,
+        slug: `contents-section-${t}`,
+        status: "draft",
+        content: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: HEADING,
+              type: "core/heading",
+              version: 1,
+              props: { text: "Components panel heading", level: "h2" },
+            },
+            {
+              id: SECTION,
+              type: "core/section",
+              version: 1,
+              name: "Our team",
+              props: { as: "section", contained: true },
+              styles: { base: { base: { display: "contents" } } },
+              slots: {
+                children: [
+                  {
+                    id: "00000000-0000-4000-8000-00000000d003",
+                    type: "core/text",
+                    version: 1,
+                    props: { text: "Drawn by its children alone." },
+                  },
+                ],
+              },
+            },
+            {
+              id: "00000000-0000-4000-8000-00000000d004",
+              type: "core/section",
+              version: 1,
+              name: "Contact",
+              props: { as: "section", contained: true },
+              slots: { children: [] },
+            },
+          ],
+        },
+      },
+    });
+    expect(created.ok(), `creating the page: ${created.status()}`).toBe(true);
+    const id = ((await created.json()) as { item: { id: string } }).item.id;
+    await openBuilder(page, id);
+
+    // The control: the stored style reached the canvas, so the section
+    // really is drawn without a box of its own.
+    await expect
+      .poll(() =>
+        canvasBlock(page, SECTION).evaluate(
+          element => getComputedStyle(element).display
+        )
+      )
+      .toBe("contents");
+    await expect(
+      page.getByRole("button", { name: "Add a section after Heading" })
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Add a section after Our team" })
+    ).toHaveCount(1);
+  });
+
   test.describe("on a touch screen", () => {
     test.use({ hasTouch: true });
 
@@ -451,7 +525,7 @@ test.describe("the Components panel", () => {
       const id = await createPage(page.request);
       await openBuilder(page, id);
       expect(
-        await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+        await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches),
         "the browser reports a coarse pointer"
       ).toBe(true);
       const add = page.getByRole("button", {

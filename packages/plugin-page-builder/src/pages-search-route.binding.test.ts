@@ -15,7 +15,7 @@ import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** The Direct API handle the route reaches, with its list read recorded. */
-const nextly = vi.hoisted(() => ({ find: vi.fn() }));
+const nextly = vi.hoisted(() => ({ find: vi.fn(), findByID: vi.fn() }));
 
 // The handle is replaced and nothing else is: the identity the route hands it
 // is the caller's own answer (`caller.identity()`), modelled below.
@@ -24,8 +24,11 @@ vi.mock("nextly/runtime", async importOriginal => ({
   requireNextly: () => nextly,
 }));
 
-import { PAGES_SEARCH_ROUTE_PATH } from "./pages-search-contract";
-import { pagesSearchRoute } from "./pages-search-route";
+import {
+  pageAddressPath,
+  PAGES_SEARCH_ROUTE_PATH,
+} from "./pages-search-contract";
+import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pageBuilder } from "./plugin";
 
 /**
@@ -41,6 +44,7 @@ function contextAs(identity: {
     status: true,
     fields: [
       { name: "title", type: "text" },
+      { name: "slug", type: "text" },
       { name: "content", type: "blocks" },
     ],
   });
@@ -158,6 +162,35 @@ describe("the pages search reads AS THE CALLER", () => {
         hasPrev: false,
       },
     });
+  });
+});
+
+describe("a page's address reads the page AS SAVED, as the caller", () => {
+  it("reads its working draft by id, with the caller's identity", async () => {
+    // A Save that does not publish stores a working draft: the address is
+    // the draft's, not the live row's a list read would answer with.
+    nextly.findByID.mockReset();
+    nextly.findByID.mockResolvedValue({ id: "p-1", slug: "pricing-v2" });
+    const identity = { user: { id: "u1", roles: ["editor"] } };
+
+    const response = await pageAddressRoute(undefined, "/{slug}").handler(
+      new Request(
+        `http://nextly.test/plugins/x${pageAddressPath({ collection: "pages", id: "p-1" })}`
+      ),
+      contextAs(identity)
+    );
+
+    expect(await response.json()).toEqual({ path: "/pricing-v2" });
+    const args = nextly.findByID.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args).toMatchObject({
+      collection: "pages",
+      id: "p-1",
+      overrideAccess: false,
+      status: "all",
+      draft: true,
+      select: { id: true, slug: true },
+    });
+    expect(args.user).toBe(identity.user);
   });
 });
 

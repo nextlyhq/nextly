@@ -899,7 +899,11 @@ for (const entry of DIALECTS) {
             adapter.getDrizzle(),
             dialect
           ).listFileApplies();
-          expect(ledger.filter(row => move.includes(row.filename))).toEqual([]);
+          expect(
+            ledger.filter(
+              row => row.filename !== null && move.includes(row.filename)
+            )
+          ).toEqual([]);
 
           // Once the second entry has its own English body, a plain run makes the move.
           await adapter.executeQuery(
@@ -997,7 +1001,11 @@ for (const entry of DIALECTS) {
           adapter.getDrizzle(),
           dialect
         ).listFileApplies();
-        expect(ledger.filter(row => move.includes(row.filename))).toEqual([]);
+        expect(
+          ledger.filter(
+            row => row.filename !== null && move.includes(row.filename)
+          )
+        ).toEqual([]);
         expect(await archived()).toEqual([]);
       });
 

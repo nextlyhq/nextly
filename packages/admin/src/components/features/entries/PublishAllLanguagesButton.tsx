@@ -5,17 +5,19 @@
  * language at once.
  *
  * Gating and the mutation live in `usePublishAllLanguages`, shared with the
- * header's Languages menu: one availability rule, two triggers. Renders
- * nothing when the action does not apply, so non-localized editors are
- * unchanged.
+ * header's Languages menu: one availability rule, two triggers. It confirms
+ * through the same dialog as the language panel, which lists what the
+ * publish does to each language before anything goes live. Renders nothing
+ * when the action does not apply, so non-localized editors are unchanged.
  *
  * @module components/features/entries/PublishAllLanguagesButton
  */
 
 import { Button } from "@nextlyhq/ui";
 import { Globe } from "lucide-react";
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
+import { PublishAllConfirm } from "./PublishAllConfirmDialog";
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
 export interface PublishAllLanguagesButtonProps {
@@ -26,22 +28,33 @@ export interface PublishAllLanguagesButtonProps {
 export function PublishAllLanguagesButton({
   hasStatus,
 }: PublishAllLanguagesButtonProps): JSX.Element | null {
+  const [confirming, setConfirming] = useState(false);
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
   );
   if (!publish.available) return null;
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="gap-1.5"
-      disabled={publish.pending}
-      onClick={publish.publishAll}
-    >
-      <Globe className="h-3.5 w-3.5" />
-      {publish.pending ? "Publishing…" : "Publish all languages"}
-    </Button>
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        disabled={publish.pending}
+        onClick={() => setConfirming(true)}
+      >
+        <Globe className="h-3.5 w-3.5" />
+        {publish.pending ? "Publishing…" : "Publish all languages"}
+      </Button>
+      <PublishAllConfirm
+        open={confirming}
+        held={false}
+        onOpenChange={setConfirming}
+        // The rail reads no language states, so no count is known.
+        pendingCount={null}
+        publish={publish}
+      />
+    </>
   );
 }

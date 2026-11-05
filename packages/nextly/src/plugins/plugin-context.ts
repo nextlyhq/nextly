@@ -58,6 +58,7 @@ import type { UserService } from "../services/users/user-service";
 import { runInPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import {
   type AfterCommitAdapter,
+  afterCommit as holdUntilCommit,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
 import { secretGenerations } from "../shared/lib/secret-generations";
@@ -1489,6 +1490,11 @@ function buildPluginDatabase(
             return tx.drizzleWithRelations(relations());
           },
           adapterTx: asTransactionContext(tx),
+          // Registered from inside the transaction's work, so the adapter
+          // holds it for the transaction this call runs in, or joined.
+          afterCommit: effect => {
+            void holdUntilCommit(transactions, effect);
+          },
         });
       const transactions = adapter();
       // A snapshot: REPEATABLE READ and read-only on PostgreSQL and MySQL
