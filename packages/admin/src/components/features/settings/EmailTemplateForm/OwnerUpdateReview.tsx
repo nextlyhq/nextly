@@ -49,11 +49,37 @@ const FIELD_LABELS: Record<OwnerChange["field"], string> = {
   preheader: "Preview text",
   htmlContent: "HTML",
   plainTextContent: "Plain text",
+  blocks: "Blocks",
   // An update to a template written in blocks, taken or kept whole.
   template: "Whole template",
 };
 
-const VERSION_FIELDS: Exclude<OwnerChange["field"], "template">[] = [
+/** What the owner did to a run of blocks. */
+const KIND_LABELS: Record<NonNullable<OwnerChange["kind"]>, string> = {
+  insert: "Added",
+  delete: "Removed",
+  change: "Changed",
+  move: "Moved",
+};
+
+/** Whether the site edited what a change covers, in the words of what it is. */
+function editedBadge(change: OwnerChange): string {
+  if (change.field === "template") {
+    return change.conflict
+      ? "You edited your version: theirs replaces it"
+      : "You didn't change your version";
+  }
+  if (change.field === "blocks") {
+    return change.conflict
+      ? "You edited these blocks too"
+      : "You didn't change these blocks";
+  }
+  return change.conflict
+    ? "You edited these lines too"
+    : "You didn't change these lines";
+}
+
+const VERSION_FIELDS: (keyof EmailTemplateVersion)[] = [
   "subject",
   "preheader",
   "htmlContent",
@@ -113,7 +139,11 @@ function ChangeCard({
   const options: { use: OwnerChangeChoice["use"]; label: string }[] = [
     { use: "mine", label: "Keep yours" },
     { use: "theirs", label: "Use theirs" },
-    ...(change.conflict
+    // Lines can be written by hand; blocks and a whole template are taken
+    // or kept as they are.
+    ...(change.conflict &&
+    change.field !== "blocks" &&
+    change.field !== "template"
       ? [{ use: "edited" as const, label: "Edit the result" }]
       : []),
   ];
@@ -130,11 +160,10 @@ function ChangeCard({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="text-sm font-medium">
             Change {index + 1} of {total} · {FIELD_LABELS[change.field]}
+            {change.kind ? ` · ${KIND_LABELS[change.kind]}` : ""}
           </span>
           <Badge variant="outline" className="w-fit">
-            {change.conflict
-              ? "You edited these lines too"
-              : "You didn't change these lines"}
+            {editedBadge(change)}
           </Badge>
         </div>
         <div
@@ -209,14 +238,33 @@ function ChangeCard({
 function SideBySide({
   mine,
   theirs,
+  inWords,
   owner,
 }: {
   mine: EmailTemplateVersion;
   theirs: EmailTemplateVersion;
+  inWords?: EmailTemplateComparison["inWords"];
   owner: string;
 }) {
+  // A template written in blocks on either side reads as its blocks in plain
+  // words, in place of the HTML and plain text written from them.
+  const written = !!inWords && (!!inWords.mine || !!inWords.theirs);
+  const text = (
+    side: "mine" | "theirs",
+    field: (typeof VERSION_FIELDS)[number]
+  ) => {
+    const version = side === "mine" ? mine : theirs;
+    if (written && field === "htmlContent") {
+      return (inWords?.[side] ?? (version.htmlContent ?? "").split("\n")).join(
+        "\n"
+      );
+    }
+    return version[field] ?? "";
+  };
   const fields = VERSION_FIELDS.filter(
-    field => (mine[field] ?? "") !== (theirs[field] ?? "")
+    field =>
+      !(written && field === "plainTextContent") &&
+      text("mine", field) !== text("theirs", field)
   );
   return (
     <div className="flex flex-col gap-4">
@@ -226,13 +274,15 @@ function SideBySide({
           className="overflow-hidden rounded-lg border border-border bg-card"
         >
           <h3 className="border-b border-border px-4 py-2.5 text-sm font-medium">
-            {FIELD_LABELS[field]}
+            {written && field === "htmlContent"
+              ? FIELD_LABELS.blocks
+              : FIELD_LABELS[field]}
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2">
             {(
               [
-                ["Your version", mine[field]],
-                [`${owner}'s version`, theirs[field]],
+                ["Your version", text("mine", field)],
+                [`${owner}'s version`, text("theirs", field)],
               ] as const
             ).map(([label, text], index) => (
               <div
@@ -291,6 +341,7 @@ function ReviewChanges({
         <SideBySide
           mine={comparison.mine}
           theirs={comparison.theirs}
+          inWords={comparison.inWords}
           owner={owner}
         />
       ) : (

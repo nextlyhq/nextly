@@ -125,13 +125,21 @@ export interface EmailTemplateVersion {
 export interface OwnerChange {
   /** Stable within one review. */
   id: string;
-  /** The field, or "template" for an update offered as a whole. */
+  /**
+   * The field; "blocks" for a change to a written template's blocks; or
+   * "template" for an update offered as a whole.
+   */
   field:
     | "subject"
     | "preheader"
     | "htmlContent"
     | "plainTextContent"
+    | "blocks"
     | "template";
+  /** For a change to blocks: what the owner did to them. */
+  kind?: "insert" | "delete" | "change" | "move";
+  /** For a change to blocks: the blocks themselves. */
+  blocks?: { base: unknown[]; theirs: unknown[]; mine: unknown[] };
   /** The site edited the same lines. */
   conflict: boolean;
   /** The lines the change replaced in the version the copy started from. */
@@ -154,6 +162,12 @@ export interface EmailTemplateComparison {
   theirs: EmailTemplateVersion;
   mine: EmailTemplateVersion;
   changes: OwnerChange[];
+  /** For a template written in blocks: each side's blocks in plain words, or null where coded. */
+  inWords?: {
+    base: string[] | null;
+    theirs: string[] | null;
+    mine: string[] | null;
+  };
   /** Names the three versions; applying is refused once any of them moved. */
   review: string;
 }
@@ -165,6 +179,8 @@ export interface OwnerUpdateUndo {
   blocks?: unknown;
   /** The digest the override was based on before the review. */
   baseDigest?: string | null;
+  /** The base copy's blocks before the review; passed back as given. */
+  baseBlocks?: unknown;
   base: EmailTemplateVersion;
   applied: string;
   appliedBase: string;

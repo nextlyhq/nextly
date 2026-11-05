@@ -228,3 +228,96 @@ describe("an owner's update offered whole", () => {
     ).toBeNull();
   });
 });
+
+describe("an owner's update to written blocks", () => {
+  const written: EmailTemplateComparison = {
+    ...comparison,
+    base: { ...version, subject: "Welcome" },
+    theirs: { ...version, subject: "Welcome" },
+    mine: { ...version, subject: "Welcome" },
+    changes: [
+      {
+        id: "blocks:0",
+        field: "blocks",
+        kind: "change",
+        conflict: true,
+        base: ["Heading: Welcome"],
+        theirs: ["Heading: Welcome aboard"],
+        mine: ["Heading: Hello"],
+      },
+      {
+        id: "blocks:1",
+        field: "blocks",
+        kind: "move",
+        conflict: false,
+        base: ["Divider"],
+        theirs: ["Divider"],
+        mine: ["Divider"],
+      },
+    ],
+    inWords: {
+      base: ["Heading: Welcome", "Divider", "Text: Hi [name]"],
+      theirs: ["Heading: Welcome aboard", "Text: Hi [name]", "Divider"],
+      mine: ["Heading: Hello", "Divider", "Text: Hi [name]"],
+    },
+  };
+
+  it("names each change by what the owner did to the blocks, in plain words", async () => {
+    api.compareTemplate.mockResolvedValue(written);
+    mount();
+
+    await screen.findByText("Change 1 of 2 · Blocks · Changed");
+    expect(screen.getByText("Change 2 of 2 · Blocks · Moved")).toBeDefined();
+    expect(
+      within(card(0)).getByText("You edited these blocks too")
+    ).toBeDefined();
+    expect(
+      within(card(1)).getByText("You didn't change these blocks")
+    ).toBeDefined();
+    expect(within(card(0)).getByText("Heading: Welcome aboard")).toBeDefined();
+    // Blocks are taken or kept as they are, even where both changed them.
+    expect(
+      within(card(0)).queryByRole("button", { name: "Edit the result" })
+    ).toBeNull();
+  });
+
+  it("reads both versions whole as their blocks in plain words", async () => {
+    api.compareTemplate.mockResolvedValue(written);
+    mount();
+    await screen.findByText("Change 1 of 2 · Blocks · Changed");
+    fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
+
+    expect(screen.getByText("Blocks")).toBeDefined();
+    expect(screen.getByLabelText("Your version").textContent).toContain(
+      "Heading: Hello"
+    );
+    expect(screen.getByLabelText("Nextly's version").textContent).toContain(
+      "Heading: Welcome aboard"
+    );
+  });
+
+  it("says when taking the owner's whole template replaces the site's edit", async () => {
+    api.compareTemplate.mockResolvedValue({
+      ...written,
+      changes: [
+        {
+          id: "template",
+          field: "template",
+          conflict: true,
+          base: ["Subject: Welcome"],
+          theirs: ["Subject: Welcome aboard"],
+          mine: ["Subject: Welcome!"],
+        },
+      ],
+    } satisfies EmailTemplateComparison);
+    mount();
+
+    await screen.findByText("Change 1 of 1 · Whole template");
+    expect(
+      within(card(0)).getByText("You edited your version: theirs replaces it")
+    ).toBeDefined();
+    expect(
+      within(card(0)).queryByRole("button", { name: "Edit the result" })
+    ).toBeNull();
+  });
+});

@@ -436,18 +436,66 @@ const blockKeys = (blocks: ReadonlyArray<WrittenBlock>): string[] =>
 const blocksOf = (keys: ReadonlyArray<string>): WrittenBlock[] =>
   keys.map(key => JSON.parse(key) as WrittenBlock);
 
+/** A run of the base the owner or the site changed, as blocks are reviewed. */
+interface BlockRegion {
+  bStart: number;
+  bEnd: number;
+  theirs: string[];
+  mine: string[];
+  /** The owner changed it, and the site didn't make exactly the same edit. */
+  offered: boolean;
+  /** The site changed it since the base. */
+  siteChanged: boolean;
+}
+
+/**
+ * The merge's regions, block for block where it can be: a region where the
+ * base, the owner and the site have the same number of blocks is one region
+ * per block, so a block only the site changed is never offered beside one
+ * the owner changed next to it.
+ */
+function blockRegions(merge: SequenceMerge): BlockRegion[] {
+  return merge.regions.flatMap(({ region, theirs, mine, offered }) => {
+    const base = merge.base.slice(region.bStart, region.bEnd);
+    if (
+      base.length > 1 &&
+      theirs.length === base.length &&
+      mine.length === base.length
+    ) {
+      return base.map((block, k) => ({
+        bStart: region.bStart + k,
+        bEnd: region.bStart + k + 1,
+        theirs: [theirs[k]],
+        mine: [mine[k]],
+        offered: theirs[k] !== block && theirs[k] !== mine[k],
+        siteChanged: mine[k] !== block,
+      }));
+    }
+    return [
+      {
+        bStart: region.bStart,
+        bEnd: region.bEnd,
+        theirs,
+        mine,
+        offered,
+        siteChanged: region.mine.length > 0,
+      },
+    ];
+  });
+}
+
 interface BlockMerge {
   base: string[];
-  regions: SequenceMerge["regions"];
+  regions: BlockRegion[];
   /** The change each offered region is part of, by its index in `regions`. */
   changeOf: Map<number, OwnerChange>;
   changes: OwnerChange[];
 }
 
 function blockChangeKind(
-  region: SequenceMerge["regions"][number]
+  region: BlockRegion
 ): Exclude<BlockChangeKind, "move"> {
-  if (region.region.bEnd === region.region.bStart) return "insert";
+  if (region.bEnd === region.bStart) return "insert";
   return region.theirs.length === 0 ? "delete" : "change";
 }
 
@@ -467,25 +515,25 @@ function mergeBlocks(
     blockKeys(theirs),
     blockKeys(mine)
   );
-  const offered = merge.regions.flatMap((r, i) => (r.offered ? [i] : []));
-  const untouched = (i: number) => merge.regions[i].region.mine.length === 0;
+  const regions = blockRegions(merge);
+  const offered = regions.flatMap((r, i) => (r.offered ? [i] : []));
   const removed = (i: number) =>
-    merge.base.slice(
-      merge.regions[i].region.bStart,
-      merge.regions[i].region.bEnd
-    );
+    merge.base.slice(regions[i].bStart, regions[i].bEnd);
 
   const partner = new Map<number, number>();
   for (const out of offered) {
-    if (blockChangeKind(merge.regions[out]) !== "delete" || !untouched(out)) {
+    if (
+      blockChangeKind(regions[out]) !== "delete" ||
+      regions[out].siteChanged
+    ) {
       continue;
     }
     const into = offered.find(
       i =>
         !partner.has(i) &&
-        blockChangeKind(merge.regions[i]) === "insert" &&
-        untouched(i) &&
-        sameItems(merge.regions[i].theirs, removed(out))
+        blockChangeKind(regions[i]) === "insert" &&
+        !regions[i].siteChanged &&
+        sameItems(regions[i].theirs, removed(out))
     );
     if (into !== undefined) {
       partner.set(out, into);
@@ -497,7 +545,7 @@ function mergeBlocks(
   const changes: OwnerChange[] = [];
   for (const i of offered) {
     if (changeOf.has(i)) continue;
-    const r = merge.regions[i];
+    const r = regions[i];
     const other = partner.get(i);
     let sides: NonNullable<OwnerChange["blocks"]>;
     if (other === undefined) {
@@ -516,7 +564,7 @@ function mergeBlocks(
       id: `blocks:${changes.length}`,
       field: "blocks",
       kind: other === undefined ? blockChangeKind(r) : "move",
-      conflict: other === undefined && !untouched(i),
+      conflict: other === undefined && r.siteChanged,
       base: describeBlocks(sides.base),
       theirs: describeBlocks(sides.theirs),
       mine: describeBlocks(sides.mine),
@@ -526,7 +574,7 @@ function mergeBlocks(
     if (other !== undefined) changeOf.set(other, change);
     changes.push(change);
   }
-  return { base: merge.base, regions: merge.regions, changeOf, changes };
+  return { base: merge.base, regions, changeOf, changes };
 }
 
 /** The site's blocks with the person's choices applied. */
@@ -538,8 +586,8 @@ function applyBlocks(
   const out: string[] = [];
   let at = 0;
   merge.regions.forEach((r, i) => {
-    out.push(...merge.base.slice(at, r.region.bStart));
-    at = r.region.bEnd;
+    out.push(...merge.base.slice(at, r.bStart));
+    at = r.bEnd;
     const change = merge.changeOf.get(i);
     if (!change) {
       // Not offered: the site's blocks stand.
@@ -636,12 +684,15 @@ export const WHOLE_TEMPLATE = "template";
 export function wholeTemplateChange(
   base: EmailTemplateVersion,
   theirs: EmailTemplateVersion,
-  mine: EmailTemplateVersion
+  mine: EmailTemplateVersion,
+  edited = false
 ): OwnerChange {
   return {
     id: WHOLE_TEMPLATE,
     field: "template",
-    conflict: false,
+    // Whether the site edited its version since the base: taking the
+    // owner's then replaces that edit. It is still taken or kept whole.
+    conflict: edited,
     base: wholeLines(base),
     theirs: wholeLines(theirs),
     mine: wholeLines(mine),

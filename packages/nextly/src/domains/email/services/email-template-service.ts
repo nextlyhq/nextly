@@ -60,8 +60,11 @@ import {
 import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
 import {
   applyOwnerChoices,
+  applyWrittenChoices,
   ownerChanges,
   wholeTemplateChange,
+  writtenOwnerChanges,
+  type ReviewedBlocks,
   wholeTemplateChoice,
   type OwnerChange,
   type OwnerChangeChoice,
@@ -92,6 +95,7 @@ import {
   transactionOpenInFlow,
 } from "../transaction-flow";
 import type { EmailConfig } from "../types";
+import { describeBlocks } from "../written/describe";
 import type { WrittenDocument } from "../written/document";
 import {
   compiledVersion,
@@ -233,7 +237,38 @@ function updateColumns(
 
 /** The owner's current version and details, kept as an override's base. */
 function keptBase(entry: OwnedTemplate): KeptBase {
-  return { ...entry.version, details: detailsOf(entry.defaults) };
+  return {
+    ...entry.version,
+    details: detailsOf(entry.defaults),
+    blocks: entry.blocks ?? null,
+  };
+}
+
+/** A row's own version as a base copy: its text, its details and its blocks. */
+function rowAsBase(row: StoredTemplateRow): KeptBase {
+  return {
+    ...versionOf(row),
+    details: detailsOf(row),
+    blocks: storedFormat(row).blocks,
+  };
+}
+
+/** The digest a row's own version is known by as a base, with its blocks. */
+function rowDigest(row: StoredTemplateRow): string {
+  return storedDigest(versionOf(row), storedFormat(row).blocks);
+}
+
+/**
+ * Whether a row holds its owner's current version: a written owner's by its
+ * blocks, whatever HTML they were stored as; a coded owner's by its text.
+ */
+function holdsOwnersVersion(
+  row: StoredTemplateRow,
+  entry: OwnedTemplate
+): boolean {
+  return entry.blocks
+    ? isOwnersVersion(entry, versionOf(row), storedFormat(row).blocks)
+    : sameVersion(versionOf(row), entry.version);
 }
 
 // ============================================================
@@ -281,6 +316,16 @@ export type EmailTemplateComparison = {
   /** Each change the owner made since `base`, to review one by one. */
   changes: OwnerChange[];
   /**
+   * @experimental For a template written in blocks on any side: each side's
+   * blocks in plain words, one line each (null for a coded side), to read the
+   * versions whole beside the changes.
+   */
+  inWords?: {
+    base: string[] | null;
+    theirs: string[] | null;
+    mine: string[] | null;
+  };
+  /**
    * Names the three versions this comparison was made from. Apply takes it
    * back and refuses once any of them moved, so a choice is never applied to
    * text the person didn't see.
@@ -315,6 +360,7 @@ function reviewToken(
   theirs: EmailTemplateVersion,
   mine: EmailTemplateVersion,
   blocks: {
+    base?: WrittenDocument | null;
     theirs?: WrittenDocument | null;
     mine?: WrittenDocument | null;
   } = {}
@@ -325,6 +371,7 @@ function reviewToken(
     .update(
       JSON.stringify([
         ...[base, theirs, mine].map(v => versionOf(v)),
+        storedDigest(base, blocks.base),
         storedDigest(theirs, blocks.theirs),
         storedDigest(mine, blocks.mine),
       ])
@@ -359,6 +406,11 @@ export interface OwnerUpdateUndo {
    * Undo puts it back as it was: a written owner's is taken over its blocks.
    */
   baseDigest?: string | null;
+  /**
+   * @experimental The base copy's blocks before the review, so Undo puts the
+   * override back on the base it had, block by block.
+   */
+  baseBlocks?: WrittenDocument | null;
   /** The owner's version the override was based on before. */
   base: EmailTemplateVersion;
   /**
@@ -372,15 +424,36 @@ export interface OwnerUpdateUndo {
 }
 
 /**
- * Whether an owner's update to this override is reviewed as a whole, the
- * site's version or the owner's: when it is written in blocks on either
- * side, until blocks are reviewed one by one.
+ * How an owner's update to this override is reviewed: line by line when
+ * both are coded; block by block when the base, the owner's version and the
+ * site's are all written; as a whole, the site's version or the owner's, when
+ * only one side is written or the base copy was kept without its blocks.
  */
-function reviewedWhole(
+function reviewMode(
   record: Pick<EmailTemplateRecord, "format" | "blocks">,
-  entry: OwnedTemplate
-): boolean {
-  return storedFormat(record).format === "written" || !!entry.blocks;
+  entry: OwnedTemplate,
+  baseBlocks: WrittenDocument | null
+): "lines" | "blocks" | "whole" {
+  const mine = storedFormat(record).format === "written";
+  if (!mine && !entry.blocks) return "lines";
+  return mine && entry.blocks && baseBlocks ? "blocks" : "whole";
+}
+
+/** The three sides' blocks, once `reviewMode` has found all three written. */
+function reviewedBlocks(blocks: {
+  base: WrittenDocument | null;
+  theirs: WrittenDocument | null;
+  mine: WrittenDocument | null;
+}): ReviewedBlocks {
+  if (!blocks.base || !blocks.theirs || !blocks.mine) {
+    throw new Error("A block review needs the blocks of all three sides.");
+  }
+  return { base: blocks.base, theirs: blocks.theirs, mine: blocks.mine };
+}
+
+/** A side's blocks in plain words, or null for a coded side. */
+function inWords(blocks: WrittenDocument | null): string[] | null {
+  return blocks ? describeBlocks(blocks.blocks) : null;
 }
 
 /** A stored row: the record's columns, with ownership as stored. */
@@ -1472,15 +1545,13 @@ export class EmailTemplateService extends BaseService {
       // reconciliation runs in the background) is based on what it holds, so
       // the owner's changes since are still offered for review.
       const entry = this.registry.owned.get(record.slug);
-      const current = entry && sameVersion(versionOf(existing), entry.version);
+      const current = entry && holdsOwnersVersion(existing, entry);
       const base: KeptBase =
-        entry && current
-          ? keptBase(entry)
-          : { ...versionOf(existing), details: detailsOf(existing) };
+        entry && current ? keptBase(entry) : rowAsBase(existing);
       updateData.overridden = true;
       updateData.baseVersion = base;
       updateData.baseDigest =
-        entry && current ? entry.digest : versionDigest(base);
+        entry && current ? entry.digest : rowDigest(existing);
     }
 
     try {
@@ -1662,12 +1733,9 @@ export class EmailTemplateService extends BaseService {
     // As an edit's override: a row the boot hasn't brought to the owner's
     // current version is based on what it holds, so the owner's changes since
     // are still offered for review.
-    const base = sameVersion(versionOf(row), entry.version)
+    const base = holdsOwnersVersion(row, entry)
       ? { version: keptBase(entry), digest: entry.digest }
-      : {
-          version: { ...versionOf(row), details: detailsOf(row) },
-          digest: versionDigest(versionOf(row)),
-        };
+      : { version: rowAsBase(row), digest: rowDigest(row) };
 
     // `start` carries every version field from the read, so a save in
     // between must not be overwritten.
@@ -1773,6 +1841,10 @@ export class EmailTemplateService extends BaseService {
       record,
       entry,
       base: versionOf(row.baseVersion ?? entry.version),
+      // A base copy kept before blocks were has none, and is reviewed whole.
+      baseBlocks: row.baseVersion
+        ? (row.baseVersion.blocks ?? null)
+        : (entry.blocks ?? null),
       mine: versionOf(row),
     };
   }
@@ -1782,21 +1854,52 @@ export class EmailTemplateService extends BaseService {
    * change the owner made since the override started.
    */
   async compareTemplate(id: string): Promise<EmailTemplateComparison> {
-    const { record, entry, base, mine } = await this.reviewOf(id);
+    const { record, entry, base, baseBlocks, mine } = await this.reviewOf(id);
+    const blocks = {
+      base: baseBlocks,
+      theirs: entry.blocks ?? null,
+      mine: record.blocks ?? null,
+    };
+    const mode = reviewMode(record, entry, baseBlocks);
+    let changes: OwnerChange[];
+    if (mode === "lines") changes = ownerChanges(base, entry.version, mine);
+    else if (mode === "blocks") {
+      changes = writtenOwnerChanges(
+        base,
+        entry.version,
+        mine,
+        reviewedBlocks(blocks)
+      );
+    } else {
+      changes = record.ownerChanged
+        ? [
+            wholeTemplateChange(
+              base,
+              entry.version,
+              mine,
+              // Whether the site edited its version since the base.
+              storedDigest(base, baseBlocks) !==
+                storedDigest(mine, record.blocks)
+            ),
+          ]
+        : [];
+    }
     return {
       base,
       // A copy: the registry's own version must not change with a caller's.
       theirs: versionOf(entry.version),
       mine,
-      changes: reviewedWhole(record, entry)
-        ? record.ownerChanged
-          ? [wholeTemplateChange(base, entry.version, mine)]
-          : []
-        : ownerChanges(base, entry.version, mine),
-      review: reviewToken(base, entry.version, mine, {
-        theirs: entry.blocks,
-        mine: record.blocks,
-      }),
+      changes,
+      ...(mode === "lines"
+        ? {}
+        : {
+            inWords: {
+              base: inWords(baseBlocks),
+              theirs: inWords(blocks.theirs),
+              mine: inWords(blocks.mine),
+            },
+          }),
+      review: reviewToken(base, entry.version, mine, blocks),
     };
   }
 
@@ -1815,20 +1918,32 @@ export class EmailTemplateService extends BaseService {
     review: string,
     actor?: RequestActor | null
   ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
-    const { row, record, entry, base, mine } = await this.reviewOf(id);
-    if (
-      reviewToken(base, entry.version, mine, {
-        theirs: entry.blocks,
-        mine: record.blocks,
-      }) !== review
-    ) {
+    const { row, record, entry, base, baseBlocks, mine } =
+      await this.reviewOf(id);
+    const reviewed = {
+      base: baseBlocks,
+      theirs: entry.blocks ?? null,
+      mine: record.blocks ?? null,
+    };
+    if (reviewToken(base, entry.version, mine, reviewed) !== review) {
       throw changedSince("reviewed", id, record.slug);
     }
-    // A template written on either side is reviewed whole: the site's
-    // version and blocks, or the owner's.
+    const mode = reviewMode(record, entry, baseBlocks);
     let merged: EmailTemplateVersion;
-    let blocks = record.blocks;
-    if (reviewedWhole(record, entry)) {
+    let blocks = record.blocks ?? null;
+    if (mode === "blocks") {
+      const result = applyWrittenChoices(
+        base,
+        entry.version,
+        mine,
+        reviewedBlocks(reviewed),
+        choices
+      );
+      merged = result.version;
+      blocks = result.blocks;
+    } else if (mode === "whole") {
+      // Written on one side only: the site's version and blocks, or the
+      // owner's.
       const use = wholeTemplateChoice(choices, record.ownerChanged);
       if (use === "theirs") {
         merged = versionOf(entry.version);
@@ -1853,6 +1968,7 @@ export class EmailTemplateService extends BaseService {
         // compared against are a separate matter and carry over.
         baseVersion: {
           ...entry.version,
+          blocks: entry.blocks ?? null,
           details: row.baseVersion?.details ?? detailsOf(entry.defaults),
         },
       },
@@ -1866,8 +1982,13 @@ export class EmailTemplateService extends BaseService {
       templateKind: record.kind,
       // The base moves even when every change keeps the site's lines, so the
       // entry always names it.
+      // As stored before and after, so a change of blocks or of format is
+      // named even where the text it writes is the same.
       changedFields: [
-        ...changedTemplateFields({ ...mine }, { ...merged }),
+        ...changedTemplateFields(
+          { ...mine, ...storedFormat(record) },
+          { ...merged, ...sitesVersionFormat(blocks, merged) }
+        ),
         "baseVersion",
       ],
       operation: "apply-owner-update",
@@ -1880,6 +2001,7 @@ export class EmailTemplateService extends BaseService {
         blocks: record.blocks,
         baseDigest: row.baseDigest ?? null,
         base,
+        baseBlocks,
         applied: storedDigest(merged, blocks),
         appliedBase: entry.digest,
       },
@@ -1916,7 +2038,13 @@ export class EmailTemplateService extends BaseService {
       record,
       version,
       undo.baseDigest ?? versionDigest(base),
-      { baseVersion: { ...base, details: row.baseVersion?.details } },
+      {
+        baseVersion: {
+          ...base,
+          blocks: undo.baseBlocks ?? null,
+          details: row.baseVersion?.details,
+        },
+      },
       undo.blocks
     );
 
@@ -1926,7 +2054,10 @@ export class EmailTemplateService extends BaseService {
       templateName: record.name,
       templateKind: record.kind,
       changedFields: [
-        ...changedTemplateFields({ ...versionOf(row) }, { ...version }),
+        ...changedTemplateFields(
+          { ...versionOf(row), ...storedFormat(row) },
+          { ...version, ...sitesVersionFormat(undo.blocks, version) }
+        ),
         "baseVersion",
       ],
       operation: "undo-owner-update",
@@ -2306,8 +2437,8 @@ export class EmailTemplateService extends BaseService {
           ...(plugin
             ? {
                 overridden: true,
-                baseVersion: { ...versionOf(row), details: detailsOf(row) },
-                baseDigest: versionDigest(versionOf(row)),
+                baseVersion: rowAsBase(row),
+                baseDigest: rowDigest(row),
               }
             : { overridden: false }),
         })
@@ -2468,7 +2599,7 @@ export class EmailTemplateService extends BaseService {
           ...detailsOf(entry.defaults),
           overridden: true,
           baseVersion: {
-            ...(row.baseVersion ?? entry.version),
+            ...(row.baseVersion ?? keptBase(entry)),
             details: detailsOf(entry.defaults),
           },
           baseDigest: row.baseDigest ?? entry.digest,
@@ -2514,6 +2645,9 @@ export class EmailTemplateService extends BaseService {
         updatedAt: new Date(),
         baseVersion: {
           ...versionOf(row.baseVersion ?? entry.version),
+          blocks: row.baseVersion
+            ? (row.baseVersion.blocks ?? null)
+            : (entry.blocks ?? null),
           details: owners,
         },
       })

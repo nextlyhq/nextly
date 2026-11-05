@@ -56,6 +56,21 @@ const MINE: WrittenDocument = {
 };
 
 /**
+ * The site's version with the plugin's heading taken: the paragraph, which
+ * only the site changed, stays the site's.
+ */
+const TAKEN: WrittenDocument = {
+  version: 1,
+  blocks: [heading("Thank you"), paragraph("Your payment of ")],
+};
+
+/** Every change a comparison offers, decided the same way. */
+const every = (
+  comparison: { changes: ReadonlyArray<{ id: string }> },
+  use: "mine" | "theirs"
+) => Object.fromEntries(comparison.changes.map(change => [change.id, { use }]));
+
+/**
  * The same blocks with the paragraph's text in two runs: other blocks that
  * compile to exactly the same HTML and plain text.
  */
@@ -101,6 +116,16 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       });
       await service.ensureBuiltInTemplates();
       return service;
+    }
+
+    /** The choices and review token of deciding every change the same way, now. */
+    async function decide(
+      service: EmailTemplateService,
+      id: string,
+      use: "mine" | "theirs"
+    ) {
+      const comparison = await service.compareTemplate(id);
+      return [every(comparison, use), comparison.review] as const;
     }
 
     async function paidTemplate(service: EmailTemplateService) {
@@ -155,7 +180,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       });
     });
 
-    it("keeps the site's blocks as an override, and offers the plugin's update as a whole", async () => {
+    it("keeps the site's blocks as an override, and offers the plugin's update block by block", async () => {
       const id = await overridden();
       const unchanged = await boot(V1);
       expect(await unchanged.getTemplate(id)).toMatchObject({
@@ -172,8 +197,21 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         blocks: MINE,
       });
       const comparison = await service.compareTemplate(id);
+      // The heading both changed; the paragraph only the site did.
       expect(comparison.changes).toEqual([
-        expect.objectContaining({ id: WHOLE_TEMPLATE, conflict: false }),
+        expect.objectContaining({
+          id: "blocks:0",
+          field: "blocks",
+          kind: "change",
+          conflict: true,
+          base: ["Heading: Payment received"],
+          theirs: ["Heading: Thank you"],
+          mine: ["Heading: Paid, with thanks"],
+        }),
+      ]);
+      expect(comparison.inWords?.mine).toEqual([
+        "Heading: Paid, with thanks",
+        'Text: Your payment of [amount, or "your payment"].',
       ]);
     });
 
@@ -184,12 +222,12 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
 
       const { template, undo } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "theirs" } },
+        every(comparison, "theirs"),
         comparison.review
       );
       expect(template).toMatchObject({
         format: "written",
-        blocks: V2,
+        blocks: TAKEN,
         overridden: true,
         ownerChanged: false,
       });
@@ -210,7 +248,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
 
       const { template } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "mine" } },
+        every(comparison, "mine"),
         comparison.review
       );
       expect(template).toMatchObject({
@@ -220,14 +258,14 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       });
     });
 
-    it("refuses written text for a whole-template change", async () => {
+    it("refuses written text for a change to blocks", async () => {
       const id = await overridden();
       const service = await boot(V2);
       const comparison = await service.compareTemplate(id);
       await expect(
         service.applyOwnerUpdate(
           id,
-          { [WHOLE_TEMPLATE]: { use: "edited", text: "<p>x</p>" } },
+          { "blocks:0": { use: "edited", text: "x" } },
           comparison.review
         )
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
@@ -247,7 +285,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       await expect(
         service.applyOwnerUpdate(
           id,
-          { [WHOLE_TEMPLATE]: { use: "theirs" } },
+          every(comparison, "theirs"),
           comparison.review
         )
       ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -261,16 +299,15 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       const service = await boot(V2);
       const { undo } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "theirs" } },
-        (await service.compareTemplate(id)).review
+        ...(await decide(service, id, "theirs"))
       );
-      await service.updateTemplate(id, { blocks: splitRuns(V2) });
+      await service.updateTemplate(id, { blocks: splitRuns(TAKEN) });
 
       await expect(service.undoOwnerUpdate(id, undo)).rejects.toMatchObject({
         code: "CONFLICT",
       });
       expect(await service.getTemplate(id)).toMatchObject({
-        blocks: splitRuns(V2),
+        blocks: splitRuns(TAKEN),
       });
     });
 
@@ -284,8 +321,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
 
       const { template } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "mine" } },
-        (await service.compareTemplate(id)).review
+        ...(await decide(service, id, "mine"))
       );
       expect(template).toMatchObject({
         format: "written",
@@ -303,8 +339,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       const service = await boot(V2);
       const { undo } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "theirs" } },
-        (await service.compareTemplate(id)).review
+        ...(await decide(service, id, "theirs"))
       );
 
       await service.undoOwnerUpdate(id, undo);
@@ -352,7 +387,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         await expect(
           service.applyOwnerUpdate(
             id,
-            { [WHOLE_TEMPLATE]: { use: "mine" } },
+            every(comparison, "mine"),
             comparison.review
           )
         ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -369,8 +404,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       const service = await boot(V2);
       const { undo } = await service.applyOwnerUpdate(
         id,
-        { [WHOLE_TEMPLATE]: { use: "theirs" } },
-        (await service.compareTemplate(id)).review
+        ...(await decide(service, id, "theirs"))
       );
       await service.undoOwnerUpdate(id, undo);
 
@@ -380,6 +414,60 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         overridden: true,
         ownerChanged: false,
       });
+    });
+
+    it("offers the plugin's update as a whole once the site converted it to code", async () => {
+      const first = await boot(V1);
+      const { id } = await paidTemplate(first);
+      await first.updateTemplate(id, { format: "code" });
+      const service = await boot(V2);
+
+      const comparison = await service.compareTemplate(id);
+      expect(comparison.changes).toEqual([
+        expect.objectContaining({
+          id: WHOLE_TEMPLATE,
+          field: "template",
+          // The site's version differs from the base: it is code now.
+          conflict: true,
+        }),
+      ]);
+      expect(comparison.inWords).toEqual({
+        base: [
+          "Heading: Payment received",
+          'Text: We received [amount, or "your payment"].',
+        ],
+        theirs: [
+          "Heading: Thank you",
+          'Text: We received [amount, or "your payment"].',
+        ],
+        mine: null,
+      });
+
+      const { template } = await service.applyOwnerUpdate(
+        id,
+        every(comparison, "theirs"),
+        comparison.review
+      );
+      expect(template).toMatchObject({ format: "written", blocks: V2 });
+    });
+
+    it("offers the plugin's update as a whole when the base copy was kept without its blocks", async () => {
+      const id = await overridden();
+      const rows = (await boot(V1)) as unknown as {
+        getRow(id: string): Promise<{ baseVersion: Record<string, unknown> }>;
+      };
+      // As an override kept before base copies held their blocks.
+      const { blocks: _blocks, ...withoutBlocks } = (await rows.getRow(id))
+        .baseVersion;
+      const json = JSON.stringify(withoutBlocks).replace(/'/g, "''");
+      await store.exec(
+        `UPDATE ${store.q("email_templates")} SET ${store.q("base_version")} = '${json}' WHERE ${store.q("slug")} = 'orders-paid'`
+      );
+      const service = await boot(V2);
+
+      expect((await service.compareTemplate(id)).changes).toEqual([
+        expect.objectContaining({ id: WHOLE_TEMPLATE }),
+      ]);
     });
 
     it("is the plugin's blocks again on Reset", async () => {
