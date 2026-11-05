@@ -1558,6 +1558,7 @@ export const pageBuilder = (
           retired: ids => retired.of(ids),
           cleanup: () => cleanup,
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          store: composition.store,
         });
       } else {
         // Nothing is retired without the readiness hooks, so nothing is owed.

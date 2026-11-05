@@ -563,6 +563,12 @@ export interface RetiredCleanupCheckArgs {
   ) => Promise<RetiredByComponent>;
   readonly cleanup: () => Pick<RetiredCleanupService, "walkAgain">;
   readonly limits: () => DocumentLimits;
+  /**
+   * Where component definitions are stored: a write there is also judged for
+   * the component's OWN retired ids, which its `exposed` list, slots and
+   * variants may carry back.
+   */
+  readonly store: { readonly collection: string; readonly field: string };
 }
 
 /**
@@ -600,7 +606,8 @@ async function checkWrite(
   if (documents.length === 0) return;
   try {
     const limits = args.limits();
-    const placed = new Set<string>();
+    const own = ownDefinitionOf(args, fields.collection, fields.data);
+    const placed = new Set<string>(own === null ? [] : [own.componentId]);
     for (const document of documents) {
       for (const id of componentIdsIn(document.nodes, limits.maxNodes)) {
         placed.add(id);
@@ -610,9 +617,12 @@ async function checkWrite(
     const retired = await args.retired([...placed]);
     for (const [componentId, ids] of retired) {
       const one: RetiredByComponent = new Map([[componentId, ids]]);
-      const holds = documents.some(
-        document => stripRetiredExposures(document, one, limits).removed > 0
-      );
+      const holds =
+        documents.some(
+          document => stripRetiredExposures(document, one, limits).removed > 0
+        ) ||
+        (own?.componentId === componentId &&
+          withoutOwnRetired(own.document, ids).removed > 0);
       if (holds) await args.cleanup().walkAgain(componentId);
     }
   } catch (error) {
@@ -623,6 +633,25 @@ async function checkWrite(
       { collection: fields.collection, error }
     );
   }
+}
+
+/**
+ * The written component definition and its id, for a write to the component
+ * store; `null` for any other write.
+ */
+function ownDefinitionOf(
+  args: Pick<RetiredCleanupCheckArgs, "store">,
+  collection: unknown,
+  data: Record<string, unknown>
+): { readonly componentId: string; readonly document: BlockDocument } | null {
+  if (collection !== args.store.collection) return null;
+  const id = data.id;
+  const document = asDocument(data[args.store.field]);
+  if (document === null) return null;
+  if (typeof id === "string" && id !== "") {
+    return { componentId: id, document };
+  }
+  return typeof id === "number" ? { componentId: String(id), document } : null;
 }
 
 /** How deep a written row's groups are looked into, as the strip looks. */

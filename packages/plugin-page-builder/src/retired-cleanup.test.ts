@@ -233,6 +233,7 @@ function checkHarness(
       },
     }),
     limits: () => LIMITS,
+    store: STORE,
   });
   const run = (phase: string, context: Row) =>
     handlers.get(`${phase} *`)!(context);
@@ -271,6 +272,22 @@ describe("the check after a committed write", () => {
     });
 
     expect(walkedAgain).toEqual(["hero", "hero"]);
+  });
+
+  it("sends a component's run back when its own definition carries a retired field back", async () => {
+    const { run, walkedAgain } = checkHarness({ hero: RETIRED });
+
+    await run("afterUpdate", {
+      collection: STORE.collection,
+      data: { id: "hero", content: heroDefinition() },
+    });
+    // The same definition stored as another component's is not hero's.
+    await run("afterUpdate", {
+      collection: STORE.collection,
+      data: { id: "card", content: heroDefinition() },
+    });
+
+    expect(walkedAgain).toEqual(["hero"]);
   });
 
   it("sends nothing back for a document holding only live values", async () => {
