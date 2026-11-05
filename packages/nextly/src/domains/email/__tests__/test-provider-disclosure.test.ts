@@ -1062,3 +1062,63 @@ describe("a numeric credential returned as an MX priority", () => {
     expect(JSON.stringify(status)).not.toContain("98765");
   });
 });
+
+describe("a saved provider read with its domain status", () => {
+  let sqlite: Database.Database;
+  let service: EmailProviderService;
+  let providerId: string;
+
+  /** Reads DNS records for the sending domain, naming the key it was given. */
+  const reporting = defineEmailProvider<{ apiKey: string }>({
+    type: "status-reporting",
+    label: "Status Reporting",
+    configFields: [
+      { name: "apiKey", label: "API Key", kind: "password", secret: true },
+    ],
+    parseConfig: input => input as { apiKey: string },
+    createAdapter: () => ({
+      send: () => Promise.resolve({ success: true, messageId: "x" }),
+    }),
+    domainStatus: config =>
+      Promise.resolve({
+        domain: "example.com",
+        status: "pending" as const,
+        records: [{ type: "TXT", name: "auth", value: `k=${config.apiKey}` }],
+      }),
+  });
+
+  beforeEach(async () => {
+    sqlite = new Database(":memory:");
+    createEmailProvidersTable(sqlite);
+    service = new EmailProviderService(
+      makeAdapter(drizzle({ client: sqlite })),
+      logger
+    );
+    getEmailProviderRegistry().register(reporting);
+    const created = await service.createProvider({
+      name: "Reporting",
+      type: "status-reporting",
+      fromEmail: "noreply@example.com",
+      fromName: null,
+      configuration: { apiKey: SECRET },
+      isDefault: false,
+      isActive: true,
+    });
+    providerId = created.id;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+    getEmailProviderRegistry().reset();
+  });
+
+  it("returns the provider with its domain status, and the credential stays out of both", async () => {
+    const record = await service.getProviderWithDomainStatus(providerId);
+
+    expect(record.id).toBe(providerId);
+    expect(record.domainStatus?.domain).toBe("example.com");
+    expect(record.domainStatus?.records[0]?.value).toBe("k=[secret]");
+    expect(JSON.stringify(record)).not.toContain(SECRET);
+  });
+});
