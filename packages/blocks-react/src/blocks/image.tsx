@@ -211,7 +211,13 @@ function wrapPicture(
     ) : (
       <a
         {...link}
-        className={[rootClass, partClass("link")].filter(Boolean).join(" ")}
+        className={[
+          rootClass,
+          partClass("link"),
+          caption === "" ? "" : partClass("relay"),
+        ]
+          .filter(Boolean)
+          .join(" ")}
         {...(linkName === undefined ? {} : { "aria-label": linkName })}
       >
         {image}
@@ -325,13 +331,20 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Passed on from a figure to the picture inside: neither is
-          // inherited unless each element between asks for it.
-          objectFit: "inherit",
-          objectPosition: "inherit",
           // Clipped, so a radius set on the block rounds the picture inside.
           overflow: "hidden",
         },
+      },
+    },
+  },
+  // The link between a figure and its picture passes the fit and focal point
+  // on from the figure: neither is inherited unless each element between asks
+  // for it. Only there: a link that is the root holds the node's own values,
+  // and asked to inherit, an unset one would come from above the block.
+  relay: {
+    baseStyles: {
+      base: {
+        base: { objectFit: "inherit", objectPosition: "inherit" },
       },
     },
   },

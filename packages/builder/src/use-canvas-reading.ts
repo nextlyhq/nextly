@@ -104,6 +104,13 @@ const PICTURE_WRAPPERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * What the rich-text renderer draws a passage's pictures and galleries in:
+ * its own figures, which a block's styles never reach, whether or not the
+ * passage has words beside them.
+ */
+const RICH_TEXT_MEDIA = '[class*="nextly-rich-text"]';
+
+/**
  * Whether an element shows words of its own, not of a block inside it.
  *
  * Text is what makes a root a passage: a picture among words is an inline one,
@@ -135,9 +142,12 @@ function hasOwnText(element: Element): boolean {
 function ownImage(element: Element | undefined | null): Element | undefined {
   if (element == null) return undefined;
   if (element.tagName === "IMG") return element;
-  // Its own, past any image a block inside it draws.
+  // Its own, past any image a block inside it draws, and never one a
+  // passage it holds draws.
   const owned = [...element.querySelectorAll("img")].filter(
-    candidate => candidate.closest("[data-nx-node]") === element
+    candidate =>
+      candidate.closest("[data-nx-node]") === element &&
+      candidate.closest(RICH_TEXT_MEDIA) === null
   );
   if (PICTURE_WRAPPERS.has(element.tagName)) return owned[0];
   return owned.length === 1 && !hasOwnText(element) ? owned[0] : undefined;

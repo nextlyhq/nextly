@@ -15,7 +15,10 @@
  */
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { RichText } from "@nextlyhq/blocks-react";
 
 import type { EditorState } from "./editor-state";
 import { useCanvasReading } from "./use-canvas-reading";
@@ -133,6 +136,33 @@ describe("which pictures are a block's own to style", () => {
     pair.innerHTML =
       '<div data-nx-node="n1"><img src="/a.png" alt=""><img src="/b.png" alt=""></div>';
     view.rerender(<Reader root={pair} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A passage holding nothing but a picture is still a passage: drawn by
+    // the rich-text renderer itself, whose figure the root's styles never
+    // reach, so its picture is not the block's own.
+    const lone = document.createElement("div");
+    lone.innerHTML = `<div data-nx-node="n1">${renderToStaticMarkup(
+      <RichText
+        value={
+          {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "image",
+                  version: 1,
+                  src: "https://cdn.example.com/a.jpg",
+                  altText: "A",
+                },
+              ],
+            },
+          } as never
+        }
+      />
+    )}</div>`;
+    expect(lone.querySelector("img")).not.toBeNull();
+    view.rerender(<Reader root={lone} />);
     expect(screen.getByTestId("picture").textContent).toBe("none");
 
     // A child block's words are its own, not text beside this block's picture.
