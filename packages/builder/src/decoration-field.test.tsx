@@ -16,6 +16,7 @@ import {
   parseDecoration,
 } from "./decoration-field";
 import { InheritedValue } from "./inherited-value";
+import { SectionHeld } from "./section-held";
 
 beforeAll(() => {
   // Radix's select and popover measure and scroll, which jsdom does not do.
@@ -303,6 +304,80 @@ describe("DecorationField", () => {
     fireEvent.change(thickness, { target: { value: "2px" } });
     fireEvent.blur(thickness);
     expect(onCommit).toHaveBeenLastCalledWith("underline 2px");
+  });
+
+  it("draws the line just chosen while its write is on its way", () => {
+    // A shared style's write lands later: the icons follow what was chosen,
+    // so pressing it again clears it rather than choosing it twice.
+    const onCommit = mount("underline");
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(onCommit).toHaveBeenLastCalledWith("overline");
+    expect(
+      screen
+        .getByRole("radio", { name: "Overline" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(onCommit).toHaveBeenLastCalledWith(null);
+  });
+
+  it("goes back to the stored line when the write is refused later", () => {
+    // A shared style's write can be refused after the click that sent it; the
+    // refusal arrives as the field's problem, and the icons then show what the
+    // document still holds rather than the line it refused.
+    const onCommit = vi.fn(() => "applied" as const);
+    const view = render(field("underline", onCommit));
+    fireEvent.click(screen.getByRole("radio", { name: "Overline" }));
+    expect(
+      screen
+        .getByRole("radio", { name: "Overline" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    view.rerender(field("underline", onCommit, "decoration-error"));
+    expect(
+      screen
+        .getByRole("radio", { name: "Underline" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("holds the popover's controls when the section is held while it is open", () => {
+    // The popover is drawn outside the section, where the section's disabled
+    // fieldset does not reach.
+    const onCommit = vi.fn(() => "applied" as const);
+    const view = render(
+      <SectionHeld.Provider value={false}>
+        {field("underline", onCommit)}
+      </SectionHeld.Provider>
+    );
+    openStyle();
+    view.rerender(
+      <SectionHeld.Provider value={true}>
+        {field("underline", onCommit)}
+      </SectionHeld.Provider>
+    );
+    for (const control of [
+      screen.getByRole("combobox", { name: "Line style" }),
+      screen.getByRole("textbox", { name: "Thickness" }),
+      screen.getByRole("textbox", { name: "Line colour" }),
+      screen.getByRole("textbox", { name: "Decoration as CSS" }),
+    ]) {
+      expect(control.hasAttribute("disabled")).toBe(true);
+    }
+  });
+
+  it("writes CSS as typed, and leaves an unchanged value alone", () => {
+    // Legal CSS whitespace around a stored value is not an edit; a no-break
+    // space is not CSS whitespace, so it is written for the field to judge
+    // rather than read as empty and clearing the decoration.
+    const onCommit = mount(" underline ");
+    openStyle();
+    const css = screen.getByRole("textbox", { name: "Decoration as CSS" });
+    fireEvent.blur(css);
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.change(css, { target: { value: "\u00a0" } });
+    fireEvent.blur(css);
+    expect(onCommit).toHaveBeenLastCalledWith("\u00a0");
   });
 
   it("points the popover's controls at a refusal", () => {
