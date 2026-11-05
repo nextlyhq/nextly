@@ -926,8 +926,8 @@ describe.each(getConfiguredTestDialects())(
       const singles: SingleEntryService = t.getService("singleEntryService");
       await singles.update(
         SETTINGS,
-        { siteName: "Site", status: "draft" },
-        { overrideAccess: true, _overwrite: true }
+        { siteName: "Site", status: "draft", _overwrite: true },
+        { overrideAccess: true }
       );
       const rows = await t.adapter.select<{ id: string }>(
         `single_${SETTINGS}`,

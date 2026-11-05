@@ -322,8 +322,8 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     ]) {
       const written = await singles.update(
         "hero",
-        { heading: value },
-        { locale, overrideAccess: true, _overwrite: true }
+        { heading: value, _overwrite: true },
+        { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }

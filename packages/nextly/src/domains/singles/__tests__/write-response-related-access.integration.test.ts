@@ -86,8 +86,8 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
-      { user: { id: "writer-1" }, routeAuthorized: true, _overwrite: true }
+      { siteName: "Acme", author: authorId, _overwrite: true },
+      { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
     expect(result.success).toBe(true);
@@ -149,8 +149,12 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
-      { user: { id: "writer-1" }, routeAuthorized: true, _overwrite: true }
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
+      { user: { id: "writer-1" }, routeAuthorized: true }
     );
 
     expect(result.success).toBe(true);
@@ -207,8 +211,12 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: (author.data as { id: string }).id },
-      { routeAuthorized: true, _overwrite: true }
+      {
+        siteName: "Acme",
+        author: (author.data as { id: string }).id,
+        _overwrite: true,
+      },
+      { routeAuthorized: true }
     );
 
     expect(result.success).toBe(true);
@@ -226,8 +234,8 @@ describe("single write response — related-row field access (integration)", () 
 
     const result = await entry.update(
       "branding",
-      { siteName: "Acme", author: authorId },
-      { overrideAccess: true, _overwrite: true }
+      { siteName: "Acme", author: authorId, _overwrite: true },
+      { overrideAccess: true }
     );
 
     expect(result.success).toBe(true);

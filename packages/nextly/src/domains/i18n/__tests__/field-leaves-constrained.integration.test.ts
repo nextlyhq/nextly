@@ -657,8 +657,8 @@ describeEachDialect(
           current.getService("singleEntryService");
         const written = await singles.update(
           "hero",
-          { code: value },
-          { locale: "en", overrideAccess: true, _overwrite: true }
+          { code: value, _overwrite: true },
+          { locale: "en", overrideAccess: true }
         );
         expect(written.success, JSON.stringify(written)).toBe(true);
         const read = await singles.get("hero", {
@@ -880,8 +880,8 @@ describeEachDialect(
         current.getService("singleEntryService");
       const written = await singles.update(
         "hero",
-        { code: "b2@example.com" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { code: "b2@example.com", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
       const read = await singles.get("hero", {

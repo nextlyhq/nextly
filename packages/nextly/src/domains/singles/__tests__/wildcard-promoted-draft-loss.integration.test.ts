@@ -118,13 +118,13 @@ async function pendingDrafts(
 async function germanOnlyAndPublished(t: TestNextly): Promise<void> {
   await singlesOf(t).update(
     SLUG,
-    { siteName: "DE live", status: "published" },
-    { locale: "de", overrideAccess: true, _overwrite: true }
+    { siteName: "DE live", status: "published", _overwrite: true },
+    { locale: "de", overrideAccess: true }
   );
   await singlesOf(t).update(
     SLUG,
-    { status: "published" },
-    { locale: "*", overrideAccess: true, _overwrite: true }
+    { status: "published", _overwrite: true },
+    { locale: "*", overrideAccess: true }
   );
 }
 
@@ -142,8 +142,8 @@ describe.each(getConfiguredTestDialects())(
       // A status-less save on a published document is held as a pending edit.
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN pending", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
 
       // POPULATION CONTROL: the edit really was held. Without it, a later
@@ -153,8 +153,8 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await singlesOf(t).update(
         SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       // An edit the author saved is either readable or still pending. Which of
@@ -176,15 +176,15 @@ describe.each(getConfiguredTestDialects())(
 
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN pending", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       expect(JSON.stringify(await pendingDrafts(t))).toContain("EN pending");
 
       await singlesOf(t).update(
         SLUG,
-        { status: "published" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
 
       const readable = await readSiteName(t, "en");
@@ -200,13 +200,13 @@ describe.each(getConfiguredTestDialects())(
 
       await singlesOf(t).update(
         SLUG,
-        { siteName: "EN pending" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN pending", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await singlesOf(t).update(
         SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       // Proves the probe is aimed correctly: the read path works, and German

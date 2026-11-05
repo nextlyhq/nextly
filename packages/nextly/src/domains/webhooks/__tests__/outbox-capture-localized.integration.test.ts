@@ -225,6 +225,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 
@@ -282,6 +283,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 
@@ -327,6 +329,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 

@@ -751,7 +751,7 @@ describe.each(getConfiguredTestDialects())(
       const written = await handlerOf(t)
         .getEntryService()
         .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
-          { id: dossier, data: { guarded: "secret" } },
+          { id: dossier, data: { guarded: "secret", _overwrite: true } },
         ]);
       expect(written.successful).toBe(1);
 

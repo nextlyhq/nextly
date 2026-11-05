@@ -75,6 +75,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: ARTICLES,
           entryId: id,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
 
       const first = await publishEvery();
@@ -88,14 +89,17 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService");
       await singles.update(
         BANNER,
-        { headline: "en" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { headline: "en", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await t.adapter.executeQuery(
         `DROP TABLE IF EXISTS single_${BANNER}_locales`
       );
       const publishEvery = () =>
-        singles.publishAllLocales(BANNER, { overrideAccess: true });
+        singles.publishAllLocales(BANNER, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
 
       await expect(publishEvery()).rejects.toMatchObject({ statusCode: 409 });
       await expect(publishEvery()).rejects.toMatchObject({ statusCode: 409 });

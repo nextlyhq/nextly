@@ -288,19 +288,19 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN v1", status: "published" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN v1", status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v1", status: "published" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "DE v1", status: "published", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
       // A status-less save in the NON-write language is held as pending.
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v2" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "DE v2", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       // Precondition: the edit really is pending, not live.
@@ -308,8 +308,8 @@ describe.each(getConfiguredTestDialects())(
 
       const refused = await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       expect(refused.success).toBe(false);
@@ -326,19 +326,19 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN v1", status: "draft" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN v1", status: "draft", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v1", status: "draft" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "DE v1", status: "draft", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       const ok = await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       expect(ok.success).toBe(true);
@@ -439,8 +439,8 @@ describe.each(getConfiguredTestDialects())(
       // lifecycle on the companion.
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE live", status: "published" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "DE live", status: "published", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       const beforeRow = await t.adapter.selectOne<{
@@ -460,8 +460,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       const afterRow = await t.adapter.selectOne<{
@@ -527,14 +527,14 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         NO_LIFECYCLE_SINGLE,
-        { status: "keep me" },
-        { overrideAccess: true, _overwrite: true }
+        { status: "keep me", _overwrite: true },
+        { overrideAccess: true }
       );
 
       const refused = await singlesOf(t).update(
         NO_LIFECYCLE_SINGLE,
-        { status: "overwritten" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "overwritten", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       expect(refused.success).toBe(false);
@@ -551,19 +551,19 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN", status: "draft" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "EN", status: "draft", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE", status: "draft" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "DE", status: "draft", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
-        { locale: "*", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "*", overrideAccess: true }
       );
 
       const rows = await t.adapter.select<{ type?: string; payload?: unknown }>(

@@ -161,13 +161,13 @@ describe.each(getConfiguredTestDialects())(
       // Published by no one the trail records, so only the edit below counts.
       await t.singles.update(
         "masthead",
-        { heading: "Live", status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "Live", status: "published", _overwrite: true },
+        { overrideAccess: true }
       );
       const held = await t.singles.update(
         "masthead",
-        { heading: "Next" },
-        { routeAuthorized: true, user: ANA, _overwrite: true }
+        { heading: "Next", _overwrite: true },
+        { routeAuthorized: true, user: ANA }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -184,46 +184,45 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "banner",
-        { headline: "hello" },
+        { headline: "hello", _overwrite: true },
         {
           ...AS_ANA,
           locale: "en",
-          _overwrite: true,
         }
       );
       await t.singles.update(
         "banner",
-        { headline: "hola" },
+        { headline: "hola", _overwrite: true },
         {
           ...AS_ANA,
           locale: "es",
-          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(2);
 
       await t.singles.update(
         "banner",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         {
           ...AS_ANA,
           locale: "*",
-          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(3);
 
       await t.singles.update(
         "banner",
-        { status: "draft" },
+        { status: "draft", _overwrite: true },
         {
           ...AS_ANA,
           locale: "*",
-          _overwrite: true,
         }
       );
       expect(await t.rowsOf("banner")).toHaveLength(4);
-      await t.singles.publishAllLocales("banner", AS_ANA);
+      await t.singles.publishAllLocales("banner", {
+        ...AS_ANA,
+        data: { _overwrite: true },
+      });
       // One row for every language at once, not one per language.
       expect(await t.rowsOf("banner")).toHaveLength(5);
     }, 120_000);
@@ -254,18 +253,17 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "site-settings",
-        { siteName: "by the system" },
-        { overrideAccess: true, _overwrite: true }
+        { siteName: "by the system", _overwrite: true },
+        { overrideAccess: true }
       );
       expect(await t.rowsOf("site-settings")).toEqual([]);
 
       await t.singles.update(
         "site-settings",
-        { siteName: "by a key" },
+        { siteName: "by a key", _overwrite: true },
         {
           overrideAccess: true,
           actor: { type: "apiKey", id: "key-1" },
-          _overwrite: true,
         }
       );
       expect(await t.rowsOf("site-settings")).toEqual([
@@ -277,10 +275,9 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.singles.update(
         "site-settings",
-        { siteName: "Before" },
+        { siteName: "Before", _overwrite: true },
         {
           overrideAccess: true,
-          _overwrite: true,
         }
       );
       const service = container.get<ActivityLogService>("activityLogService");

@@ -94,7 +94,11 @@ describe.each(getConfiguredTestDialects())(
       registry.retractDynamicSchema(GROUP_TABLE);
 
       const refusal = await (current!.nextly as unknown as DirectApi)
-        .update({ collection: PAGES, id, data: { hero: { heading: "Two" } } })
+        .update({
+          collection: PAGES,
+          id,
+          data: { hero: { heading: "Two" }, _overwrite: true },
+        })
         .then(
           () => undefined,
           (error: unknown) => error

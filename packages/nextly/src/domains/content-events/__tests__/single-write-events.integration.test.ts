@@ -155,15 +155,18 @@ describe.each(getConfiguredTestDialects())(
       const as = { overrideAccess: true, user: ANA };
       await t.singles.update(
         "banner",
-        { headline: "hello" },
-        { ...as, locale: "en", _overwrite: true }
+        { headline: "hello", _overwrite: true },
+        { ...as, locale: "en" }
       );
       await t.singles.update(
         "banner",
-        { headline: "hola" },
-        { ...as, locale: "es", _overwrite: true }
+        { headline: "hola", _overwrite: true },
+        { ...as, locale: "es" }
       );
-      await t.singles.publishAllLocales("banner", as);
+      await t.singles.publishAllLocales("banner", {
+        ...as,
+        data: { _overwrite: true },
+      });
 
       const publishes = (await t.eventsOf("banner")).filter(
         e => e.kind === "published"

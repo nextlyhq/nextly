@@ -517,7 +517,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection,
           id,
-          data,
+          data: { ...data, _overwrite: true },
           user: editor.user,
           overrideAccess: false,
         } as never)
@@ -903,7 +903,11 @@ describe.each(getConfiguredTestDialects())(
       /** As another writer: a save of the Single, judged by no expectation. */
       const authorSavesSingle = (slug: string, data: Record<string, unknown>) =>
         writerOf.run("author", () =>
-          t.nextly.updateSingle({ slug, data, overrideAccess: true } as never)
+          t.nextly.updateSingle({
+            slug,
+            data: { ...data, _overwrite: true },
+            overrideAccess: true,
+          } as never)
         );
 
       /**
@@ -1431,7 +1435,11 @@ describe.each(getConfiguredTestDialects())(
               t.nextly.update({
                 collection: "stagedwords",
                 id,
-                data: { body: { v: "draft" }, status: "draft" },
+                data: {
+                  body: { v: "draft" },
+                  status: "draft",
+                  _overwrite: true,
+                },
                 overrideAccess: true,
               } as never)
             )

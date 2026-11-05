@@ -373,7 +373,7 @@ async function boot(
     .getService("singleEntryService")
     .update(
       "homepage",
-      { featured: pageId, logo: "media-1" },
+      { featured: pageId, logo: "media-1", _overwrite: true },
       { overrideAccess: true }
     );
 

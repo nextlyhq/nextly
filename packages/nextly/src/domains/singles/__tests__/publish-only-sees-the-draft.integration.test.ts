@@ -93,8 +93,8 @@ async function heldDraft(
 ): Promise<void> {
   await singles.update(
     slug,
-    { siteName: "Live", status: "published" },
-    { overrideAccess: true, _overwrite: true }
+    { siteName: "Live", status: "published", _overwrite: true },
+    { overrideAccess: true }
   );
   const held = await singles.update(slug, change, {
     routeAuthorized: true,
@@ -163,12 +163,11 @@ describe.each(getConfiguredTestDialects())(
       );
       const published = await singles.update(
         FIELD_RULED,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         {
           routeAuthorized: false,
           user: PUBLISHER,
           overrideAccess: false,
-          _overwrite: true,
         }
       );
       expect(published.success).toBe(false);

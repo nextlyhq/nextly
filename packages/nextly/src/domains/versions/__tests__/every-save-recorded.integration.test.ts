@@ -152,27 +152,27 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "branding",
-        { heading: "Live", status: "published" },
-        { overrideAccess: true, user: ana, _overwrite: true }
+        { heading: "Live", status: "published", _overwrite: true },
+        { overrideAccess: true, user: ana }
       );
       const before = (await versionsFor(current, "branding")).length;
 
       await singles.update(
         "branding",
-        { heading: "Ana's" },
-        { overrideAccess: true, user: ana, _overwrite: true }
+        { heading: "Ana's", _overwrite: true },
+        { overrideAccess: true, user: ana }
       );
       await singles.update(
         "branding",
-        { heading: "Ben's" },
-        { overrideAccess: true, user: ben, _overwrite: true }
+        { heading: "Ben's", _overwrite: true },
+        { overrideAccess: true, user: ben }
       );
 
       // Saving the same heading again changes nothing, so records nothing.
       await singles.update(
         "branding",
-        { heading: "Ben's" },
-        { overrideAccess: true, user: ben, _overwrite: true }
+        { heading: "Ben's", _overwrite: true },
+        { overrideAccess: true, user: ben }
       );
 
       const saves = (await versionsFor(current, "branding")).slice(before);
@@ -242,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             user: ana,
           },
-          { title }
+          { title, _overwrite: true }
         );
 
       // The same as what is live: nothing to record.
@@ -304,7 +304,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (title: string) =>
         handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true },
-          { title }
+          { title, _overwrite: true }
         );
       await save("Pending");
       await save("Later");
@@ -320,6 +320,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         versionNo: pending!.versionNo!,
         user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const [live] = (
@@ -349,7 +350,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (title: string) =>
         handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true },
-          { title }
+          { title, _overwrite: true }
         );
       await save("Pending A");
       await save("Pending B");
@@ -363,6 +364,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         versionNo: pendingA!.versionNo!,
         user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const undo = (await rowsFor(current, "posts")).filter(
@@ -390,18 +392,18 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "branding",
-        { heading: "Live", status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "Live", status: "published", _overwrite: true },
+        { overrideAccess: true }
       );
       await singles.update(
         "branding",
-        { heading: "Pending A" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "Pending A", _overwrite: true },
+        { overrideAccess: true }
       );
       await singles.update(
         "branding",
-        { heading: "Pending B" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "Pending B", _overwrite: true },
+        { overrideAccess: true }
       );
       const versions = await versionsFor(current, "branding");
       const pendingA = versions.find(
@@ -414,6 +416,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: pendingA!.entryId,
         versionNo: pendingA!.versionNo!,
         user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       });
 
       const undo = (await rowsFor(current, "branding")).filter(
@@ -464,6 +467,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         versionNo: before.length + 1,
         user: await storedSuperAdmin(current),
+        version: { _overwrite: true },
       }).then(
         () => undefined,
         (err: unknown) => err

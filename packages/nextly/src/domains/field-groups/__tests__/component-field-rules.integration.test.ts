@@ -707,7 +707,11 @@ describe.each(getConfiguredTestDialects())(
             tx,
             "drafted",
             id,
-            { title: "d2", one: { heading: "h2", ...guardedValues("held") } },
+            {
+              title: "d2",
+              one: { heading: "h2", ...guardedValues("held") },
+              _overwrite: true,
+            },
             { user: { id: editorId }, overrideAccess: false }
           )
         );

@@ -42,6 +42,7 @@ interface Entries {
     collectionName: string;
     entryId: string;
     overrideAccess?: boolean;
+    data?: Record<string, unknown>;
   }): Promise<{ success: boolean }>;
 }
 
@@ -97,6 +98,7 @@ describe("publishing every language of an entry", () => {
       collectionName: "notices",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(result.success).toBe(false);
@@ -136,6 +138,7 @@ describe("publishing every language of an entry, with a language since removed",
       collectionName: "notices",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(result.success, JSON.stringify(result)).toBe(true);

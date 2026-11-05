@@ -239,7 +239,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     .getService("singleEntryService")
     .update(
       "homepage",
-      { headline: "Welcome", card: card("Single"), blocks },
+      { headline: "Welcome", card: card("Single"), blocks, _overwrite: true },
       { overrideAccess: true }
     );
   const deleted = await handler.deleteEntry({
@@ -322,12 +322,14 @@ async function readHomepage(
 }
 
 async function saveHomepage(fx: Fixture, data: Doc): Promise<void> {
-  const result = await fx.t
-    .getService("singleEntryService")
-    .update("homepage", data, {
+  const result = await fx.t.getService("singleEntryService").update(
+    "homepage",
+    { ...data, _overwrite: true },
+    {
       user: { id: fx.editor },
       routeAuthorized: true,
-    });
+    }
+  );
   expect(result.success).toBe(true);
 }
 

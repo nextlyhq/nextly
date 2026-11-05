@@ -264,8 +264,8 @@ async function writeMasthead(): Promise<string> {
   for (const heading of ["a", "b", "c"]) {
     await singles.update(
       "masthead",
-      { heading },
-      { overrideAccess: true, user: ANA, _overwrite: true }
+      { heading, _overwrite: true },
+      { overrideAccess: true, user: ANA }
     );
   }
   const [row] = (await rowsOf("nextly_versions")).filter(

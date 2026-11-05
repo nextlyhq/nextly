@@ -170,7 +170,7 @@ describe("a field group's validators and the parent write's request", () => {
     const error = await current.nextly
       .updateSingle({
         slug: "landing",
-        data: { headline: "Hello", badge: { badge: "gold" } },
+        data: { headline: "Hello", badge: { badge: "gold" }, _overwrite: true },
         overrideAccess: true,
       })
       .catch((e: unknown) => e);

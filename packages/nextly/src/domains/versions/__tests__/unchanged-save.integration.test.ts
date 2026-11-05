@@ -182,8 +182,8 @@ describe.each(getConfiguredTestDialects())(
       const singles = current!.getService("singleEntryService");
       await singles.update(
         "masthead",
-        { heading: "a" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "a", _overwrite: true },
+        { overrideAccess: true }
       );
       const all = () =>
         current!.adapter
@@ -204,15 +204,15 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "masthead",
-        { heading: "a" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "a", _overwrite: true },
+        { overrideAccess: true }
       );
       expect(await all()).toHaveLength(before);
 
       await singles.update(
         "masthead",
-        { heading: "b" },
-        { overrideAccess: true, _overwrite: true }
+        { heading: "b", _overwrite: true },
+        { overrideAccess: true }
       );
       expect(await all()).toHaveLength(before + 1);
     });
@@ -223,7 +223,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (label: string) =>
         singles.update(
           "masthead",
-          { heading: "a", byline: { label } },
+          { heading: "a", byline: { label }, _overwrite: true },
           { overrideAccess: true }
         );
       const all = () =>
@@ -335,6 +335,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "bilingual",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       // Spanish back to draft: the content is what the newest version holds,
       // and only Spanish's status differs from it.
@@ -350,6 +351,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "bilingual",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       const after = await versionsOf(id);
@@ -362,23 +364,29 @@ describe.each(getConfiguredTestDialects())(
       const singles = current!.getService("singleEntryService");
       await singles.update(
         "edition",
-        { headline: "hello", status: "published" },
-        { overrideAccess: true, locale: "en", _overwrite: true }
+        { headline: "hello", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
       );
       await singles.update(
         "edition",
-        { headline: "hola" },
-        { overrideAccess: true, locale: "es", _overwrite: true }
+        { headline: "hola", _overwrite: true },
+        { overrideAccess: true, locale: "es" }
       );
-      await singles.publishAllLocales("edition", { overrideAccess: true });
+      await singles.publishAllLocales("edition", {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
       await singles.update(
         "edition",
-        { status: "draft" },
-        { overrideAccess: true, locale: "es", _overwrite: true }
+        { status: "draft", _overwrite: true },
+        { overrideAccess: true, locale: "es" }
       );
       const before = (await singleVersionsOf("edition")).length;
 
-      await singles.publishAllLocales("edition", { overrideAccess: true });
+      await singles.publishAllLocales("edition", {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
 
       const after = await singleVersionsOf("edition");
       expect(after).toHaveLength(before + 1);

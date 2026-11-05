@@ -349,9 +349,19 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
         locale,
       });
-      await handler.updateEntry(at("de"), { title: "DE", status: "published" }); // v2
-      await handler.updateEntry(at("de"), { status: "draft" }); // v3, de withdrawn
-      await handler.updateEntry(at("en"), { title: "EN held" }); // v4, en draft
+      await handler.updateEntry(at("de"), {
+        title: "DE",
+        status: "published",
+        _overwrite: true,
+      }); // v2
+      await handler.updateEntry(at("de"), {
+        status: "draft",
+        _overwrite: true,
+      }); // v3, de withdrawn
+      await handler.updateEntry(at("en"), {
+        title: "EN held",
+        _overwrite: true,
+      }); // v4, en draft
       const notes = (args: {
         to?: number;
         baseline?: string;

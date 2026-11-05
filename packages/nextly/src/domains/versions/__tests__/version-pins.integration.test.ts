@@ -551,7 +551,11 @@ describe.each(getConfiguredTestDialects())(
       );
       await current
         .getService("singleEntryService")
-        .update(slug, { heading: "v1" }, { overrideAccess: true });
+        .update(
+          slug,
+          { heading: "v1", _overwrite: true },
+          { overrideAccess: true }
+        );
       const [version] = (
         await current.adapter.select<{ scopeSlug: string; entryId: string }>(
           "nextly_versions"

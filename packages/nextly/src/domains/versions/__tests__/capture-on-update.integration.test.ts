@@ -104,8 +104,8 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { title: "hello" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "hello", _overwrite: true },
+      { overrideAccess: true }
     );
 
     const rows = await versions(current, "preferences");
@@ -146,8 +146,8 @@ describe("version capture on update (integration)", () => {
     // defaulted `siteName` is never in the patch, only in the auto-create seed.
     await singles.update(
       "preferences",
-      { tagline: "hi" },
-      { overrideAccess: true, locale: "en", _overwrite: true }
+      { tagline: "hi", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
     );
 
     const rows = await versions(current, "preferences");
@@ -186,14 +186,14 @@ describe("version capture on update (integration)", () => {
     // Establish both German translations.
     await singles.update(
       "preferences",
-      { siteName: "Meine Seite", tagline: "hallo" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { siteName: "Meine Seite", tagline: "hallo", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
     // Partial German edit: touch only `siteName`, leaving `tagline` untouched.
     await singles.update(
       "preferences",
-      { siteName: "Meine Seite 2" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { siteName: "Meine Seite 2", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
 
     const rows = await versions(current, "preferences");
@@ -233,14 +233,14 @@ describe("version capture on update (integration)", () => {
     // Establish a German translation.
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { tagline: "hallo", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
     // Shared-field-only write at the same locale: touches no translatable field.
     await singles.update(
       "preferences",
-      { siteName: "Acme" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { siteName: "Acme", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
 
     const rows = await versions(current, "preferences");
@@ -278,19 +278,19 @@ describe("version capture on update (integration)", () => {
     // Default locale published; then a draft German translation.
     await singles.update(
       "preferences",
-      { siteName: "Acme", status: "published" },
-      { overrideAccess: true, locale: "en", _overwrite: true }
+      { siteName: "Acme", status: "published", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
     );
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { tagline: "hallo", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
     // Shared-field write at German: no status, but folds in the translation.
     await singles.update(
       "preferences",
-      { siteName: "Acme 2" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { siteName: "Acme 2", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
 
     const rows = await versions(current, "preferences");
@@ -334,8 +334,8 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { region: "us" },
-      { overrideAccess: true, locale: "en", _overwrite: true }
+      { region: "us", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
     );
 
     const rows = await versions(current, "preferences");
@@ -374,8 +374,8 @@ describe("version capture on update (integration)", () => {
     // First update auto-creates at "de" and touches only `tagline`.
     await singles.update(
       "preferences",
-      { tagline: "hallo" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { tagline: "hallo", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
 
     const rows = await versions(current, "preferences");
@@ -433,8 +433,8 @@ describe("version capture on update (integration)", () => {
           // The concurrent writer persists the row with a REAL siteName.
           await singles.update(
             "preferences",
-            { siteName: "Real Name" },
-            { overrideAccess: true, locale: "en", _overwrite: true }
+            { siteName: "Real Name", _overwrite: true },
+            { overrideAccess: true, locale: "en" }
           );
         }
         return context.data;
@@ -445,8 +445,8 @@ describe("version capture on update (integration)", () => {
     // the concurrent writer just inserted.
     const outer = await singles.update(
       "preferences",
-      { region: "us" },
-      { overrideAccess: true, locale: "en", _overwrite: true }
+      { region: "us", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
     );
     // The adopting write itself must succeed and be captured, otherwise the
     // assertions below would pass against the inner hook's write alone and never
@@ -794,8 +794,8 @@ describe("version capture on update (integration)", () => {
 
     await singles.update(
       "preferences",
-      { meta: { hero: { heading: "Welcome" } } },
-      { overrideAccess: true, _overwrite: true }
+      { meta: { hero: { heading: "Welcome" } }, _overwrite: true },
+      { overrideAccess: true }
     );
 
     const rows = await versions(current, "preferences");

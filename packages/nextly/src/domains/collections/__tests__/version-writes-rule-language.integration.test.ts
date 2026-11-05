@@ -175,12 +175,11 @@ async function restoreIn(
     { scopeKind: "collection", scopeSlug: collection, entryId: id },
     locale
   );
-  return rest("POST", [
-    ...entry(collection, id),
-    "versions",
-    String(versionNo),
-    "restore",
-  ]);
+  return rest(
+    "POST",
+    [...entry(collection, id), "versions", String(versionNo), "restore"],
+    { _overwrite: true }
+  );
 }
 
 /** Takes the live values into `id`'s held edit in `locale`. */
@@ -188,7 +187,7 @@ const takeLiveIn = (collection: string, id: string, locale: string) =>
   rest(
     "POST",
     [...entry(collection, id), "versions", "working-draft", "take-live"],
-    {},
+    { _overwrite: true },
     `?locale=${locale}`
   );
 
@@ -252,8 +251,12 @@ describe.each(getConfiguredTestDialects())(
           for (const locale of ["en", "de"]) {
             const written = await singles.update(
               BY_LANGUAGE_SINGLE,
-              { headline: `live ${locale}`, status: "published" },
-              { overrideAccess: true, locale, _overwrite: true }
+              {
+                headline: `live ${locale}`,
+                status: "published",
+                _overwrite: true,
+              },
+              { overrideAccess: true, locale }
             );
             expect(written.success).toBe(true);
             id = String((written.data as { id: unknown }).id);
@@ -263,8 +266,8 @@ describe.each(getConfiguredTestDialects())(
               (
                 await singles.update(
                   BY_LANGUAGE_SINGLE,
-                  { headline: `held ${locale}` },
-                  { overrideAccess: true, locale, _overwrite: true }
+                  { headline: `held ${locale}`, _overwrite: true },
+                  { overrideAccess: true, locale }
                 )
               ).success
             ).toBe(true);
@@ -304,7 +307,7 @@ describe.each(getConfiguredTestDialects())(
             rest(
               "PATCH",
               entry(BY_LANGUAGE, id),
-              { title: locale },
+              { title: locale, _overwrite: true },
               `?locale=${locale}`
             );
 
@@ -337,13 +340,17 @@ describe.each(getConfiguredTestDialects())(
             entryId: id,
           };
           const restore = async (locale: string) =>
-            rest("POST", [
-              "singles",
-              BY_LANGUAGE_SINGLE,
-              "versions",
-              String(await newestIn(t, ref, locale)),
-              "restore",
-            ]);
+            rest(
+              "POST",
+              [
+                "singles",
+                BY_LANGUAGE_SINGLE,
+                "versions",
+                String(await newestIn(t, ref, locale)),
+                "restore",
+              ],
+              { _overwrite: true }
+            );
 
           expect(await restore("de")).toBe(german);
           expect(await restore("en")).toBe(english);
@@ -362,7 +369,7 @@ describe.each(getConfiguredTestDialects())(
                 "working-draft",
                 "take-live",
               ],
-              {},
+              { _overwrite: true },
               `?locale=${locale}`
             );
 

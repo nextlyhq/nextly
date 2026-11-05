@@ -146,12 +146,14 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "articles",
         entryId: id,
         user: ANA,
+        version: { _overwrite: true },
       });
       // Nothing left to discard.
       await t.handler.discardWorkingDraft({
         collectionName: "articles",
         entryId: id,
         user: ANA,
+        version: { _overwrite: true },
       });
 
       const discarded = (await t.eventsOf(id)).filter(
@@ -215,10 +217,14 @@ describe.each(getConfiguredTestDialects())(
       // per item and carries on; a pass that pruned versions without its event
       // must not.
       const result = await service
-        .updateMany("drafted", [{ id, data: { title: "held 3" } }], {
-          overrideAccess: true,
-          user: ANA,
-        })
+        .updateMany(
+          "drafted",
+          [{ id, data: { title: "held 3", _overwrite: true } }],
+          {
+            overrideAccess: true,
+            user: ANA,
+          }
+        )
         .catch(() => ({ failed: -1 }));
 
       expect(result.failed).not.toBe(0);

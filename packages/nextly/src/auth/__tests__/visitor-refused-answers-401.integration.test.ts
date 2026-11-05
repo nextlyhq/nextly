@@ -78,7 +78,7 @@ describe("a visitor the Public role doesn't cover", () => {
       t.nextly.update({
         collection: NOTES,
         id: String(item.id),
-        data: { title: "changed" },
+        data: { title: "changed", _overwrite: true },
         overrideAccess: false,
       } as never)
     );
@@ -97,7 +97,7 @@ describe("a visitor the Public role doesn't cover", () => {
     const refused = await errorOf(() =>
       t.nextly.updateSingle({
         slug: SETTINGS,
-        data: { title: "changed" },
+        data: { title: "changed", _overwrite: true },
         overrideAccess: false,
       } as never)
     );
@@ -122,7 +122,7 @@ describe("a visitor the Public role covers", () => {
       t.nextly.update({
         collection: LOCKED,
         id: String(item.id),
-        data: { title: "changed" },
+        data: { title: "changed", _overwrite: true },
         overrideAccess: false,
       } as never)
     );

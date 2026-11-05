@@ -488,6 +488,7 @@ describe("a publish inside ctx.db.transaction on sqlite", () => {
         collectionName: "pages",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
     const publish = async () => {
       const result = await publishResult();

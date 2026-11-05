@@ -189,8 +189,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
     ]) {
       const written = await singles.update(
         "hero",
-        { heading, views: 7 },
-        { locale, overrideAccess: true, _overwrite: true }
+        { heading, views: 7, _overwrite: true },
+        { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }
@@ -586,8 +586,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
       current.getService("singleEntryService");
     const written = await singles.update(
       "hero",
-      { heading: "Hello", views: 7 },
-      { overrideAccess: true, _overwrite: true }
+      { heading: "Hello", views: 7, _overwrite: true },
+      { overrideAccess: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
     const [row] = await query<{ id: string }>(

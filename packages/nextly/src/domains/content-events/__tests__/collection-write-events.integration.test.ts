@@ -198,7 +198,7 @@ describe.each(getConfiguredTestDialects())(
             .updateEntryInTransaction(
               tx as never,
               { collectionName: "posts", entryId: batched, ...as },
-              { status }
+              { status, _overwrite: true }
             )
         );
         expect(result.success).toBe(true);
@@ -314,6 +314,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "translated",
         entryId: id,
         ...as,
+        data: { _overwrite: true },
       });
       expect(published.success).toBe(true);
 
@@ -340,7 +341,7 @@ describe.each(getConfiguredTestDialects())(
       const result = await t.handler
         .updateEntry(
           { collectionName: "posts", entryId: id, ...as },
-          { title: "lost" }
+          { title: "lost", _overwrite: true }
         )
         .catch(error => {
           refusal = error;

@@ -91,7 +91,7 @@ function save(
 ) {
   return entries.updateEntry(
     { collectionName: COLLECTION, entryId: id, overrideAccess: true, locale },
-    body
+    { ...body, _overwrite: true }
   );
 }
 
@@ -313,6 +313,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
       expect(taken.success).toBe(true);
       expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
@@ -391,6 +392,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: false,
           routeAuthorized: true,
           user: { id: "u1" },
+          version: { _overwrite: true },
         });
 
         expect(result.data, JSON.stringify(result)).toEqual({
@@ -492,6 +494,7 @@ describe.each(getConfiguredTestDialects())(
             entryId: id,
             overrideAccess: true,
             locale: "en",
+            version: { _overwrite: true },
           })
         ).success
       ).toBe(true);
@@ -624,6 +627,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
 
       expect({ statusCode: missing.statusCode, code: missing.code }).toEqual({

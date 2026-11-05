@@ -375,7 +375,7 @@ describe.each(getConfiguredTestDialects())(
           who,
           "PATCH",
           ["collections", "pages", "entries", id],
-          data
+          { ...data, _overwrite: true }
         );
         expect(res.status).toBe(200);
         return;
@@ -393,7 +393,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           "pages",
           id,
-          data,
+          { ...data, _overwrite: true },
           serviceContext(who)
         )
       );
@@ -412,7 +412,7 @@ describe.each(getConfiguredTestDialects())(
           who,
           "PATCH",
           ["collections", collection, "entries", id],
-          data
+          { ...data, _overwrite: true }
         );
         expect(res.status).toBe(200);
         return;
@@ -1179,7 +1179,10 @@ describe.each(getConfiguredTestDialects())(
           },
         };
         if (door === "rest") {
-          const res = await rest("editor", "PATCH", ["singles", "site"], data);
+          const res = await rest("editor", "PATCH", ["singles", "site"], {
+            ...data,
+            _overwrite: true,
+          });
           expect(res.status).toBe(200);
         } else {
           await checkedAs("editor").updateSingle({
@@ -1267,7 +1270,7 @@ describe.each(getConfiguredTestDialects())(
           checkedAs("editor").update({
             collection: "drafted",
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           } as never)
           // Refused, naming the field: the pending change edits it, and the
           // publisher may not write it. The change is kept for someone who may.
@@ -1300,7 +1303,7 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           checkedAs("editor").updateSingle({
             slug: "board",
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           } as never)
           // Refused, naming the field: the pending change edits it, and the
           // publisher may not write it. The change is kept for someone who may.
@@ -1373,7 +1376,8 @@ describe.each(getConfiguredTestDialects())(
             "single" in target
               ? ["singles", target.single]
               : ["collections", target.collection, "entries", target.id];
-          return (await rest(who, "PATCH", path, body)).status;
+          return (await rest(who, "PATCH", path, { ...body, _overwrite: true }))
+            .status;
         }
         try {
           if ("single" in target) {
@@ -1589,7 +1593,7 @@ describe.each(getConfiguredTestDialects())(
           checkedAs("allowed").update({
             collection: "drafted",
             id,
-            data: { status: "published" },
+            data: { status: "published", _overwrite: true },
           } as never)
         ).rejects.toMatchObject({ statusCode: 400 });
         expect(list((await stored("drafted", id)).many)).toHaveLength(
@@ -1883,6 +1887,7 @@ describe.each(getConfiguredTestDialects())(
           entryId: id,
           versionNo: 1,
           user: { id: editorId },
+          version: { _overwrite: true },
         } as never);
         const after = await stored("versioned", id);
         // What the restorer may write comes back; what they may not stays.

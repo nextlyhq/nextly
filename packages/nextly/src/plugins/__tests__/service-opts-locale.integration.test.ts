@@ -184,7 +184,7 @@ describe("what the pair refuses", () => {
       services.collections.updateEntry(
         "pages",
         id,
-        { title: "Typo" },
+        { title: "Typo", _overwrite: true },
         { as: "system", locale: "xx" }
       )
     ).rejects.toMatchObject({ statusCode: 400 });

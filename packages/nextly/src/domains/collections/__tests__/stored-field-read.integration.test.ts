@@ -851,8 +851,11 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       const result = await entries.updateEntries(
         { collectionName: "plain", overrideAccess: true },
         [
-          { id: x, data: { body: { v: "written in the batch" } } },
-          { id: y, data: { body: { peek: x } } },
+          {
+            id: x,
+            data: { body: { v: "written in the batch" }, _overwrite: true },
+          },
+          { id: y, data: { body: { peek: x }, _overwrite: true } },
         ],
         { skipHooks: true }
       );

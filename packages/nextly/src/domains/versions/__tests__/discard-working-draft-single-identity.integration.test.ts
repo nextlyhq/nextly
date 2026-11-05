@@ -89,6 +89,7 @@ describe.each(getConfiguredTestDialects())(
           slug: SETTINGS,
           entryId: "a-document-no-longer-there",
           user: { id: "system-check", roles: ["super-admin"] },
+          version: { _overwrite: true },
         })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect((await draftParts()).length).toBeGreaterThan(0);
@@ -100,6 +101,7 @@ describe.each(getConfiguredTestDialects())(
         slug: SETTINGS,
         entryId: liveId,
         user: { id: "system-check", roles: ["super-admin"] },
+        version: { _overwrite: true },
       });
       expect(removed).toBe(1);
       expect(await draftParts()).toEqual([]);
@@ -131,7 +133,7 @@ describe.each(getConfiguredTestDialects())(
           );
           await new Nextly().updateSingle({
             slug: SETTINGS,
-            data: { siteName: "Acme (pending once more)" },
+            data: { siteName: "Acme (pending once more)", _overwrite: true },
           });
           expect((await draftParts()).length).toBeGreaterThan(0);
 
@@ -171,10 +173,12 @@ describe.each(getConfiguredTestDialects())(
                   slug: SETTINGS,
                   entryId: liveId,
                   user: { id: "system-check", roles: ["super-admin"] },
+                  version: { _overwrite: true },
                 })
               : t.getService("singleEntryService").discardWorkingDraft({
                   slug: SETTINGS,
                   user: { id: "system-check", roles: ["super-admin"] },
+                  version: { _overwrite: true },
                 });
             await untilSomeoneWaitsOnALock(t.adapter, dialect);
             release();

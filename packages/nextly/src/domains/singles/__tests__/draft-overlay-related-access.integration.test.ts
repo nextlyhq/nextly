@@ -100,14 +100,19 @@ describe("single draft overlay — related-row collection access (integration)",
     // carries it.
     const published = await singles.update(
       SLUG,
-      { headline: "Live", featured: pageId, status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      {
+        headline: "Live",
+        featured: pageId,
+        status: "published",
+        _overwrite: true,
+      },
+      { overrideAccess: true }
     );
     expect(published.success).toBe(true);
     const held = await singles.update(
       SLUG,
-      { headline: "Edited" },
-      { overrideAccess: true, _overwrite: true }
+      { headline: "Edited", _overwrite: true },
+      { overrideAccess: true }
     );
     expect(held.success).toBe(true);
 
@@ -145,13 +150,18 @@ describe("single draft overlay — related-row collection access (integration)",
     const { singles, pageId } = await boot();
     await singles.update(
       SLUG,
-      { headline: "Live", featured: pageId, status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      {
+        headline: "Live",
+        featured: pageId,
+        status: "published",
+        _overwrite: true,
+      },
+      { overrideAccess: true }
     );
     await singles.update(
       SLUG,
-      { headline: "Edited" },
-      { overrideAccess: true, _overwrite: true }
+      { headline: "Edited", _overwrite: true },
+      { overrideAccess: true }
     );
 
     const draft = await singles.get(SLUG, {

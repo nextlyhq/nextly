@@ -170,7 +170,7 @@ describe.each(getConfiguredTestDialects())(
         new Request(`http://localhost/api/${path.join("/")}`, {
           method: "PATCH",
           headers: { cookie: writerCookie, "content-type": "application/json" },
-          body: JSON.stringify(data),
+          body: JSON.stringify({ ...data, _overwrite: true }),
         }),
         { params: Promise.resolve({ params: path }) }
       );

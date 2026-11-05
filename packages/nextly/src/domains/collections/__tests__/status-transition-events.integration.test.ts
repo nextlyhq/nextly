@@ -256,6 +256,7 @@ describe("document status-transition events (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     // Both companion locales' draft->published changes reached the workflow

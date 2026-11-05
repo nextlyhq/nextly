@@ -516,8 +516,8 @@ describe.each(getConfiguredTestDialects())(
       const as = { overrideAccess: true };
       const written = await singles.update(
         "bulletin",
-        { headline: "hello", region: "open" },
-        { ...as, locale: "en", _overwrite: true }
+        { headline: "hello", region: "open", _overwrite: true },
+        { ...as, locale: "en" }
       );
       expect(written.success).toBe(true);
       const id = String((written.data as { id: unknown }).id);
@@ -525,14 +525,19 @@ describe.each(getConfiguredTestDialects())(
         (
           await singles.update(
             "bulletin",
-            { headline: "hola", region: "closed" },
-            { ...as, locale: "es", _overwrite: true }
+            { headline: "hola", region: "closed", _overwrite: true },
+            { ...as, locale: "es" }
           )
         ).success
       ).toBe(true);
-      expect((await singles.publishAllLocales("bulletin", as)).success).toBe(
-        true
-      );
+      expect(
+        (
+          await singles.publishAllLocales("bulletin", {
+            ...as,
+            data: { _overwrite: true },
+          })
+        ).success
+      ).toBe(true);
       const subject = { kind: "single" as const, slug: "bulletin", id };
       const document = {
         scopeKind: "single" as const,
@@ -729,7 +734,9 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(es)], { label: "x" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(es), "restore"])
+          restWrite("POST", key, [...versions, String(es), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["refused", "refused"]);
       // The same caller names and restores a version of a language it reads.
@@ -738,7 +745,9 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(en)], { label: "y" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(en), "restore"])
+          restWrite("POST", key, [...versions, String(en), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["done", "done"]);
 

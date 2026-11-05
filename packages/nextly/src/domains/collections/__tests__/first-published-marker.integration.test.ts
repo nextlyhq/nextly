@@ -276,6 +276,7 @@ describe("first_published_at", () => {
       collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const after = await storedRow(current, id);
@@ -300,6 +301,7 @@ describe("first_published_at", () => {
       collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const after = await storedRow(current, id);
@@ -341,7 +343,7 @@ describe("first_published_at", () => {
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       )
     );
 
@@ -369,14 +371,14 @@ describe("first_published_at", () => {
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       )
     );
     await current.adapter.transaction(tx =>
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       )
     );
 
@@ -417,6 +419,7 @@ describe("first_published_at", () => {
       collectionName: "fpmversioned",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const versions = (
@@ -712,8 +715,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "draft" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "hi", status: "draft", _overwrite: true },
+      { overrideAccess: true }
     );
     expect(
       (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
@@ -721,8 +724,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "hi", status: "published", _overwrite: true },
+      { overrideAccess: true }
     );
 
     const row = (await tableRows(current, "single_fpmbanner"))[0] ?? {};
@@ -752,8 +755,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmowner",
-      { title: "hi", created_by: "written by the user" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "hi", created_by: "written by the user", _overwrite: true },
+      { overrideAccess: true }
     );
 
     const row = (await tableRows(current, "single_fpmowner"))[0] ?? {};
@@ -783,8 +786,9 @@ describe("first_published_at", () => {
         status: "draft",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
         first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+        _overwrite: true,
       },
-      { overrideAccess: true, _overwrite: true }
+      { overrideAccess: true }
     );
     expect(
       (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
@@ -793,8 +797,8 @@ describe("first_published_at", () => {
     // And a real marker cannot be overwritten once the Single has been published.
     await singles.update(
       "fpmbanner",
-      { status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      { status: "published", _overwrite: true },
+      { overrideAccess: true }
     );
     const stamped = String(
       (await tableRows(current, "single_fpmbanner"))[0]?.first_published_at
@@ -806,8 +810,9 @@ describe("first_published_at", () => {
         title: "edited",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
         first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+        _overwrite: true,
       },
-      { overrideAccess: true, _overwrite: true }
+      { overrideAccess: true }
     );
 
     expect(
@@ -834,8 +839,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "hi", status: "published", _overwrite: true },
+      { overrideAccess: true }
     );
     const singleId = (await tableRows(current, "single_fpmbanner"))[0]?.id;
     // Narrowed rather than asserted loosely: the row is read back as `Record<string, unknown>`,
@@ -855,8 +860,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { status: "draft" },
-      { overrideAccess: true, _overwrite: true }
+      { status: "draft", _overwrite: true },
+      { overrideAccess: true }
     );
     const unpublished = (await tableRows(current, "single_fpmbanner"))[0] ?? {};
     expect(unpublished.status).toBe("draft");
@@ -864,8 +869,8 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { status: "published" },
-      { overrideAccess: true, _overwrite: true }
+      { status: "published", _overwrite: true },
+      { overrideAccess: true }
     );
     expect(
       String(

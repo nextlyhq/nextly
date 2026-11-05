@@ -143,8 +143,8 @@ describe("singles lazy runtime-table registration (integration)", () => {
     // Write a translatable value — must route to the companion.
     const write = await entryServiceOf(current).update(
       "test-page",
-      { description: "hello" },
-      { overrideAccess: true, _overwrite: true }
+      { description: "hello", _overwrite: true },
+      { overrideAccess: true }
     );
     expect(write.success).toBe(true);
     const adapter = current.adapter as unknown as {

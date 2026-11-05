@@ -487,7 +487,7 @@ describe.each(getConfiguredTestDialects())(
           user: { id: AUTHOR },
           overrideAccess: false,
         } as never,
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
     /** The members of a new release, added on a trusted call as the author's. */

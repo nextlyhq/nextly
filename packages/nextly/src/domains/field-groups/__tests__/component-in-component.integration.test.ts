@@ -227,6 +227,7 @@ describe.each(getConfiguredTestDialects())(
           data: {
             headline: "H",
             card: { meta: { badge: { label: "L", code: "forbidden" } } },
+            _overwrite: true,
           } as never,
         })
       );
@@ -260,7 +261,10 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "pages" as never,
           id: id as never,
-          data: { card: { title: "U", badge: { label: "L" } } } as never,
+          data: {
+            card: { title: "U", badge: { label: "L" } },
+            _overwrite: true,
+          } as never,
         })
       );
       expect(onUpdate.ok).toBe(false);
@@ -318,7 +322,7 @@ describe.each(getConfiguredTestDialects())(
         outcomeOf(() =>
           t.nextly.updateSingle({
             slug: "landing" as never,
-            data: data as never,
+            data: { ...data, _overwrite: true } as never,
           })
         );
 

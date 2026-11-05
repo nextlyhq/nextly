@@ -82,7 +82,7 @@ describe.each(getConfiguredTestDialects())(
       const update = () =>
         singles.updateSingle({
           slug: SINGLE,
-          data: { title: "changed" },
+          data: { title: "changed", _overwrite: true },
           overrideAccess: false,
           user: { id: owner },
         });

@@ -292,8 +292,8 @@ for (const dialect of getConfiguredTestDialects()) {
       const entries = current.getService("singleEntryService");
       const written = await entries.update(
         slug,
-        { body: "kept" },
-        { overrideAccess: true, _overwrite: true }
+        { body: "kept", _overwrite: true },
+        { overrideAccess: true }
       );
       expect(written.success).toBe(true);
 

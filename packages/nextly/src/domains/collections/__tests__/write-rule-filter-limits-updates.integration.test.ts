@@ -174,7 +174,13 @@ const update = (
   collection: string,
   id: string,
   data: Record<string, unknown>
-) => t.nextly.update({ collection, id, data, ...asAuthor } as never);
+) =>
+  t.nextly.update({
+    collection,
+    id,
+    data: { ...data, _overwrite: true },
+    ...asAuthor,
+  } as never);
 
 /** The entry as the author reads it with its held edit, where it has one. */
 const readWithDraft = (t: TestNextly, collection: string, id: string) =>
@@ -209,7 +215,7 @@ const updateInTransaction = (
       entries.updateEntryInTransaction(
         tx,
         { collectionName, entryId, user: { id: AUTHOR } },
-        data
+        { ...data, _overwrite: true }
       )
     )
     .then(
@@ -496,7 +502,7 @@ describe("an update rule's filter on a collection with languages", () => {
           collection: LOCALIZED,
           id: others,
           locale: "de",
-          data: { title: "renamed" },
+          data: { title: "renamed", _overwrite: true },
           ...asAuthor,
         } as never)
       );
@@ -544,7 +550,7 @@ describe("an update rule's filter on a collection with languages", () => {
         collection: FALLBACK,
         id,
         locale: "fr",
-        data: { note: "changed in French" },
+        data: { note: "changed in French", _overwrite: true },
         ...asAuthor,
       } as never)
     );

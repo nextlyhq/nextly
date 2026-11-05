@@ -355,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
         entries.updateEntryInTransaction(
           tx as never,
           { collectionName: "usageposts", entryId: id, overrideAccess: true },
-          { cover: B.id }
+          { cover: B.id, _overwrite: true }
         )
       );
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -373,7 +373,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: id,
               overrideAccess: true,
             },
-            { cover: C.id }
+            { cover: C.id, _overwrite: true }
           );
           throw new Error("the write after it failed");
         })
@@ -407,6 +407,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "usageposts",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published).toMatchObject({ success: true });
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -416,6 +417,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "usageposts",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(unpublished).toMatchObject({ success: true });
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -1277,7 +1279,7 @@ describe.each(getConfiguredTestDialects())(
           await entries.updateEntryInTransaction(
             tx as never,
             { collectionName: "usagewide", entryId: id, overrideAccess: true },
-            { gallery: [Q.id] }
+            { gallery: [Q.id], _overwrite: true }
           );
           entered();
           await held;

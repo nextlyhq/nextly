@@ -151,7 +151,7 @@ describe.each(getConfiguredTestDialects())(
         as(PUBLISHER.id).update({
           collection: SLUG,
           id,
-          data: { body: "not theirs", status: "published" },
+          data: { body: "not theirs", status: "published", _overwrite: true },
         } as never)
       ).rejects.toThrow();
       expect((await liveDoc(t, id)).body).toBe("live");
@@ -232,7 +232,7 @@ describe.each(getConfiguredTestDialects())(
         as(PUBLISHER.id).update({
           collection: FIELD_RULED,
           id,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
         } as never)
       ).rejects.toThrow();
     });

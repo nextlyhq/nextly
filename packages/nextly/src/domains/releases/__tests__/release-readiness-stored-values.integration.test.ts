@@ -183,7 +183,7 @@ async function writeAsAuthor(
   return t.nextly.update({
     collection: collection as never,
     id,
-    data: { status } as never,
+    data: { status, _overwrite: true } as never,
     locale: "*",
     overrideAccess: false,
     user: { id: author, email: user.email, roles: [] },

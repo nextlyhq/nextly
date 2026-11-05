@@ -82,6 +82,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const after = await handler.getEntry({
@@ -117,6 +118,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const history = await versions.list({
@@ -158,6 +160,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const ref = {
@@ -220,6 +223,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: head!.versionNo!,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const history = await versions.list(ref);
@@ -251,6 +255,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
     // Undo the restore by restoring the version it replaced.
     await restoreVersion({
@@ -259,6 +264,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 2,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const after = await handler.getEntry({
@@ -295,13 +301,13 @@ describe("restoreVersion (integration)", () => {
 
     await singles.update(
       "preferences",
-      { title: "First" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "First", _overwrite: true },
+      { overrideAccess: true }
     );
     await singles.update(
       "preferences",
-      { title: "Second" },
-      { overrideAccess: true, _overwrite: true }
+      { title: "Second", _overwrite: true },
+      { overrideAccess: true }
     );
 
     interface VRow {
@@ -322,6 +328,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     // The pre-restore snapshot holds the content that was live at the restore
@@ -356,20 +363,20 @@ describe("restoreVersion (integration)", () => {
     // Default locale published: main row and the `en` companion published.
     await singles.update(
       "branding",
-      { heading: "EN", status: "published" },
-      { overrideAccess: true, locale: "en", _overwrite: true }
+      { heading: "EN", status: "published", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
     );
     // The German translation stays draft: its companion `_status` never leaves
     // draft even though the main row is published.
     await singles.update(
       "branding",
-      { heading: "DE one" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { heading: "DE one", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
     await singles.update(
       "branding",
-      { heading: "DE two" },
-      { overrideAccess: true, locale: "de", _overwrite: true }
+      { heading: "DE two", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
     );
 
     interface VRow {
@@ -393,6 +400,7 @@ describe("restoreVersion (integration)", () => {
       entryId: deVersion!.entryId,
       versionNo: deVersion!.versionNo!,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const beforeRestore = (await rows()).find(
@@ -445,13 +453,13 @@ describe("restoreVersion (integration)", () => {
 
     await singles.update(
       "prefs",
-      { title: "one", byline: { author: authorId } },
-      { overrideAccess: true, _overwrite: true }
+      { title: "one", byline: { author: authorId }, _overwrite: true },
+      { overrideAccess: true }
     );
     await singles.update(
       "prefs",
-      { title: "two", byline: { author: authorId } },
-      { overrideAccess: true, _overwrite: true }
+      { title: "two", byline: { author: authorId }, _overwrite: true },
+      { overrideAccess: true }
     );
 
     interface VRow {
@@ -474,6 +482,7 @@ describe("restoreVersion (integration)", () => {
       entryId: first!.entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const beforeRestore = (await rows()).find(

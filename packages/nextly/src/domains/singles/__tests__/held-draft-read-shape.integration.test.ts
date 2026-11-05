@@ -97,13 +97,18 @@ describe.each(getConfiguredTestDialects())(
           seo: { metaTitle: "Live title" },
           links: [{ label: "Live link" }],
           status: "published",
+          _overwrite: true,
         },
-        { overrideAccess: true, _overwrite: true }
+        { overrideAccess: true }
       );
       await singles.update(
         "site-meta",
-        { seo: { metaTitle: "Held title" }, links: [{ label: "Held link" }] },
-        { overrideAccess: true, _overwrite: true }
+        {
+          seo: { metaTitle: "Held title" },
+          links: [{ label: "Held link" }],
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       );
 
       const draft = await workingDraft(current, "site-meta");
@@ -115,8 +120,8 @@ describe.each(getConfiguredTestDialects())(
       // Move the draft on, then put the held save back from history.
       await singles.update(
         "site-meta",
-        { seo: { metaTitle: "Later title" } },
-        { overrideAccess: true, _overwrite: true }
+        { seo: { metaTitle: "Later title" }, _overwrite: true },
+        { overrideAccess: true }
       );
       await restoreVersion({
         scopeKind: "single",
@@ -129,11 +134,12 @@ describe.each(getConfiguredTestDialects())(
           ...superAdmin,
           id: await superAdminUser(current, superAdmin.id),
         },
+        version: { _overwrite: true },
       });
       await singles.update(
         "site-meta",
-        { status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { overrideAccess: true }
       );
 
       const live = await liveRead(current, "site-meta");
@@ -164,8 +170,9 @@ describe.each(getConfiguredTestDialects())(
           siteName: "Live",
           seo: { metaTitle: "Live title" },
           status: "published",
+          _overwrite: true,
         },
-        { overrideAccess: true, _overwrite: true }
+        { overrideAccess: true }
       );
       const before = (await rowsFor(current, "site-meta")).filter(
         r => typeof r.versionNo === "number"
@@ -174,8 +181,12 @@ describe.each(getConfiguredTestDialects())(
       // The same values, held: the first held save compares with what is live.
       await singles.update(
         "site-meta",
-        { siteName: "Live", seo: { metaTitle: "Live title" } },
-        { overrideAccess: true, _overwrite: true }
+        {
+          siteName: "Live",
+          seo: { metaTitle: "Live title" },
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       );
       const after = (await rowsFor(current, "site-meta")).filter(
         r => typeof r.versionNo === "number"
@@ -203,18 +214,28 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "home",
-        { heading: "EN live", tagline: "EN tagline", status: "published" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        {
+          heading: "EN live",
+          tagline: "EN tagline",
+          status: "published",
+          _overwrite: true,
+        },
+        { locale: "en", overrideAccess: true }
       );
       await singles.update(
         "home",
-        { heading: "DE live", tagline: "DE tagline", status: "published" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        {
+          heading: "DE live",
+          tagline: "DE tagline",
+          status: "published",
+          _overwrite: true,
+        },
+        { locale: "de", overrideAccess: true }
       );
       await singles.update(
         "home",
-        { heading: "DE held" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { heading: "DE held", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       const draft = await workingDraft(current, "home");
@@ -231,8 +252,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "home",
-        { status: "published" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
       expect(await liveRead(current, "home", "de")).toMatchObject({
         heading: "DE held",

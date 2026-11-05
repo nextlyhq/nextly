@@ -87,14 +87,14 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "home",
-        { title: "Live", status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        { title: "Live", status: "published", _overwrite: true },
+        { overrideAccess: true }
       );
 
       await singles.update(
         "home",
-        { title: "Held" },
-        { overrideAccess: true, _overwrite: true }
+        { title: "Held", _overwrite: true },
+        { overrideAccess: true }
       );
 
       expect(await workingDrafts(current)).toHaveLength(1);
@@ -133,8 +133,9 @@ describe.each(getConfiguredTestDialects())(
           title: "T",
           layout: { hero: { heading: "Live" } },
           status: "published",
+          _overwrite: true,
         },
-        { overrideAccess: true, _overwrite: true }
+        { overrideAccess: true }
       );
       return singles;
     }
@@ -144,8 +145,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "home",
-        { layout: { hero: { heading: "Held" } } },
-        { overrideAccess: true, _overwrite: true }
+        { layout: { hero: { heading: "Held" } }, _overwrite: true },
+        { overrideAccess: true }
       );
 
       const [draft] = await workingDrafts(current!);
@@ -162,14 +163,14 @@ describe.each(getConfiguredTestDialects())(
       const singles = await bootNested(dialect);
       await singles.update(
         "home",
-        { layout: { hero: { heading: "Held" } } },
-        { overrideAccess: true, _overwrite: true }
+        { layout: { hero: { heading: "Held" } }, _overwrite: true },
+        { overrideAccess: true }
       );
 
       const published = await singles.update(
         "home",
-        { status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { overrideAccess: true }
       );
       expect(published.success, JSON.stringify(published)).not.toBe(false);
 

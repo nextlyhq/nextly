@@ -220,6 +220,7 @@ describe("version retention (integration)", () => {
       entryId: id,
       versionNo: source,
       user: { id: "u1" },
+      version: { _overwrite: true },
     });
 
     const rows = await versionsFor(current, "posts");
@@ -375,7 +376,7 @@ describe.each(getConfiguredTestDialects())(
                   overrideAccess: true,
                   locale,
                 },
-                { title, status: word }
+                { title, status: word, _overwrite: true }
               );
 
         const created = await save("en", "Hello");
@@ -429,13 +430,13 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "branding",
-        { heading: "EN", status: "published" },
-        { overrideAccess: true, locale: "en", _overwrite: true }
+        { heading: "EN", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
       );
       await singles.update(
         "branding",
-        { heading: "DE", status: "published" },
-        { overrideAccess: true, locale: "de", _overwrite: true }
+        { heading: "DE", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "de" }
       );
       const german = (await versionsFor(current, "branding")).find(
         r => r.locale === "de" && r.status === "published"
@@ -445,8 +446,8 @@ describe.each(getConfiguredTestDialects())(
       for (const n of [2, 3, 4, 5, 6]) {
         await singles.update(
           "branding",
-          { heading: `EN ${n}` },
-          { overrideAccess: true, locale: "en", _overwrite: true }
+          { heading: `EN ${n}`, _overwrite: true },
+          { overrideAccess: true, locale: "en" }
         );
       }
 

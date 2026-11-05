@@ -72,8 +72,13 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "live", goesLiveAt: PUBLISHED_AT, status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        {
+          headline: "live",
+          goesLiveAt: PUBLISHED_AT,
+          status: "published",
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       );
 
       const published = await singles.get(SLUG, { overrideAccess: true });
@@ -88,8 +93,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "edited", goesLiveAt: EDITED_AT },
-        { overrideAccess: true, _overwrite: true }
+        { headline: "edited", goesLiveAt: EDITED_AT, _overwrite: true },
+        { overrideAccess: true }
       );
 
       const drafted = await singles.get(SLUG, {
@@ -112,8 +117,13 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "live", goesLiveAt: PUBLISHED_AT, status: "published" },
-        { overrideAccess: true, _overwrite: true }
+        {
+          headline: "live",
+          goesLiveAt: PUBLISHED_AT,
+          status: "published",
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       );
       const published = await singles.get(SLUG, { overrideAccess: true });
       const publishedShape = shapeOf(
@@ -125,8 +135,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SLUG,
-        { headline: "edited" },
-        { overrideAccess: true, _overwrite: true }
+        { headline: "edited", _overwrite: true },
+        { overrideAccess: true }
       );
       const drafted = await singles.get(SLUG, {
         overrideAccess: true,

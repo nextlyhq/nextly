@@ -213,6 +213,7 @@ describe.each(getConfiguredTestDialects())(
         ...at(id),
         user: CLERK,
         versionNo: 1,
+        version: { _overwrite: true },
       });
       expect(JSON.stringify(result)).toContain("banner");
       const live = await current!.getService("collectionsHandler").getEntry({

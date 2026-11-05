@@ -70,8 +70,8 @@ async function draftedSingleInRelease(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "pending", status: "draft" },
-    { overrideAccess: true, _overwrite: true }
+    { headline: "pending", status: "draft", _overwrite: true },
+    { overrideAccess: true }
   );
 
   const row = await t.adapter.selectOne<{ id: string }>(`single_${SLUG}`, {});
@@ -106,8 +106,8 @@ async function publishedSingleInTakedown(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "live", status: "published" },
-    { overrideAccess: true, _overwrite: true }
+    { headline: "live", status: "published", _overwrite: true },
+    { overrideAccess: true }
   );
 
   const row = await t.adapter.selectOne<{ id: string }>(`single_${SLUG}`, {});

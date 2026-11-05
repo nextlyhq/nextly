@@ -243,7 +243,12 @@ describe.each(getConfiguredTestDialects())(
       expect(many.successful).toBe(1);
       const updated = await c.updateMany(
         OPEN,
-        [{ id: String(many.ids[0]), data: { title: "sys-many-2" } }],
+        [
+          {
+            id: String(many.ids[0]),
+            data: { title: "sys-many-2", _overwrite: true },
+          },
+        ],
         sys
       );
       expect(updated.successful).toBe(1);
@@ -258,7 +263,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           OPEN,
           String(row.id),
-          { title: "sys-tx-2" },
+          { title: "sys-tx-2", _overwrite: true },
           sys
         );
         await c.deleteEntryInTransaction(tx, OPEN, String(row.id), sys);

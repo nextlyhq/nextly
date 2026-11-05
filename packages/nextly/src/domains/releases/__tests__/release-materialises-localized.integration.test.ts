@@ -302,13 +302,13 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         SINGLE_SLUG,
-        { siteName: "Prefs EN", status: "published" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { siteName: "Prefs EN", status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       await singlesOf(t).update(
         SINGLE_SLUG,
-        { siteName: "Prefs DE", status: "published" },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { siteName: "Prefs DE", status: "published", _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
 
       const rows = await t.adapter.select<{ id: string }>(

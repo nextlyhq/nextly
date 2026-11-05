@@ -502,6 +502,7 @@ describe("draft/published split — discard working draft (integration)", () => 
           slug: COLLECTION,
           entryId: id,
           user: { id: "editor-1" },
+          version: { _overwrite: true },
           params: {
             collectionName: COLLECTION,
             entryId: id,
@@ -560,6 +561,7 @@ describe("draft/published split — discard working draft (integration)", () => 
           slug: COLLECTION,
           entryId: id,
           user: { id: "reader-1" },
+          version: { _overwrite: true },
           params: {
             collectionName: COLLECTION,
             entryId: id,
@@ -603,6 +605,7 @@ describe("draft/published split — discard working draft (integration)", () => 
     await handler.discardWorkingDraft({
       collectionName: COLLECTION,
       entryId: id,
+      version: { _overwrite: true },
     });
 
     expect(await workingDraftCount(id)).toBe(0);
@@ -663,6 +666,7 @@ describe("draft/published split — discard working draft (integration)", () => 
         entryId: id,
         user: { id: "editor-1" },
         locale: "es",
+        version: { _overwrite: true },
         params: {
           collectionName: COLLECTION,
           entryId: id,

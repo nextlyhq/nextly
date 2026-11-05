@@ -76,8 +76,8 @@ describe("single config honored — hooks + defaults (integration)", () => {
     // An update runs the change hooks, mapped to the update lifecycle.
     const updated = await service.update(
       "branding",
-      { siteName: "Beta" },
-      { overrideAccess: true, _overwrite: true }
+      { siteName: "Beta", _overwrite: true },
+      { overrideAccess: true }
     );
     expect(updated.success).toBe(true);
     expect(beforeChange).toHaveBeenCalled();

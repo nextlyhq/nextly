@@ -111,7 +111,11 @@ describe("beforeChange runs after the validation gate", () => {
     seen.beforeChange = 0;
 
     await expect(
-      t.nextly.update({ collection: DOCS, id, data: { code: "" } })
+      t.nextly.update({
+        collection: DOCS,
+        id,
+        data: { code: "", _overwrite: true },
+      })
     ).rejects.toThrow();
 
     expect(seen.beforeValidate).toBe(1);
@@ -289,7 +293,7 @@ describe("beforeChange runs after the validation gate", () => {
     await expect(
       current.nextly.updateSingle({
         slug: SETTINGS,
-        data: { contact: "" },
+        data: { contact: "", _overwrite: true },
         overrideAccess: true,
       })
     ).rejects.toThrow();

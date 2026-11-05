@@ -337,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.updateSingle({
           slug: "notice" as never,
           locale: "*",
-          data: { status: "draft" } as never,
+          data: { status: "draft", _overwrite: true } as never,
         })
       ).rejects.toMatchObject({ code: "CONFLICT" });
 

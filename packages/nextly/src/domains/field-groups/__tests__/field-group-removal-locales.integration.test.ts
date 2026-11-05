@@ -370,7 +370,10 @@ describe.each(getConfiguredTestDialects())(
       async function hold(door: "direct" | "rest", id: string, data: Doc) {
         if (door === "rest") {
           expect(
-            await restPatch(["collections", "ldrafted", "entries", id], data)
+            await restPatch(["collections", "ldrafted", "entries", id], {
+              ...data,
+              _overwrite: true,
+            })
           ).toBe(200);
           return;
         }
@@ -448,6 +451,7 @@ describe.each(getConfiguredTestDialects())(
         ).held as Doc;
       const change = (tag: string) => ({
         wrap: { held: { heading: `h-${tag}`, secret: "forged" } },
+        _overwrite: true,
       });
 
       it.each(["direct", "rest"] as const)(

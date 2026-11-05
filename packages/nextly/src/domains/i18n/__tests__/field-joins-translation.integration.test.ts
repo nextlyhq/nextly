@@ -191,8 +191,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       current.getService("singleEntryService");
     const written = await singles.update(
       "hero",
-      { heading: "Hello", views: 7 },
-      { locale: "en", overrideAccess: true, _overwrite: true }
+      { heading: "Hello", views: 7, _overwrite: true },
+      { locale: "en", overrideAccess: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
     const [row] = await query<{ id: string }>(

@@ -504,7 +504,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "dossiers" as never,
           id,
-          data: { status: "published" } as never,
+          data: { status: "published", _overwrite: true } as never,
           overrideAccess: false,
           user: { id: author, email: authorUser.email, roles: [] },
         } as never)
@@ -551,7 +551,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "bulletins" as never,
             id,
-            data: { status } as never,
+            data: { status, _overwrite: true } as never,
             locale: "*",
             overrideAccess: false,
             user: { id: author, email: authorUser.email, roles: [] },
@@ -604,7 +604,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "dossiers" as never,
           id,
-          data: { status: "draft" } as never,
+          data: { status: "draft", _overwrite: true } as never,
           locale: "*",
           overrideAccess: false,
           user: { id: author, email: authorUser.email, roles: [] },
@@ -737,7 +737,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       expect(written).toMatchObject({ success: false });
 

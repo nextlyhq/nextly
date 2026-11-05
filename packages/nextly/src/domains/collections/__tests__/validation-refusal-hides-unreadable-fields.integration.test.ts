@@ -267,10 +267,13 @@ describe.each(getConfiguredTestDialects())(
         data: { ...valid, status: "draft" },
       });
       entryId = String(made.item.id);
-      await singles(t).update(BANNER, valid, {
-        overrideAccess: true,
-        _overwrite: true,
-      });
+      await singles(t).update(
+        BANNER,
+        { ...valid, _overwrite: true },
+        {
+          overrideAccess: true,
+        }
+      );
       const banner = await t.nextly.findSingle({ slug: BANNER });
       const bannerId = String((banner as unknown as { id: unknown }).id);
 
@@ -309,13 +312,13 @@ describe.each(getConfiguredTestDialects())(
       for (const slug of [LANG_BANNER, LANG_HIDDEN]) {
         await singles(t).update(
           slug,
-          { headline: "h" },
-          { overrideAccess: true, _overwrite: true }
+          { headline: "h", _overwrite: true },
+          { overrideAccess: true }
         );
         await singles(t).update(
           slug,
-          { headline: "h de", germanOnly: "ok" },
-          { overrideAccess: true, locale: "de", _overwrite: true }
+          { headline: "h de", germanOnly: "ok", _overwrite: true },
+          { overrideAccess: true, locale: "de" }
         );
       }
       const languageRows: Array<[string, string]> = [
@@ -366,7 +369,7 @@ describe.each(getConfiguredTestDialects())(
           () =>
             handler(t).updateEntry(
               { collectionName: ENTRIES, entryId, ...who },
-              { headline: "changed", status: "published" }
+              { headline: "changed", status: "published", _overwrite: true }
             ),
         ],
         [
@@ -374,7 +377,7 @@ describe.each(getConfiguredTestDialects())(
           () =>
             handler(t).updateEntry(
               { collectionName: ENTRIES, entryId, ...who },
-              { status: "published" }
+              { status: "published", _overwrite: true }
             ),
         ],
         [
@@ -384,6 +387,7 @@ describe.each(getConfiguredTestDialects())(
               collectionName: ENTRIES,
               entryId,
               ...who,
+              data: { _overwrite: true },
             }),
         ],
         [
@@ -392,7 +396,7 @@ describe.each(getConfiguredTestDialects())(
             t.nextly.update({
               collection: ENTRIES,
               id: entryId,
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
               ...who,
             } as never),
         ],
@@ -403,7 +407,7 @@ describe.each(getConfiguredTestDialects())(
               collection: ENTRIES,
               id: entryId,
               locale: "*",
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
               ...who,
             } as never),
         ],
@@ -422,20 +426,24 @@ describe.each(getConfiguredTestDialects())(
           () =>
             singles(t).update(
               BANNER,
-              { headline: "changed", status: "published" },
+              { headline: "changed", status: "published", _overwrite: true },
               who
             ),
         ],
         [
           "a Single publish of every language",
-          () => singles(t).publishAllLocales(BANNER, who),
+          () =>
+            singles(t).publishAllLocales(BANNER, {
+              ...who,
+              data: { _overwrite: true },
+            }),
         ],
         [
           "a Direct API Single publish",
           () =>
             t.nextly.updateSingle({
               slug: BANNER,
-              data: { status: "published" },
+              data: { status: "published", _overwrite: true },
               ...who,
             } as never),
         ],
@@ -475,7 +483,7 @@ describe.each(getConfiguredTestDialects())(
           await issuesOf(() =>
             handler(t).updateEntry(
               { collectionName: ENTRIES, entryId, ...as(WRITER) },
-              { headline: "changed", status: "published" }
+              { headline: "changed", status: "published", _overwrite: true }
             )
           )
         ).toEqual([GENERIC]);
@@ -486,7 +494,7 @@ describe.each(getConfiguredTestDialects())(
           await issuesOf(() =>
             singles(t).update(
               BANNER,
-              { headline: "changed", status: "published" },
+              { headline: "changed", status: "published", _overwrite: true },
               as(WRITER)
             )
           )
@@ -502,7 +510,7 @@ describe.each(getConfiguredTestDialects())(
           await issuesOf(() =>
             handler(t).updateEntry(
               { collectionName: ENTRIES, entryId, ...as(PUBLISHER) },
-              { meta: { metaCode: SECRET } }
+              { meta: { metaCode: SECRET }, _overwrite: true }
             )
           )
         ).toEqual([GENERIC]);
@@ -513,7 +521,7 @@ describe.each(getConfiguredTestDialects())(
           await issuesOf(() =>
             singles(t).update(
               BANNER,
-              { meta: { metaCode: SECRET } },
+              { meta: { metaCode: SECRET }, _overwrite: true },
               as(PUBLISHER)
             )
           )
@@ -531,6 +539,7 @@ describe.each(getConfiguredTestDialects())(
               collectionName: LANG_ENTRIES,
               entryId: langEntryId,
               ...as(PUBLISHER),
+              data: { _overwrite: true },
             })
           )
         ).toEqual([GENERIC]);
@@ -539,7 +548,10 @@ describe.each(getConfiguredTestDialects())(
       it("withholds a Single field only a German read hides", async () => {
         expect(
           await issuesOf(() =>
-            singles(t).publishAllLocales(LANG_BANNER, as(PUBLISHER))
+            singles(t).publishAllLocales(LANG_BANNER, {
+              ...as(PUBLISHER),
+              data: { _overwrite: true },
+            })
           )
         ).toEqual([GENERIC]);
       });
@@ -547,7 +559,10 @@ describe.each(getConfiguredTestDialects())(
       it("withholds every field of a Single a German read does not show", async () => {
         expect(
           await issuesOf(() =>
-            singles(t).publishAllLocales(LANG_HIDDEN, as(PUBLISHER))
+            singles(t).publishAllLocales(LANG_HIDDEN, {
+              ...as(PUBLISHER),
+              data: { _overwrite: true },
+            })
           )
         ).toEqual([GENERIC]);
       });
@@ -573,7 +588,11 @@ describe.each(getConfiguredTestDialects())(
         // Judged by the save's own validation, on the values it sends.
         expect(
           await issuesOf(() =>
-            singles(t).update(BANNER, { internalScore: 99 }, key)
+            singles(t).update(
+              BANNER,
+              { internalScore: 99, _overwrite: true },
+              key
+            )
           )
         ).toEqual([GENERIC]);
       });
