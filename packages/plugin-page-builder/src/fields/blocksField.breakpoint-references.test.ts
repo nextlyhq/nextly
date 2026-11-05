@@ -313,6 +313,27 @@ describe("a page update's styles and hides under the site's breakpoints", () => 
     ).toEqual(["invalid-visibility"]);
   });
 
+  it("reads every per-device setting, as the engine does", async () => {
+    // Visibility is read whole by validation and by the compiler, so a hide
+    // past the style maps' bound is still one the save brings.
+    const devices: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SCANNED_KEYS; i += 1) devices[`old-${i}`] = true;
+    devices.mobile = false;
+    const held: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SCANNED_KEYS; i += 1) held[`old-${i}`] = true;
+    const { write: stored } = write({
+      published: page([text("a", { visibility: { devices: held } })]),
+    });
+    expect(
+      codes(
+        await validate(page([text("a", { visibility: { devices } })]), {
+          mode: "update",
+          write: stored,
+        })
+      )
+    ).toContain("removed-breakpoint");
+  });
+
   it("reads a style map no wider than the engine reads one", async () => {
     // A corrupt map with more keys than the engine's bound: the keys past it
     // are not read, here or by the compiler, so one there is not judged.

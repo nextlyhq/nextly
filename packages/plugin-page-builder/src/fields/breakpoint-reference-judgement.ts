@@ -52,20 +52,21 @@ const REMOVED_BREAKPOINT_MESSAGE =
 
 /**
  * The keys of a stored record that `holds` says keep something, read no
- * further than the engine reads one record: a record wider than that is
- * corrupt, and enumerating it whole would cost what the engine's bound exists
- * to prevent. Read with an early break rather than `Object.keys`, which
- * builds every key before anything can stop it.
+ * further than `bound`: as far as the engine reads the same record, so this
+ * check judges exactly the keys the engine acts on. Read with an early break
+ * rather than `Object.keys`, which builds every key before anything can stop
+ * it.
  */
 function* keysHolding(
   record: Record<string, unknown>,
-  holds: (value: unknown) => boolean
+  holds: (value: unknown) => boolean,
+  bound: number
 ): Generator<string> {
   let read = 0;
   for (const key in record) {
     if (!Object.hasOwn(record, key)) continue;
     read += 1;
-    if (read > MAX_SCANNED_KEYS) return;
+    if (read > bound) return;
     if (holds(record[key])) yield key;
   }
 }
@@ -93,7 +94,11 @@ function addEnvelopeIds(styles: unknown, into: Set<string>): void {
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
-    for (const id of keysHolding(byBreakpoint, holdsValues)) into.add(id);
+    // The compiler reads a style map's keys up to its bound and no further: a
+    // map wider than that is corrupt, and the keys past it are never read.
+    for (const id of keysHolding(byBreakpoint, holdsValues, MAX_SCANNED_KEYS)) {
+      into.add(id);
+    }
   }
 }
 
@@ -120,8 +125,10 @@ function breakpointIdsUsed(
       ? read.visibility.devices
       : undefined;
     if (isPlainRecord(devices)) {
-      // A stored setting is a boolean; anything else applies nothing.
-      for (const id of keysHolding(devices, isBoolean)) ids.add(id);
+      // A stored setting is a boolean; anything else applies nothing. Every
+      // key, as the engine's validation and compiler both read this record
+      // whole: one past any bound is still judged and applied there.
+      for (const id of keysHolding(devices, isBoolean, Infinity)) ids.add(id);
     }
   }
   const settings = document.settings;
