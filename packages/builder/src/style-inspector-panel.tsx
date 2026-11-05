@@ -769,9 +769,9 @@ function StyleSections({
   fit: string | undefined;
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
-  const { picture } = React.useContext(FocalFrame);
+  const { picture, position } = React.useContext(FocalFrame);
   return (
-    <FocalFrame.Provider value={{ picture, fit }}>
+    <FocalFrame.Provider value={{ picture, position, fit }}>
       <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
         {sections.map(section => (
           <StyleSectionItem

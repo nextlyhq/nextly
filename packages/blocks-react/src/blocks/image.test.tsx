@@ -174,3 +174,17 @@ describe("core/image as content", () => {
     expect(named.querySelector("a")?.hasAttribute("aria-label")).toBe(false);
   });
 });
+
+describe("core/image's link inside a figure", () => {
+  it("passes the fit and focal point on to the picture it holds", () => {
+    // figure > a > img: neither property is inherited, so the link between
+    // the figure and the picture has to take them for the picture to.
+    const link = (
+      image.parts as Record<string, { baseStyles?: unknown }> | undefined
+    )?.link?.baseStyles as { base?: { base?: Record<string, unknown> } };
+    expect(link?.base?.base).toMatchObject({
+      objectFit: "inherit",
+      objectPosition: "inherit",
+    });
+  });
+});

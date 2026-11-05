@@ -325,6 +325,10 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
+          // Passed on from a figure to the picture inside: neither is
+          // inherited unless each element between asks for it.
+          objectFit: "inherit",
+          objectPosition: "inherit",
           // Clipped, so a radius set on the block rounds the picture inside.
           overflow: "hidden",
         },

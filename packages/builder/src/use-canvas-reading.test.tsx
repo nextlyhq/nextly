@@ -26,10 +26,14 @@ afterEach(cleanup);
 const DOCUMENT = {} as EditorState["document"];
 
 function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
-  const { tag, orientation, picture } = useCanvasReading(root, "n1", {
-    document: DOCUMENT,
-    state,
-  });
+  const { tag, orientation, picture, picturePosition } = useCanvasReading(
+    root,
+    "n1",
+    {
+      document: DOCUMENT,
+      state,
+    }
+  );
   return (
     <>
       <span data-testid="tag">{tag ?? "unknown"}</span>
@@ -39,6 +43,7 @@ function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
           : `${orientation.writingMode}/${orientation.direction}`}
       </span>
       <span data-testid="picture">{picture ?? "none"}</span>
+      <span data-testid="position">{picturePosition ?? "none"}</span>
       <span data-testid="layout">
         {orientation === undefined
           ? "unknown"
@@ -81,6 +86,27 @@ describe("reading the picture a node draws", () => {
       '<figure data-nx-node="n1"><div data-nx-node="n2"><img src="/child.png" alt=""></div><img src="/own.png" alt=""></figure>';
     view.rerender(<Reader root={both} />);
     expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+  });
+});
+
+describe("which pictures are a block's own to style", () => {
+  it("counts only a root that hands its media styles to the picture", () => {
+    // A rich-text passage with an inline picture is not an image block: its
+    // root takes the Style values, and no fit or focal point reaches the
+    // picture inside it.
+    const passage = document.createElement("div");
+    passage.innerHTML =
+      '<div data-nx-node="n1"><p>Words <img src="/inline.png" alt=""></p></div>';
+    const view = render(<Reader root={passage} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    const captioned = document.createElement("div");
+    captioned.innerHTML =
+      '<figure data-nx-node="n1"><img src="/own.png" alt="" style="object-position: 100% 0%"><figcaption>A caption</figcaption></figure>';
+    view.rerender(<Reader root={captioned} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+    // And where the canvas places it, resolved there.
+    expect(screen.getByTestId("position").textContent).toBe("100% 0%");
   });
 });
 

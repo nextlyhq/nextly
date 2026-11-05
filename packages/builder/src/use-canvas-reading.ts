@@ -89,21 +89,48 @@ export interface CanvasReading {
    * point) shows the same one.
    */
   readonly picture?: string | undefined;
+  /** Where the canvas places that picture: its computed `object-position`. */
+  readonly picturePosition?: string | undefined;
 }
 
 /**
- * The picture an element draws: itself, or the first image inside it that is
- * its own (a link or a figure around it), not one of a block inside it.
+ * Roots that hand their media styles to a picture inside them: a link or a
+ * figure around an image. A block of any other kind that merely holds a
+ * picture (a passage with an inline one) styles its own root, which no fit or
+ * focal point of the picture's follows.
+ */
+const PICTURE_WRAPPERS: ReadonlySet<string> = new Set([
+  "A",
+  "FIGURE",
+  "PICTURE",
+]);
+
+/** The image an element draws as its own picture, if it draws one. */
+function ownImage(element: Element | undefined | null): Element | undefined {
+  if (element == null) return undefined;
+  if (element.tagName === "IMG") return element;
+  if (!PICTURE_WRAPPERS.has(element.tagName)) return undefined;
+  // Its own, past any image a block inside it draws first.
+  return [...element.querySelectorAll("img")].find(
+    candidate => candidate.closest("[data-nx-node]") === element
+  );
+}
+
+/** Where the canvas places a picture, as its window computes it. */
+function positionOf(image: Element | undefined): string | undefined {
+  if (image === undefined) return undefined;
+  const view = image.ownerDocument.defaultView;
+  const position = view?.getComputedStyle(image).objectPosition;
+  return position === undefined || position === "" ? undefined : position;
+}
+
+/**
+ * The picture an element draws: itself, or the image inside the link or the
+ * figure it is, not one of a block inside it.
  */
 function pictureOf(element: Element | undefined | null): string | undefined {
   if (element == null) return undefined;
-  // Its own, past any image a block inside it draws first.
-  const image =
-    element.tagName === "IMG"
-      ? element
-      : [...element.querySelectorAll("img")].find(
-          candidate => candidate.closest("[data-nx-node]") === element
-        );
+  const image = ownImage(element);
   if (image === undefined) return undefined;
   const shown =
     (image as HTMLImageElement).currentSrc || image.getAttribute("src");
@@ -118,6 +145,7 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
   return (
     a.tag === b.tag &&
     a.picture === b.picture &&
+    a.picturePosition === b.picturePosition &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
     a.orientation?.direction === b.orientation?.direction &&
     // The layout too: alignment icons follow it, and it can change alone.
@@ -161,6 +189,7 @@ export function useCanvasReading(
         tag: element?.tagName.toLowerCase(),
         orientation: orientationOfElement(element),
         picture: pictureOf(element),
+        picturePosition: positionOf(ownImage(element)),
       };
       setReading(current => (same(current, next) ? current : next));
     };
