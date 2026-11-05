@@ -4,13 +4,17 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /** Register the `add` command with the program. */
 export function registerAddCommand(program: Command): void {
-  program
-    .command("add <package>")
-    .description("Install a Nextly plugin and show how to register it")
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("add <package>")
+      .description("Install a Nextly plugin and show how to register it")
+  )
     .option("-D, --dev", "Install as a dev dependency", false)
     .option(
       "--skip-install",

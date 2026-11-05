@@ -232,9 +232,17 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
       keywords: ["repeat", "query", "entries", "dynamic"],
     },
     props: {
-      collection: { label: "Collection", type: "text" },
+      // Still text, as stored: `display` asks the editor to offer the site's
+      // collections, and the sort keys of the collection `collectionProp`
+      // names, rather than a field to type a slug or a key into.
+      collection: { label: "Collection", type: "text", display: "collection" },
       limit: { label: "Number of items", type: "number", min: 1, max: 100 },
-      sort: { label: "Sort by", type: "text" },
+      sort: {
+        label: "Sort by",
+        type: "text",
+        display: "sort",
+        collectionProp: "collection",
+      },
     },
     defaultProps: { limit: 10 },
     example: { props: { collection: "posts", limit: 3 } },

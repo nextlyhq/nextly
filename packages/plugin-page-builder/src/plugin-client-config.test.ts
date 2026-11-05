@@ -55,3 +55,16 @@ describe("the limits published to the admin", () => {
     expect(config.limits?.maxNodes).toBe(12);
   });
 });
+
+describe("the site style published to the admin", () => {
+  it("carries the core blocks' looks when the host states no site style", () => {
+    // The canvas reads only this tier before the stored one, so a look
+    // missing here would draw on the published page and not in the editor.
+    const config = clientConfig(pageBuilder()) as {
+      siteStyle?: { classes?: { id: string }[] };
+    };
+    expect((config.siteStyle?.classes ?? []).map(each => each.id)).toEqual(
+      expect.arrayContaining(["look:core/button:outline"])
+    );
+  });
+});

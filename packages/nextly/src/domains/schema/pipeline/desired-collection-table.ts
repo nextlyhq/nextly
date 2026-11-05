@@ -16,6 +16,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { storesPerLanguage } from "../../i18n/per-language-storage";
+
 import { buildDesiredTableFromFields } from "./diff/build-from-fields";
 import type { TableSpec } from "./diff/types";
 import { builtByFor } from "./registered-collections";
@@ -37,9 +39,10 @@ export function desiredCollectionTable(
       builtBy: builtByFor("collection", collection.builderOwned),
       // The status system column exists only while Draft/Published is on.
       hasStatus: collection.status === true,
-      // A localized collection's translatable columns live in its `_locales`
-      // companion, so they are left off the main table.
-      localized: collection.localized === true,
+      // A collection whose translatable columns live in its `_locales` companion has them left off
+      // the main table: a translatable collection, or every collection on a site that keeps every
+      // translatable field per language.
+      localized: storesPerLanguage(collection),
       // Config-declared compound indexes, which name FIELDS.
       indexes: [...(collection.indexes ?? [])],
     }

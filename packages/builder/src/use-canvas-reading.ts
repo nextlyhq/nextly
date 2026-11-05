@@ -82,6 +82,91 @@ export interface CanvasReading {
    * a positional claim with nothing behind it.
    */
   readonly orientation: SideOrientation | undefined;
+  /**
+   * The address of the picture the node draws, the node itself or the one
+   * inside it (a link or a figure around an image), or `undefined` for none.
+   * What the canvas really shows, so a control aimed at the picture (a focal
+   * point) shows the same one.
+   */
+  readonly picture?: string | undefined;
+  /** Where the canvas places that picture: its computed `object-position`. */
+  readonly picturePosition?: string | undefined;
+}
+
+/**
+ * Roots that hand their media styles to a picture inside them: a link or a
+ * figure around an image, whatever else they hold (a caption).
+ */
+const PICTURE_WRAPPERS: ReadonlySet<string> = new Set([
+  "A",
+  "FIGURE",
+  "PICTURE",
+]);
+
+/**
+ * What the rich-text renderer draws a passage's pictures and galleries in:
+ * its own figures, which a block's styles never reach, whether or not the
+ * passage has words beside them.
+ */
+const RICH_TEXT_MEDIA = '[class*="nextly-rich-text"]';
+
+/**
+ * Whether an element shows words of its own, not of a block inside it.
+ *
+ * Text is what makes a root a passage: a picture among words is an inline one,
+ * which no fit or focal point set on the passage reaches.
+ */
+function hasOwnText(element: Element): boolean {
+  const walker = element.ownerDocument.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT
+  );
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const words = (node.textContent ?? "").trim() !== "";
+    if (words && node.parentElement?.closest("[data-nx-node]") === element) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The image an element draws as its own picture, if it draws one.
+ *
+ * A link, a figure or a picture element hands its media styles on by design.
+ * Any other root (a custom block's div or span around its picture) counts
+ * only when that one picture is all it draws: a passage with an inline
+ * picture styles its own root, and two pictures leave a single focal point
+ * nothing to be aimed at.
+ */
+function ownImage(element: Element | undefined | null): Element | undefined {
+  if (element == null) return undefined;
+  if (element.tagName === "IMG") return element;
+  // Its own, past any image a block inside it draws, and never one a
+  // passage it holds draws.
+  const owned = [...element.querySelectorAll("img")].filter(
+    candidate =>
+      candidate.closest("[data-nx-node]") === element &&
+      candidate.closest(RICH_TEXT_MEDIA) === null
+  );
+  if (PICTURE_WRAPPERS.has(element.tagName)) return owned[0];
+  return owned.length === 1 && !hasOwnText(element) ? owned[0] : undefined;
+}
+
+/** Where the canvas places a picture, as its window computes it. */
+function positionOf(image: Element | undefined): string | undefined {
+  if (image === undefined) return undefined;
+  const view = image.ownerDocument.defaultView;
+  const position = view?.getComputedStyle(image).objectPosition;
+  return position === undefined || position === "" ? undefined : position;
+}
+
+/** The address a picture shows: the source it chose, else the one it names. */
+function addressOf(image: Element | undefined): string | undefined {
+  if (image === undefined) return undefined;
+  const shown =
+    (image as HTMLImageElement).currentSrc || image.getAttribute("src");
+  return shown === null || shown === "" ? undefined : shown;
 }
 
 /** Nothing known yet, shared so an unchanged reading keeps its identity. */
@@ -91,6 +176,8 @@ const NOTHING: CanvasReading = { tag: undefined, orientation: undefined };
 function same(a: CanvasReading, b: CanvasReading): boolean {
   return (
     a.tag === b.tag &&
+    a.picture === b.picture &&
+    a.picturePosition === b.picturePosition &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
     a.orientation?.direction === b.orientation?.direction &&
     // The layout too: alignment icons follow it, and it can change alone.
@@ -130,9 +217,13 @@ export function useCanvasReading(
      */
     const read = () => {
       const element = markedElementOf(canvasRoot, selectedId);
+      // Found once: the address and the placement are of the same picture.
+      const image = ownImage(element);
       const next: CanvasReading = {
         tag: element?.tagName.toLowerCase(),
         orientation: orientationOfElement(element),
+        picture: addressOf(image),
+        picturePosition: positionOf(image),
       };
       setReading(current => (same(current, next) ? current : next));
     };

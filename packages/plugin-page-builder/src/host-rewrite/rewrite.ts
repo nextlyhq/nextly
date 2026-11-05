@@ -51,6 +51,13 @@ export interface HostCandidate {
   readonly access: HostAccess;
   /** For a `scan`: the paths whose values have hosts of their own. */
   readonly excluded?: readonly (readonly string[])[];
+  /**
+   * Read in this language only because whether the value is stored per
+   * language is unknown: the same value read in two languages may be one
+   * stored value. Absent where the value is known to be stored per language,
+   * or where there is no language.
+   */
+  readonly maybeShared?: true;
 }
 
 /** One document and its hosts: every blocks field, in every language. */
@@ -88,6 +95,11 @@ export interface HostRead {
    * not public. Writing a public row means publishing it again in that state.
    */
   readonly liveState: string | null;
+  /**
+   * The row's version as this read gave it, which the write made from the
+   * read sends back; absent from a server that issues none.
+   */
+  readonly rev?: string;
 }
 
 /** Reads one host's stored forms, as the system. Throws when it cannot. */
@@ -103,6 +115,11 @@ export interface HostWrite {
   readonly publishAs?: string;
   /** The form the value was computed from, and its hash. */
   readonly expected: { readonly form: HostForm; readonly hash: string };
+  /**
+   * The row's version as it was read: sent with the write, so a save of the
+   * row since the read refuses the write, which the run reports as changed.
+   */
+  readonly rev?: string;
 }
 
 /** What a write came to. Anything unexpected is thrown. */
@@ -481,6 +498,7 @@ async function decideLive(
         ? { mode: "save" as const }
         : { mode: "publish" as const, publishAs: read.liveState }),
       expected: { form, hash: await storedHash(read.published.value) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }
@@ -536,6 +554,7 @@ async function decideWithDraft(
       value: outcome.value,
       mode: "save",
       expected: { form: "draft", hash: await storedHash(draft.value) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }

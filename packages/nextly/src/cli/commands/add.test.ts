@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createContext } from "../context";
+import { dryRunLines } from "../dry-run";
 
 import { buildInstallArgs, runAdd } from "./add";
 
@@ -124,5 +125,69 @@ describe("nextly add, when the install fails", () => {
   it("does not exit when the install succeeds", async () => {
     install.code = 0;
     expect(await add()).toBeUndefined();
+  });
+});
+
+describe("nextly add --dry-run", () => {
+  let project: string;
+  let output: string[];
+
+  beforeEach(async () => {
+    project = await mkdtemp(join(tmpdir(), "nextly-add-dry-"));
+    await writeFile(join(project, "pnpm-lock.yaml"), "");
+    install.runs = [];
+    install.code = 0;
+    output = [];
+    vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+      output.push(parts.map(String).join(" "));
+    });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(project, { recursive: true, force: true });
+  });
+
+  /** What the logger printed as info, without its symbol. */
+  const info = () =>
+    output.filter(line => line.startsWith("ℹ ")).map(line => line.slice(2));
+
+  it("names the install command it would run, runs nothing, and shows the wiring", async () => {
+    await runAdd(
+      "@acme/p",
+      { cwd: project, dev: true, dryRun: true },
+      createContext({ noColor: true })
+    );
+
+    expect(install.runs).toEqual([]);
+    expect(info().slice(-2)).toEqual(
+      dryRunLines({
+        changes: [{ action: "run", target: "pnpm add -D @acme/p" }],
+      })
+    );
+    expect(output.join("\n")).toContain('import p from "@acme/p";');
+  });
+
+  it("with --skip-install, says nothing would change and still shows the wiring", async () => {
+    await runAdd(
+      "@acme/p",
+      { cwd: project, skipInstall: true, dryRun: true },
+      createContext({ noColor: true })
+    );
+
+    expect(install.runs).toEqual([]);
+    expect(info().slice(-2)).toEqual(dryRunLines({ changes: [] }));
+    expect(output.join("\n")).toContain('import p from "@acme/p";');
+  });
+
+  it("runs the same command it names when not a dry run", async () => {
+    await runAdd(
+      "@acme/p",
+      { cwd: project, dev: true },
+      createContext({ noColor: true })
+    );
+
+    expect(install.runs).toEqual([["pnpm", "add", "-D", "@acme/p"]]);
+    expect(info()).not.toContain("Dry run: nothing was changed.");
   });
 });

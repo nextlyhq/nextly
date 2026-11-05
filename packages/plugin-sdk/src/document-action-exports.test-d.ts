@@ -53,6 +53,11 @@ expectTypeOf(useBeforeDocumentAction)
 expectTypeOf<StoreReadiness["writesSettled"]>().returns.toEqualTypeOf<
   Promise<boolean>
 >();
+// The check is synchronous: the store makes it with nothing awaited between
+// it and the write.
+expectTypeOf<StoreReadiness["checkBeforeWrite"]>()
+  .parameter(0)
+  .toEqualTypeOf<() => boolean>();
 
 expectTypeOf(useTrackedWrite).returns.toEqualTypeOf<
   (label: string, write: Promise<unknown>) => void

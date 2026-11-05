@@ -29,11 +29,13 @@ import * as React from "react";
 
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import {
+  BASE_BREAKPOINT,
   clearBlocks,
   hasBlock,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
@@ -387,6 +389,59 @@ function openAdvanced(): void {
     fireEvent.click(summary);
   }
 }
+
+describe("the picture the canvas draws, carried to the focal point", () => {
+  it("previews a contextual point where the canvas resolves it", () => {
+    /*
+     * The whole chain, from the canvas to the preview: the panel reads where
+     * the canvas places the picture and lends it, through the style tab and
+     * the panel's sections, to the focal point. A point the inspector cannot
+     * resolve itself (a variable) previews where the canvas put it, and a
+     * link dropped anywhere on the way previews the inspector's default.
+     */
+    // A block whose style tab offers only its dimensions, opened first.
+    registerBlocks(
+      [
+        {
+          name: "acme/picture",
+          version: 1,
+          description: "A picture.",
+          example: { props: {} },
+          editor: { label: "Picture" },
+          props: {},
+          supports: { dimensions: true },
+          render: () => null,
+        },
+      ] as never,
+      { source: "inspector-panel-test" }
+    );
+    const canvas = document.createElement("div");
+    canvas.innerHTML =
+      '<img data-nx-node="a" src="/team.png" alt="" style="object-position: 100% 0%">';
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: {
+          objectFit: "cover",
+          objectPosition: "var(--image-focus)",
+        },
+      },
+    } as NodeStyles;
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({ type: "acme/picture", styles }))}
+        canvasRoot={canvas}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    const backdrop = document.querySelector(
+      ".nx-focal__picture"
+    ) as HTMLImageElement | null;
+    expect(backdrop?.getAttribute("src")).toBe("/team.png");
+    expect(backdrop?.style.objectPosition).toBe("100% 0%");
+  });
+});
 
 describe("InspectorPanel block card", () => {
   it("shows the icon, the author's label beside the type, and the description", () => {

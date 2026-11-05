@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SchemaRegistry } from "../../../database/schema-registry";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { resolveTypeColumns } from "../storage/resolve-storage-names";
 
@@ -59,7 +60,8 @@ export async function registerComponentSchemas(
   );
 
   for (const component of components) {
-    const localized = component.localized === true;
+    // Laid out as boot lays it out: per language when the site keeps every translatable value so.
+    const localized = storesPerLanguage(component);
     const fields = component.fields ?? [];
 
     registry.registerDynamicSchema(

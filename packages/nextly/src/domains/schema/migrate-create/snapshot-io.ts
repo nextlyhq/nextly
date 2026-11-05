@@ -192,6 +192,15 @@ function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
 }
 
 /**
+ * Where `writeSnapshot` writes the snapshot of the migration named `baseName`:
+ * `<metaDir>/<baseName>.snapshot.json`, the pairing every reader of a
+ * migrations folder relies on. A dry run names the file by it.
+ */
+export function snapshotPathOf(metaDir: string, baseName: string): string {
+  return resolve(metaDir, `${baseName}.snapshot.json`);
+}
+
+/**
  * Write a snapshot file paired with a migration `.sql` file.
  *
  * The `migrationHash` is computed from the `.sql` file content so
@@ -284,7 +293,7 @@ export async function writeSnapshot(
     },
   };
   const json = JSON.stringify(file, sortedKeysReplacer, 2);
-  const path = resolve(metaDir, `${baseName}.snapshot.json`);
+  const path = snapshotPathOf(metaDir, baseName);
   await writeFile(path, json + "\n", "utf-8");
   return path;
 }

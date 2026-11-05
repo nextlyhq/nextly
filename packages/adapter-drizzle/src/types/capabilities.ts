@@ -86,7 +86,9 @@ export interface DatabaseCapabilities {
    * Case-insensitive ILIKE operator support (PostgreSQL only).
    *
    * @remarks
-   * Other databases must emulate with LOWER(column) LIKE LOWER(value).
+   * Other databases emulate it by folding both sides, then LIKE: `lower()` on MySQL, and
+   * Nextly's own `nextly_fold_case` on SQLite, whose `lower()` folds ASCII only (see
+   * `caseFolded` in text-match).
    */
   supportsIlike: boolean;
 

@@ -147,14 +147,16 @@ describe("a routed page's lists", () => {
     };
     expect(options.revalidate).toBe(60);
     expect(options.tags.some(tag => tag.includes("posts"))).toBe(true);
-    expect(options.keyParts.slice(0, 2)).toEqual([
+    // The scope, the page's language (none here) and the public query: the
+    // public reader's whole answer is what is cached.
+    expect(options.keyParts.slice(0, 3)).toEqual([
       "nextly-public-list",
       "tenant-a",
+      "",
     ]);
-    expect(JSON.parse(options.keyParts[2] ?? "{}")).toMatchObject({
+    expect(JSON.parse(options.keyParts[3] ?? "{}")).toMatchObject({
       collection: "posts",
       limit: 5,
-      status: "published",
     });
   });
 

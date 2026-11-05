@@ -5,25 +5,24 @@
 import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 export function registerMigrateDownCommand(program: Command): void {
-  program
-    .command("migrate:down")
-    .description(
-      "Roll back the most-recently-applied migration(s) using their -- DOWN section"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("migrate:down")
+      .description(
+        "Roll back the most-recently-applied migration(s) using their -- DOWN section"
+      )
+  )
     .option("--step <n>", "Roll back the last N migrations", parseInt)
     .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
     .option(
       "--yes",
       "Confirm rollback in production (NODE_ENV=production)",
-      false
-    )
-    .option(
-      "--dry-run",
-      "Show what would be rolled back (and the DOWN SQL) without executing",
       false
     )
     .option(
