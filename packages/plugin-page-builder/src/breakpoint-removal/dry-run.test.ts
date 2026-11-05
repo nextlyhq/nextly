@@ -24,7 +24,7 @@ const styled = (id: string, extra: Node = {}): Node => ({
   type: "core/text",
   version: 1,
   props: {},
-  styles: { base: { mobile: { color: "#111", padding: "4px" } } },
+  styles: { base: { mobile: { color: "#111", backgroundColor: "#eeeeee" } } },
   ...extra,
 });
 
@@ -168,6 +168,38 @@ describe("a breakpoint removal counted across the site", () => {
     expect(mobile?.locked).toEqual({ named: [], unnamed: 1 });
     // Counted all the same: the removal drops what it holds.
     expect(mobile?.places.pages.documents).toBe(2);
+  });
+
+  it("names readable documents past ones the caller may not read", async () => {
+    // The unreadable ones come first; they must not use up the places.
+    const stored: Stored[] = [
+      ...Array.from({ length: NAMED_AT_MOST + 2 }, (_, i) => ({
+        host: entry("components", `c${i}`),
+        published: page(styled("a")),
+      })),
+      { host: entry("pages", "home"), published: page(styled("a")) },
+    ];
+    const run = await countRemoval(
+      MOBILE,
+      site(stored, { readable: host => host.slug === "pages" })
+    );
+    expect(run.removed[0]?.documents).toEqual({
+      named: ["pages/home"],
+      unnamed: NAMED_AT_MOST + 2,
+    });
+  });
+
+  it("asks the caller once for a document in both lists", async () => {
+    const deps = site([
+      {
+        host: entry("pages", "p1"),
+        published: page(styled("a", { locked: true })),
+      },
+    ]);
+    const [mobile] = (await countRemoval(MOBILE, deps)).removed;
+    expect(mobile?.documents.named).toEqual(["pages/p1"]);
+    expect(mobile?.locked.named).toEqual(["pages/p1"]);
+    expect(deps.named).toHaveLength(1);
   });
 
   it("names at most a handful, and counts the rest", async () => {

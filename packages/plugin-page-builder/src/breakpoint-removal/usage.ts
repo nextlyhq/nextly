@@ -15,12 +15,16 @@
  * @experimental
  */
 import {
+  compileStyleValues,
   DEFAULT_LIMITS,
   documentRefusal,
   isPlainRecord,
   MAX_SCANNED_KEYS,
+  namedClassesRead,
   selectNodes,
   STYLE_STATES,
+  usableNamedClasses,
+  validateStyleValues,
   type DocumentLimits,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
@@ -98,10 +102,28 @@ function* askedKeys(
   }
 }
 
-/** How many style values one breakpoint's entry holds; none for an empty one. */
+/**
+ * How many of one breakpoint's style values the compiler writes. A map it
+ * writes nothing from (one past its diagnostics budget is refused whole)
+ * holds none. Otherwise, each property its strict validation does not refuse:
+ * the verdict `compileStyleValues` writes from. A property it does not know,
+ * or a value it cannot read, is kept in the document and written nowhere, so
+ * no removal drops anything there.
+ */
 function valueCount(values: unknown): number {
   if (!isPlainRecord(values)) return 0;
-  return [...keysHolding(values, () => true, MAX_SCANNED_KEYS)].length;
+  if (compileStyleValues(values, "").declarations.length === 0) return 0;
+  // Each issue's path starts with the property it is about: `/padding/top`.
+  const refused = new Set(
+    validateStyleValues(values, "", "strict")
+      .filter(issue => issue.severity === "error")
+      .map(issue => issue.path.split("/")[1] ?? "")
+  );
+  let count = 0;
+  for (const key of keysHolding(values, () => true, MAX_SCANNED_KEYS)) {
+    if (!refused.has(key)) count += 1;
+  }
+  return count;
 }
 
 /** Whether a breakpoint's entry holds a value the compiler would emit. */
@@ -168,16 +190,20 @@ export function breakpointUsesIn(
   // whatever is counted from it is not the whole of it.
   const readable = documentRefusal(document) === undefined;
   const selection = selectNodes(document, limits);
+  const shared = sharedNodeIds(selection.nodes);
   // Level order puts a block's parent before it, so its lock is known.
   const lockedAt: boolean[] = [];
   selection.nodes.forEach(({ node, parent }, index) => {
     const read = node as {
+      id?: unknown;
       locked?: unknown;
       styles?: unknown;
       visibility?: unknown;
     };
     const locked = read.locked === true || (lockedAt[parent] ?? false);
     lockedAt[index] = locked;
+    // The compiler writes nothing of a block it cannot target on its own.
+    if (typeof read.id !== "string" || shared.has(read.id)) return;
     countEnvelope(read.styles, asked, uses, locked);
     const devices = isPlainRecord(read.visibility)
       ? read.visibility.devices
@@ -196,6 +222,25 @@ export function breakpointUsesIn(
   return { uses, complete: readable && selection.stopped === undefined };
 }
 
+/**
+ * The ids more than one of `nodes` carries. The compiler gives a block its
+ * class by its id, so two blocks sharing one cannot be styled apart: it writes
+ * none of their own styles or visibility, and nothing of theirs is dropped.
+ */
+function sharedNodeIds(
+  nodes: readonly { readonly node: unknown }[]
+): Set<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const { node } of nodes) {
+    const id = (node as { id?: unknown }).id;
+    if (typeof id !== "string") continue;
+    if (seen.has(id)) shared.add(id);
+    seen.add(id);
+  }
+  return shared;
+}
+
 /** What the shared styles keep under one breakpoint. */
 export interface SharedStyleUse {
   /** How many shared styles hold a value there. */
@@ -212,7 +257,10 @@ export function sharedStyleUses(
   ids: ReadonlySet<string>
 ): Map<string, SharedStyleUse> {
   const found = new Map<string, SharedStyleUse>();
-  for (const entry of classes) {
+  // The library as the compiler reads it: within its cap, and without an
+  // entry whose name or id an earlier one took. Nothing of a dropped entry is
+  // written, so nothing of it is counted.
+  for (const entry of usableNamedClasses(namedClassesRead(classes))) {
     const uses: BreakpointUses = new Map();
     countEnvelope(entry.styles, ids, uses, false);
     for (const [id, use] of uses) {

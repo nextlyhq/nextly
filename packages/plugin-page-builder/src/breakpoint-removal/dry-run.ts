@@ -17,7 +17,7 @@
  */
 import type { DocumentLimits, NamedClass } from "@nextlyhq/blocks-engine";
 
-import type { HostAddress } from "../host-rewrite/contract";
+import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import type {
   HostDocument,
   HostRead,
@@ -101,6 +101,12 @@ export interface RemovalDryRun {
 
 /** How many documents one list names; the rest are counted. */
 export const NAMED_AT_MOST = 10;
+
+/**
+ * How many documents one list holds to try naming. The caller may not read
+ * some of them, so a list keeps more than it names; past this it only counts.
+ */
+const CANDIDATES_AT_MOST = 50;
 
 /** What the dry run reads the site through. */
 export interface DryRunDeps {
@@ -309,22 +315,40 @@ interface Naming {
   unnamed: number;
 }
 
-/** Add a document to a list, holding its address while there is room to name it. */
+/** Add a document to a list, holding its address while there is room to try naming it. */
 function addTo(naming: Naming, host: HostAddress): void {
-  if (naming.hosts.length < NAMED_AT_MOST) naming.hosts.push(host);
+  if (naming.hosts.length < CANDIDATES_AT_MOST) naming.hosts.push(host);
   else naming.unnamed += 1;
 }
 
-/** A list's names, asked of the caller: one they may not read is counted. */
+/** What the caller knows each document by, asked once however many lists hold it. */
+type NameCache = Map<string, Promise<string | null | typeof TIMED_OUT>>;
+
+/**
+ * A list's names, asked of the caller until {@link NAMED_AT_MOST} are found:
+ * one they may not read is counted and does not use up a place, so readable
+ * documents later in the list are still named. The rest are counted unasked.
+ */
 async function named(
   naming: Naming,
-  deps: DryRunDeps
+  deps: DryRunDeps,
+  cache: NameCache
 ): Promise<NamedDocuments> {
   const names: string[] = [];
   let unnamed = naming.unnamed;
   for (const host of naming.hosts) {
-    // Past the deadline a document is counted rather than named.
-    const name = await beforeDeadline(deps.nameFor(host), deps);
+    if (names.length >= NAMED_AT_MOST) {
+      unnamed += 1;
+      continue;
+    }
+    const key = documentKeyOf(host);
+    let asked = cache.get(key);
+    if (asked === undefined) {
+      // Past the deadline a document is counted rather than named.
+      asked = beforeDeadline(deps.nameFor(host), deps);
+      cache.set(key, asked);
+    }
+    const name = await asked;
     if (name === null || name === TIMED_OUT) unnamed += 1;
     else names.push(name);
   }
@@ -446,14 +470,15 @@ export async function countRemoval(
       ? { unreadable: 0, complete: true }
       : await walkSite(ids, per, deps);
   const out: RemovedBreakpoint[] = [];
+  const names: NameCache = new Map();
   for (const [id, entry] of per) {
     out.push({
       id,
       label: removed.get(id) ?? id,
       places: entry.places,
       sharedStyles: shared.get(id) ?? { classes: 0, styles: 0, locked: [] },
-      documents: await named(entry.documents, deps),
-      locked: await named(entry.locked, deps),
+      documents: await named(entry.documents, deps, names),
+      locked: await named(entry.locked, deps, names),
       unaddressable: entry.unaddressable,
     });
   }

@@ -42,7 +42,7 @@ describe("a blocks value's use of the breakpoints asked about", () => {
       page([
         block("a", {
           styles: {
-            base: { mobile: { color: "#111111", padding: "4px" } },
+            base: { mobile: { color: "#111111", backgroundColor: "#eeeeee" } },
             hover: { mobile: { color: "#222222" } },
             // Written at no breakpoint: not dropped by any removal.
             pressed: { mobile: { color: "#333333" } },
@@ -53,6 +53,45 @@ describe("a blocks value's use of the breakpoints asked about", () => {
     );
     expect(uses.get("mobile")).toEqual({ styles: 3, hides: 0, locked: false });
     expect(uses.has("watch")).toBe(false);
+  });
+
+  it("counts only the values the compiler writes", () => {
+    // An unknown property, and a value it cannot read, are kept and written
+    // nowhere: no removal drops them.
+    const { uses } = breakpointUsesIn(
+      page([
+        block("a", {
+          styles: {
+            base: { mobile: { color: "#111111", bogus: 1, padding: "4px" } },
+          },
+        }),
+      ]),
+      ASKED
+    );
+    expect(uses.get("mobile")?.styles).toBe(1);
+
+    // A map past the compiler's diagnostics budget is refused whole, its one
+    // good value with it.
+    const wide: Record<string, unknown> = { color: "#111111" };
+    for (let i = 0; i < 300; i += 1) wide[`bogus${i}`] = 1;
+    const refused = breakpointUsesIn(
+      page([block("a", { styles: { base: { mobile: wide } } })]),
+      ASKED
+    );
+    expect(refused.uses.has("mobile")).toBe(false);
+  });
+
+  it("skips blocks sharing an id, whose styles the compiler writes for neither", () => {
+    const at = { styles: { base: { mobile: { color: "#111111" } } } };
+    const { uses } = breakpointUsesIn(
+      page([
+        block("twin", at),
+        block("twin", { ...at, visibility: { devices: { mobile: false } } }),
+        block("own", at),
+      ]),
+      ASKED
+    );
+    expect(uses.get("mobile")).toEqual({ styles: 1, hides: 0, locked: false });
   });
 
   it("counts a block's own visibility as one hide, shown or hidden", () => {
@@ -77,7 +116,7 @@ describe("a blocks value's use of the breakpoints asked about", () => {
             block("inner", { styles: { base: { mobile: { color: "#111" } } } }),
           ]),
         ],
-        { styles: { base: { mobile: { background: "#fff" } } } }
+        { styles: { base: { mobile: { backgroundColor: "#ffffff" } } } }
       ),
       ASKED
     );
@@ -149,7 +188,7 @@ describe("the shared styles' use of the breakpoints asked about", () => {
     const found = sharedStyleUses(
       [
         named("card", {
-          base: { mobile: { color: "#111", padding: "4px" } },
+          base: { mobile: { color: "#111", backgroundColor: "#eeeeee" } },
         }),
         named(
           "hero",
@@ -167,6 +206,22 @@ describe("the shared styles' use of the breakpoints asked about", () => {
       locked: ["Hero"],
     });
     expect(found.has("watch")).toBe(false);
+  });
+
+  it("counts the library as the compiler reads it", () => {
+    // A second entry claiming a slug an earlier one holds is dropped whole.
+    const found = sharedStyleUses(
+      [
+        named("card", { base: { mobile: { color: "#111" } } }),
+        named(
+          "card-again",
+          { base: { mobile: { color: "#222" } } },
+          { slug: "card", locked: true, label: "Copy" }
+        ),
+      ],
+      ASKED
+    );
+    expect(found.get("mobile")).toEqual({ classes: 1, styles: 1, locked: [] });
   });
 
   it("names a locked style without a label by its slug", () => {
