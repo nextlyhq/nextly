@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-New apps' admin layouts keep the plugin component map current in development. Both starter templates now call `checkAdminComponents` from `nextly/runtime` in the admin layout, as the playground does, beneath its Suspense boundary. A plugin added to the config while `next dev` runs gets its admin components, its dashboard widget cards included, with no `nextly generate:types` by hand. Production builds read and write no map, as before.
+New apps' admin layouts keep the plugin component map current in development. The site template now calls `checkAdminComponents` from `nextly/runtime` in its admin layout, as the playground does, beneath its Suspense boundary. A plugin added to the config while `next dev` runs gets its admin components, its dashboard widget cards included, with no `nextly generate:types` by hand. Production builds read and write no map, as before.
