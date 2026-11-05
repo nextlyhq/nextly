@@ -752,6 +752,9 @@ export class FieldGroupQueryService extends BaseService {
           results[index][fieldName] = value;
         });
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the component replaced by a default.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode a read failure must roll the write back rather than
         // ship a payload with silently-missing component data.
         if (strict) throw error;
@@ -853,6 +856,8 @@ export class FieldGroupQueryService extends BaseService {
           }
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catch above.
+        rethrowIfRuleCouldNotRun(error);
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
@@ -1056,6 +1061,8 @@ export class FieldGroupQueryService extends BaseService {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catches above.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode surface the failure so a durable payload is not built
         // from a partial dynamic-zone read.
         if (strict) throw error;
