@@ -39,9 +39,16 @@ afterEach(async () => {
 
 const FIELDS = [{ name: "heading", type: "text" }];
 
-describe.each(getConfiguredTestDialects())(
-  "turning translation on and off under per-language storage (%s)",
-  (dialect: TestDialect) => {
+/** The two Builder paths that turn a Single's translation on or off. */
+const PATHS = ["its schema dialog", "its settings"] as const;
+
+describe.each(
+  getConfiguredTestDialects().flatMap(dialect =>
+    PATHS.map(path => [dialect, path] as const)
+  )
+)(
+  "turning translation on and off under per-language storage (%s, through %s)",
+  (dialect: TestDialect, path: (typeof PATHS)[number]) => {
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
     const run = (sql: string) => current!.adapter.executeQuery(sql);
@@ -85,16 +92,22 @@ describe.each(getConfiguredTestDialects())(
       }>(
         `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_singles")} WHERE ${q("slug")} = 'hero'`
       );
-      return dispatchSingles(
-        "applySingleSchemaChanges",
-        { slug: "hero" },
-        {
-          fields: FIELDS,
-          confirmed: true,
-          localized,
-          schemaVersion: Number(row?.version ?? 1),
-        }
-      );
+      return path === "its schema dialog"
+        ? dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: "hero" },
+            {
+              fields: FIELDS,
+              confirmed: true,
+              localized,
+              schemaVersion: Number(row?.version ?? 1),
+            }
+          )
+        : dispatchSingles(
+            "updateSingleSchema",
+            { slug: "hero" },
+            { localized }
+          );
     }
 
     async function companionColumns(): Promise<string[]> {
