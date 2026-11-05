@@ -685,9 +685,9 @@ async function staleVersionRefusal(args: {
 
 /**
  * Whether the caller of a refused update may be told who changed the document
- * and when: the decision a read of its history gets
- * (`assertVersionDocumentReadable`, draft and published visibility, row rules
- * and read hooks included). A trusted server caller may. An anonymous visitor
+ * and when: whether their own read of it returns it in each language the
+ * refusal reports (`readsAsItsCaller`, the read rule and its filter, draft and
+ * published visibility and read hooks included). A trusted server caller may. An anonymous visitor
  * never is, even one the Public role lets read the document: who changed it is
  * part of its history, which visitors are never shown.
  *
