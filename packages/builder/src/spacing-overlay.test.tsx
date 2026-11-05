@@ -224,6 +224,17 @@ class FakeResizeObserver {
   }
 }
 
+/**
+ * The canvas watch's observer: the newest one watching a rendered block. Found
+ * by what it watches, not by being the last made, since the canvas makes
+ * others of its own (one watching its root's size).
+ */
+function watchObserver(): FakeResizeObserver | undefined {
+  return FakeResizeObserver.instances.findLast(observer =>
+    observer.observed.some(element => element.hasAttribute("data-nx-node"))
+  );
+}
+
 function withFakeResizeObserver() {
   FakeResizeObserver.instances = [];
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
@@ -231,7 +242,7 @@ function withFakeResizeObserver() {
 
 /** Make the overlay measure again, the way a real resize would. */
 function remeasure(): void {
-  const observer = FakeResizeObserver.instances.at(-1);
+  const observer = watchObserver();
   act(() => {
     observer?.callback([], observer as unknown as ResizeObserver);
   });
@@ -634,7 +645,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
 
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     expect(observer?.observed).toContain(
       container.querySelector('[data-nx-node="a"]')
     );
@@ -650,7 +661,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
 
-    expect(FakeResizeObserver.instances.at(-1)?.observed).toContain(
+    expect(watchObserver()?.observed).toContain(
       container.querySelector(`.${CANVAS_ROOT_CLASS}`)
     );
   });
@@ -666,7 +677,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const first = editorOf("a");
     const { rerender } = mount(first);
-    const before = FakeResizeObserver.instances.at(-1);
+    const before = watchObserver();
 
     const edited = {
       ...DOCUMENT,

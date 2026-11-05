@@ -2278,6 +2278,37 @@ describe("the site's ground and text on the canvas root", () => {
     }
   });
 
+  it("judges the ground again when the canvas frame resizes", () => {
+    // A site can override the background token under a width or height
+    // query, which a frame resized past it crosses with no render.
+    let narrow = false;
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor") {
+              return narrow ? "rgba(255, 255, 255, 0.5)" : "rgb(255, 255, 255)";
+            }
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({ breakpoints, tokens: { tokens: [] } });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(true);
+      narrow = true;
+      window.dispatchEvent(new Event("resize"));
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("judges the ground again when the site's theme changes, with no render", async () => {
     // The theme marker writes the root's theme without a render; a light
     // ground that is opaque and a dark one that is not must each be judged.

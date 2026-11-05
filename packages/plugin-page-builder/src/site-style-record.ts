@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isSpacingMode,
+  isLook,
   isUsableNamedClass,
   namedClassesRead,
   newStyleIssueBudget,
@@ -650,13 +651,15 @@ function mergedLibraryIssues(
   const merged = resolveSiteStyle(policy.defaults, { classes }).classes ?? [];
   const before = referableClassIds(policy.defaults?.classes ?? []);
   const after = referableClassIds(merged);
+  const shadowed = looksShadowed(merged, after);
 
   const issues: string[] = [];
   // A class the site used to render and no longer does. This write caused it,
   // whether by claiming its slug, taking its id, reordering it behind another,
-  // or pushing it past the cap.
+  // or pushing it past the cap. A look the site's own style shadows is not
+  // one: the style keeps its name by design, so the site keeps it saved.
   for (const id of before) {
-    if (!after.has(id)) {
+    if (!after.has(id) && !shadowed.has(id)) {
       issues.push(
         `Saving this would stop the class "${id}" rendering: once merged with this site's config it is no longer one of the ${MAX_NAMED_CLASSES} the compiler reads, or another class claims its slug or id first.`
       );
@@ -672,6 +675,31 @@ function mergedLibraryIssues(
     }
   }
   return issues;
+}
+
+/**
+ * The looks a rendered shared style shadows: those left out because a style
+ * holds their name, which the compiler gives the style first so seeding a
+ * look never takes a name a site already uses. Derived from what renders,
+ * so a look left out for any other reason is not among them.
+ */
+function looksShadowed(
+  merged: readonly NamedClass[],
+  rendered: ReadonlySet<string>
+): ReadonlySet<string> {
+  const styleSlugs = new Set(
+    merged
+      .filter(entry => rendered.has(entry.id) && !isLook(entry))
+      .map(entry => entry.slug)
+  );
+  return new Set(
+    merged
+      .filter(
+        entry =>
+          isLook(entry) && !rendered.has(entry.id) && styleSlugs.has(entry.slug)
+      )
+      .map(entry => entry.id)
+  );
 }
 
 /**
