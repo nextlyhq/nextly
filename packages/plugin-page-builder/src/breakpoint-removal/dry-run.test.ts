@@ -295,6 +295,44 @@ describe("a breakpoint removal counted across the site", () => {
     expect(run.removed[0]?.documents.named[0]).toBe("mobile-0 (draft)");
   });
 
+  it("spends no saved-title read on a Single, which is named by its slug", async () => {
+    // Ten Singles hold Mobile, ten pages Watch and ten pages TV. The Singles
+    // take nothing from the twenty reads, so both lists of pages get theirs.
+    const at = (breakpoint: string, host: HostAddress): Stored => ({
+      host,
+      published: page({
+        id: "a",
+        type: "core/text",
+        version: 1,
+        props: {},
+        styles: { base: { [breakpoint]: { color: "#111" } } },
+      }),
+    });
+    const singles = Array.from({ length: 10 }, (_, i) =>
+      at("mobile", { kind: "single", slug: `s${i}`, path: ["content"] })
+    );
+    const pages = ["watch", "tv"].flatMap(breakpoint =>
+      Array.from({ length: 10 }, (_, i) =>
+        at(breakpoint, entry("pages", `${breakpoint}-${i}`))
+      )
+    );
+    const deps = site([...singles, ...pages], {
+      saved: host => `${host.id ?? host.slug} (draft)`,
+    });
+    const run = await countRemoval(
+      new Map([
+        ["mobile", "Mobile"],
+        ["watch", "Watch"],
+        ["tv", "TV"],
+      ]),
+      deps
+    );
+    expect(
+      deps.savedAsks.flat().every(host => host.kind === "collection")
+    ).toBe(true);
+    expect(run.removed[2]?.documents.named[0]).toBe("tv-0 (draft)");
+  });
+
   it("asks once for saved titles that run out of time, and keeps the names it has", async () => {
     const deps = site([
       {

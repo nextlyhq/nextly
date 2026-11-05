@@ -127,15 +127,21 @@ async function titleFieldOf(
  * names, all at once rather than one after another; a Single is named by its
  * slug and is left out.
  */
-async function savedTitlesAsCaller(
+export async function savedTitlesAsCaller(
   site: Pick<DocumentSite, "resolveCollection">,
   ctx: Pick<PluginRouteContext, "caller">,
-  hosts: readonly HostAddress[]
+  hosts: readonly HostAddress[],
+  deadline: Date | undefined
 ): Promise<Map<string, string>> {
   const entries = hosts.filter(host => host.kind === "collection");
   const read = await Promise.all(
     entries.map(async host => {
       const titleField = await titleFieldOf(site, host.slug);
+      // Looked at again once the collection is known: a read started past the
+      // deadline would run on after the dry run has answered.
+      if (deadline !== undefined && Date.now() >= deadline.getTime()) {
+        return [documentKeyOf(host), undefined] as const;
+      }
       const row = await readSavedAsCaller(ctx, {
         collection: host.slug,
         id: host.id ?? "",
@@ -243,7 +249,8 @@ export async function countRemovalOnSite(
     read: siteHostReader(site),
     placeOf: host => placeOf(slugs, host),
     namesFor: hosts => namesAsCaller(install, site, ctx, hosts),
-    savedTitles: hosts => savedTitlesAsCaller(site, ctx, hosts),
+    savedTitles: (hosts, deadline) =>
+      savedTitlesAsCaller(site, ctx, hosts, deadline),
     limits: install.limits(),
     classes,
     deadline: new Date(Date.now() + WALK_MS),

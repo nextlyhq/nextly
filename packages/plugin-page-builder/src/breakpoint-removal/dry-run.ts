@@ -136,7 +136,9 @@ export interface DryRunDeps {
    * names, so only for those, and at most once per document.
    */
   readonly savedTitles?: (
-    hosts: readonly HostAddress[]
+    hosts: readonly HostAddress[],
+    /** When to stop starting reads: one the dry run could not wait for. */
+    deadline: Date | undefined
   ) => Promise<ReadonlyMap<string, string>>;
   /** The bounds the compiler reads a document within. */
   readonly limits: DocumentLimits;
@@ -405,16 +407,23 @@ async function savedNames(
   // Within the dry run's own allowance of such reads, and never once the
   // deadline has passed: a read started then could not be heard.
   const room = SAVED_TITLES_AT_MOST - saved.size;
+  // Only an entry has a title to read as saved: a Single is named by its
+  // slug, so it takes nothing from the allowance.
   const unasked = picked
     .map(entry => entry.host)
-    .filter(host => !saved.has(documentKeyOf(host)))
+    .filter(
+      host => host.kind === "collection" && !saved.has(documentKeyOf(host))
+    )
     .slice(0, Math.max(room, 0));
   if (
     deps.savedTitles !== undefined &&
     unasked.length > 0 &&
     !pastDeadline(deps)
   ) {
-    const answer = await beforeDeadline(deps.savedTitles(unasked), deps);
+    const answer = await beforeDeadline(
+      deps.savedTitles(unasked, deps.deadline),
+      deps
+    );
     // Timed out means the deadline has passed, so no later list asks again.
     if (answer !== TIMED_OUT) {
       for (const host of unasked) {
