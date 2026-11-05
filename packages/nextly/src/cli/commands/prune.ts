@@ -22,11 +22,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 import { and, count, eq } from "drizzle-orm";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
@@ -49,10 +46,9 @@ import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
-import { openCommandAdapter } from "../utils/adapter";
 import {
+  openOrConnect,
   requireDatabaseEnv,
-  connectOrExit,
 } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -62,6 +58,7 @@ import {
   requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 export { registerPruneCommand } from "./prune.command";
 
@@ -534,16 +531,11 @@ export async function runPruneCommand(
   });
   const currentSlugs = (configResult.config.collections ?? []).map(c => c.slug);
 
-  const connection = {
-    dialect: dbValidation.dialect,
-    databaseUrl: dbValidation.databaseUrl,
-  };
-  // A dry run opens the database read-only, and one that is not there has
-  // said so and ends here.
-  const adapter =
-    options.dryRun === true
-      ? await openCommandAdapter({ ...connection, dryRun: true }, logger)
-      : await connectOrExit(connection, logger);
+  const adapter = await openOrConnect(
+    { dialect: dbValidation.dialect, databaseUrl: dbValidation.databaseUrl },
+    options.dryRun === true,
+    logger
+  );
   if (adapter === undefined) return;
 
   try {
@@ -552,14 +544,7 @@ export async function runPruneCommand(
     // tables first, then every component's `comp_` table, which the sweep deletes rows from.
     const drizzleAdapter = adapter as unknown as DrizzleAdapter;
     const { dialect } = drizzleAdapter.getCapabilities();
-    const schemaRegistry = new SchemaRegistry(dialect);
-    // Both spellings of the field-group registry: a database whose storage
-    // migration has run has no handle for its registry otherwise.
-    schemaRegistry.registerStaticSchemas({
-      ...getDialectTables(dialect),
-      ...getFieldGroupRegistryAliases(dialect),
-    });
-    drizzleAdapter.setTableResolver(schemaRegistry);
+    const schemaRegistry = installRegistryResolver(drizzleAdapter);
     await registerComponentSchemas({
       adapter: drizzleAdapter,
       registry: schemaRegistry,

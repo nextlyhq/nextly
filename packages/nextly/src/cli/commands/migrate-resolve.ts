@@ -38,9 +38,8 @@ import { reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import { resolveModeRequired } from "../errors/areas/migrations";
 import type { CommandContext } from "../program";
-import { openCommandAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
-import { requireDatabaseEnv } from "../utils/command-prerequisites";
-import { loadConfig } from "../utils/config-loader";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import { openMigrationCommand } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
   selectVariant,
@@ -205,30 +204,13 @@ export async function runMigrateResolve(
 
   logger.header("Migrate Resolve");
 
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
-  const configResult = await loadConfig({
-    configPath: options.config,
-    cwd: options.cwd,
-    debug: options.verbose,
-  });
-  const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-  const metaDir = resolve(migrationsDir, "meta");
-
   // A dry run opens the database read-only, and one that is not there has
   // said so and ends here.
-  const adapter = await openCommandAdapter(
-    {
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-      dryRun: options.dryRun,
-    },
-    logger
-  );
-  if (adapter === undefined) return;
+  const opened = await openMigrationCommand(options, logger);
+  if (opened === undefined) return;
+  const { dbValidation, configResult, cwd, migrationsDir, adapter } = opened;
+  const dialect = dbValidation.dialect;
+  const metaDir = resolve(migrationsDir, "meta");
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
@@ -298,21 +280,11 @@ export async function runMigrateResolve(
     // A dry run takes no lock and clears none: it runs the same checks, and
     // its ledger writes are named, not made.
     if (options.dryRun === true) {
-      const changes: DryRunChange[] = options.forceUnlock
-        ? [{ action: "remove", target: "any migrate lock held" }]
-        : [];
-      try {
-        await resolveMigration({
-          ...resolveArgs,
-          atomically: work => work(recordingRepo(repo, filename, changes)),
-        });
-      } catch (error) {
-        const refusal = dryRunRefusalOf(error);
-        if (refusal === undefined) throw error;
-        reportDryRun(logger, { changes, refusals: [refusal] });
-        return;
-      }
-      reportDryRun(logger, { changes });
+      await previewResolve(resolveArgs, repo, {
+        filename,
+        forceUnlock: options.forceUnlock === true,
+        logger,
+      });
       return;
     }
 
@@ -385,6 +357,42 @@ export async function runMigrateResolve(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * `migrate:resolve --dry-run`: the resolve itself, run with a ledger that
+ * reads the real one and names each write instead of making it, so its checks
+ * and refusals are the real run's. It takes no lock and clears none; under
+ * `--force-unlock` it says the real run would clear the lock first.
+ */
+async function previewResolve(
+  resolveArgs: Omit<ResolveMigrationArgs, "atomically">,
+  repo: SchemaEventsRepository,
+  {
+    filename,
+    forceUnlock,
+    logger,
+  }: {
+    filename: string;
+    forceUnlock: boolean;
+    logger: CommandContext["logger"];
+  }
+): Promise<void> {
+  const changes: DryRunChange[] = forceUnlock
+    ? [{ action: "remove", target: "any migrate lock held" }]
+    : [];
+  try {
+    await resolveMigration({
+      ...resolveArgs,
+      atomically: work => work(recordingRepo(repo, filename, changes)),
+    });
+  } catch (error) {
+    const refusal = dryRunRefusalOf(error);
+    if (refusal === undefined) throw error;
+    reportDryRun(logger, { changes, refusals: [refusal] });
+    return;
+  }
+  reportDryRun(logger, { changes });
 }
 
 /**

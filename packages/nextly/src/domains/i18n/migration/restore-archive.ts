@@ -27,6 +27,7 @@ import {
   inArray,
   lte,
   sql,
+  type SQL,
 } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -300,9 +301,10 @@ export async function restoreI18nArchive(
       ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
       ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
     );
-  const where = scope(
-    args.claimUnknown ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS] : [kind]
-  );
+  const kinds = args.claimUnknown
+    ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS]
+    : [kind];
+  const where = scope(kinds);
   const unattributed = async (): Promise<number> => {
     const [row] = (await db
       .select({ n: count() })
@@ -320,43 +322,16 @@ export async function restoreI18nArchive(
   // either: an older archive may have no kind column yet, and its rows no kind.
   const planned =
     args.dryRun === true
-      ? await rowsAsLabelled(adapter, db, {
-          collection,
-          kinds: args.claimUnknown
-            ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS]
-            : [kind],
-          locale,
-          field,
-        })
+      ? await rowsAsLabelled(adapter, db, { collection, kinds, locale, field })
       : undefined;
   const rows =
     planned?.rows ??
-    ((await db
-      .select({
-        id: nextlyI18nArchive.id,
-        entityKind: nextlyI18nArchive.entityKind,
-        entryId: nextlyI18nArchive.entryId,
-        locale: nextlyI18nArchive.locale,
-        field: nextlyI18nArchive.field,
-        value: nextlyI18nArchive.value,
-      })
-      .from(nextlyI18nArchive)
-      .where(where)
-      // Oldest first, so that when a value was archived more than once (a field made shared,
-      // translated again, then made shared again) the newest row is the one assigned last below
-      // and is what comes back. The id is the database's own insertion order on every dialect.
-      .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[]);
+    (await archivedRowsOldestFirst(db, nextlyI18nArchive, where));
   const unattributedNow = async () =>
     planned?.unattributed ?? (await unattributed());
 
   if (rows.length === 0) {
-    return {
-      rowsRead: 0,
-      rowsRestored: 0,
-      locales: [],
-      rowsClaimed: 0,
-      rowsUnattributed: await unattributedNow(),
-    };
+    return restoreCounts([], 0, 0, await unattributedNow());
   }
 
   await refuseFieldsNotTranslatedNow(
@@ -366,34 +341,19 @@ export async function restoreI18nArchive(
     rows.map(r => r.field)
   );
 
-  // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
-  // language is written in a single upsert rather than once per field.
-  const grouped = new Map<
-    string,
-    { entryId: string; locale: string; data: Record<string, unknown> }
-  >();
-  for (const r of rows) {
-    const key = `${r.entryId}::${r.locale}`;
-    let g = grouped.get(key);
-    if (!g) {
-      g = { entryId: r.entryId, locale: r.locale, data: {} };
-      grouped.set(key, g);
-    }
-    g.data[r.field] = r.value;
-  }
+  const grouped = byEntryAndLocale(rows);
 
   const rowsClaimed = rows.filter(r =>
     (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
   ).length;
   // What a restore writes, counted and not written.
   if (args.dryRun === true) {
-    return {
-      rowsRead: rows.length,
-      rowsRestored: grouped.size,
-      locales: [...new Set(rows.map(r => r.locale))].sort(),
+    return restoreCounts(
+      rows,
+      grouped.size,
       rowsClaimed,
-      rowsUnattributed: await unattributedNow(),
-    };
+      await unattributedNow()
+    );
   }
 
   // 🔴 Probed ONCE before the loop, because `"clear"` NAMES the column and a companion that
@@ -461,11 +421,79 @@ export async function restoreI18nArchive(
       .where(and(where, lte(nextlyI18nArchive.id, maxId)));
   }
 
+  return restoreCounts(rows, grouped.size, rowsClaimed, await unattributed());
+}
+
+/** The archive table as its dialect's schema declares it. */
+type ArchiveTable = ReturnType<
+  typeof nextlyI18nArchiveTables
+>["nextlyI18nArchive"];
+
+/**
+ * The archived rows `where` selects, oldest first, so that when a value was archived more than
+ * once (a field made shared, translated again, then made shared again) the newest row is the one
+ * assigned last when grouped and is what comes back. The id is the database's own insertion order
+ * on every dialect.
+ */
+async function archivedRowsOldestFirst(
+  db: ArchiveReadWriteDb,
+  nextlyI18nArchive: ArchiveTable,
+  where: SQL | undefined
+): Promise<ArchiveRow[]> {
+  return (await db
+    .select({
+      id: nextlyI18nArchive.id,
+      entityKind: nextlyI18nArchive.entityKind,
+      entryId: nextlyI18nArchive.entryId,
+      locale: nextlyI18nArchive.locale,
+      field: nextlyI18nArchive.field,
+      value: nextlyI18nArchive.value,
+    })
+    .from(nextlyI18nArchive)
+    .where(where)
+    .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
+}
+
+/**
+ * The per-field archive rows collapsed back into one companion row per (entry, locale), so each
+ * language is written in a single upsert rather than once per field. A later row's value for a
+ * field replaces an earlier one's.
+ */
+function byEntryAndLocale(
+  rows: readonly ArchiveRow[]
+): Map<
+  string,
+  { entryId: string; locale: string; data: Record<string, unknown> }
+> {
+  const grouped = new Map<
+    string,
+    { entryId: string; locale: string; data: Record<string, unknown> }
+  >();
+  for (const r of rows) {
+    const key = `${r.entryId}::${r.locale}`;
+    const g = grouped.get(key) ?? {
+      entryId: r.entryId,
+      locale: r.locale,
+      data: {},
+    };
+    grouped.set(key, g);
+    g.data[r.field] = r.value;
+  }
+  return grouped;
+}
+
+/** What a restore reports: the rows it read, the companion rows they make, and the claims. */
+function restoreCounts(
+  rows: readonly ArchiveRow[],
+  rowsRestored: number,
+  rowsClaimed: number,
+  rowsUnattributed: number
+): RestoreArchiveResult {
   return {
     rowsRead: rows.length,
-    rowsRestored: grouped.size,
+    rowsRestored,
     locales: [...new Set(rows.map(r => r.locale))].sort(),
     rowsClaimed,
-    rowsUnattributed: await unattributed(),
+    rowsUnattributed,
   };
 }
