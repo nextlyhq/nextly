@@ -112,10 +112,13 @@ function open(section: string): void {
     fireEvent.click(heading);
 }
 
-describe("a Section's Height", () => {
-  it("is offered in Size, and Full screen writes the min height", () => {
+describe("a Section's Min height presets", () => {
+  it("are the Min height row while no min height draws the field", () => {
     const editor = mount("core/section");
     open("Size");
+    expect(
+      screen.getByRole("radiogroup", { name: "Min height" })
+    ).toBeDefined();
     expect(
       screen.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")
     ).toBe("true");
@@ -123,6 +126,26 @@ describe("a Section's Height", () => {
     expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
       '"minHeight":"100svh"'
     );
+  });
+
+  it("stand over the Min height field once it is drawn, one label for both", () => {
+    mount("core/section", {
+      base: { [BASE_BREAKPOINT]: { minHeight: "100svh" } },
+    });
+    open("Size");
+    expect(
+      screen
+        .getByRole("radio", { name: "Full screen" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+    expect(
+      screen.getByRole("radiogroup", { name: "Min height presets" })
+    ).toBeDefined();
+    // The field's label is the one on screen; no second "Height" row.
+    expect(screen.getAllByText("Min height")).toHaveLength(1);
+    const presets = document.querySelector('[data-control="section-height"]');
+    const field = document.querySelector('[data-property="minHeight"]');
+    expect(presets?.nextElementSibling).toBe(field);
   });
 });
 

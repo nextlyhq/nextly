@@ -42,9 +42,14 @@ const SIZE_LABELS: Readonly<Record<SizeChoice, string>> = {
   large: "Large",
 };
 
-/** A labelled row of choices, with the line that says what they do. */
+/**
+ * A labelled row of choices, with the line that says what they do. Unlabelled
+ * on screen where it stands over the field it presets, which carries the
+ * label; its name is still read.
+ */
 function ChoiceRow<T extends string>({
   label,
+  shownLabel = true,
   options,
   on,
   labels,
@@ -52,6 +57,7 @@ function ChoiceRow<T extends string>({
   onChoose,
 }: {
   label: string;
+  shownLabel?: boolean;
   options: readonly T[];
   on: T | undefined;
   labels: Readonly<Record<T, string>>;
@@ -63,7 +69,7 @@ function ChoiceRow<T extends string>({
     <>
       <div className="nx-inspector__field">
         <span className="nx-inspector__field-name" id={labelId}>
-          {label}
+          {shownLabel ? label : <span className="sr-only">{label}</span>}
         </span>
         <SegmentChoices
           options={options}
@@ -78,37 +84,60 @@ function ChoiceRow<T extends string>({
   );
 }
 
+/** Where a shortcut control writes, and from what. */
+interface ShortcutProps {
+  editor: EditorState;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+}
+
+/**
+ * A Section's Min height presets, Auto and Full screen: on the Min height
+ * row, as a row over its input where that field is drawn (`over`), else as
+ * the row itself, named Min height, until a value draws the field.
+ */
+export function MinHeightPresets({
+  editor,
+  nodeId,
+  state,
+  breakpoint,
+  over,
+}: ShortcutProps & { over: boolean }): React.JSX.Element | null {
+  const node = findNode(editor.document.nodes, nodeId);
+  if (node?.type !== SECTION_BLOCK) return null;
+  const at: ShortcutAt = { state, breakpoint };
+  return (
+    <div className="nx-block-shortcuts" data-control="section-height">
+      <ChoiceRow
+        label={over ? "Min height presets" : "Min height"}
+        shownLabel={!over}
+        options={["auto", "screen"] as const}
+        on={heightOf(node, at)}
+        labels={HEIGHT_LABELS}
+        hint="Full screen: at least the screen's height, growing with its content."
+        onChoose={choice => {
+          const op = planHeight(node, choice, at);
+          if (op !== null) editor.apply(op);
+        }}
+      />
+    </div>
+  );
+}
+
+/** A Button's Size and Full width, at the top of its Size section. */
 export function BlockShortcutsControl({
   editor,
   nodeId,
   state,
   breakpoint,
-}: {
-  editor: EditorState;
-  nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
-}): React.JSX.Element | null {
+}: ShortcutProps): React.JSX.Element | null {
   const node = findNode(editor.document.nodes, nodeId);
   if (node === undefined) return null;
   const at: ShortcutAt = { state, breakpoint };
   const apply = (op: BuilderOp | null) => {
     if (op !== null) editor.apply(op);
   };
-  if (node.type === SECTION_BLOCK) {
-    return (
-      <div className="nx-block-shortcuts" data-control="section-height">
-        <ChoiceRow
-          label="Height"
-          options={["auto", "screen"] as const}
-          on={heightOf(node, at)}
-          labels={HEIGHT_LABELS}
-          hint="At least the screen's height; grows with its content."
-          onChoose={choice => apply(planHeight(node, choice, at))}
-        />
-      </div>
-    );
-  }
   if (node.type !== BUTTON_BLOCK) return null;
   const size = sizeOf(node, at);
   return (

@@ -83,7 +83,10 @@ import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
-import { BlockShortcutsControl } from "./block-shortcuts-field";
+import {
+  BlockShortcutsControl,
+  MinHeightPresets,
+} from "./block-shortcuts-field";
 import {
   breakpointQueries,
   editedTierLive,
@@ -1173,7 +1176,12 @@ function SectionFields({
           <ColumnsLayoutFields surroundings={surroundings} />
         ) : null}
         {sectionKey === "size" ? (
-          <BlockShortcutsFields surroundings={surroundings} />
+          <BlockShortcutsFields
+            surroundings={surroundings}
+            minHeightDrawn={(rings?.rest ?? shown).some(
+              property => property.property === "minHeight"
+            )}
+          />
         ) : null}
         {rings === undefined ? null : (
           <SpacingBox
@@ -1183,12 +1191,16 @@ function SectionFields({
           />
         )}
         {(rings?.rest ?? shown).map(property => (
-          <StylePropertyFields
-            key={`${surroundings.nodeId}:${property.property}`}
-            property={withOverlayOffered(property, surroundings)}
-            namesSection={property.property === sectionKey}
-            {...surroundings}
-          />
+          <React.Fragment key={`${surroundings.nodeId}:${property.property}`}>
+            {property.property === "minHeight" ? (
+              <BlockPresetsOver surroundings={surroundings} />
+            ) : null}
+            <StylePropertyFields
+              property={withOverlayOffered(property, surroundings)}
+              namesSection={property.property === sectionKey}
+              {...surroundings}
+            />
+          </React.Fragment>
         ))}
         {shown.length === 0 ? (
           <p className="nx-inspector__note">
@@ -1292,17 +1304,43 @@ function appliedAtReader({
  */
 function BlockShortcutsFields({
   surroundings,
+  minHeightDrawn,
+}: {
+  surroundings: StyleFieldSurroundings;
+  /** Whether the Min height field is drawn, which then carries its presets. */
+  minHeightDrawn: boolean;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  if (target.kind !== "block") return null;
+  const where = {
+    editor: surroundings.editor,
+    nodeId: surroundings.nodeId,
+    state: surroundings.state,
+    breakpoint: surroundings.breakpoint,
+  };
+  return (
+    <>
+      <BlockShortcutsControl {...where} />
+      {minHeightDrawn ? null : <MinHeightPresets {...where} over={false} />}
+    </>
+  );
+}
+
+/** A Section's Min height presets, over the Min height field it presets. */
+function BlockPresetsOver({
+  surroundings,
 }: {
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element | null {
   const target = React.useContext(StyleTargetContext);
   if (target.kind !== "block") return null;
   return (
-    <BlockShortcutsControl
+    <MinHeightPresets
       editor={surroundings.editor}
       nodeId={surroundings.nodeId}
       state={surroundings.state}
       breakpoint={surroundings.breakpoint}
+      over
     />
   );
 }
