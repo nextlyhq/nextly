@@ -2241,6 +2241,56 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("clears the deleted Layout from a published page's live row when the page is next published", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const kept = await layout(t, "Kept", "kept");
+        const hidden = await layout(t, "Hidden", "hidden", "draft");
+        const live = await page(t, "Live", {
+          layout: other,
+          status: "published",
+        });
+        const resent = await page(t, "Resent", {
+          layout: other,
+          status: "published",
+        });
+        const onKept = await page(t, "On kept", {
+          layout: kept,
+          status: "published",
+        });
+        const onHidden = await page(t, "On hidden", {
+          layout: hidden,
+          status: "published",
+        });
+
+        expect((await runMove(cookie, other)).state).toBe("done");
+        expect(await layoutRow(t, other)).toBeUndefined();
+        // The live rows still name it until the pages are published again.
+        expect(await liveLayout(t, live)).toBe(other);
+        expect(await liveLayout(t, resent)).toBe(other);
+
+        const publish = (id: string, data: Record<string, unknown>) =>
+          t.nextly.update({
+            collection: PAGES_SLUG,
+            id,
+            data: { ...data, status: "published" },
+            overrideAccess: true,
+          });
+        // A publish that leaves the Layout out, and one that sends the stored
+        // choice back, as a form holding the whole page does.
+        await publish(live, { title: "Live again" });
+        await publish(resent, { layout: other });
+        await publish(onKept, { title: "On kept again" });
+        await publish(onHidden, { title: "On hidden again" });
+
+        expect(await liveLayout(t, live)).toBeNull();
+        expect(await liveLayout(t, resent)).toBeNull();
+        // The controls: a Layout that exists stays chosen, published or not.
+        expect(await liveLayout(t, onKept)).toBe(kept);
+        expect(await liveLayout(t, onHidden)).toBe(hidden);
+      });
+
       it("moves the pages and then unpublishes the Layout", async () => {
         const t = await boot();
         const { cookie } = await owner(t);

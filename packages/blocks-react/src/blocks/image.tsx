@@ -16,12 +16,14 @@ import {
   type BlockDefinition,
   blockTypeClassName,
   defineBlock,
+  LOOK_CLASS_PREFIX,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
+import { imageLooks } from "./looks";
 import {
   fetchableUrl,
   flag,
@@ -159,6 +161,25 @@ export async function renderImage({
 }
 
 /**
+ * The look classes among a class string. The compiler puts a look on a node
+ * only when the look is bound to the node's own type, so every look class on
+ * an image is one of the image's looks, whatever its name.
+ */
+function looksIn(className: string | undefined): string[] {
+  return (className ?? "")
+    .split(/\s+/)
+    .filter(name => name.startsWith(LOOK_CLASS_PREFIX));
+}
+
+/** A class string without its look classes. */
+function withoutLooks(className: string | undefined): string {
+  return (className ?? "")
+    .split(/\s+/)
+    .filter(name => name !== "" && !name.startsWith(LOOK_CLASS_PREFIX))
+    .join(" ");
+}
+
+/**
  * The picture's classes: the node's own where it is the root, else the type
  * class and the part that takes the fit and focal point from the root (where
  * the node's Style values land, and `object-fit` does nothing), plus the part
@@ -175,6 +196,9 @@ function pictureClass(
     blockTypeClassName(IMAGE_BLOCK),
     partClass("picture"),
     ...(link === undefined ? [] : [partClass("linked")]),
+    // The image's looks style the picture itself (its corners, its fit), so
+    // they ride the `<img>` wherever it isn't the root.
+    ...looksIn(className),
   ]
     .filter(Boolean)
     .join(" ");
@@ -204,7 +228,7 @@ function wrapPicture(
     linkName: string | undefined;
   }
 ): ReactElement {
-  const rootClass = caption === "" ? className : "";
+  const rootClass = caption === "" ? withoutLooks(className) : "";
   const linked =
     link === undefined ? (
       image
@@ -226,7 +250,9 @@ function wrapPicture(
   if (caption === "") return linked;
   return (
     <figure
-      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+      className={[withoutLooks(className), partClass("frame")]
+        .filter(Boolean)
+        .join(" ")}
     >
       {linked}
       <figcaption className={partClass("caption")}>{caption}</figcaption>
@@ -381,6 +407,8 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     icon: "image",
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: imageLooks(),
   },
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,

@@ -73,6 +73,7 @@ import {
   sharedStyleReachChip,
   sharedStyleReachSentence,
   sharedStyleRows,
+  sharedStylesOnly,
   sharedStyleSearchText,
   SHARED_STYLE_NOT_WHOLE_REMOVAL,
   SHARED_STYLE_RENAME_PENDING,
@@ -252,7 +253,10 @@ function useRows(
     () =>
       library === undefined
         ? []
-        : sharedStyleRows(library, new Set(idsOf(suppliedKey))),
+        : sharedStyleRows(
+            sharedStylesOnly(library),
+            new Set(idsOf(suppliedKey))
+          ),
     [library, suppliedKey]
   );
 }

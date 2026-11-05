@@ -190,8 +190,12 @@ When a `@public` export must change incompatibly:
    removed in.
 2. **Emit a one-time runtime warning** at first use where practical — log via
    `ctx.logger.warn` (or the host logger), guarded so it fires once per process so it
-   doesn't spam.
-3. **Keep it for ≥ 1 major version** after deprecation (the support window).
+   doesn't spam. Core and the admin say it through `noticeDeprecation`
+   (`nextly/deprecation-notice`), which keeps that once-per-process record.
+3. **Keep it working for at least two minor releases** after the one that deprecates it,
+   and remove it only at the next major release after those (the support window).
+   Deprecated in 1.3, it still works in 1.4 and 1.5, and 2.0 is the earliest it can be
+   removed; if 2.0 comes before two minor releases have passed, removal waits for 3.0.
 4. **Ship a migration guide** in the docs before removal.
 
 `@experimental` exports may be changed or removed **without** this process — that is the

@@ -342,6 +342,22 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   name: string;
   label?: string;
   props?: Partial<P>;
+  /**
+   * A LOOK rather than an insert preset: the styles of one named variant of the block
+   * (Outline, Rounded), which an author picks for a block already on the page. The site
+   * receives it as a shared style bound to this block type (`blockLooks`), which it may edit;
+   * a variation with styles is not offered as a separate insert entry.
+   *
+   * @experimental
+   */
+  styles?: NodeStyles;
+  /**
+   * Names the block's own look, its `baseStyles`, as one of its looks (a button's Primary).
+   * Carries no styles of its own: wearing it is wearing no look.
+   *
+   * @experimental
+   */
+  isDefault?: true;
 }
 
 /**
