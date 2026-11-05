@@ -1812,8 +1812,11 @@ function planFieldsJoiningTranslation(
             columns: joining.map(j => j.column),
             // A default-language row created for an entry takes its publishing state, when the
             // main table and the companion both have one before this change.
+            // Only where each language publishes on its own: an untranslated entity kept per
+            // language under the setting publishes as a document, and its companion has no
+            // `_status`.
             status:
-              c.status === true &&
+              publishesPerLanguage(c) &&
               prevMain?.columns.some(col => col.name === "status") === true,
           },
           builtBy: "codeFirst",

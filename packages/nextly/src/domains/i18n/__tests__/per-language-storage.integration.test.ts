@@ -28,6 +28,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { historyLanguagesOf } from "../../../api/versions-access";
 import { createAdapter } from "../../../database/factory";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -194,6 +195,44 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await t.nextly.findByID({ collection: "articles", id })
       ).toMatchObject({ headline: "Hello again", excerpt: "A first article." });
+    });
+
+    // A save of an untranslated entity kept per language is recorded in its language, so the
+    // history it can be asked about is every configured language, as a translated entity's is.
+    it("asks an untranslated Single's history in every language the site keeps it in", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        singles: [
+          defineSingle({
+            slug: "notice",
+            versions: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+      });
+      expect(
+        [...(await historyLanguagesOf("single", "notice"))].sort()
+      ).toEqual(["de", "en"]);
+    });
+
+    // A translatable field's values are in the per-language table, which a grouped read does not
+    // aggregate yet: it is refused for that reason, as on a translated collection, not as a field
+    // that has no column.
+    it("refuses grouping by a translatable field as kept per language, not as missing", async () => {
+      const t = await boot(dialect, true);
+      const refused = await t.nextly
+        .group({
+          collection: "articles",
+          groupBy: "headline",
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      expect(JSON.stringify(refused)).toContain("stored per locale");
     });
 
     // Publishing stays document-level for an entity that is not translated: its per-language row

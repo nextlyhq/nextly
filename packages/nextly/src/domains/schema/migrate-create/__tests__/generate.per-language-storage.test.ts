@@ -75,6 +75,59 @@ describe("generateMigration under per-language storage", () => {
     expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "dc_notes_locales"`);
   });
 
+  // A Draft/Published collection that is not translated publishes as a document, so its
+  // companion has no `_status`: a shared field moving into it must not write one.
+  it("moves a shared field into the companion of an untranslated Draft/Published collection without a status", async () => {
+    setPerLanguageStorage(true);
+    const fields = (headline: Record<string, unknown>) => [
+      headline,
+      { name: "summary", type: "text" },
+      { name: "views", type: "number" },
+    ];
+    const run = (name: string, at: string, headline: Record<string, unknown>) =>
+      generateMigration({
+        name,
+        dialect: "sqlite",
+        migrationsDir,
+        collections: [
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            status: true,
+            fields: fields(headline),
+          } as MinimalConfigEntity,
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date(at),
+      });
+    await run("create_notes", "2026-10-29T12:00:00.000Z", {
+      name: "headline",
+      type: "text",
+      localized: false,
+    });
+    const before = new Set(
+      (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"))
+    );
+    await run("headline_joins", "2026-10-30T12:00:00.000Z", {
+      name: "headline",
+      type: "text",
+    });
+    const added = (await readdir(migrationsDir)).filter(
+      f => f.endsWith(".sql") && !before.has(f)
+    );
+    const sql = (
+      await Promise.all(
+        added.map(f => readFile(resolve(migrationsDir, f), "utf-8"))
+      )
+    ).join("\n");
+    // The move is planned, so absence of `_status` below is not an empty file passing.
+    expect(sql).toContain(`"dc_notes_locales"`);
+    expect(sql).toContain(`"headline"`);
+    expect(sql).not.toContain(`"_status"`);
+  });
+
   it("generates it as before with the setting off", async () => {
     setPerLanguageStorage(false);
     const { mainColumns, sql } = await generated(migrationsDir);

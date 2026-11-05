@@ -17,6 +17,7 @@
  */
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import { isJsonFieldType } from "../services/collection-utils";
 
@@ -90,6 +91,22 @@ export function groupKeyDeclarationProblem(
     return `"${groupBy}" ${ungroupable}. Group by a scalar field instead.`;
   }
   return undefined;
+}
+
+/**
+ * `declared` as its entity stores it: marked localized when its values are kept per language,
+ * whether the field says so itself or its entity keeps every translatable field so (a translated
+ * entity, or any under `experimental.perLanguageStorage`). A field kept per language has no column
+ * on the entity's own table, so it is refused for that reason rather than as a missing column.
+ */
+export function declaredAsStored(
+  declared: FieldDefinition | undefined,
+  entityStoresPerLanguage: boolean
+): FieldDefinition | undefined {
+  if (declared === undefined || declared.localized === true) return declared;
+  return isFieldLocalized(declared, entityStoresPerLanguage)
+    ? { ...declared, localized: true }
+    : declared;
 }
 
 /** Whether a declaration leaves the field usable as a group key. */
