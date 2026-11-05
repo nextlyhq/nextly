@@ -467,10 +467,11 @@ describe("PushSchemaPipeline.apply with an unanswered column made required", () 
     expect(executePreRes).not.toHaveBeenCalled();
   });
 
-  // The fill and delete judgements run on the rows as they stand before the renames and drops of
+  // The delete threshold is judged on the rows as they stand before the renames and drops of
   // pre-resolution, read through a rename to the column the database still has: on MySQL those
   // would have committed by the time pre-cleanup ran.
-  it("refuses a unique fill whose rows grew while the prompt was open, before any rename", async () => {
+  it("refuses a delete whose rows grew past the threshold while the prompt was open, before any rename", async () => {
+    vi.stubEnv("NEXTLY_DELETE_THRESHOLD", "2");
     sqlite.exec(`ALTER TABLE dc_posts ADD COLUMN nick TEXT`);
     const event: ClassifierEvent = {
       ...madeRequired("dc_posts", "handle"),
@@ -478,47 +479,49 @@ describe("PushSchemaPipeline.apply with an unanswered column made required", () 
       nullCount: 1,
       tableRowCount: 3,
     };
-    const { result, executePreRes } = await applyWith({
-      desired: {
-        ...posts,
-        collections: {
-          posts: {
-            ...posts.collections.posts,
-            fields: [
-              { name: "summary", type: "text" },
-              { name: "body", type: "text" },
-              { name: "handle", type: "text", required: true, unique: true },
-            ] as never,
+    try {
+      const { result, executePreRes } = await applyWith({
+        desired: {
+          ...posts,
+          collections: {
+            posts: {
+              ...posts.collections.posts,
+              fields: [
+                { name: "summary", type: "text" },
+                { name: "body", type: "text" },
+                { name: "handle", type: "text", required: true },
+              ] as never,
+            },
           },
         },
-      },
-      events: [event],
-      ops: [
-        {
-          type: "rename_column",
-          tableName: "dc_posts",
-          fromColumn: "nick",
-          toColumn: "handle",
-          fromType: "text",
-          toType: "text",
-        },
-        {
-          type: "change_column_nullable",
-          tableName: "dc_posts",
-          columnName: "handle",
-          fromNullable: true,
-          toNullable: false,
-        },
-      ],
-      answer: () => [
-        { kind: "provide_default", eventId: event.id, value: "same" },
-      ],
-    });
-    expect(result.success).toBe(false);
-    expect(result.error?.message).toContain(
-      "is unique, so one value for its 3 rows would repeat"
-    );
-    // Nothing renamed: pre-resolution never ran.
-    expect(executePreRes).not.toHaveBeenCalled();
+        events: [event],
+        ops: [
+          {
+            type: "rename_column",
+            tableName: "dc_posts",
+            fromColumn: "nick",
+            toColumn: "handle",
+            fromType: "text",
+            toType: "text",
+          },
+          {
+            type: "change_column_nullable",
+            tableName: "dc_posts",
+            columnName: "handle",
+            fromNullable: true,
+            toNullable: false,
+          },
+        ],
+        answer: () => [{ kind: "delete_nonconforming", eventId: event.id }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toContain(
+        "DELETE_THRESHOLD_EXCEEDED: 3 rows >= 2"
+      );
+      // Nothing renamed: pre-resolution never ran.
+      expect(executePreRes).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

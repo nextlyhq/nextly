@@ -13,7 +13,7 @@ Refused before its first statement, nothing of the migration was applied. On MyS
 
 ## Fix
 
-Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again. A field made required in the Schema Builder or by the development push can be given a value for those rows when you save it.
+Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again. A field made required in the Schema Builder or by the development push can be given a value for those rows when you save it, unless the field is unique: one value would repeat in those rows, or match a value another row already holds, so give each row its own value first.
 
 ## Example
 

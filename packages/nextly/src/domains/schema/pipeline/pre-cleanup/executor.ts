@@ -74,7 +74,7 @@ export function assertPreCleanupAccepted(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
   fields: PreCleanupField[];
-  /** The schema being applied: a fill's column, its type and its unique indexes. */
+  /** The schema being applied: a fill's column and its type. */
   desiredSnapshot: NextlySchemaSnapshot;
   /** Which encodings a value may arrive in: SQLite's columns store booleans and dates as numbers. */
   dialect: SupportedDialect;
@@ -104,26 +104,17 @@ export function assertPreCleanupAccepted(args: {
 
   for (const { resolution, event } of sideEffectResolutions(args)) {
     if (resolution.kind === "provide_default") {
-      const target = fillTargetOf(args, event);
+      const fillType = fillTypeOf(args, event);
       const validation = validateDefaultValue(
-        { name: event.columnName, type: target.type },
+        { name: event.columnName, type: fillType },
         resolution.value,
         args.dialect
       );
       if (!validation.success) {
         throw new Error(
-          `INVALID_DEFAULT_FOR_TYPE: ${event.columnName} (${target.type}) - ${validation.error}`
+          `INVALID_DEFAULT_FOR_TYPE: ${event.columnName} (${fillType}) - ${validation.error}`
         );
       }
-      // The classifier's counts, from before the prompt: judged again on the rows as they stand
-      // when pre-cleanup runs (`assertLiveCounts`).
-      assertFillCanBeUnique(
-        event,
-        target.unique,
-        event.kind === "add_required_field_no_default"
-          ? event.tableRowCount
-          : event.nullCount
-      );
     } else if (event.kind === "add_not_null_with_nulls") {
       assertDeleteWithinThreshold(event.nullCount);
     }
@@ -133,50 +124,43 @@ export function assertPreCleanupAccepted(args: {
 }
 
 /**
- * The fill and delete judgements again, on the rows as they stand after the prompt, counted through
- * the apply's transaction before its first statement (the pipeline asks it ahead of the renames and
- * drops of pre-resolution, which on MySQL commit as they run): rows can change while the prompt is
- * open, so the classifier's counts can be stale. Counted with the shared counter
- * (`countRowsBreakingNotNull`): a column added over the table counts every row, an existing one its
- * null rows, under the name it has now when the apply renames it. Only the answers these judge are
- * counted.
+ * The delete threshold again, on the rows as they stand after the prompt, counted through the
+ * apply's transaction before its first statement (the pipeline asks it ahead of the renames and drops
+ * of pre-resolution, which on MySQL commit as they run): rows can change while the prompt is open, so
+ * the classifier's count can be stale. Counted with the shared counter (`countRowsBreakingNotNull`),
+ * under the column's current name when the apply renames it.
  */
 export async function assertLiveCounts(args: {
   tx: unknown;
   resolutions: Resolution[];
   events: ClassifierEvent[];
-  fields: PreCleanupField[];
-  desiredSnapshot: NextlySchemaSnapshot;
   /** The apply's operations: a column it renames is counted under its current name. */
   operations: readonly Operation[];
   dialect: SupportedDialect;
 }): Promise<void> {
-  const renamedFrom = (table: string, column: string) =>
-    args.operations.find(
+  for (const { resolution, event } of sideEffectResolutions(args)) {
+    if (
+      resolution.kind !== "delete_nonconforming" ||
+      event.kind !== "add_not_null_with_nulls"
+    ) {
+      continue;
+    }
+    const rename = args.operations.find(
       op =>
         op.type === "rename_column" &&
-        sameName(op.tableName, table) &&
-        sameName(op.toColumn, column)
+        sameName(op.tableName, event.tableName) &&
+        sameName(op.toColumn, event.columnName)
     );
-  for (const { resolution, event } of sideEffectResolutions(args)) {
-    const added = event.kind === "add_required_field_no_default";
-    const judgesFill =
-      resolution.kind === "provide_default" && fillTargetOf(args, event).unique;
-    const judgesDelete = resolution.kind === "delete_nonconforming" && !added;
-    if (!judgesFill && !judgesDelete) continue;
-    const rename = renamedFrom(event.tableName, event.columnName);
     const rows = (
       await countRowsBreakingNotNull(args.tx, args.dialect, {
         table: event.tableName,
-        column: added
-          ? null
-          : rename?.type === "rename_column"
+        column:
+          rename?.type === "rename_column"
             ? rename.fromColumn
             : event.columnName,
       })
     ).total;
-    if (judgesFill) assertFillCanBeUnique(event, true, rows);
-    else assertDeleteWithinThreshold(rows);
+    assertDeleteWithinThreshold(rows);
   }
 }
 
@@ -190,30 +174,20 @@ function assertDeleteWithinThreshold(rows: number): void {
 }
 
 /**
- * What a fill's column is, as the schema being applied declares it: the declared field's type, or,
- * for a column no field declares (an extension's), the type family of the column itself; and
- * unique when the field says so or the table has a single-column unique index on it (a unique
- * index declared on the collection, not the field, is as unique).
+ * The type a fill's value must have, as the schema being applied declares the column: the declared
+ * field's type, or, for a column no field declares (an extension's), the type family of the column
+ * itself.
  */
-function fillTargetOf(
+function fillTypeOf(
   args: { fields: PreCleanupField[]; desiredSnapshot: NextlySchemaSnapshot },
   event: { tableName: string; columnName: string }
-): { type: string; unique: boolean } {
+): string {
   const field = fieldOf(args.fields, event.tableName, event.columnName);
-  const table = args.desiredSnapshot.tables.find(t =>
-    sameName(t.name, event.tableName)
-  );
-  const column = table?.columns.find(c => sameName(c.name, event.columnName));
-  const indexed = (table?.indexes ?? []).some(
-    index =>
-      index.unique &&
-      index.columns.length === 1 &&
-      sameName(index.columns[0], event.columnName)
-  );
-  return {
-    type: field?.type ?? (column ? typeFamilyOf(column.type) : "text"),
-    unique: field?.unique === true || indexed,
-  };
+  if (field) return field.type;
+  const column = args.desiredSnapshot.tables
+    .find(t => sameName(t.name, event.tableName))
+    ?.columns.find(c => sameName(c.name, event.columnName));
+  return column ? typeFamilyOf(column.type) : "text";
 }
 
 /** The value family a column's SQL type takes, as `validateDefaultValue` names it. */
@@ -231,34 +205,6 @@ function typeFamilyOf(sqlType: string): string {
   }
   if (/^(timestamp|datetime|date)/.test(type)) return "date";
   return "text";
-}
-
-/**
- * Refuses one value for a unique column that it would fill in two or more rows: a fill writes the
- * same value to every row it fills (each row of a column added over the table, an existing
- * column's null rows), so the unique index that follows would fail, on MySQL after earlier
- * statements committed. Refused before any statement.
- */
-function assertFillCanBeUnique(
-  event: { id: string; tableName: string; columnName: string },
-  unique: boolean,
-  rows: number
-): void {
-  if (!unique || rows < 2) return;
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: `fields.${event.columnName}`,
-        code: "UNIQUE_FILL_WOULD_REPEAT",
-        message: `Table '${event.tableName}': column '${event.columnName}' is unique, so one value for its ${String(rows)} rows would repeat in them. Give each of those rows its own value first, or keep the field optional.`,
-      },
-    ],
-    logContext: {
-      reason: "unique-fill-would-repeat",
-      eventId: event.id,
-      rows,
-    },
-  });
 }
 
 /**

@@ -191,91 +191,6 @@ describe("RealPreCleanupExecutor", () => {
     ).resolves.toBeDefined();
   });
 
-  // One value written to every row it fills repeats in a unique column filling two or more of them,
-  // so the unique index after it would fail: refused before any statement, for a column added over
-  // existing rows and for an existing one's null rows alike.
-  it.each([
-    ["an added column over 3 rows", "add_required_field_no_default", 3, 0],
-    ["an existing column's 3 null rows", "add_not_null_with_nulls", 47, 3],
-  ] as const)(
-    "provide_default: refuses one value for a unique column filling %s",
-    async (_case, kind, tableRowCount, nullCount) => {
-      const execute = vi.fn();
-      const event: ClassifierEvent =
-        kind === "add_required_field_no_default"
-          ? {
-              id: `${kind}:dc_users.handle`,
-              kind,
-              tableName: "dc_users",
-              columnName: "handle",
-              tableRowCount,
-              applicableResolutions: [
-                "provide_default",
-                "make_optional",
-                "abort",
-              ],
-            }
-          : { ...addedOver("handle"), nullCount, tableRowCount };
-      const rows =
-        kind === "add_required_field_no_default" ? tableRowCount : nullCount;
-      await expect(
-        new RealPreCleanupExecutor().execute({
-          tx: { execute },
-          desiredSnapshot: baseSnapshot,
-          resolutions: [
-            { kind: "provide_default", eventId: event.id, value: "same" },
-          ],
-          events: [event],
-          operations: [],
-          fields: [
-            {
-              tableName: "dc_users",
-              name: "handle",
-              type: "text",
-              unique: true,
-            },
-          ],
-          dialect: "postgresql",
-        })
-      ).rejects.toMatchObject({
-        code: "VALIDATION_ERROR",
-        publicData: {
-          errors: [
-            {
-              path: "fields.handle",
-              code: "UNIQUE_FILL_WOULD_REPEAT",
-              message: `Table 'dc_users': column 'handle' is unique, so one value for its ${rows} rows would repeat in them. Give each of those rows its own value first, or keep the field optional.`,
-            },
-          ],
-        },
-      });
-      expect(execute).not.toHaveBeenCalled();
-    }
-  );
-
-  it("provide_default: takes one value for a unique column filling a single row", async () => {
-    const execute = vi.fn().mockResolvedValue({ rowCount: 1 });
-    await expect(
-      new RealPreCleanupExecutor().execute({
-        tx: { execute },
-        desiredSnapshot: baseSnapshot,
-        resolutions: [
-          {
-            kind: "provide_default",
-            eventId: addedOver("handle").id,
-            value: "only",
-          },
-        ],
-        events: [{ ...addedOver("handle"), nullCount: 1 }],
-        operations: [],
-        fields: [
-          { tableName: "dc_users", name: "handle", type: "text", unique: true },
-        ],
-        dialect: "postgresql",
-      })
-    ).resolves.toBeDefined();
-  });
-
   // Rows can change while the prompt is open: the classifier's counts are from before it, so the
   // threshold and the unique fill are judged again on the rows as they stand, before any statement.
   it("delete_nonconforming: refuses past the threshold on the rows as they stand now", async () => {
@@ -285,51 +200,14 @@ describe("RealPreCleanupExecutor", () => {
     await expect(
       assertLiveCounts({
         tx: { execute },
-        desiredSnapshot: baseSnapshot,
         resolutions: [
           { kind: "delete_nonconforming", eventId: notNullEvent.id },
         ],
         events: [notNullEvent],
         operations: [],
-        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       })
     ).rejects.toThrow(/DELETE_THRESHOLD_EXCEEDED: 7 rows >= 5/);
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("provide_default: refuses a unique fill on the rows as they stand now", async () => {
-    liveCounts.set("dc_users.handle", 2);
-    const execute = vi.fn();
-    await expect(
-      assertLiveCounts({
-        tx: { execute },
-        desiredSnapshot: baseSnapshot,
-        resolutions: [
-          {
-            kind: "provide_default",
-            eventId: addedOver("handle").id,
-            value: "same",
-          },
-        ],
-        // One null row when the change was classified.
-        events: [{ ...addedOver("handle"), nullCount: 1 }],
-        operations: [],
-        fields: [
-          { tableName: "dc_users", name: "handle", type: "text", unique: true },
-        ],
-        dialect: "postgresql",
-      })
-    ).rejects.toMatchObject({
-      publicData: {
-        errors: [
-          expect.objectContaining({
-            code: "UNIQUE_FILL_WOULD_REPEAT",
-            message: expect.stringContaining("one value for its 2 rows"),
-          }),
-        ],
-      },
-    });
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -369,49 +247,34 @@ describe("RealPreCleanupExecutor", () => {
         })
       ).toThrow(/INVALID_DEFAULT_FOR_TYPE: qty \(number\)/);
     });
+  });
 
-    it("counts a unique index declared on the collection as the column's uniqueness", () => {
-      const indexed: NextlySchemaSnapshot = {
-        tables: [
-          {
-            ...baseSnapshot.tables[0],
-            columns: [
-              ...baseSnapshot.tables[0].columns,
-              { name: "handle", type: "text", nullable: false },
-            ],
-            indexes: [
-              {
-                name: "dc_users_handle_unique",
-                columns: ["handle"],
-                unique: true,
-              },
-            ],
-          },
+  // A unique column is never offered "fill with one value" (the classifier leaves it out), so a
+  // request sending one anyway is refused before any statement, as any answer not offered is.
+  it("refuses a fill value for a unique column, which its event does not offer", async () => {
+    const execute = vi.fn();
+    const uniqueEvent: ClassifierEvent = {
+      ...addedOver("handle"),
+      applicableResolutions: ["make_optional", "delete_nonconforming", "abort"],
+    };
+    await expect(
+      new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          { kind: "provide_default", eventId: uniqueEvent.id, value: "same" },
         ],
-      };
-      let refusal: unknown;
-      try {
-        assertPreCleanupAccepted({
-          resolutions: [
-            {
-              kind: "provide_default",
-              eventId: addedOver("handle").id,
-              value: "same",
-            },
-          ],
-          events: [addedOver("handle")],
-          fields: [{ tableName: "dc_users", name: "handle", type: "text" }],
-          desiredSnapshot: indexed,
-          dialect: "postgresql",
-        });
-      } catch (thrown) {
-        refusal = thrown;
-      }
-      expect(
-        (refusal as { publicData?: { errors: { message: string }[] } })
-          ?.publicData?.errors[0]?.message
-      ).toContain("is unique, so one value for its 3 rows would repeat");
+        events: [uniqueEvent],
+        operations: [],
+        fields: [{ tableName: "dc_users", name: "handle", type: "text" }],
+        dialect: "postgresql",
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ code: "RESOLUTION_NOT_OFFERED" })],
+      },
     });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("delete_nonconforming: runs DELETE", async () => {

@@ -137,6 +137,7 @@ import {
 } from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
+import { uniqueColumnLookup } from "./unique-columns";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -844,6 +845,8 @@ export class PushSchemaPipeline {
         countRows: table => countRowsHelper(db, dialect, table),
         countLongerThan: (table, column, length) =>
           countLongerThanHelper(db, dialect, table, column, length),
+        // "Fill with one value" is not offered for a column the schema makes unique.
+        isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
         dialect,
       });
 
@@ -1127,7 +1130,7 @@ export class PushSchemaPipeline {
         // sync so a future classifier-on-singles event has field metadata
         // to validate provide_default values against.
         // Each tagged with its entity's table, so a fill is judged by the field on the event's own
-        // table, and with whether its column is unique.
+        // table.
         const aggregatedFields: PreCleanupField[] = [
           ...Object.values(desired.collections),
           ...Object.values(desired.singles),
@@ -1142,7 +1145,6 @@ export class PushSchemaPipeline {
               tableName: c.tableName,
               name: f.name,
               type: f.type,
-              unique: "unique" in f && f.unique === true,
             }))
         );
         try {
@@ -1159,8 +1161,6 @@ export class PushSchemaPipeline {
             tx,
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
-            fields: aggregatedFields,
-            desiredSnapshot,
             operations: resolvedOps,
             dialect,
           });

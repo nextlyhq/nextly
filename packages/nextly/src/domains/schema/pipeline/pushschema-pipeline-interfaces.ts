@@ -77,6 +77,11 @@ export interface Classifier {
       column: string,
       length: number
     ) => Promise<number>;
+    /**
+     * Whether a column is unique in the schema being applied. "Fill with one value" is not offered
+     * for one. A caller that cannot say leaves it out, and every column is read as not unique.
+     */
+    isUnique?: (table: string, column: string) => boolean;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult>;
 }
@@ -120,14 +125,12 @@ export interface PreRenameExecutor {
 // before the UPDATE fires.
 /**
  * A declared field as pre-cleanup judges a fill for it: found by its entity's table and its
- * column (a same-named field elsewhere is another field), with the type the value must have and
- * whether its column is unique.
+ * column (a same-named field elsewhere is another field), with the type the value must have.
  */
 export interface PreCleanupField {
   tableName: string;
   name: string;
   type: string;
-  unique?: boolean;
 }
 
 export interface PreCleanupExecutor {
