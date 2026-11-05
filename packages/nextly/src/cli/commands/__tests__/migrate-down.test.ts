@@ -331,13 +331,13 @@ describe("migrateDownCore", () => {
         },
       };
       const empty = { listFileApplies: async () => [] };
-      const real = baseDeps({ ...empty, refuseUnresolvedAttempts: refuse });
+      const real = baseDeps({ ...empty, checkAppHistory: refuse });
       await expect(migrateDownCore(real.deps as never)).rejects.toBe(refusal);
 
       const dry = baseDeps({
         ...empty,
         logger,
-        refuseUnresolvedAttempts: refuse,
+        checkAppHistory: refuse,
         options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
       });
       await expect(migrateDownCore(dry.deps as never)).resolves.toEqual({
@@ -350,7 +350,7 @@ describe("migrateDownCore", () => {
 
     it("stops a run with targets before any DOWN runs", async () => {
       const { deps, executed } = baseDeps({
-        refuseUnresolvedAttempts: refuse,
+        checkAppHistory: refuse,
         // Consented, so the run reaches the lock rather than stopping on it.
         options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
       });
@@ -358,11 +358,31 @@ describe("migrateDownCore", () => {
       expect(executed).toEqual([]);
     });
 
+    it("records no checksum in a dry run, and may in a real one", async () => {
+      const asked: boolean[] = [];
+      const check = async (args: { recordChecksums: boolean }) => {
+        asked.push(args.recordChecksums);
+      };
+      const empty = { listFileApplies: async () => [] };
+      await migrateDownCore(
+        baseDeps({ ...empty, checkAppHistory: check }).deps as never
+      );
+      await migrateDownCore(
+        baseDeps({
+          ...empty,
+          logger: { info: () => {}, warn: () => {}, debug: () => {} },
+          checkAppHistory: check,
+          options: { step: 1, allowDataLoss: false, yes: false, dryRun: true },
+        }).deps as never
+      );
+      expect(asked).toEqual([true, false]);
+    });
+
     it("is not asked for a plugin's stream", async () => {
       const asked: string[] = [];
       const { deps } = baseDeps({
         listFileApplies: async () => [],
-        refuseUnresolvedAttempts: async () => {
+        checkAppHistory: async () => {
           asked.push("asked");
         },
         options: {
@@ -568,6 +588,27 @@ describe("migrateDownCore", () => {
     });
     await migrateDownCore(deps);
     expect(executed.length).toBe(1);
+  });
+
+  describe("a migration whose removal was recorded", () => {
+    it("is refused by name while its file is absent, running nothing", async () => {
+      const gone = Object.assign(new Error("ENOENT: no such file"), {
+        code: "ENOENT",
+      });
+      const { deps, executed } = baseDeps({
+        readDownSql: async () => {
+          throw gone;
+        },
+        removedFiles: async () => new Set(["a.sql"]),
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+      });
+      await expect(migrateDownCore(deps as never)).rejects.toMatchObject({
+        publicMessage: expect.stringMatching(
+          /a\.sql[\s\S]*recorded as removed/
+        ),
+      });
+      expect(executed).toEqual([]);
+    });
   });
 
   describe("a dry run reports what a real run would refuse, without throwing", () => {

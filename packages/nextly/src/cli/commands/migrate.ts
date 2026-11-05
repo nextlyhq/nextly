@@ -48,7 +48,9 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { migrationStanding } from "../../domains/schema/events/migration-state";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
@@ -815,6 +817,8 @@ export interface MigrateCoreDeps {
   refuseUnresolvedAttemptsFn?: typeof refuseUnresolvedAppAttempts;
   /** The applied-file checksum check; injected for tests (`assertAppliedFilesUnchanged`). */
   assertAppliedFilesUnchangedFn?: typeof assertAppliedFilesUnchanged;
+  /** Injected for tests; the default is `assertAppliedFilesPresent`. */
+  assertAppliedFilesPresentFn?: typeof assertAppliedFilesPresent;
   /** Junction tables the config names outright; see `runFileMigrations`. */
   knownJunctions?: ReadonlySet<string>;
   withLock?: typeof withMigrateLock;
@@ -1862,6 +1866,16 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // An older build stops here, before the lock and anything else, with exit
+  // 3 while the ledger records an app migration its folder lacks; asked again
+  // under the lock, below, where no other run changes the ledger.
+  const assertFilesPresent =
+    deps.assertAppliedFilesPresentFn ?? assertAppliedFilesPresent;
+  const historyArgs = {
+    ...deps,
+    command: deps.lockCommand ?? "nextly migrate",
+  };
+  await assertFilesPresent(historyArgs);
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
@@ -1900,11 +1914,12 @@ export async function migrateCore(
       // at a release that never ran.
       await assertPluginHistoriesHold(deps);
       // Under the lock, so the ledger read is the one no other run changes
-      // before this one writes, and before Phase 1's first write.
-      await (deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts)({
-        ...deps,
-        command: deps.lockCommand ?? "nextly migrate",
-      });
+      // before this one writes, and before Phase 1's first write: the
+      // history checks of `assertAppHistoryHolds`, in its order.
+      await assertFilesPresent(historyArgs);
+      await (deps.refuseUnresolvedAttemptsFn ?? refuseUnresolvedAppAttempts)(
+        historyArgs
+      );
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
       // files run only as they were judged here (`assertRunsAsJudged`).
@@ -2353,6 +2368,8 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   | {
       files: ParsedMigration[];
       rows: SchemaEventRow[];
+      /** The files whose removal `migrate:resolve --removed` recorded. */
+      removed: ReadonlySet<string>;
       repo: SchemaEventsRepository;
     }
   | undefined
@@ -2372,7 +2389,124 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
     args.dialect,
     "app"
   );
-  return { files, rows, repo };
+  const removed = new Set(
+    (await repo.listFileRemovals()).flatMap(row =>
+      row.filename === null ? [] : [row.filename]
+    )
+  );
+  return { files, rows, removed, repo };
+}
+
+/**
+ * Every check of the app's history a command that runs, records or rolls back
+ * app migrations, or changes core tables, makes before its first write, in
+ * the order an older build's operator needs them: an applied migration the
+ * folder lacks (exit 3), an unresolved attempt, then an applied file edited
+ * since it ran (exit 2). `recordChecksums` false (a dry run) leaves the
+ * checksum of an applied row that has none unrecorded, so nothing is written.
+ */
+export async function assertAppHistoryHolds(
+  args: AppHistoryArgs & {
+    /** The command refusing, as the operator typed it. */
+    command: string;
+    recordChecksums?: boolean;
+  }
+): Promise<void> {
+  await assertAppliedFilesPresent(args);
+  await refuseUnresolvedAppAttempts(args);
+  await assertAppliedFilesUnchanged(args);
+}
+
+/**
+ * Refuses, before the run's first write, while the ledger holds an app
+ * migration this build's folder lacks that is applied, or that has an
+ * unresolved attempt: a newer build migrated the database, or tried to, or the
+ * file was removed. The command exits with code 3 (`migrateExitCode`), naming
+ * each one. A migration's state is its latest outcome (`migrationStanding`);
+ * an applied one whose removal `migrate:resolve --removed` recorded is not
+ * missing, and a plugin's rows are never an app migration's.
+ */
+export async function assertAppliedFilesPresent(
+  args: AppHistoryArgs & {
+    /** The command refusing, as the operator typed it. */
+    command: string;
+  }
+): Promise<void> {
+  const history = await readAppHistory(args);
+  if (history === undefined) return;
+  const inFolder = new Set(history.files.map(m => `${m.name}.sql`));
+  const byFilename = new Map<string, SchemaEventRow[]>();
+  for (const row of history.rows) {
+    if (row.filename === null || isPluginLedgerRow(row.filename)) continue;
+    if (inFolder.has(row.filename)) continue;
+    byFilename.set(row.filename, [
+      ...(byFilename.get(row.filename) ?? []),
+      row,
+    ]);
+  }
+  const missing: string[] = [];
+  const tried: string[] = [];
+  for (const [filename, rows] of [...byFilename].sort(([a], [b]) =>
+    a.localeCompare(b)
+  )) {
+    const standing = migrationStanding(rows);
+    if (standing.unresolvedAttempt !== undefined) tried.push(filename);
+    else if (standing.state === "applied" && !history.removed.has(filename)) {
+      missing.push(filename);
+    }
+  }
+  if (missing.length > 0 || tried.length > 0) {
+    throw appliedFilesMissing(args.command, missing, tried);
+  }
+}
+
+/** Each file named in backticks, separated by commas. */
+function namedFiles(files: readonly string[]): string {
+  return files.map(f => `\`${f}\``).join(", ");
+}
+
+/**
+ * The refusal for app migrations the folder lacks (`MIGRATION_MISSING`):
+ * `missing`, applied, and `tried`, with an unresolved attempt a newer build
+ * left, each said with its own reason and its own way out.
+ */
+function appliedFilesMissing(
+  command: string,
+  missing: readonly string[],
+  tried: readonly string[]
+): CliError {
+  const whats: string[] = [];
+  const whys: string[] = [];
+  const nexts: string[] = [];
+  if (missing.length > 0) {
+    whats.push(
+      `the ledger records ${formatCount(missing.length, "applied migration")} this build's migrations folder lacks (${namedFiles(missing)})`
+    );
+    whys.push(
+      "A newer build has migrated this database, or a file was removed from the folder after it ran."
+    );
+    nexts.push(
+      "Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`: the migration stays applied, and is never run again if its file returns."
+    );
+  }
+  if (tried.length > 0) {
+    whats.push(
+      `${formatCount(tried.length, "migration")} this build's folder lacks ${tried.length === 1 ? "has" : "have"} an unresolved attempt (${namedFiles(tried)})`
+    );
+    whys.push(
+      "A newer build tried it and did not finish, so the database may hold part of it."
+    );
+    nexts.push(
+      "Deploy the build that holds the file and let it finish; or reverse what of it ran and record it with `nextly migrate:resolve --rolled-back <file> --file-missing`."
+    );
+  }
+  const what = whats.join("; and ");
+  return new CliError("MIGRATION_MISSING", {
+    what: `${what.charAt(0).toUpperCase()}${what.slice(1)}, so \`${command}\` ran nothing.`,
+    why: whys.join(" "),
+    next: nexts.join(" "),
+    context: { files: [...missing], unresolved: [...tried] },
+  });
 }
 
 /**
@@ -2391,6 +2525,8 @@ export async function assertAppliedFilesUnchanged(
   args: AppHistoryArgs & {
     /** The command refusing, as the operator typed it. */
     command: string;
+    /** False (a dry run): refuse as a run would, recording no checksum. */
+    recordChecksums?: boolean;
   }
 ): Promise<void> {
   const history = await readAppHistory(args);
@@ -2403,6 +2539,7 @@ export async function assertAppliedFilesUnchanged(
     history.rows
   );
   if (changed.length > 0) throw appliedFilesChanged(args.command, changed);
+  if (args.recordChecksums === false) return;
   for (const row of unrecorded) {
     await history.repo.recordChecksum(
       row.outcomeId,
@@ -2436,14 +2573,15 @@ function appliedFilesChanged(
 }
 
 /**
- * The exit code `nextly migrate` ends with on `error`: 2 for an applied file
- * edited since it ran, the code the guide documents, so a deploy script can
- * tell it from any other failure (1).
+ * The exit code a command that checks the app's history ends with on `error`:
+ * 2 for an applied file edited since it ran, 3 for an app migration the
+ * folder lacks, the codes the guide documents, so a deploy script can tell
+ * them from any other failure (1).
  */
-export function migrateExitCode(error: unknown): 1 | 2 {
-  return error instanceof CliError && error.code === "MIGRATION_TAMPERED"
-    ? 2
-    : 1;
+export function migrateExitCode(error: unknown): 1 | 2 | 3 {
+  if (!(error instanceof CliError)) return 1;
+  if (error.code === "MIGRATION_TAMPERED") return 2;
+  return error.code === "MIGRATION_MISSING" ? 3 : 1;
 }
 
 /**
