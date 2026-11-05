@@ -8931,7 +8931,10 @@ export class CollectionMutationService extends BaseService {
       // Every language this moves is judged, so the version must name each
       // one: a read of one language cannot say whether another changed since.
       // Asked only once there is something to move, and before any work.
-      const languagesTable = translationTableOf(companion, companionPublishable);
+      const languagesTable = translationTableOf(
+        companion,
+        companionPublishable
+      );
       const judgedLocales = this.everyLanguageJudged(
         versionCheck,
         languagesTable
@@ -9066,24 +9069,6 @@ export class CollectionMutationService extends BaseService {
             entryVanished = true;
             return;
           }
-          // Judged under the lock, before anything is written: the entry's own
-          // row, then every language it moves. A refusal throws, rolling back
-          // whatever this transaction would have moved.
-          const mainBefore = await refuseIfMainMoved(
-            tx,
-            this.dialect,
-            versionCheck,
-            {
-              table: tableName,
-              id: params.entryId,
-              languages: languagesJudged(languagesTable, judgedLocales),
-            },
-            staleWrite
-          );
-          const languagesBefore = judgedLanguageStates(
-            mainBefore,
-            judgedLocales
-          );
           const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
           lockedPreviousStatus =
             typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
@@ -9158,6 +9143,26 @@ export class CollectionMutationService extends BaseService {
             publishDocDenied = outsideUnderLock;
             throw new StatusTransitionDeniedError();
           }
+
+          // Judged under the lock, once the caller is known to still be
+          // allowed to move the entry and before anything is written: the
+          // entry's own row, then every language it moves. A refusal throws,
+          // rolling back whatever this transaction would have moved.
+          const mainBefore = await refuseIfMainMoved(
+            tx,
+            this.dialect,
+            versionCheck,
+            {
+              table: tableName,
+              id: params.entryId,
+              languages: languagesJudged(languagesTable, judgedLocales),
+            },
+            staleWrite
+          );
+          const languagesBefore = judgedLanguageStates(
+            mainBefore,
+            judgedLocales
+          );
 
           // One instant for everything this attempt writes.
           const publishNow = new Date();
@@ -12611,7 +12616,6 @@ export class CollectionMutationService extends BaseService {
     assertVersionNamesEvery(given, locales);
     return locales;
   }
-
 
   /**
    * How a rewrite of one language's pending change is judged (taking the live

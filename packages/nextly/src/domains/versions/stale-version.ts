@@ -270,7 +270,8 @@ export function sameValuesVersionRequirement(
     // own refusal once the others are written.
     decodeDocumentVersion(rev);
   }
-  if (target.ids.some(id => !(id in parsed.data))) {
+  // Own keys only: an id named like a prototype member is not a version.
+  if (target.ids.some(id => !Object.hasOwn(parsed.data, id))) {
     throw versionRequiredFor("ids");
   }
   return { kind: "per-document", revs: parsed.data };

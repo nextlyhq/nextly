@@ -443,7 +443,7 @@ export class SinglePublishAllService extends BaseService {
             askedLanguages,
             promoteGrants,
             promoteReads,
-            { stale, languages: judged }
+            { stale, languages: judged, personName: options.user?.name ?? null }
           )
         )
       );
@@ -623,7 +623,9 @@ export class SinglePublishAllService extends BaseService {
       localization: this.localization,
       locale: EVERY_LOCALE,
     });
-    if (given === undefined || !locales) return undefined;
+    if (given === undefined || !locales || locales.length === 0) {
+      return undefined;
+    }
     assertVersionNamesEvery(given, locales);
     return languagesJudged(table, locales);
   }
@@ -639,6 +641,7 @@ export class SinglePublishAllService extends BaseService {
     version: {
       stale: PublishAllStale;
       languages: ReturnType<typeof languagesJudged>;
+      personName: string | null;
     }
   ): Promise<void> {
     const { stale } = version;
@@ -661,7 +664,7 @@ export class SinglePublishAllService extends BaseService {
       {
         subject: { kind: "single", slug: plan.slug, id: plan.existingDoc.id },
         actor: plan.actor,
-        personName: null,
+        personName: version.personName,
         locale: null,
         ...overwriteRecordOf(stale.check, {
           main: before?.main,
@@ -1102,6 +1105,8 @@ export class SinglePublishAllService extends BaseService {
     version?: {
       stale: PublishAllStale;
       languages: ReturnType<typeof languagesJudged>;
+      /** The caller's name, kept with an overwrite as every save keeps it. */
+      personName: string | null;
     }
   ): Promise<PublishOutcome> {
     const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
