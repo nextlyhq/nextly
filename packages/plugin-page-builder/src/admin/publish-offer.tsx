@@ -23,7 +23,6 @@
 import {
   useBeforeDocumentAction,
   writePluginRoute,
-  type StoreReadiness,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   AlertDialog,
@@ -120,31 +119,28 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     latest.current = input;
   });
 
-  /** Put the question, when the answer calls for one, and do as told. */
-  const settle = async (
-    readiness: PublishReadinessResponse | null,
-    store: StoreReadiness,
-    subject: PublishSubject
-  ): Promise<void> => {
+  /**
+   * Put the question, when the answer calls for one: the author's choice, or
+   * null when there was nothing to ask. The question stays open after a
+   * choice, until the handler is done with it.
+   */
+  const ask = async (
+    readiness: PublishReadinessResponse | null
+  ): Promise<PublishChoice | null> => {
     if (
       readiness === null ||
       (readiness.dependencies.length === 0 && readiness.missing === 0)
     ) {
-      return;
+      return null;
     }
     const choice = await new Promise<PublishChoice>(answer => {
       setQuestion({ readiness, answer });
     });
-    setQuestion(null);
     if (choice.kind === "cancel") {
+      setQuestion(null);
       throw new DOMException("Publishing was cancelled.", "AbortError");
     }
-    if (choice.kind === "only") return;
-    // Nothing goes live for a store a failed write will refuse: the page
-    // would stay as it was while its parts went live without it.
-    if (!(await store.writesSettled())) return;
-    const result = await publishChosen(choice.dependencies);
-    reportLeftUnpublished(result, readiness, subject);
+    return choice;
   };
 
   useBeforeDocumentAction(async (action, store) => {
@@ -158,12 +154,29 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     for (let asked = 0; asked < MAX_ASKS; asked++) {
       const request = readinessRequest(latest.current);
       const askedAbout = JSON.stringify(request);
-      await settle(await askReadiness(request), store, subject);
-      // The writes the store waits for next are waited for here, so nothing
-      // is awaited between the draft compared below and the one stored.
-      if (!(await store.writesSettled())) return;
-      if (JSON.stringify(readinessRequest(latest.current)) === askedAbout) {
+      const readiness = await askReadiness(request);
+      const choice = await ask(readiness);
+      try {
+        // The writes the store waits for next are waited for here, so nothing
+        // is awaited between the draft compared below and the one stored.
+        // Nothing goes live for a store a failed write will refuse: the page
+        // would stay as it was while its parts went live without it.
+        if (!(await store.writesSettled())) return;
+        // Compared before any part is published, so a draft asked about again,
+        // or refused, has put nothing live without its page.
+        if (JSON.stringify(readinessRequest(latest.current)) !== askedAbout) {
+          continue;
+        }
+        if (choice?.kind === "with" && readiness !== null) {
+          const result = await publishChosen(choice.dependencies);
+          reportLeftUnpublished(result, readiness, subject);
+        }
         return;
+      } finally {
+        // Closed only now: while it is open the form behind it can't be
+        // edited, so the draft compared above is the one the parts go live
+        // with.
+        setQuestion(null);
       }
     }
     throw new Error(

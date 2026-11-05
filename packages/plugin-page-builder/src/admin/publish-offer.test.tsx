@@ -484,32 +484,56 @@ describe("an edit made while the question is asked", () => {
     expect(routes).toHaveBeenCalledTimes(2);
   });
 
-  it("asks again about an edit made while the chosen parts were published", async () => {
-    let asks = 0;
-    routes.mockImplementation(async (path: string) => {
-      if (path === "/publish-readiness") {
-        asks += 1;
-        return asks === 1
-          ? { dependencies: [card], missing: 0 }
-          : { dependencies: [], missing: 1 };
-      }
-      draft = edited;
-      return {
-        item: { published: [{ kind: "component", id: "c1" }], refused: [] },
-      };
-    });
+  it("keeps the question open while the chosen parts are published", async () => {
+    // Open, it keeps the form behind it out of reach, so the parts go live
+    // with the draft that was asked about.
+    let published: (answer: unknown) => void = () => undefined;
+    routes.mockImplementation(async (path: string) =>
+      path === "/publish-readiness"
+        ? { dependencies: [card], missing: 0 }
+        : new Promise(resolve => {
+            published = resolve;
+          })
+    );
     render(<Editing />);
     const running = publish();
     await screen.findByRole("alertdialog");
     fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
     await waitFor(() =>
-      expect(screen.getByRole("alertdialog").textContent).toContain(
-        "no longer exists"
-      )
+      expect(routes).toHaveBeenLastCalledWith("/publish-dependencies", {
+        dependencies: [{ kind: "component", id: "c1" }],
+      })
     );
-    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    published({
+      item: { published: [{ kind: "component", id: "c1" }], refused: [] },
+    });
     await expect(running).resolves.toBeUndefined();
-    expect(asks).toBe(2);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("publishes no part for a draft that changed while it was asked about", async () => {
+    // Each answer is about a draft edited since: the parts chosen for it are
+    // never published, so the refusal leaves nothing live without its page.
+    let asks = 0;
+    routes.mockImplementation(async (path: string) => {
+      if (path !== "/publish-readiness") throw new Error("not to publish");
+      asks += 1;
+      draft = { ...DOCUMENT, nodes: [{ id: `n${String(asks)}` }] };
+      return { dependencies: [card], missing: 0 };
+    });
+    render(<Editing />);
+    const running = publish();
+    for (let round = 1; round <= 3; round++) {
+      await waitFor(() => expect(asks).toBe(round));
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Publish both" })
+      );
+    }
+    await expect(running).rejects.toThrow("kept changing");
+    expect(
+      routes.mock.calls.some(([path]) => path === "/publish-dependencies")
+    ).toBe(false);
   });
 
   it("refuses a publish whose draft keeps changing while it is asked about", async () => {
