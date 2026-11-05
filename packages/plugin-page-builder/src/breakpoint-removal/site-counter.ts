@@ -13,7 +13,7 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
 import { titleFieldIn } from "../entries-route";
-import { entryOf, findAsCaller } from "../entry-reads";
+import { entryOf, findAsCaller, readSavedAsCaller } from "../entry-reads";
 import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import {
   siteDocuments,
@@ -22,7 +22,12 @@ import {
 } from "../host-rewrite/site";
 import { readingAsUser } from "../library-route";
 
-import { countRemoval, type RemovalDryRun, type RemovalPlace } from "./dry-run";
+import {
+  countRemoval,
+  NAMED_AT_MOST,
+  type RemovalDryRun,
+  type RemovalPlace,
+} from "./dry-run";
 
 /** How long one dry run may walk before it answers with what it has. */
 const WALK_MS = 20_000;
@@ -85,15 +90,16 @@ async function entryNamesAsCaller(
       : undefined;
   const ids = hosts.map(host => host.id ?? "");
   const names = new Map<string, string>();
+  const select = {
+    id: true,
+    ...(titleField === undefined ? {} : { [titleField]: true }),
+  };
   let page;
   try {
     page = await findAsCaller(ctx, {
       collection: slug,
       where: { id: { in: ids } },
-      select: {
-        id: true,
-        ...(titleField === undefined ? {} : { [titleField]: true }),
-      },
+      select,
       limit: ids.length,
     });
   } catch (error) {
@@ -104,10 +110,23 @@ async function entryNamesAsCaller(
   for (const row of page.items) {
     const entry = entryOf(row, titleField);
     if (entry === undefined) continue;
-    names.set(
-      documentKeyOf({ kind: "collection", slug, id: entry.id }),
-      entry.title
-    );
+    // The list read answers with the live row; a pending working draft may
+    // have renamed it, and the editor shows the saved name. Read as saved
+    // only for the few a list can name; the rest keep the live title, which
+    // is never shown.
+    const saved =
+      names.size < NAMED_AT_MOST
+        ? await readSavedAsCaller(ctx, {
+            collection: slug,
+            id: entry.id,
+            select,
+          })
+        : null;
+    const title =
+      saved === null
+        ? entry.title
+        : (entryOf(saved, titleField)?.title ?? entry.title);
+    names.set(documentKeyOf({ kind: "collection", slug, id: entry.id }), title);
   }
   return names;
 }
