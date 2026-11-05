@@ -86,6 +86,7 @@ import {
 import {
   SegmentedChoice,
   type ContentServices,
+  type ListEntriesCount,
   type LoopCollection,
   type LoopListField,
 } from "./content-controls";
@@ -2043,6 +2044,7 @@ function BoundField({
   unsetValue,
   disabled,
   problem: storedProblem,
+  hint,
   onBound,
 }: {
   id: string;
@@ -2060,6 +2062,8 @@ function BoundField({
   unsetValue?: number;
   disabled: boolean;
   problem: string | undefined;
+  /** A line under the field, said while it has no problem to say. */
+  hint?: string | undefined;
   onBound: (value: number | undefined) => void;
 }): React.JSX.Element {
   const text =
@@ -2129,6 +2133,14 @@ function BoundField({
       {shown === undefined ? null : (
         <FieldError id={errorId}>{shown}</FieldError>
       )}
+      {shown !== undefined || hint === undefined ? null : (
+        <p
+          className="nx-inspector__note nx-list-query__hint nx-list-query__indented"
+          role="status"
+        >
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -2143,12 +2155,62 @@ function codedIssues(issues: Issues, prop: string, code: string): string[] {
 }
 
 /** The How many group: the number of items, and the entries to skip. */
+/**
+ * How many entries the list's query matches and how many it shows, counted
+ * once per query: drawn again with the same query, nothing is read again,
+ * and an answer for a query since changed is dropped.
+ */
+function useListCount(
+  count: ContentServices["countListEntries"],
+  values: Readonly<Record<string, unknown>>
+): ListEntriesCount | undefined {
+  const asked = JSON.stringify(
+    LIST_QUERY_PROPS.map(name => values[name] ?? null)
+  );
+  const [answer, setAnswer] = React.useState<
+    { readonly asked: string; readonly count: ListEntriesCount } | undefined
+  >(undefined);
+  React.useEffect(() => {
+    if (count === undefined) return;
+    let current = true;
+    // The props the count is of, read back from the key, so the read and
+    // the key it is kept under are one value.
+    const read = JSON.parse(asked) as unknown[];
+    const props = Object.fromEntries(
+      LIST_QUERY_PROPS.flatMap((name, at) =>
+        read[at] === null ? [] : [[name, read[at]]]
+      )
+    );
+    count(props).then(
+      found => {
+        if (current && found !== undefined) setAnswer({ asked, count: found });
+      },
+      // A count that fails says nothing: the canvas's note says why the
+      // list's read failed.
+      () => undefined
+    );
+    return () => {
+      current = false;
+    };
+  }, [count, asked]);
+  return answer?.asked === asked ? answer.count : undefined;
+}
+
+/** "4 entries match, so 3 show.", with one entry spoken of as one. */
+function countWords({ matching, shown }: ListEntriesCount): string {
+  const match =
+    matching === 1 ? "1 entry matches" : `${String(matching)} entries match`;
+  const show = shown === 1 ? "1 shows" : `${String(shown)} show`;
+  return `${match}, so ${show}.`;
+}
+
 function HowManyGroup({
   id,
   values,
   limitFallback,
   issues,
   disabled,
+  count,
   commit,
 }: {
   id: string;
@@ -2157,8 +2219,11 @@ function HowManyGroup({
   limitFallback: unknown;
   issues: Issues;
   disabled: boolean;
+  /** The host's count of the list's matching entries, where it has one. */
+  count: ContentServices["countListEntries"];
   commit: (changes: Readonly<Record<string, unknown>>) => void;
 }): React.JSX.Element {
+  const counted = useListCount(count, values);
   return (
     <section className="nx-list-query__group" aria-labelledby={`${id}-title`}>
       <GroupTitle id={`${id}-title`}>How many</GroupTitle>
@@ -2170,6 +2235,7 @@ function HowManyGroup({
         fallback={limitFallback}
         disabled={disabled}
         problem={issuesAt(issues, ["limit"])[0]}
+        hint={counted === undefined ? undefined : countWords(counted)}
         onBound={limit => commit({ limit })}
       />
       <BoundField
@@ -2388,6 +2454,7 @@ export function ListQueryField({
         limitFallback={props.find(prop => prop.name === "limit")?.defaultValue}
         issues={issues}
         disabled={held}
+        count={services?.countListEntries}
         commit={commit}
       />
       {onShowEmpty === undefined ? null : (

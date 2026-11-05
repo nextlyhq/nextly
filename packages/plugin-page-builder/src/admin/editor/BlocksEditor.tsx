@@ -66,6 +66,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
+import { canvasListCount } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -366,6 +367,9 @@ function borrowedServices(): ContentServices {
     findEntries,
     findLinkTargets,
     listLoopCollections,
+    // The selected list's "N entries match, so M show", read as the canvas
+    // reads the list; one count kept for the module's life.
+    countListEntries: canvasListCount(),
   };
   return contentServices;
 }

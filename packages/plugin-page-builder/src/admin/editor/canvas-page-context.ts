@@ -32,7 +32,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
 
-import { canvasListData } from "../list-entries-client";
+import { CANVAS_LIST_TERMS, canvasListData } from "../list-entries-client";
 
 /** What a media item read through the admin gives a block to draw. */
 interface MediaItem {
@@ -73,6 +73,7 @@ export function useCanvasPageContext(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
+        ...CANVAS_LIST_TERMS,
         data: canvasListData(),
         diagnostics: true,
         // The canvas acts on a note's action: see `onListSortField`.

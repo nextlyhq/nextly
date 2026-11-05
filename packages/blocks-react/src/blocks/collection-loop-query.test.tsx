@@ -25,7 +25,7 @@ import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 
 import { coreBlocks } from "./index";
-import { dayStartIn } from "./list-read";
+import { dayStartIn, listCountRead, listShownOf } from "./list-read";
 
 const node = (
   id: string,
@@ -719,5 +719,61 @@ describe("a list's empty state, as an author looks at it", () => {
     );
     expect(headings(visitor)).toEqual(["Nothing here yet"]);
     expect(visitor.querySelector("[data-nx-list-shows]")).toBeNull();
+  });
+});
+
+describe("a list's count, for the editor", () => {
+  it("counts with the very filters the list reads with, and no window", async () => {
+    const props = {
+      collection: "posts",
+      filters: [
+        { field: "title", op: "contains", value: "o" },
+        { field: "publishedAt", op: "greater_than", value: "2026-09-01" },
+      ],
+      sort: "-title",
+      limit: 2,
+      offset: 1,
+    };
+    const ctx = context({ timeZone: "Asia/Karachi" });
+    const { provider, queries } = source({ posts: [] });
+    await drawn(page(list(props)), { ...ctx, data: provider });
+    const read = listCountRead(props, ctx);
+    // The list's own read, less what a count does not take.
+    expect(read?.query).toEqual({
+      collection: queries[0]?.collection,
+      filters: queries[0]?.filters,
+    });
+    expect(read).toMatchObject({ offset: 1, limit: 2 });
+  });
+
+  it("shows what the window leaves of the matching entries, never fewer than none", () => {
+    const read = { offset: 2, limit: 3 };
+    expect(listShownOf(10, read)).toBe(3);
+    expect(listShownOf(4, read)).toBe(2);
+    expect(listShownOf(1, read)).toBe(0);
+    // No limit stored is the list's own default.
+    const stored = listCountRead({ collection: "posts" }, context({}));
+    expect(stored).toMatchObject({ offset: 0, limit: 10 });
+    expect(listShownOf(25, stored ?? read)).toBe(10);
+  });
+
+  it("makes no count where one read cannot answer it", () => {
+    // A related source's ids are read first, and no collection is no list.
+    expect(
+      listCountRead(
+        { collection: "posts", relation: { of: "entry", field: "related" } },
+        context({})
+      )
+    ).toBeUndefined();
+    expect(listCountRead({ collection: " " }, context({}))).toBeUndefined();
+    expect(
+      listCountRead(
+        {
+          collection: "posts",
+          filters: [{ field: "title", op: "like", value: "o" }],
+        },
+        context({})
+      )
+    ).toBeUndefined();
   });
 });

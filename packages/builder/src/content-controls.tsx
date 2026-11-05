@@ -183,6 +183,12 @@ export interface LoopCollection {
   }[];
 }
 
+/** A list's matching entries, and how many of them it shows. */
+export interface ListEntriesCount {
+  readonly matching: number;
+  readonly shown: number;
+}
+
 /**
  * What the host lends the Content tab: the parts of the admin this package
  * cannot reach itself. Each is optional, and a control whose service is absent
@@ -215,6 +221,15 @@ export interface ContentServices {
    * typed as text.
    */
   readonly listLoopCollections?: () => Promise<readonly LoopCollection[]>;
+  /**
+   * How many entries a list's stored query matches as a visitor reads them,
+   * and how many of those its window shows, from one count read. Asked only
+   * for the list selected in the editor. Undefined where one read cannot
+   * count it, such as a list of an entry's related entries.
+   */
+  readonly countListEntries?: (
+    props: Readonly<Record<string, unknown>>
+  ) => Promise<ListEntriesCount | undefined>;
   /**
    * The collection the document being edited is an entry of, so a list on
    * it can show the entry's related entries. Absent where the document is

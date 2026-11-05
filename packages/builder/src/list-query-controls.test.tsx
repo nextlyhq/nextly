@@ -542,6 +542,61 @@ describe("how many entries a list shows", () => {
   });
 });
 
+describe("how many entries match, for the selected list", () => {
+  it("says how many match and how many show, from one count", async () => {
+    const countListEntries = vi.fn(async () => ({ matching: 4, shown: 3 }));
+    const editor = mount(
+      { collection: "posts", limit: 3, offset: 0 },
+      { countListEntries }
+    );
+    expect(
+      await screen.findByText("4 entries match, so 3 show.")
+    ).toBeDefined();
+    expect(countListEntries).toHaveBeenCalledTimes(1);
+    expect(countListEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "posts", limit: 3 })
+    );
+    // Drawn again with the same query, nothing is counted again.
+    fireEvent.click(screen.getByRole("radio", { name: "When empty" }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(countListEntries).toHaveBeenCalledTimes(1);
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("speaks of one entry as one", async () => {
+    mount(
+      { collection: "posts" },
+      { countListEntries: vi.fn(async () => ({ matching: 1, shown: 1 })) }
+    );
+    expect(
+      await screen.findByText("1 entry matches, so 1 shows.")
+    ).toBeDefined();
+  });
+
+  it("says nothing where no count is made, or the count fails", async () => {
+    mount(
+      { collection: "posts" },
+      { countListEntries: vi.fn(async () => undefined) }
+    );
+    await screen.findByLabelText("Number of items");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByText(/match(es)?, so/)).toBeNull();
+    cleanup();
+    clearBlocks();
+    mount(
+      { collection: "posts" },
+      {
+        countListEntries: vi.fn(async () => {
+          throw new Error("Visitors can't read posts.");
+        }),
+      }
+    );
+    await screen.findByLabelText("Number of items");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByText(/match(es)?, so/)).toBeNull();
+  });
+});
+
 describe("what the canvas shows", () => {
   it("asks the editor to draw the list's empty state, which writes nothing", async () => {
     const editor = mount({ collection: "posts" });

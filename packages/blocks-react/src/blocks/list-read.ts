@@ -206,7 +206,7 @@ function comparesOrder(op: ListFilterOp): boolean {
 function dayZoneOf(
   field: string,
   collection: string,
-  ctx: PageContext
+  ctx: Pick<PageContext, "timeZone" | "fieldShapes">
 ): string {
   const shape = ctx.fieldShapes
     ?.fieldsOf({ collection })
@@ -219,7 +219,7 @@ function dayZoneOf(
 function readerFilters(
   filters: readonly ListFilter[],
   collection: string,
-  ctx: PageContext
+  ctx: Pick<PageContext, "timeZone" | "fieldShapes">
 ): BlocksFilter[] {
   return filters.map(row =>
     comparesOrder(row.op) && isListDay(row.value)
@@ -502,23 +502,26 @@ function errorDetail(error: unknown): string | undefined {
 }
 
 /**
- * Read a list's entries as its stored props ask. Never throws: a read that
- * fails comes back as `failed` with what failed, and the list draws its
- * empty state.
+ * A stored list's read before its source is read: its query as the engine
+ * reads it, and the reader's base query with its window. One reading, so the
+ * list's read and the editor's count of it cannot drift apart.
  */
-export async function readList(
+function listReadBase(
   props: unknown,
   collection: string,
-  ctx: PageContext,
-  reads: ListReads
-): Promise<ListOutcome> {
+  ctx: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">
+):
+  | { readonly blocking: string }
+  | {
+      readonly query: ListQuery;
+      readonly problems: ReturnType<typeof readListQuery>["problems"];
+      readonly base: BlocksQuery;
+      readonly offset: number;
+      readonly limit: number;
+    } {
   const { query, problems } = readListQuery(props);
   const blocking = blockingProblem(problems);
-  if (blocking !== undefined) {
-    return { items: [], failed: true, diagnostic: failure(blocking) };
-  }
-  const sortProblem = problems.find(problem => problem.prop === "sort");
-  const sort = sortProblem === undefined ? sortTexts(query) : [];
+  if (blocking !== undefined) return { blocking };
   const limit = safeLimit((props as { limit?: unknown } | null)?.limit);
   const offset = query.offset ?? 0;
   const filters = readerFilters(query.filters, collection, ctx);
@@ -529,6 +532,80 @@ export async function readList(
     ...(offset === 0 ? {} : { offset }),
     ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
   };
+  return { query, problems, base, offset, limit };
+}
+
+/**
+ * The one read that counts a list's matching entries, and the window it
+ * shows them through, for the editor to say "N entries match, so M show".
+ *
+ * The count's query is the list's own read less its sort and window, so it
+ * counts exactly the entries the list chooses from, as a visitor reads them.
+ * Undefined where one read cannot answer it: no collection named; a query
+ * that cannot be read as stored; and a related source, whose ids are read
+ * from the entry or the outer item first.
+ *
+ * @experimental
+ */
+export interface ListCountRead {
+  readonly query: Pick<BlocksQuery, "collection" | "filters" | "locale">;
+  readonly offset: number;
+  readonly limit: number;
+}
+
+/** A stored list's count read: see {@link ListCountRead}. @experimental */
+export function listCountRead(
+  props: unknown,
+  ctx: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">
+): ListCountRead | undefined {
+  const named = readListQuery(props).query;
+  if (named.collection === undefined || named.relation !== undefined) {
+    return undefined;
+  }
+  const read = listReadBase(props, named.collection, ctx);
+  if ("blocking" in read) return undefined;
+  return {
+    query: {
+      collection: read.base.collection,
+      ...(read.base.filters === undefined
+        ? {}
+        : { filters: read.base.filters }),
+      ...(read.base.locale === undefined ? {} : { locale: read.base.locale }),
+    },
+    offset: read.offset,
+    limit: read.limit,
+  };
+}
+
+/**
+ * How many of `matching` entries a list shows: those after the skipped ones,
+ * up to its limit, and never fewer than none. @experimental
+ */
+export function listShownOf(
+  matching: number,
+  window: Pick<ListCountRead, "offset" | "limit">
+): number {
+  return Math.max(0, Math.min(matching - window.offset, window.limit));
+}
+
+/**
+ * Read a list's entries as its stored props ask. Never throws: a read that
+ * fails comes back as `failed` with what failed, and the list draws its
+ * empty state.
+ */
+export async function readList(
+  props: unknown,
+  collection: string,
+  ctx: PageContext,
+  reads: ListReads
+): Promise<ListOutcome> {
+  const read = listReadBase(props, collection, ctx);
+  if ("blocking" in read) {
+    return { items: [], failed: true, diagnostic: failure(read.blocking) };
+  }
+  const { query, problems, base, offset, limit } = read;
+  const sortProblem = problems.find(problem => problem.prop === "sort");
+  const sort = sortProblem === undefined ? sortTexts(query) : [];
   try {
     // A related source's ids first, as a visitor reads them; with none to
     // read, the list draws its empty state and an author is told why.
