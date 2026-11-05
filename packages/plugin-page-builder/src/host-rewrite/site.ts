@@ -374,7 +374,9 @@ function hostsOf(
       ? [...locales]
       : [undefined];
   return [
-    ...reach.fields.flatMap(field => fieldHosts(at, field, languages)),
+    ...reach.fields.flatMap(field =>
+      fieldHosts(at, field, languages, everyField)
+    ),
     ...(reach.unreachable
       ? scanHosts(
           at,
@@ -395,14 +397,20 @@ function fieldHosts(
     readonly path: readonly string[];
     readonly descriptor: { readonly localized: boolean };
   },
-  languages: Languages
+  languages: Languages,
+  /** Whether the declaration's per-language fields are unknown. */
+  everyField: boolean
 ): HostCandidate[] {
   const hosts: HostCandidate[] = [];
   const topLevel = field.path.length === 1;
+  // Only a top-level field the declaration says is translated is known to be
+  // stored per language; any other read per language may be one stored value.
+  const perLanguage = topLevel && field.descriptor.localized && !everyField;
   for (const locale of languages(!topLevel || field.descriptor.localized)) {
     hosts.push({
       host: { ...at, path: field.path, ...inLanguage(locale) },
       access: topLevel ? "write" : "read",
+      ...(locale !== undefined && !perLanguage ? { maybeShared: true } : {}),
     });
   }
   return hosts;
@@ -421,6 +429,9 @@ function scanHosts(
       host: { ...at, path: [], ...inLanguage(locale) },
       access: "scan",
       excluded,
+      // A scan reads in every language because which values core keeps per
+      // language is unknown.
+      ...(locale === undefined ? {} : { maybeShared: true }),
     });
   }
   return hosts;

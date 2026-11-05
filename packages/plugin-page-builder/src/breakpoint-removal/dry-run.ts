@@ -266,11 +266,12 @@ async function documentUses(
  * Add one host's stored forms to the document's tallies; false when one could
  * not be read to the end.
  *
- * `counted` holds the values already counted, by field, form and content. A
- * field whose languages are unknown is read once per language, and where it is
- * stored once each read answers the same value: counted once, not once per
- * language. The count is of distinct values, so a translated field holding the
- * same value in two languages is counted once as well.
+ * `counted` holds the values already counted, by field, language, form and
+ * content. A field whose languages are unknown is read once per language, and
+ * where it is stored once each read answers the same value: counted once, not
+ * once per language. A field known to be stored per language keeps its
+ * language in the key, so two languages holding the same value, each dropped
+ * on its own, are each counted.
  */
 async function addHost(
   tallies: Map<string, DocumentTally>,
@@ -288,6 +289,8 @@ async function addHost(
     if (form.value === undefined) continue;
     const key = [
       candidate.host.path.join("."),
+      // A value known to be stored per language is its own, however alike.
+      candidate.maybeShared === true ? "" : (candidate.host.locale ?? ""),
       form.draft ? "draft" : "published",
       await storedHash(form.value),
     ].join("\u001F");
