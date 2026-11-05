@@ -26,6 +26,15 @@ const mockIsCancel = vi.fn(
   (value: unknown) => value === Symbol.for("clack:cancel")
 );
 
+// Every case here fakes the terminal it needs, and the dispatcher asks only when a person can
+// answer (`canPrompt`), which a set `CI` rules out: a CI runner's own `CI` must not decide them.
+beforeEach(() => {
+  vi.stubEnv("CI", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 vi.mock("@clack/prompts", () => ({
   select: (...args: unknown[]) => mockSelect(...args),
   confirm: (...args: unknown[]) => mockConfirm(...args),
