@@ -507,6 +507,39 @@ describe.each(getConfiguredTestDialects())(
       expect((await stored(t, LOGGED, id)).title).toBe("one");
     });
 
+    // A release run's own write is the one not asked, and only the runner can
+    // say so: nothing a caller sends, in its data or its options, makes a
+    // write one.
+    it("lets no caller mark its write as a release run's", async () => {
+      const t = await boot(dialect);
+      const key = await adminKey(t);
+      const id = await create(t, NOTES, { title: "first" });
+      const claim = {
+        scopeKind: "collection",
+        scopeSlug: NOTES,
+        entryId: id,
+      };
+
+      expect(
+        await codeOf(() =>
+          t.nextly.update({
+            collection: NOTES as never,
+            id,
+            data: { title: "claimed", releaseRun: claim, _releaseRun: true },
+            context: { releaseRun: claim },
+          } as never)
+        )
+      ).toBe("VERSION_REQUIRED");
+      expectVersionRequired(
+        await rest(key, "PATCH", ["collections", NOTES, "entries", id], {
+          title: "claimed",
+          releaseRun: claim,
+          _releaseRun: true,
+        })
+      );
+      expect((await stored(t, NOTES, id)).title).toBe("first");
+    });
+
     it("leaves creates and deletes as they were", async () => {
       const t = await boot(dialect);
       const id = await create(t, NOTES, { title: "made" });
