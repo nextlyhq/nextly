@@ -36,6 +36,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
 import { NoticeSinkProvider } from "./builder-notices";
+import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
@@ -5393,6 +5394,65 @@ describe("an aspect ratio", () => {
     );
     expect(fieldsOf("aspectRatio").queryByRole("combobox")).toBeNull();
     expect(fieldsOf("aspectRatio").getByRole("textbox")).toBeDefined();
+  });
+});
+
+describe("an image's focal point", () => {
+  /** An image with the given fit, drawn on the canvas as `img`. */
+  function mountImage(fit: string | undefined, picture?: string) {
+    register({ dimensions: true });
+    const styles =
+      fit === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { objectFit: fit } } } as NodeStyles);
+    const editor = editorFor(documentOf(styles));
+    render(
+      <FocalFrame.Provider value={{ picture }}>
+        <StyleInspectorPanel editor={editor} renderedTag="img" />
+      </FocalFrame.Provider>
+    );
+    return editor;
+  }
+
+  it("shows beside a fit that leaves a choice of where the picture sits", () => {
+    // Scale down is None or Contain, whichever is smaller: it sits too.
+    for (const fit of ["cover", "contain", "none", "scale-down"]) {
+      mountImage(fit);
+      expect(
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("waits behind More where the fit stretches the picture, or none is set", () => {
+    for (const fit of ["fill", undefined]) {
+      mountImage(fit);
+      expect(
+        screen.queryByRole("radiogroup", { name: "Focal point" })
+      ).toBeNull();
+      cleanup();
+      clearBlocks();
+    }
+  });
+
+  it("is drawn over the block's own picture, and writes object-position", () => {
+    const editor = mountImage("cover", "/team.png");
+    expect(
+      document.querySelector(".nx-focal__picture")?.getAttribute("src")
+    ).toBe("/team.png");
+    expect(screen.getByText("Kept in view")).toBeDefined();
+    fireEvent.click(screen.getByRole("radio", { name: "Top" }));
+    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
+      '"objectPosition":"center top"'
+    );
+  });
+
+  it("does not choose a point when its label is clicked", () => {
+    const editor = mountImage("cover");
+    fireEvent.click(screen.getByText("Focal point"));
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 });
 

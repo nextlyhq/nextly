@@ -106,7 +106,7 @@ import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordSingleActivity } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
-import { entryWriteContext } from "../../collections/services/stored-field-read";
+import * as storedFieldRead from "../../collections/services/stored-field-read";
 import {
   recordOverwriteEvent,
   recordSaveEvent,
@@ -1734,7 +1734,7 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
         // Before the transaction opens, so on the pool.
-        write: entryWriteContext({
+        write: storedFieldRead.entryWriteContext({
           kind: "single",
           slug,
           ...(args.writeLocale === undefined
@@ -2723,14 +2723,14 @@ export class SingleMutationService extends BaseService {
             const attemptComponentFields: Record<string, unknown> = {
               ...componentFieldData,
             };
-            // True only when THIS transaction inserted the row AND seeded the
-            // default-locale companion with the localized defaults. The version
-            // snapshot overlay below is gated on it, not on `autoCreated`: two
-            // first writes can race so that this request enters with
-            // `autoCreated === true` but then adopts a row another writer already
-            // inserted (the `committed` branch), in which case it did NOT seed —
-            // the companion may already hold that writer's real translations, and
-            // overlaying schema defaults would let a restore overwrite them.
+            // Whether THIS transaction inserted the row, and whether it also
+            // seeded the default-locale companion with the localized defaults.
+            // Not `autoCreated`: two first writes can race so that this request
+            // adopts a row another writer inserted (the `committed` branch). It
+            // seeded nothing then, the companion may hold that writer's real
+            // translations a snapshot overlay of defaults would let a restore
+            // overwrite, and that row is what a conditional write is judged by.
+            let insertedHere = false;
             let didSeedCompanionDefaults = false;
             // First-write auto-create, committed atomically with the update. A
             // failed update/component/companion/version write rolls the insert
@@ -2765,9 +2765,9 @@ export class SingleMutationService extends BaseService {
                   (existingDoc as { status?: string }).status,
                   seedCompanionExists
                 );
-                // The seed persists defaults only when the companion physically
-                // exists; track that this transaction actually seeded so the
-                // snapshot overlay records defaults that were really written.
+                // The seed persists defaults only where the companion exists,
+                // and the snapshot overlay records only defaults truly written.
+                insertedHere = true;
                 didSeedCompanionDefaults = seedCompanionExists;
                 // The Single's first history event: this write created its
                 // document.
@@ -2940,6 +2940,14 @@ export class SingleMutationService extends BaseService {
                 languages: judgedLanguages,
               },
               staleWrite
+            );
+            // A conditional write is judged here, under the lock, against the
+            // value as committed now (a row it inserted, as absent); a refused
+            // one writes nothing. Thrown as is, and unwrapped below.
+            await storedFieldRead.holdStoredExpectation(
+              options.context,
+              { kind: "single", slug, createdHere: insertedHere },
+              { tx, localization: this.localization, locale: options.locale }
             );
             // The save's language row as it stood before this save wrote it,
             // for an overwrite's history; set where the row is written below.
@@ -3883,7 +3891,7 @@ export class SingleMutationService extends BaseService {
               // reads the same language's stored values and sees the save's
               // status as the Single's own fields do.
               write: {
-                ...entryWriteContext({
+                ...storedFieldRead.entryWriteContext({
                   kind: "single",
                   slug,
                   ...(writeLocale === undefined ? {} : { locale: writeLocale }),

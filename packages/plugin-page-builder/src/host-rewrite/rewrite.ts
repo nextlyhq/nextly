@@ -53,6 +53,13 @@ export interface HostCandidate {
   readonly access: HostAccess;
   /** For a `scan`: the paths whose values have hosts of their own. */
   readonly excluded?: readonly (readonly string[])[];
+  /**
+   * Read in this language only because whether the value is stored per
+   * language is unknown: the same value read in two languages may be one
+   * stored value. Absent where the value is known to be stored per language,
+   * or where there is no language.
+   */
+  readonly maybeShared?: true;
 }
 
 /** One document and its hosts: every blocks field, in every language. */

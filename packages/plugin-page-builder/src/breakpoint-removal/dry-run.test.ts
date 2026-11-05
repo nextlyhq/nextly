@@ -258,44 +258,39 @@ describe("a breakpoint removal counted across the site", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("counts a value read the same in every language once", async () => {
-    // A field whose languages are unknown is read once per language; stored
-    // once, each read answers the same value.
+  it("counts a value read the same in every language once, where it may be one", async () => {
     const shared = page(styled("a"));
     const hosts = ["en", "fr"].map(locale => ({
       ...entry("pages", "p1"),
       locale,
     }));
     const deps = site(hosts.map(host => ({ host, published: shared })));
-    const once = await countRemoval(MOBILE, {
-      ...deps,
-      documents: async function* () {
-        yield {
-          key: "p1",
-          hosts: hosts.map(host => ({ host, access: "write" as const })),
-        };
-      },
-    });
-    expect(once.removed[0]?.places.pages).toMatchObject({
+    const run = (maybeShared: boolean) =>
+      countRemoval(MOBILE, {
+        ...deps,
+        documents: async function* () {
+          yield {
+            key: "p1",
+            hosts: hosts.map(host => ({
+              host,
+              access: "write" as const,
+              ...(maybeShared ? { maybeShared: true as const } : {}),
+            })),
+          };
+        },
+      });
+
+    // Read per language only because its languages are unknown: one value.
+    expect((await run(true)).removed[0]?.places.pages).toMatchObject({
       documents: 1,
       styles: 2,
     });
-
-    // Two languages holding different values: each is dropped, each counted.
-    const apart = site([
-      { host: hosts[0]!, published: shared },
-      { host: hosts[1]!, published: page(styled("a"), styled("b")) },
-    ]);
-    const both = await countRemoval(MOBILE, {
-      ...apart,
-      documents: async function* () {
-        yield {
-          key: "p1",
-          hosts: hosts.map(host => ({ host, access: "write" as const })),
-        };
-      },
+    // Known to be stored per language: each copy is dropped, each counted,
+    // however alike they are.
+    expect((await run(false)).removed[0]?.places.pages).toMatchObject({
+      documents: 1,
+      styles: 4,
     });
-    expect(both.removed[0]?.places.pages.styles).toBe(6);
   });
 
   it("takes a document this version cannot interpret for an unreadable one", async () => {
