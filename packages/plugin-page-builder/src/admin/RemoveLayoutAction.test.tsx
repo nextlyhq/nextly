@@ -502,7 +502,13 @@ describe("moving the pages to the site default first", () => {
         "40 pages moved to the site default, Main, and the Layout was deleted."
       )
     ).toBeTruthy();
-    expect(screen.getByText("Layout deleted")).toBeTruthy();
+    // The outcome is marked by an icon beside the title, not by colouring
+    // the sentence.
+    expect(
+      screen
+        .getByText("Layout deleted")
+        .querySelector('svg[aria-hidden="true"]')
+    ).not.toBeNull();
     expect(navigated).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(navigated).toEqual(["/admin/collections/layouts"]);

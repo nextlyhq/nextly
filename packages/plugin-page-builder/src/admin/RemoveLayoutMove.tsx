@@ -31,9 +31,11 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Badge,
   Button,
   Progress,
 } from "@nextlyhq/ui";
+import { CircleCheck } from "lucide-react";
 import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 
 import type { MoveProgress, UnmovedPage } from "../layout-removal/move-pages";
@@ -146,15 +148,14 @@ function PageRow({
       >
         {page.title === "" ? "Untitled page" : page.title}
       </a>
-      <span
-        className={
-          tagTone === "error"
-            ? "shrink-0 rounded bg-muted px-1.5 text-xs text-destructive"
-            : "shrink-0 rounded bg-muted px-1.5 text-xs text-muted-foreground"
-        }
+      {/* The design system's chip: its destructive pair holds 4.5:1 in
+          both themes, which red text on the muted fill did not in light. */}
+      <Badge
+        className="shrink-0"
+        variant={tagTone === "error" ? "destructive" : "default"}
       >
         {tag}
-      </span>
+      </Badge>
     </li>
   );
 }
@@ -185,6 +186,8 @@ function MoveBar({
 /** What the dialog says and shows in each state. */
 interface Face {
   readonly title: string;
+  /** Marks a finished move beside the title; the sentence stays plain text. */
+  readonly succeeded?: true;
   readonly sentence: ReactNode;
   readonly body: ReactNode;
 }
@@ -334,11 +337,8 @@ const FACES: {
   }),
   done: (phase, { check, total }) => ({
     title: phase.action === "delete" ? "Layout deleted" : "Layout unpublished",
-    sentence: (
-      <span className="text-success">
-        {`${pages(total)} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the Layout was ${removed(phase.action)}.`}
-      </span>
-    ),
+    succeeded: true,
+    sentence: `${pages(total)} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the Layout was ${removed(phase.action)}.`,
     body: null,
   }),
   refused: (phase, { check, moved, total, reasons }) => {
@@ -606,7 +606,17 @@ export function MovePagesDialog({
   return (
     <>
       <AlertDialogHeader>
-        <AlertDialogTitle>{face.title}</AlertDialogTitle>
+        <AlertDialogTitle className="flex items-center gap-2">
+          {/* The success colour marks the outcome on an icon, where it
+              needs only 3:1, so the sentence keeps the body text colour. */}
+          {face.succeeded === true ? (
+            <CircleCheck
+              aria-hidden="true"
+              className="size-5 shrink-0 text-success"
+            />
+          ) : null}
+          {face.title}
+        </AlertDialogTitle>
         <AlertDialogDescription>{face.sentence}</AlertDialogDescription>
       </AlertDialogHeader>
       {face.body}
