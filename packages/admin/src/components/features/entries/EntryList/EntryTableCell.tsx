@@ -477,6 +477,13 @@ export function EntryTableCell({
       );
     }
 
+    case "icon": {
+      // The stored id as text, not the drawn icon: drawing one would fetch the
+      // whole icon set for a list page, a cost a column of ids does not need.
+      const id = typeof value === "string" ? value : JSON.stringify(value);
+      return renderContent(<code className="text-sm font-mono">{id}</code>);
+    }
+
     // Numeric field
     case "number": {
       // eslint-disable-next-line @typescript-eslint/no-base-to-string

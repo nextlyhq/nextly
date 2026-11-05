@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A new `icon` field type holds one icon from the site's icon sets. Declare it with `icon({ name: "badge" })` from `nextly/config`; it stores the icon's id as plain text, such as `"lucide:star"`, on Postgres, MySQL and SQLite alike. A saved value must have that `<set>:<name>` shape, and a default of any other shape is refused when the collection is defined. An id from a set the site has not registered is still saved, so a set added later does not make existing entries fail to save.
+A new `icon` field type holds one icon from the site's icon sets. Declare it with `icon({ name: "badge" })` from `nextly/config`; it stores the icon's id as plain text, such as `"lucide:star"`, on Postgres, MySQL and SQLite alike. A saved value must have that `<set>:<name>` shape, and a default of any other shape is refused when the collection is defined. An id from a set the site has not registered is still saved, so a set added later does not make existing entries fail to save. In the admin, an icon field is one button showing the chosen icon, which opens a search-first picker over the Lucide set, loaded only when an icon field needs it.
