@@ -352,6 +352,26 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it("past its deadline a pass sees a newly declared schedule before sweeping those already seen", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const seen = [defined("0 * * * *", "s0"), defined("0 * * * *", "s1")];
+      await scheduleWindows(t.adapter, seen).sweep(
+        new Date("2026-11-05T10:30:00.000Z")
+      );
+      // At 11:05 both are due, and a third is declared; the pass has time
+      // for one, and it is the new one's.
+      const fresh = defined("0 * * * *", "fresh");
+      await scheduleWindows(t.adapter, [...seen, fresh]).sweep(
+        new Date("2026-11-05T11:05:00.000Z"),
+        Date.now() - 1
+      );
+      const rows = await t.adapter.select<WindowRow>("nextly_schedule_windows");
+      expect(
+        rows.filter(row => String(row.scheduleKey) === fresh.key)
+      ).toHaveLength(1);
+      expect(await jobsOf(t)).toEqual([]);
+    });
+
     it("two runners sweeping several schedules at once enqueue each window once", async () => {
       const t = await boot(dialect, "0 * * * *");
       const schedules = Array.from({ length: 3 }, (_, index) =>
@@ -403,6 +423,35 @@ describe.each(getConfiguredTestDialects())(
         "2026-09-01T13:00:00.000Z",
         "2026-11-04T12:00:00.000Z",
         "2026-11-04T12:30:00.000Z",
+      ]);
+    });
+
+    it("prunes as many as the bound allows when the oldest window is a schedule's latest, kept", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const monthly = defined("@monthly", "monthly");
+      // The monthly schedule's only window, 1 August, is the oldest of all.
+      await scheduleWindows(t.adapter, [monthly]).sweep(
+        new Date("2026-08-10T00:00:00.000Z")
+      );
+      const windows = scheduleWindows(t.adapter, [hourly()]);
+      for (const at of [
+        "2026-09-01T10:05:00.000Z",
+        "2026-09-01T11:05:00.000Z",
+        "2026-11-04T12:05:00.000Z",
+      ]) {
+        await windows.sweep(new Date(at));
+      }
+      expect(
+        await scheduleWindows(t.adapter, [monthly, hourly()]).prune(
+          new Date("2026-10-05T00:00:00.000Z"),
+          1
+        )
+      ).toBe(1);
+      const left = await t.adapter.select<WindowRow>("nextly_schedule_windows");
+      expect(left.map(row => iso(row.windowAt)).sort()).toEqual([
+        "2026-08-01T00:00:00.000Z",
+        "2026-09-01T11:00:00.000Z",
+        "2026-11-04T12:00:00.000Z",
       ]);
     });
 
