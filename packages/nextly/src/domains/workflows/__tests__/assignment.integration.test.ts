@@ -221,6 +221,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await workflowEvents(t, "locked", doc)).toEqual([]);
     });
 
+    it("judges an assigner's right to edit in the part's own language: Spanish, which the rule allows, and not English", async () => {
+      t = await bootSteps(dialect);
+      const dave = await person(t, "dave", [["update", "translations"]]);
+      const doc = await entry(t, "translations");
+      const part = (language: string): Assignment => ({
+        document: {
+          scopeKind: "collection",
+          scopeSlug: "translations",
+          entryId: doc,
+        },
+        part: language,
+        revision: 0,
+        assignee: user("dave"),
+      });
+
+      await assign(dave, [part("es")]);
+      expect(
+        (await stateOf(t, partOf("translations", doc, "es")))?.assignee
+      ).toEqual(user("dave"));
+
+      await expect(assign(dave, [part("en")])).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicData: {
+          reason: "no-permission",
+          refused: [{ index: 0, anyOf: ["update-translations"] }],
+        },
+      });
+      expect(await stateOf(t, partOf("translations", doc, "en"))).toBeNull();
+    });
+
     it("refuses each ineligible person, naming them and why, singly and in bulk, assigning nothing", async () => {
       t = await bootSteps(dialect);
       const dave = await person(t, "dave", [
