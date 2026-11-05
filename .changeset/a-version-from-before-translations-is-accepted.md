@@ -33,3 +33,5 @@ An update that hands back its `_rev` is now judged the same way however it arriv
 
 - A version a read gave while a collection's or Single's translations were not set up yet names no language. Sending it back with a save in the default language is now accepted, judged on the document's own row; before, it was refused with 400.
 - In `updateMany` and the in-transaction updates, a version from another language's read is refused with 400 before any hook runs, as a single save's is.
+- Who changed a refused document and when are now told only to a caller whom the collection's or Single's own read rule lets read it, a rule that answers a filter included. Before, any signed-in caller who could update it was told.
+- A save in a language other than the default, while translations are not set up yet, is refused with 400 before any hook runs.
