@@ -77,6 +77,15 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
         access: { update: () => false, publish: () => false },
         fields: [text({ name: "title" })],
       }),
+      // Its update rule answers by language: Spanish may be edited, no other language.
+      defineCollection({
+        slug: "translations",
+        localized: true,
+        ...drafts,
+        workflow: editorial,
+        access: { update: ({ locale }) => locale === "es" },
+        fields: [text({ name: "title", localized: true })],
+      }),
       defineCollection({
         slug: "memos",
         ...drafts,

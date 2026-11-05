@@ -26,7 +26,7 @@
  * Refusals, and what each carries in `publicData`:
  * - an unknown step, a document with no workflow, a missing or too long comment:
  *   `VALIDATION_ERROR`, with `errors` naming the field (`step`, `document`, `comment`) and a
- *   `WORKFLOW_*` code ({@link WORKFLOW_STEP_ERROR_CODES});
+ *   `WORKFLOW_*` code;
  * - a caller without the step's permission: `FORBIDDEN`, `{ reason: "no-permission", permission }`
  *   with the permission as stored (`approve-posts`);
  * - an API key or a trusted caller with no person taking a step of kind approve or
@@ -42,7 +42,10 @@
  * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import { systemActor, type Actor } from "../../auth/access/actor";
@@ -76,6 +79,7 @@ import {
   documentTableOf,
   partVersionOn,
   shownVersionOn,
+  type DocumentTable,
 } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import {
@@ -162,10 +166,8 @@ export interface LeftPart {
 /**
  * Why a person or role may not be assigned a part: they do not exist, the person is deactivated,
  * or they do not hold the stage's primary step.
- *
- * @experimental
  */
-export const ASSIGNEE_REFUSAL_CODES = {
+const ASSIGNEE_REFUSAL_CODES = {
   notFound: "WORKFLOW_ASSIGNEE_NOT_FOUND",
   deactivated: "WORKFLOW_ASSIGNEE_DEACTIVATED",
   lacksStep: "WORKFLOW_ASSIGNEE_LACKS_STEP",
@@ -177,10 +179,8 @@ export type AssigneeRefusalCode =
 
 /**
  * The validation codes a step's own input is refused with.
- *
- * @experimental
  */
-export const WORKFLOW_STEP_ERROR_CODES = {
+const WORKFLOW_STEP_ERROR_CODES = {
   notAttached: "WORKFLOW_NOT_ATTACHED",
   unknownStep: "WORKFLOW_UNKNOWN_STEP",
   commentRequired: "WORKFLOW_COMMENT_REQUIRED",
@@ -190,7 +190,7 @@ export const WORKFLOW_STEP_ERROR_CODES = {
 } as const;
 
 /** The longest comment a step keeps: the record of content events' note limit. */
-export const MAX_STEP_COMMENT_LENGTH = 4000;
+const MAX_STEP_COMMENT_LENGTH = 4000;
 
 /** @experimental */
 export interface TakeStepResult {
@@ -268,10 +268,8 @@ const assignPayload = z
 /**
  * The content event kinds workflows record: one per step kind, keyed by it, and one for an
  * assignment. Named with a `workflow-` prefix because kind names are shared by every producer.
- *
- * @experimental
  */
-export const WORKFLOW_CONTENT_EVENT_KINDS = {
+const WORKFLOW_CONTENT_EVENT_KINDS = {
   submit: {
     name: "workflow-submit",
     label: "Submitted by {actor}",
@@ -626,6 +624,458 @@ async function writeOverSeen(
   return (await updateReviewState(tx, part, seen, change)) ? seen + 1 : null;
 }
 
+/** What a step reads before its transaction opens, and carries into it. */
+interface StepContext {
+  input: TakeStepInput;
+  workflow: Workflow;
+  definitionHash: string;
+  step: ResolvedWorkflowStep;
+  slug: string;
+  comment: string | null;
+  caller: ResolvedCaller;
+  reviewer: Pick<TakeStepResult, "reviewer" | "skippedReviewer">;
+  dialect: SupportedDialect;
+  table: DocumentTable;
+  action: string;
+  /** Whether the caller may take the step's action on a part, as decided before the transaction. */
+  allowedOn: (part: string | null) => boolean;
+  /** Whether the step enters a stage that allows publishing, which approves what it moves. */
+  approves: boolean;
+}
+
+/** A part as a step reads it on its transaction: its review state, and the stage that gives. */
+interface ReadPart {
+  part: string | null;
+  state: ReviewState | null;
+  stage: string;
+}
+
+/** The step named `name` of `workflow`, or a refusal naming it. */
+function findStep(workflow: Workflow, name: string): ResolvedWorkflowStep {
+  const step = workflow.steps.find(candidate => candidate.name === name);
+  if (!step) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "step",
+          code: WORKFLOW_STEP_ERROR_CODES.unknownStep,
+          message: `"${name}" is not a step of the workflow "${workflow.slug}".`,
+        },
+      ],
+    });
+  }
+  return step;
+}
+
+/**
+ * Whether the caller may take `action` on each of `parts`, decided before the transaction opens.
+ * A built-in write (update, publish) is judged by the collection's own gate for this document,
+ * rule and filter included, and in each language part's own language, as the write itself would
+ * be (`entry-gate.ts`); it reads on the pool, so it is asked here and applied in its place inside.
+ * A workflow's own action has no collection rule, so its permission answers for every part.
+ */
+async function partsAllowed(
+  input: TakeStepInput,
+  parts: readonly (string | null)[],
+  action: string,
+  caller: ResolvedCaller,
+  slug: string
+): Promise<(part: string | null) => boolean> {
+  if (!isEntryWrite(action)) {
+    const allowed = decidePermission(caller.actor, action, slug).allowed;
+    return () => allowed;
+  }
+  const answers = new Map<string | null, boolean>();
+  for (const part of parts) {
+    answers.set(
+      part,
+      await entryWriteAllowed(input.document, part, action, input.caller)
+    );
+  }
+  return part => answers.get(part) === true;
+}
+
+/** Everything a step reads on the pool, before its transaction opens. */
+async function prepareStep(
+  adapter: DrizzleAdapter,
+  input: TakeStepInput,
+  registered: RegisteredWorkflow,
+  step: ResolvedWorkflowStep
+): Promise<StepContext> {
+  const { workflow, definitionHash } = registered;
+  const slug = input.document.scopeSlug;
+  const caller = await resolveCaller(adapter, input.caller);
+  const reviewer = await defaultReviewer(adapter, registered, step, slug);
+  const table = await documentTableOf(input.document);
+  const action = stepAction(workflow, step);
+  const parts = namedParts(input.parts, table.localized);
+  return {
+    input,
+    workflow,
+    definitionHash,
+    step,
+    slug,
+    comment: input.comment ?? null,
+    caller,
+    reviewer,
+    dialect: adapter.getCapabilities().dialect,
+    table,
+    action,
+    allowedOn: await partsAllowed(input, parts, action, caller, slug),
+    approves: allowsPublish(workflow, step.to),
+  };
+}
+
+/**
+ * The document's own row, locked before anything is read. Every save takes this lock before it
+ * writes, so a save in flight is waited for, and the version a step reads after it is the one it
+ * committed rather than the one it is replacing.
+ */
+async function lockDocument(
+  tx: TransactionContext,
+  c: StepContext
+): Promise<void> {
+  await readDocumentRevision(tx, {
+    dialect: c.dialect,
+    table: c.table.table,
+    id: c.input.document.entryId,
+    forUpdate: true,
+  });
+}
+
+/** Each named part's review state, read on the transaction; none reads as the first stage. */
+async function readParts(
+  tx: TransactionContext,
+  c: StepContext
+): Promise<ReadPart[]> {
+  const parts: ReadPart[] = [];
+  for (const part of namedParts(c.input.parts, c.table.localized)) {
+    const state = await readReviewState(tx, partOf(c.input.document, part));
+    parts.push({ part, state, stage: state?.stage ?? c.workflow.firstStage });
+  }
+  return parts;
+}
+
+/**
+ * Whether the caller saw `entry` at another revision than it holds, from a stage the step does not
+ * leave: then what is wrong is the caller's view, not the step.
+ */
+function seenElsewhere(c: StepContext, entry: ReadPart): boolean {
+  const seen = seenRevision(c.input.seen, entry.part);
+  return (
+    !c.step.from.includes(entry.stage) &&
+    seen !== undefined &&
+    seen !== (entry.state?.revision ?? 0)
+  );
+}
+
+/** The refusal of a step some named part cannot take from its stage. */
+function namedPartsRefusal(
+  c: StepContext,
+  parts: readonly ReadPart[],
+  left: LeftPart[]
+): NextlyError {
+  const moved = parts.filter(entry => seenElsewhere(c, entry));
+  return moved.length > 0
+    ? staleRefusal(moved.map(entry => entry.part))
+    : notFromStageRefusal(left);
+}
+
+/**
+ * The parts the step moves and those it leaves. Named parts must all leave from a stage the step
+ * leaves; `"all"` leaves the others, and is refused only when none can move.
+ */
+function splitParts(
+  c: StepContext,
+  parts: readonly ReadPart[]
+): { movable: ReadPart[]; left: LeftPart[] } {
+  const movable = parts.filter(entry => c.step.from.includes(entry.stage));
+  const left: LeftPart[] = parts
+    .filter(entry => !c.step.from.includes(entry.stage))
+    .map(entry => ({
+      part: entry.part,
+      stage: entry.stage,
+      reason: "not-from-stage" as const,
+    }));
+  if (c.input.parts !== "all" && left.length > 0) {
+    throw namedPartsRefusal(c, parts, left);
+  }
+  if (movable.length === 0) throw notFromStageRefusal(left);
+  return { movable, left };
+}
+
+/** The step's permission, for every part it moves. */
+function checkPermission(c: StepContext, movable: readonly ReadPart[]): void {
+  if (!movable.every(entry => c.allowedOn(entry.part))) {
+    throw NextlyError.forbidden({
+      publicData: {
+        reason: "no-permission",
+        permission: permissionSlug(c.action, c.slug),
+      },
+      logContext: { refusal: "workflow-step-permission", step: c.step.name },
+    });
+  }
+}
+
+/** Approvals and requests for changes come only from a signed-in person. */
+function checkPerson(c: StepContext): void {
+  if (stepNeedsPerson(c.step) && c.input.caller.kind !== "user") {
+    throw NextlyError.personOnly({
+      doing: "approve or request changes",
+      logContext: { refusal: "workflow-person-only", step: c.step.name },
+    });
+  }
+}
+
+/** The person accountable for a part's stage may not take a step that refuses it. */
+function checkSelfApproval(c: StepContext, movable: readonly ReadPart[]): void {
+  const accountable = c.caller.accountable;
+  if (
+    !allowsSelfApproval(c.step) &&
+    accountable !== null &&
+    movable.some(entry => entry.state?.enteredBy === accountable)
+  ) {
+    throw NextlyError.forbidden({
+      publicData: { reason: "self-approval" },
+      logContext: { refusal: "workflow-self-approval", step: c.step.name },
+    });
+  }
+}
+
+/** How a refusal names a part. */
+function partName(part: string | null): string {
+  return part === null ? "The shared part" : `"${part}"`;
+}
+
+/**
+ * Each moving part's newest recorded version: what a reviewer is shown of it, and what a step into
+ * a stage that allows publishing approves. A part with none has nothing to approve.
+ */
+async function readRecorded(
+  tx: TransactionContext,
+  c: StepContext,
+  movable: readonly ReadPart[]
+): Promise<Map<string | null, VersionRow | undefined>> {
+  const recorded = new Map<string | null, VersionRow | undefined>();
+  for (const entry of movable) {
+    recorded.set(
+      entry.part,
+      await shownVersionOn(tx, c.input.document, entry.part)
+    );
+  }
+  const unrecorded = movable.filter(entry => !recorded.get(entry.part));
+  if (c.approves && unrecorded.length > 0) {
+    throw NextlyError.validation({
+      errors: unrecorded.map(entry => ({
+        path: "parts",
+        code: WORKFLOW_STEP_ERROR_CODES.nothingToApprove,
+        message: `${partName(entry.part)} has no saved version to approve.`,
+      })),
+    });
+  }
+  return recorded;
+}
+
+/** Entering a stage that allows publishing approves the version shown, by a person. */
+function approvalChange(
+  c: StepContext,
+  shown: VersionRow | undefined,
+  now: Date
+): ReviewStateChange {
+  const by = c.caller.accountable;
+  if (!c.approves || shown?.versionNo == null || by === null) return {};
+  return {
+    approval: {
+      versionNo: shown.versionNo,
+      digest: approvalDigest(shown.snapshot, "collection"),
+      by,
+      at: now,
+    },
+  };
+}
+
+/** What a step changes on one part. */
+function stepChange(
+  c: StepContext,
+  entry: ReadPart,
+  shown: VersionRow | undefined,
+  now: Date
+): ReviewStateChange {
+  return {
+    stage: c.step.to,
+    enteredAt: now,
+    definitionHash: c.definitionHash,
+    // A move by trusted code keeps the accountable person the part had.
+    ...(c.caller.accountable !== null
+      ? { enteredBy: c.caller.accountable }
+      : {}),
+    // Leaving a stage that allows publishing withdraws the approval it held.
+    ...(allowsPublish(c.workflow, entry.stage) ? { approval: null } : {}),
+    ...approvalChange(c, shown, now),
+    ...(c.reviewer.reviewer ? { assignee: c.reviewer.reviewer } : {}),
+  };
+}
+
+/**
+ * Moves one part over what the caller saw of it: its content version and its review-state
+ * revision. Its new revision, or null when either moved since, having written nothing.
+ */
+async function movePart(
+  tx: TransactionContext,
+  c: StepContext,
+  entry: ReadPart,
+  shown: VersionRow | undefined,
+  now: Date
+): Promise<number | null> {
+  const seen = c.input.seen.find(candidate => candidate.part === entry.part);
+  const version = await partVersionOn(
+    tx,
+    c.dialect,
+    c.table,
+    c.input.document.entryId,
+    entry.part
+  );
+  // The content changed since the caller was shown it, or the caller never saw this part.
+  if (seen === undefined || version === undefined || version !== seen.version) {
+    return null;
+  }
+  return writeOverSeen(
+    tx,
+    c.dialect,
+    partOf(c.input.document, entry.part),
+    entry.state,
+    seen.revision,
+    { stage: c.step.to, enteredAt: now, definitionHash: c.definitionHash },
+    stepChange(c, entry, shown, now)
+  );
+}
+
+/**
+ * The move of every part. Every part is tried, so a refusal names all that moved since they were
+ * seen; any refusal rolls back the parts already written.
+ */
+async function moveParts(
+  tx: TransactionContext,
+  c: StepContext,
+  movable: readonly ReadPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): Promise<MovedPart[]> {
+  const now = new Date();
+  const stale: (string | null)[] = [];
+  const moved: MovedPart[] = [];
+  for (const entry of movable) {
+    const revision = await movePart(
+      tx,
+      c,
+      entry,
+      recorded.get(entry.part),
+      now
+    );
+    if (revision === null) stale.push(entry.part);
+    else {
+      moved.push({
+        part: entry.part,
+        from: entry.stage,
+        to: c.step.to,
+        revision,
+      });
+    }
+  }
+  if (stale.length > 0) throw staleRefusal(stale);
+  return moved;
+}
+
+/** The newest recorded version among `group`'s parts, the version an event names. */
+function newestVersionNo(
+  group: readonly MovedPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): number | null {
+  const versionNos = group.flatMap(entry => {
+    const no = recorded.get(entry.part)?.versionNo;
+    return typeof no === "number" ? [no] : [];
+  });
+  return versionNos.length > 0 ? Math.max(...versionNos) : null;
+}
+
+/** A comment as the event's note: none for an empty one. */
+function noteOf(comment: string | null): string | null {
+  return comment !== null && comment.trim() !== "" ? comment : null;
+}
+
+/** A step event's payload: the step, a key's owner, and a default reviewer skipped. */
+function stepEventPayload(c: StepContext): Record<string, unknown> {
+  const skipped = c.reviewer.skippedReviewer;
+  return {
+    step: c.step.name,
+    ...(c.caller.ownerId !== null ? { ownerId: c.caller.ownerId } : {}),
+    ...(skipped
+      ? {
+          skippedReviewer: {
+            kind: skipped.assignee.kind,
+            id: skipped.assignee.id,
+            reason: skipped.reason,
+          },
+        }
+      : {}),
+  };
+}
+
+/** Each part of `group` as the record names it: its languages, and whether the shared part. */
+function eventParts(group: readonly MovedPart[]): {
+  locales: string[];
+  shared: boolean;
+} {
+  return {
+    locales: group.flatMap(entry => (entry.part === null ? [] : [entry.part])),
+    shared: group.some(entry => entry.part === null),
+  };
+}
+
+/** One event per stage the parts left, on the same transaction, naming the newest version moved. */
+async function recordStepEvents(
+  tx: TransactionContext,
+  c: StepContext,
+  moved: readonly MovedPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): Promise<void> {
+  for (const from of new Set(moved.map(entry => entry.from))) {
+    const group = moved.filter(entry => entry.from === from);
+    await recordContentEvent(tx, {
+      subject: {
+        kind: c.input.document.scopeKind,
+        slug: c.slug,
+        id: c.input.document.entryId,
+      },
+      parts: eventParts(group),
+      kind: workflowEventKind(c.step.kind),
+      actor: c.caller.event,
+      fromState: from,
+      toState: c.step.to,
+      note: noteOf(c.comment),
+      versionNo: newestVersionNo(group, recorded),
+      payload: stepEventPayload(c),
+      definitionHash: c.definitionHash,
+    });
+  }
+}
+
+/** A step inside its transaction: the lock first, then every precondition in order, then the move. */
+async function runStep(
+  tx: TransactionContext,
+  c: StepContext
+): Promise<TakeStepResult> {
+  await lockDocument(tx, c);
+  const { movable, left } = splitParts(c, await readParts(tx, c));
+  checkPermission(c, movable);
+  checkPerson(c);
+  checkSelfApproval(c, movable);
+  checkComment(c.step, c.comment);
+  const recorded = await readRecorded(tx, c, movable);
+  const moved = await moveParts(tx, c, movable, recorded);
+  await recordStepEvents(tx, c, moved, recorded);
+  return { step: c.step.name, moved, left, ...c.reviewer };
+}
+
 /**
  * Takes `input.step` on the named parts of a document, in one transaction of `adapter`: checks
  * every precondition, moves each part over the revision it was seen at, assigns the entered
@@ -645,282 +1095,54 @@ export async function takeWorkflowStep(
   input: TakeStepInput
 ): Promise<TakeStepResult> {
   const registered = attachedWorkflow(input.document);
-  const { workflow, definitionHash } = registered;
-  const step = workflow.steps.find(candidate => candidate.name === input.step);
-  if (!step) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "step",
-          code: WORKFLOW_STEP_ERROR_CODES.unknownStep,
-          message: `"${input.step}" is not a step of the workflow "${workflow.slug}".`,
-        },
-      ],
-    });
-  }
-  const slug = input.document.scopeSlug;
-  const comment = input.comment ?? null;
-  const caller = await resolveCaller(adapter, input.caller);
-  const reviewer = await defaultReviewer(adapter, registered, step, slug);
-  const dialect = adapter.getCapabilities().dialect;
-  const table = await documentTableOf(input.document);
-  // A built-in write (update, publish) is judged by the collection's own gate for this document,
-  // rule and filter included, as the write itself would be; a workflow's own action has no
-  // collection rule, so its permission answers. The gate reads on the pool, so it is asked here and
-  // its answer applied in its place below.
-  const action = stepAction(workflow, step);
-  const permitted = isEntryWrite(action)
-    ? await entryWriteAllowed(input.document, action, input.caller)
-    : decidePermission(caller.actor, action, slug).allowed;
+  const step = findStep(registered.workflow, input.step);
+  const context = await prepareStep(adapter, input, registered, step);
   ensureWorkflowContentEventKinds();
-
-  return adapter.transaction(async tx => {
-    // 0. The document's own row, locked before anything is read. Every save takes this lock before
-    // it writes, so a save in flight is waited for, and the version read below is the one it
-    // committed rather than the one it is replacing.
-    await readDocumentRevision(tx, {
-      dialect,
-      table: table.table,
-      id: input.document.entryId,
-      forUpdate: true,
-    });
-
-    // 1. Each part's stage, read on the transaction; a part with no state is in the first stage.
-    const parts: Array<{
-      part: string | null;
-      state: ReviewState | null;
-      stage: string;
-    }> = [];
-    for (const part of namedParts(input.parts, table.localized)) {
-      const state = await readReviewState(tx, partOf(input.document, part));
-      parts.push({ part, state, stage: state?.stage ?? workflow.firstStage });
-    }
-    const movable = parts.filter(entry => step.from.includes(entry.stage));
-    const left: LeftPart[] = parts
-      .filter(entry => !step.from.includes(entry.stage))
-      .map(entry => ({
-        part: entry.part,
-        stage: entry.stage,
-        reason: "not-from-stage" as const,
-      }));
-    if (input.parts !== "all" && left.length > 0) {
-      // A part the caller saw at another revision was judged from a stage it has since left, so
-      // what is wrong is the caller's view, not the step.
-      const moved = parts.filter(entry => {
-        const seen = seenRevision(input.seen, entry.part);
-        return (
-          !step.from.includes(entry.stage) &&
-          seen !== undefined &&
-          seen !== (entry.state?.revision ?? 0)
-        );
-      });
-      if (moved.length > 0) throw staleRefusal(moved.map(entry => entry.part));
-      throw notFromStageRefusal(left);
-    }
-    if (movable.length === 0) throw notFromStageRefusal(left);
-
-    // 2. The step's permission.
-    if (!permitted) {
-      throw NextlyError.forbidden({
-        publicData: {
-          reason: "no-permission",
-          permission: permissionSlug(action, slug),
-        },
-        logContext: { refusal: "workflow-step-permission", step: step.name },
-      });
-    }
-
-    // 3. Approvals and requests for changes come only from a signed-in person.
-    if (stepNeedsPerson(step) && input.caller.kind !== "user") {
-      throw NextlyError.personOnly({
-        doing: "approve or request changes",
-        logContext: { refusal: "workflow-person-only", step: step.name },
-      });
-    }
-
-    // 4. The person accountable for a part's stage may not take a step that refuses it.
-    if (
-      !allowsSelfApproval(step) &&
-      caller.accountable !== null &&
-      movable.some(entry => entry.state?.enteredBy === caller.accountable)
-    ) {
-      throw NextlyError.forbidden({
-        publicData: { reason: "self-approval" },
-        logContext: { refusal: "workflow-self-approval", step: step.name },
-      });
-    }
-
-    // 5. The comment.
-    checkComment(step, comment);
-
-    // 6. Each part's newest recorded version: what a reviewer is shown of it, and what a step
-    // into a stage that allows publishing approves. A part with none has nothing to approve.
-    const recorded = new Map<string | null, VersionRow | undefined>();
-    for (const entry of movable) {
-      recorded.set(
-        entry.part,
-        await shownVersionOn(tx, input.document, entry.part)
-      );
-    }
-    const approves = allowsPublish(workflow, step.to);
-    const unrecorded = movable.filter(entry => !recorded.get(entry.part));
-    if (approves && unrecorded.length > 0) {
-      throw NextlyError.validation({
-        errors: unrecorded.map(entry => ({
-          path: "parts",
-          code: WORKFLOW_STEP_ERROR_CODES.nothingToApprove,
-          message: `${entry.part === null ? "The shared part" : `"${entry.part}"`} has no saved version to approve.`,
-        })),
-      });
-    }
-
-    // 7. The move, over what each part was seen at: its content version and its review-state
-    // revision. Every part is tried, so a refusal names all that moved; any refusal rolls back
-    // the parts already written.
-    const now = new Date();
-    const stale: (string | null)[] = [];
-    const moved: MovedPart[] = [];
-    for (const entry of movable) {
-      const seen = input.seen.find(candidate => candidate.part === entry.part);
-      const version = await partVersionOn(
-        tx,
-        dialect,
-        table,
-        input.document.entryId,
-        entry.part
-      );
-      // The content changed since the caller was shown it, or the caller never saw this part.
-      if (
-        seen === undefined ||
-        version === undefined ||
-        version !== seen.version
-      ) {
-        stale.push(entry.part);
-        continue;
-      }
-      const shown = recorded.get(entry.part);
-      const change: ReviewStateChange = {
-        stage: step.to,
-        enteredAt: now,
-        definitionHash,
-        // A move by trusted code keeps the accountable person the part had.
-        ...(caller.accountable !== null
-          ? { enteredBy: caller.accountable }
-          : {}),
-        // Leaving a stage that allows publishing withdraws the approval it held.
-        ...(allowsPublish(workflow, entry.stage) ? { approval: null } : {}),
-        // Entering one approves the version shown, by a person (approvals come from no one else).
-        ...(approves && shown?.versionNo != null && caller.accountable !== null
-          ? {
-              approval: {
-                versionNo: shown.versionNo,
-                digest: approvalDigest(shown.snapshot, "collection"),
-                by: caller.accountable,
-                at: now,
-              },
-            }
-          : {}),
-        ...(reviewer.reviewer ? { assignee: reviewer.reviewer } : {}),
-      };
-      const revision = await writeOverSeen(
-        tx,
-        dialect,
-        partOf(input.document, entry.part),
-        entry.state,
-        seen.revision,
-        { stage: step.to, enteredAt: now, definitionHash },
-        change
-      );
-      if (revision === null) stale.push(entry.part);
-      else
-        moved.push({
-          part: entry.part,
-          from: entry.stage,
-          to: step.to,
-          revision,
-        });
-    }
-    if (stale.length > 0) throw staleRefusal(stale);
-
-    // 8. One event per stage the parts left, on the same transaction, naming the newest version
-    // of the parts it moved.
-    const skipped = reviewer.skippedReviewer;
-    for (const from of [...new Set(moved.map(entry => entry.from))]) {
-      const group = moved.filter(entry => entry.from === from);
-      const versionNos = group.flatMap(entry => {
-        const no = recorded.get(entry.part)?.versionNo;
-        return typeof no === "number" ? [no] : [];
-      });
-      await recordContentEvent(tx, {
-        subject: {
-          kind: input.document.scopeKind,
-          slug,
-          id: input.document.entryId,
-        },
-        parts: {
-          locales: group.flatMap(entry =>
-            entry.part === null ? [] : [entry.part]
-          ),
-          shared: group.some(entry => entry.part === null),
-        },
-        kind: workflowEventKind(step.kind),
-        actor: caller.event,
-        fromState: from,
-        toState: step.to,
-        note: comment !== null && comment.trim() !== "" ? comment : null,
-        versionNo: versionNos.length > 0 ? Math.max(...versionNos) : null,
-        payload: {
-          step: step.name,
-          ...(caller.ownerId !== null ? { ownerId: caller.ownerId } : {}),
-          ...(skipped
-            ? {
-                skippedReviewer: {
-                  kind: skipped.assignee.kind,
-                  id: skipped.assignee.id,
-                  reason: skipped.reason,
-                },
-              }
-            : {}),
-        },
-        definitionHash,
-      });
-    }
-
-    return { step: step.name, moved, left, ...reviewer };
-  });
+  return adapter.transaction(tx => runStep(tx, context));
 }
 
+/** One assignment, with the workflow of its document. */
+interface AssignmentEntry {
+  assignment: Assignment;
+  registered: RegisteredWorkflow;
+}
+
+/** One assignment as read on the transaction: its part's review state and stage. */
+interface AssignedPart extends AssignmentEntry {
+  index: number;
+  state: ReviewState | null;
+  stage: string;
+}
+
+/** What an assignment reads before its transaction opens, and carries into it. */
+interface AssignContext {
+  entries: AssignmentEntry[];
+  caller: ResolvedCaller;
+  /** Why each assignee may not be given work needing each action, by {@link eligibilityKey}. */
+  eligibility: ReadonlyMap<string, AssigneeRefusalCode | null>;
+  /** Whether the caller may make each built-in write to each part, by {@link gatedKey}. */
+  gated: ReadonlyMap<string, boolean>;
+  dialect: SupportedDialect;
+}
+
+const eligibilityKey = (
+  assignee: ReviewAssignee,
+  action: string | null,
+  slug: string
+) => JSON.stringify([assignee.kind, assignee.id, action, slug]);
+
+const gatedKey = (index: number, action: string) =>
+  JSON.stringify([index, action]);
+
 /**
- * Assigns each part to a person or a role, with an optional due date, in one transaction of
- * `adapter`, over the revision each was seen at, and records a `workflow-assign` event per part.
- *
- * The caller needs, for each part, the collection's or Single's `update-<slug>` or the permission
- * of the primary step of the part's stage; else `FORBIDDEN`, `{ reason: "no-permission",
- * refused: [{ index, anyOf }] }`. Each assignee must hold that primary step: a person through
- * their roles in force, never when deactivated; a role through its own grants, the roles it
- * inherits, or super-admin. Else `VALIDATION_ERROR`, one error per refused assignment
- * (`assignments[<i>].assignee`, an {@link ASSIGNEE_REFUSAL_CODES} code). Nothing is assigned
- * unless everything is; a stale revision is `CONFLICT`, `{ reason: "stale" }`.
- *
- * @experimental
+ * Whether each assignee may be given work in each stage, answered before the transaction opens:
+ * which stage a part is in is read inside it.
  */
-export async function assignWorkflowParts(
+async function assigneeEligibility(
   adapter: DrizzleAdapter,
-  input: AssignInput
-): Promise<AssignResult> {
-  const caller = await resolveCaller(adapter, input.caller);
-  const entries = input.assignments.map(assignment => ({
-    assignment,
-    registered: attachedWorkflow(assignment.document),
-  }));
-  // Whether each assignee may be given work in each stage, answered before the transaction opens:
-  // which stage a part is in is read inside it.
+  entries: readonly AssignmentEntry[]
+): Promise<Map<string, AssigneeRefusalCode | null>> {
   const eligibility = new Map<string, AssigneeRefusalCode | null>();
-  const eligibilityKey = (
-    assignee: ReviewAssignee,
-    action: string | null,
-    slug: string
-  ) => JSON.stringify([assignee.kind, assignee.id, action, slug]);
   for (const { assignment, registered } of entries) {
     const { assignee } = assignment;
     if (!assignee) continue;
@@ -936,140 +1158,241 @@ export async function assignWorkflowParts(
       }
     }
   }
-  // Whether the caller may make each built-in write an assigner may hold, for each document, asked
-  // of the collection's own gate before the transaction opens, as a step asks it.
+  return eligibility;
+}
+
+/** Every action an assigner of `workflow`'s parts may hold, each once. */
+function everyAssignerAction(workflow: Workflow): Set<string> {
+  return new Set(
+    workflow.stages.flatMap(stage => assignerActions(workflow, stage.name))
+  );
+}
+
+/**
+ * Whether the caller may make each built-in write an assigner may hold, to each part, asked of the
+ * collection's own gate in the part's language before the transaction opens, as a step asks it.
+ */
+async function assignerGates(
+  entries: readonly AssignmentEntry[],
+  caller: WorkflowCaller
+): Promise<Map<string, boolean>> {
   const gated = new Map<string, boolean>();
-  const gatedKey = (index: number, action: string) =>
-    JSON.stringify([index, action]);
   for (const [index, { assignment, registered }] of entries.entries()) {
-    const actions = new Set(
-      registered.workflow.stages.flatMap(stage =>
-        assignerActions(registered.workflow, stage.name)
-      )
-    );
-    for (const action of actions) {
+    for (const action of everyAssignerAction(registered.workflow)) {
       if (isEntryWrite(action)) {
         gated.set(
           gatedKey(index, action),
-          await entryWriteAllowed(assignment.document, action, input.caller)
+          await entryWriteAllowed(
+            assignment.document,
+            assignment.part,
+            action,
+            caller
+          )
         );
       }
     }
   }
-  const dialect = adapter.getCapabilities().dialect;
-  ensureWorkflowContentEventKinds();
+  return gated;
+}
 
-  return adapter.transaction(async tx => {
-    const read: Array<{ state: ReviewState | null; stage: string }> = [];
-    for (const { assignment, registered } of entries) {
-      const state = await readReviewState(
-        tx,
-        partOf(assignment.document, assignment.part)
-      );
-      read.push({
-        state,
-        stage: state?.stage ?? registered.workflow.firstStage,
-      });
-    }
-
-    // Who may assign: the right to edit, or the primary step of the part's stage.
-    const refused: Array<{ index: number; anyOf: string[] }> = [];
-    entries.forEach(({ assignment, registered }, index) => {
-      const slug = assignment.document.scopeSlug;
-      const stage = read[index]?.stage ?? registered.workflow.firstStage;
-      const anyOf = assignerActions(registered.workflow, stage);
-      const may = (action: string) =>
-        isEntryWrite(action)
-          ? gated.get(gatedKey(index, action)) === true
-          : decidePermission(caller.actor, action, slug).allowed;
-      if (!anyOf.some(may)) {
-        refused.push({
-          index,
-          anyOf: anyOf.map(action => permissionSlug(action, slug)),
-        });
-      }
+/** Each assignment's part read on the transaction; none reads as its workflow's first stage. */
+async function readAssignedParts(
+  tx: TransactionContext,
+  c: AssignContext
+): Promise<AssignedPart[]> {
+  const parts: AssignedPart[] = [];
+  for (const [index, entry] of c.entries.entries()) {
+    const state = await readReviewState(
+      tx,
+      partOf(entry.assignment.document, entry.assignment.part)
+    );
+    parts.push({
+      ...entry,
+      index,
+      state,
+      stage: state?.stage ?? entry.registered.workflow.firstStage,
     });
-    if (refused.length > 0) {
-      throw NextlyError.forbidden({
-        publicData: { reason: "no-permission", refused },
-        logContext: { refusal: "workflow-assign-permission" },
-      });
-    }
+  }
+  return parts;
+}
 
-    // Who may be assigned: whoever holds the primary step of the part's stage.
-    const errors: Array<{ path: string; code: string; message: string }> = [];
-    entries.forEach(({ assignment, registered }, index) => {
-      const { assignee } = assignment;
-      if (!assignee) return;
-      const slug = assignment.document.scopeSlug;
-      const stage = read[index]?.stage ?? registered.workflow.firstStage;
-      const code = eligibility.get(
-        eligibilityKey(
-          assignee,
-          primaryAction(registered.workflow, stage),
-          slug
-        )
-      );
-      if (code) {
-        errors.push({
-          path: `assignments[${index}].assignee`,
-          code,
-          message: `The ${assignee.kind} "${assignee.id}" cannot be assigned work in "${stage}".`,
-        });
-      }
-    });
-    if (errors.length > 0) throw NextlyError.validation({ errors });
-
-    const now = new Date();
-    const stale: (string | null)[] = [];
-    const assigned: AssignResult["assigned"] = [];
-    for (const [index, { assignment, registered }] of entries.entries()) {
-      const revision = await writeOverSeen(
-        tx,
-        dialect,
-        partOf(assignment.document, assignment.part),
-        read[index]?.state ?? null,
-        assignment.revision,
+/** The refusal of one assigner, where it may neither edit nor take the stage's primary step. */
+function assignerRefusal(
+  c: AssignContext,
+  part: AssignedPart
+): Array<{ index: number; anyOf: string[] }> {
+  const slug = part.assignment.document.scopeSlug;
+  const anyOf = assignerActions(part.registered.workflow, part.stage);
+  const may = (action: string) =>
+    isEntryWrite(action)
+      ? c.gated.get(gatedKey(part.index, action)) === true
+      : decidePermission(c.caller.actor, action, slug).allowed;
+  return anyOf.some(may)
+    ? []
+    : [
         {
-          stage: registered.workflow.firstStage,
-          enteredAt: now,
-          definitionHash: registered.definitionHash,
+          index: part.index,
+          anyOf: anyOf.map(action => permissionSlug(action, slug)),
         },
-        { assignee: assignment.assignee, dueAt: assignment.dueAt ?? null }
-      );
-      if (revision === null) stale.push(assignment.part);
-      else {
-        assigned.push({
-          document: assignment.document,
-          part: assignment.part,
-          revision,
-        });
-      }
-    }
-    if (stale.length > 0) throw staleRefusal(stale);
+      ];
+}
 
-    for (const { assignment, registered } of entries) {
-      await recordContentEvent(tx, {
-        subject: {
-          kind: assignment.document.scopeKind,
-          slug: assignment.document.scopeSlug,
-          id: assignment.document.entryId,
+/** Who may assign: the right to edit, or the primary step of the part's stage. */
+function checkAssigners(
+  c: AssignContext,
+  parts: readonly AssignedPart[]
+): void {
+  const refused = parts.flatMap(part => assignerRefusal(c, part));
+  if (refused.length > 0) {
+    throw NextlyError.forbidden({
+      publicData: { reason: "no-permission", refused },
+      logContext: { refusal: "workflow-assign-permission" },
+    });
+  }
+}
+
+/** Why one assignee may not be given the part's work, as a validation error, or none. */
+function assigneeError(
+  c: AssignContext,
+  part: AssignedPart
+): Array<{ path: string; code: string; message: string }> {
+  const { assignee } = part.assignment;
+  if (!assignee) return [];
+  const code = c.eligibility.get(
+    eligibilityKey(
+      assignee,
+      primaryAction(part.registered.workflow, part.stage),
+      part.assignment.document.scopeSlug
+    )
+  );
+  return code
+    ? [
+        {
+          path: `assignments[${part.index}].assignee`,
+          code,
+          message: `The ${assignee.kind} "${assignee.id}" cannot be assigned work in "${part.stage}".`,
         },
-        parts:
-          assignment.part === null
-            ? { shared: true }
-            : { locales: [assignment.part] },
-        kind: workflowEventKind("assign"),
-        actor: caller.event,
-        payload: {
-          assignee: assignment.assignee,
-          dueAt: assignment.dueAt ? assignment.dueAt.toISOString() : null,
-          ...(caller.ownerId !== null ? { ownerId: caller.ownerId } : {}),
-        },
+      ]
+    : [];
+}
+
+/** Who may be assigned: whoever holds the primary step of the part's stage. */
+function checkAssignees(
+  c: AssignContext,
+  parts: readonly AssignedPart[]
+): void {
+  const errors = parts.flatMap(part => assigneeError(c, part));
+  if (errors.length > 0) throw NextlyError.validation({ errors });
+}
+
+/** Writes each assignment over the revision it was seen at; nothing is kept if any moved. */
+async function writeAssignments(
+  tx: TransactionContext,
+  c: AssignContext,
+  parts: readonly AssignedPart[]
+): Promise<AssignResult["assigned"]> {
+  const now = new Date();
+  const stale: (string | null)[] = [];
+  const assigned: AssignResult["assigned"] = [];
+  for (const part of parts) {
+    const { assignment, registered } = part;
+    const revision = await writeOverSeen(
+      tx,
+      c.dialect,
+      partOf(assignment.document, assignment.part),
+      part.state,
+      assignment.revision,
+      {
+        stage: registered.workflow.firstStage,
+        enteredAt: now,
         definitionHash: registered.definitionHash,
+      },
+      { assignee: assignment.assignee, dueAt: assignment.dueAt ?? null }
+    );
+    if (revision === null) stale.push(assignment.part);
+    else {
+      assigned.push({
+        document: assignment.document,
+        part: assignment.part,
+        revision,
       });
     }
+  }
+  if (stale.length > 0) throw staleRefusal(stale);
+  return assigned;
+}
 
-    return { assigned };
+/** One assignment's event: who it went to, until when, and a key's owner. */
+async function recordAssignment(
+  tx: TransactionContext,
+  c: AssignContext,
+  { assignment, registered }: AssignmentEntry
+): Promise<void> {
+  await recordContentEvent(tx, {
+    subject: {
+      kind: assignment.document.scopeKind,
+      slug: assignment.document.scopeSlug,
+      id: assignment.document.entryId,
+    },
+    parts:
+      assignment.part === null
+        ? { shared: true }
+        : { locales: [assignment.part] },
+    kind: workflowEventKind("assign"),
+    actor: c.caller.event,
+    payload: {
+      assignee: assignment.assignee,
+      dueAt: assignment.dueAt ? assignment.dueAt.toISOString() : null,
+      ...(c.caller.ownerId !== null ? { ownerId: c.caller.ownerId } : {}),
+    },
+    definitionHash: registered.definitionHash,
   });
+}
+
+/** An assignment inside its transaction: who may assign, who may be assigned, then the writes. */
+async function runAssignment(
+  tx: TransactionContext,
+  c: AssignContext
+): Promise<AssignResult> {
+  const parts = await readAssignedParts(tx, c);
+  checkAssigners(c, parts);
+  checkAssignees(c, parts);
+  const assigned = await writeAssignments(tx, c, parts);
+  for (const entry of c.entries) await recordAssignment(tx, c, entry);
+  return { assigned };
+}
+
+/**
+ * Assigns each part to a person or a role, with an optional due date, in one transaction of
+ * `adapter`, over the revision each was seen at, and records a `workflow-assign` event per part.
+ *
+ * The caller needs, for each part, the collection's or Single's `update-<slug>` or the permission
+ * of the primary step of the part's stage; else `FORBIDDEN`, `{ reason: "no-permission",
+ * refused: [{ index, anyOf }] }`. A built-in write among them is judged by the collection's own
+ * gate in the part's language. Each assignee must hold that primary step: a person through their
+ * roles in force, never when deactivated; a role through its own grants, the roles it inherits,
+ * or super-admin. Else `VALIDATION_ERROR`, one error per refused assignment
+ * (`assignments[<i>].assignee`, an assignee refusal code). Nothing is assigned unless everything
+ * is; a stale revision is `CONFLICT`, `{ reason: "stale" }`.
+ *
+ * @experimental
+ */
+export async function assignWorkflowParts(
+  adapter: DrizzleAdapter,
+  input: AssignInput
+): Promise<AssignResult> {
+  const caller = await resolveCaller(adapter, input.caller);
+  const entries = input.assignments.map(assignment => ({
+    assignment,
+    registered: attachedWorkflow(assignment.document),
+  }));
+  const context: AssignContext = {
+    entries,
+    caller,
+    eligibility: await assigneeEligibility(adapter, entries),
+    gated: await assignerGates(entries, input.caller),
+    dialect: adapter.getCapabilities().dialect,
+  };
+  ensureWorkflowContentEventKinds();
+  return adapter.transaction(tx => runAssignment(tx, context));
 }
