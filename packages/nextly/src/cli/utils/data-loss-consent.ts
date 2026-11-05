@@ -154,8 +154,12 @@ export interface DeletionSource {
 
 /** The source of a deletion from the file `label` whose statements are `text`. */
 export function deletionSource(label: string, text: string): DeletionSource {
-  const digest = createHash("sha256").update(text).digest("hex");
-  return { label, identity: `${label}\u0000${digest}` };
+  return { label, identity: `${label}\u0000${textDigest(text)}` };
+}
+
+/** The sha256 of a file's text, as an agreement binds the file and as a run checks it before running it. */
+export function textDigest(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 /** What a person agreed to: each deletion of each file, by the file's identity. */

@@ -21,6 +21,7 @@ import { registerPruneCommand } from "../prune";
 import { registerWebhooksPruneCommand } from "../webhooks-prune.command";
 
 const uninstall = vi.hoisted(() => vi.fn(async () => {}));
+const install = vi.hoisted(() => vi.fn(async () => {}));
 
 // `../program` imports every command, `migrate` with its whole graph among
 // them; the commands under test need only its context factory.
@@ -43,6 +44,8 @@ vi.mock("../migrate", () => ({
 
 vi.mock("../plugin-lifecycle-runner", () => ({
   runPluginUninstall: uninstall,
+  runPluginInstall: install,
+  runPluginInstallAll: vi.fn(async () => {}),
 }));
 
 /** A program with every command that deletes data registered on it. */
@@ -75,6 +78,7 @@ beforeEach(() => {
   savedEnv = process.env.NEXTLY_ACCEPT_DATA_LOSS;
   delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
   uninstall.mockClear();
+  install.mockClear();
 });
 afterEach(() => {
   if (savedEnv === undefined) delete process.env.NEXTLY_ACCEPT_DATA_LOSS;
@@ -88,6 +92,7 @@ describe("--accept-data-loss on every command that deletes data", () => {
     [["migrate:down"]],
     [["migrate:fresh"]],
     [["prune"]],
+    [["plugins", "install"]],
     [["plugins", "uninstall"]],
     [["webhooks:prune"]],
     [["permissions:cleanup"]],
@@ -101,6 +106,26 @@ describe("--accept-data-loss on every command that deletes data", () => {
     // every deletion and `=posts,pages.summary` names what it covers.
     expect(option?.optional).toBe(true);
     expect(option?.description).toContain("NEXTLY_ACCEPT_DATA_LOSS");
+  });
+});
+
+describe("plugins install", () => {
+  it("hands the install the flag's targets", async () => {
+    await program().parseAsync(
+      ["plugins", "install", "@acme/x", "--accept-data-loss=x__notes"],
+      { from: "user" }
+    );
+    const options = (
+      install.mock.calls[0] as unknown as [string, { consent: unknown }]
+    )[1];
+    expect(options.consent).toEqual({
+      given: {
+        from: "flag",
+        targets: { tables: new Set(["x__notes"]), columns: new Set() },
+      },
+      earlier: [],
+      ignored: [],
+    });
   });
 });
 

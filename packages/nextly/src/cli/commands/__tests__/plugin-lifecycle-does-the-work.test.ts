@@ -153,9 +153,68 @@ function depsWithout(
         ])
     ),
     recordLifecycle: vi.fn(async () => {}),
+    // No pending module deletes data, unless a test says so.
+    installDeletions: vi.fn(async () => []),
     ...over,
   };
 }
+
+describe("plugins install over a pending module that deletes data", () => {
+  // The modules an install applies are judged as `nextly migrate` judges
+  // them, one run, before anything changes.
+  const pruning = () =>
+    vi.fn(async () => [
+      {
+        label: "plugin:@acme/fx/0002_prune",
+        text: "DELETE FROM fx__notes",
+        deletions: [{ kind: "rows" as const, table: "fx__notes" }],
+      },
+    ]);
+  const watchedInstall = (over: Partial<PluginLifecycleDeps> = {}) => {
+    const reached: string[] = [];
+    const d = deps({
+      installDeletions: pruning(),
+      interactive: false,
+      underMigrateLock: async <T>(work: () => Promise<T>) => {
+        reached.push("lock");
+        return work();
+      },
+      ...over,
+    });
+    return { reached, d };
+  };
+
+  it("is refused without consent before the lock, naming the module and its deletion, and applies nothing", async () => {
+    const { reached, d } = watchedInstall();
+    await expect(runPluginInstallCommand("@acme/fx", d)).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /plugin:@acme\/fx\/0002_prune[\s\S]*fx__notes/
+      ),
+    });
+    expect(reached).toEqual([]);
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("applies with consent covering the deletion, judged again under the lock", async () => {
+    const { reached, d } = watchedInstall();
+    await runPluginInstallCommand("@acme/fx", d, {
+      consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+    });
+    expect(reached).toEqual(["lock"]);
+    expect(d.applyMigrations).toHaveBeenCalledWith(plugin);
+    expect(d.installDeletions).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops with nothing changed when the person at the terminal declines", async () => {
+    const askToDelete = vi.fn(async () => false);
+    const { reached, d } = watchedInstall({ interactive: true, askToDelete });
+    await expect(runPluginInstallCommand("@acme/fx", d)).rejects.toMatchObject({
+      code: "DATA_LOSS_DECLINED",
+    });
+    expect(askToDelete).toHaveBeenCalledTimes(1);
+    expect(reached).toEqual([]);
+  });
+});
 
 describe("plugins install", () => {
   it("applies the plugin's migrations", async () => {

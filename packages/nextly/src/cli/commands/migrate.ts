@@ -173,6 +173,7 @@ import {
   deletionSource,
   eventTriggerNotice,
   judgeRunDeletions,
+  textDigest,
   type Agreement,
   type DeletionSource,
   readDataLossConsent,
@@ -1752,7 +1753,8 @@ function appStepAfter(
  */
 async function runMigrationStreams(
   deps: MigrateCoreDeps,
-  runFiles: typeof runFileMigrations
+  runFiles: typeof runFileMigrations,
+  judged: ReadonlyMap<string, string>
 ): Promise<{ pluginModulesApplied: number; applied: number }> {
   const pluginOutcome = await runPluginPhase(deps);
   const pluginModulesApplied = pluginOutcome.applied + pluginOutcome.adopted;
@@ -1772,6 +1774,7 @@ async function runMigrationStreams(
     step: appStep,
     logger: deps.logger,
     knownJunctions: deps.knownJunctions,
+    judged,
   });
   return { pluginModulesApplied, applied };
 }
@@ -1800,7 +1803,7 @@ export async function migrateCore(
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.
-  const agreedDeletions = await judgeFileDeletions(deps);
+  const { agreement: agreedDeletions } = await judgeFileDeletions(deps);
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1835,8 +1838,12 @@ export async function migrateCore(
         command: deps.lockCommand ?? "nextly migrate",
       });
       // A file that deletes data runs only with consent covering each
-      // deletion, judged from the database this run holds the lock on.
-      await judgeFileDeletions(deps, agreedDeletions);
+      // deletion, judged from the database this run holds the lock on. The
+      // files run only as they were judged here (`assertRunsAsJudged`).
+      const { files: judgedFiles } = await judgeFileDeletions(
+        deps,
+        agreedDeletions
+      );
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -1922,7 +1929,8 @@ export async function migrateCore(
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
-        runFiles
+        runFiles,
+        judgedFiles
       ));
 
       // Element rows for contributed elements: written AFTER every stream has
@@ -2071,7 +2079,7 @@ export async function refuseUnresolvedAppAttempts(args: {
 async function judgeFileDeletions(
   deps: MigrateCoreDeps,
   agreed?: Agreement
-): Promise<Agreement> {
+): Promise<{ agreement: Agreement; files: ReadonlyMap<string, string> }> {
   const consent =
     deps.consent ??
     resolveDataLossConsent({
@@ -2091,12 +2099,10 @@ async function judgeFileDeletions(
   const sources = new Map<Deletion, DeletionSource>();
   // The plugin modules a run applies first, then the app files within the
   // step, read as one run in that order.
-  const units = [
-    ...(await moduleUnits(deps)),
-    ...listed.flatMap(({ file }) =>
-      plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
-    ),
-  ];
+  const fileUnits = listed.flatMap(({ file }) =>
+    plan.runs.has(file) ? [fileUnit(file, deps.dialect)] : []
+  );
+  const units = [...(await moduleUnits(deps)), ...fileUnits];
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
@@ -2107,7 +2113,7 @@ async function judgeFileDeletions(
   }
   // A refusal, or a no at the terminal (`DATA_LOSS_DECLINED`, exit 1),
   // throws before anything changes.
-  return judgeRunDeletions({
+  const agreement = await judgeRunDeletions({
     sources,
     consent,
     agreed,
@@ -2119,6 +2125,11 @@ async function judgeFileDeletions(
         ? undefined
         : await eventTriggerNotice(eventTriggersOf(deps)),
   });
+  // Each app file judged, by filename, with the digest of the UP judged.
+  const files = new Map(
+    fileUnits.map(unit => [unit.label, textDigest(unit.text)])
+  );
+  return { agreement, files };
 }
 
 /** How a run reads the database's DDL event triggers: injected, or from the catalog. */
@@ -2159,6 +2170,23 @@ async function moduleUnits(deps: MigrateCoreDeps): Promise<RunUnit[]> {
     deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
   )();
   return pluginModuleUnits(lists, applied, deps.step, deps.dialect);
+}
+
+/**
+ * What the pending modules of `sets` delete, judged as one run in the order a
+ * run applies them (`pluginModuleUnits`, over the ledger's applied
+ * checksums): what `plugins install` asks consent for before it applies
+ * them, as `nextly migrate` does for the same modules.
+ */
+export async function pendingPluginDeletions(
+  sets: readonly PluginMigrationSet[],
+  deps: Pick<MigrateCoreDeps, "adapter" | "db" | "dialect">
+): Promise<{ label: string; text: string; deletions: Deletion[] }[]> {
+  const applied = await appliedPluginModules(deps);
+  const units = pluginModuleUnits(sets, applied, undefined, deps.dialect);
+  return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
+    ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
+  );
 }
 
 /**
@@ -2586,6 +2614,28 @@ async function refuseUniqueFileThatCannotHold(
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
  */
+/**
+ * Refuses, before any app file runs, a file to run whose UP is not the one its
+ * deletions were judged from under the lock (`judgeFileDeletions`): the files
+ * are read again to run, and one edited, or added, in between would otherwise
+ * run without its deletions ever judged.
+ */
+function assertRunsAsJudged(
+  files: readonly ParsedMigration[],
+  judged: ReadonlyMap<string, string> | undefined
+): void {
+  // A caller that judged nothing (a boot's own run) has nothing to hold the files to.
+  if (judged === undefined) return;
+  for (const m of files) {
+    const filename = `${m.name}.sql`;
+    if (judged.get(filename) === textDigest(m.upSql)) continue;
+    throw NextlyError.invalidInput({
+      message: `\`${filename}\` changed after this run judged what it deletes, so none of the app's migration files ran. Run \`nextly migrate\` again to judge it as it stands.`,
+      logContext: { reason: "file-changed-after-judgement", file: filename },
+    });
+  }
+}
+
 export async function runFileMigrations(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
@@ -2602,6 +2652,13 @@ export async function runFileMigrations(args: {
    * migration after adoption stops with drift no migration could resolve.
    */
   knownJunctions?: ReadonlySet<string>;
+  /**
+   * The app files the run judged under its lock for what they delete, by
+   * filename, with the digest of the UP judged (`judgeFileDeletions`). Given,
+   * a file to run that differs, or was not judged, is refused before any file
+   * runs (`assertRunsAsJudged`).
+   */
+  judged?: ReadonlyMap<string, string>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
@@ -2641,6 +2698,10 @@ export async function runFileMigrations(args: {
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
   const plan = fileRunPlan(await withApplied(all, repo), args.step);
+  assertRunsAsJudged(
+    all.filter(m => plan.runs.has(m)),
+    args.judged
+  );
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
