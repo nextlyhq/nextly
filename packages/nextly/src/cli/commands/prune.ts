@@ -40,11 +40,14 @@ import {
 } from "../../domains/schema/migrate/data-loss-consent";
 import type { ExtensionSchemaRecord } from "../../domains/schema/ownership/dependent-elements";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
+import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
+import { openCommandAdapter } from "../utils/adapter";
 import {
   requireDatabaseEnv,
   connectOrExit,
@@ -52,6 +55,7 @@ import {
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
+  deletionChanges,
   readDataLossConsent,
   requireConsented,
   type AcceptDataLossOption,
@@ -71,6 +75,10 @@ export interface PruneResult {
   orphanedCompanions: string[];
   /** Companion tables actually dropped (empty unless the drop was approved). */
   droppedCompanions: string[];
+  /** Every table the prune drops, and what goes with each, as the consent lists them. */
+  planned: Deletion[];
+  /** Under `--dry-run`, why a real prune would refuse before its first drop. */
+  refusal?: string;
 }
 
 interface RunPruneArgs {
@@ -107,6 +115,11 @@ interface RunPruneArgs {
   extensionSchema?: (
     orphans: readonly DynamicCollectionRecord[]
   ) => Promise<ExtensionSchemaRecord | null>;
+  /**
+   * `--dry-run`: plan the drops and check what depends on the orphans, as a
+   * real prune does before its first drop, then drop nothing and ask nothing.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -172,23 +185,38 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   deletions.push(
     ...orphanedCompanions.map(table => ({ kind: "table" as const, table }))
   );
-  if (deletions.length === 0 || !(await args.approve(deletions))) {
-    return {
-      orphans: slugs,
-      dropped: [],
-      orphanedCompanions,
-      droppedCompanions: [],
-    };
-  }
-
+  const nothingDropped: PruneResult = {
+    orphans: slugs,
+    dropped: [],
+    orphanedCompanions,
+    droppedCompanions: [],
+    planned: deletions,
+  };
   // Before the first drop and for the whole set: a refusal part way through
   // would leave some orphans dropped and the rest not, and orphans that point
-  // only at each other go together.
+  // only at each other go together. A dry run asks the same, without asking
+  // for consent first: its refusal is the real run's.
   const compile = args.extensionSchema;
-  await args.registry.assertNothingDependsOn(
-    slugs,
-    compile === undefined ? {} : { extensionSchema: () => compile(orphans) }
-  );
+  const assertDroppable = () =>
+    args.registry.assertNothingDependsOn(
+      slugs,
+      compile === undefined ? {} : { extensionSchema: () => compile(orphans) }
+    );
+  if (args.dryRun === true) {
+    if (deletions.length === 0) return nothingDropped;
+    try {
+      await assertDroppable();
+    } catch (error) {
+      // Something still depends on an orphan: the real prune's refusal.
+      if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;
+      return { ...nothingDropped, refusal: error.publicMessage };
+    }
+    return nothingDropped;
+  }
+  if (deletions.length === 0 || !(await args.approve(deletions))) {
+    return nothingDropped;
+  }
+  await assertDroppable();
 
   // Dialect-safe identifier quoting + FK-safe drop, mirroring the sibling drop
   // sites (collection-sync-service.ts): MySQL uses backticks; Postgres needs
@@ -232,7 +260,13 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
     droppedCompanions.push(companion);
   }
 
-  return { orphans: slugs, dropped, orphanedCompanions, droppedCompanions };
+  return {
+    orphans: slugs,
+    dropped,
+    orphanedCompanions,
+    droppedCompanions,
+    planned: deletions,
+  };
 }
 
 /** The select surface of a Drizzle handle the archive count reads through. */
@@ -283,6 +317,8 @@ interface PruneCommandOptions {
   acceptDataLoss?: AcceptDataLossOption;
   /** The earlier spelling of the consent, honoured with a deprecation notice. */
   force?: boolean;
+  /** `--dry-run`: name what would be dropped, drop and ask nothing. */
+  dryRun?: boolean;
   config?: string;
   cwd?: string;
 }
@@ -352,13 +388,17 @@ export async function runPruneCommand(
   });
   const currentSlugs = (configResult.config.collections ?? []).map(c => c.slug);
 
-  const adapter = await connectOrExit(
-    {
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-    },
-    logger
-  );
+  const connection = {
+    dialect: dbValidation.dialect,
+    databaseUrl: dbValidation.databaseUrl,
+  };
+  // A dry run opens the database read-only, and one that is not there has
+  // said so and ends here.
+  const adapter =
+    options.dryRun === true
+      ? await openCommandAdapter({ ...connection, dryRun: true }, logger)
+      : await connectOrExit(connection, logger);
+  if (adapter === undefined) return;
 
   try {
     // The ORM resolves tables through a SchemaRegistry, and this command creates none of
@@ -386,6 +426,7 @@ export async function runPruneCommand(
       logger
     );
     const result = await runPrune({
+      dryRun: options.dryRun === true,
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
@@ -414,6 +455,15 @@ export async function runPruneCommand(
         });
       },
     });
+
+    // A dry run names what the real prune drops, in the consent's words.
+    if (options.dryRun === true) {
+      reportDryRun(logger, {
+        changes: result.refusal ? [] : deletionChanges(result.planned),
+        refusals: result.refusal ? [result.refusal] : [],
+      });
+      return;
+    }
 
     // The listing and the consent that drops it were printed by the
     // judgement; what remains is what was done.
@@ -447,7 +497,11 @@ export async function runPruneCommand(
 
 /** The action of `nextly prune`, loaded when it runs. */
 export async function pruneAction(
-  cmdOptions: { acceptDataLoss?: AcceptDataLossOption; force?: boolean },
+  cmdOptions: {
+    acceptDataLoss?: AcceptDataLossOption;
+    force?: boolean;
+    dryRun?: boolean;
+  },
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
