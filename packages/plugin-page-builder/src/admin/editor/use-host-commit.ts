@@ -38,6 +38,7 @@ import {
 
 import { usePageLayoutId } from "../page-layout";
 import { usePublishOffer } from "../publish-offer";
+import { useRemovalHold } from "../removal-hold-client";
 import { withValueAtPath } from "../snapshot-merge";
 
 /**
@@ -303,6 +304,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onCommit,
   onClose,
   savePoint,
+  confirmedRemoval,
 }: {
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
@@ -316,6 +318,13 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose: () => void;
   /** Where the history stood at the last store; see `useSavePoint`. */
   savePoint: ReturnType<typeof useSavePoint>;
+  /**
+   * For a component, how many documents placing it the removal dialog said:
+   * the count a publish removing fields confirms (see `useRemovalHold`).
+   */
+  confirmedRemoval?: () =>
+    | { readonly count: number; readonly complete: boolean }
+    | undefined;
 }): {
   done: () => void;
   /**
@@ -323,6 +332,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * rendered anywhere inside the editor.
    */
   publishOffer: JSX.Element;
+  /** The question asked again when a removal's count grew, rendered likewise. */
+  removalHold: JSX.Element;
 } {
   useCheckpoints({ name, control, document: editor.document });
 
@@ -384,6 +395,15 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     documents: () => [storing()],
     layout: usePageLayoutId(control),
     subject: editor.document.kind === "component" ? "component" : "page",
+  });
+  /*
+   * A publish removing a component's fields, held at the count the designer
+   * confirmed. Registered last, so it runs after the questions above: a
+   * publish they call off takes no hold.
+   */
+  const removalHold = useRemovalHold({
+    document: storing,
+    confirmed: () => confirmedRemoval?.(),
   });
 
   /*
@@ -447,5 +467,5 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     canExit: true,
   });
 
-  return { done, publishOffer };
+  return { done, publishOffer, removalHold };
 }

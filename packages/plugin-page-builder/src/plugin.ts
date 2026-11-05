@@ -7,6 +7,7 @@ import {
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import {
   definePlugin,
+  NextlyError,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PluginDefinition,
@@ -151,6 +152,13 @@ import {
   publishReadinessRoute,
   type PublishReadinessSetup,
 } from "./publish-readiness";
+import {
+  registerHoldRelease,
+  registerRemovalFence,
+  removalHoldStore,
+  type RemovalHoldStore,
+} from "./removal-hold";
+import { removalHoldRoutes } from "./removal-hold-route";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
@@ -210,6 +218,7 @@ import {
   usageHealthService,
 } from "./usage-health-service";
 import { variantUseRoute } from "./variant-use-route";
+import { SINGLE_HOOK_NAMESPACE } from "./write-target";
 
 /**
  * What the plugin-owned `pages` collection is built with, resolved from the
@@ -1017,6 +1026,49 @@ function rewriteInstallFor(
 }
 
 /**
+ * A written document's pending working draft, read as the system, or `null`
+ * where there is none: what a write's hold judgement compares with beside
+ * the live row its hook is handed. A Single's hooks name it `single:<slug>`.
+ */
+async function storedDraftOf(at: {
+  readonly collection: string;
+  readonly id: string | undefined;
+}): Promise<unknown> {
+  const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+  const nextly: RewriteDirectApi = await getCachedNextly();
+  const single = at.collection.startsWith(SINGLE_HOOK_NAMESPACE)
+    ? at.collection.slice(SINGLE_HOOK_NAMESPACE.length)
+    : undefined;
+  try {
+    const row =
+      single !== undefined
+        ? await nextly.findSingle({
+            slug: single,
+            createIfMissing: false,
+            draft: true,
+            status: "all",
+            depth: 0,
+            overrideAccess: true,
+          })
+        : at.id === undefined
+          ? null
+          : await nextly.findByID({
+              collection: at.collection,
+              id: at.id,
+              draft: true,
+              status: "all",
+              depth: 0,
+              overrideAccess: true,
+            });
+    const pending = row as { _isWorkingDraft?: unknown } | null;
+    return pending?._isWorkingDraft === true ? pending : null;
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+/**
  * Every live Single whose declaration holds a blocks field, with its fields
  * and its localization master switch, or `undefined` when the registry cannot
  * be read whole. Orphaned code-first rows are left out, as `singlesHoldBlocks`
@@ -1232,6 +1284,34 @@ export const pageBuilder = (
   // it. Set by `init`, which holds the context pins are made through; read by
   // the facts route's repair, which releases them.
   let heldRemovals: RetiredPins | undefined;
+  // The holds a component's removal takes while it is published. Set by
+  // `init`, which holds the bookkeeping table's slug; read by the hold route.
+  let removalHolds: RemovalHoldStore | null = null;
+  const requireRemovalHolds = (): RemovalHoldStore => {
+    if (removalHolds === null) {
+      throw new Error(
+        "[page-builder] a component removal was held before the plugin was installed"
+      );
+    }
+    return removalHolds;
+  };
+  /**
+   * How many documents place a component directly, from the usage index: the
+   * number the removal dialog says, and the one a hold counts again.
+   */
+  const countPlacements = (ctx: PluginRouteContext) => async (id: string) => {
+    const index =
+      ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+      COMPONENT_USAGE_INDEX_SLUG;
+    return componentUsageCount({
+      read: usageCountReader(await requireInstalled().nextly(), index),
+      componentId: id,
+      health: await usageHealthService(requireInstalled).read(
+        componentUsageIndex,
+        index
+      ),
+    });
+  };
   // The ids a published removal retired: those the write hooks recorded, and
   // those the component's published history implies, recorded here when the
   // table lacks them. Where the hooks are not registered (the host renders
@@ -1585,6 +1665,26 @@ export const pageBuilder = (
           memo: retiredHistory,
           pins: heldRemovals,
         });
+        // While a removal is published, no write may newly set one of its
+        // fields: the count the designer confirmed is final until it lands.
+        const holds = removalHoldStore({
+          nextly: () => requireInstalled().nextly(),
+          collection:
+            ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+            COMPONENT_RETIRED_SLUG,
+        });
+        removalHolds = holds;
+        registerRemovalFence({
+          ctx,
+          holds: () => holds,
+          storedDraft: at => storedDraftOf(at),
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+        });
+        registerHoldRelease({
+          ctx,
+          componentCollection: composition.store.collection,
+          holds: () => holds,
+        });
       }
       // A write that keeps a reference to a component being deleted, committed
       // after the deletion converted that document, sends the document back to
@@ -1799,19 +1899,7 @@ export const pageBuilder = (
         // maintains.
         componentFactsRoute({
           store: componentStoreOf(opts),
-          countPlacements: ctx => async id => {
-            const index =
-              ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
-              COMPONENT_USAGE_INDEX_SLUG;
-            return componentUsageCount({
-              read: usageCountReader(await requireInstalled().nextly(), index),
-              componentId: id,
-              health: await usageHealthService(requireInstalled).read(
-                componentUsageIndex,
-                index
-              ),
-            });
-          },
+          countPlacements,
           // How many pages a change reaches, for the banner over the view:
           // through other components by the same index, and through the
           // Layouts wrapping pages, read live, the site's default included.
@@ -1859,6 +1947,13 @@ export const pageBuilder = (
           },
           // The ids a published removal retired; `null` adds no field.
           readRetired: readRetiredFor,
+        }),
+        // A removal's hold at publish: the count taken again, and while held
+        // no write sets a removed field (`removal-hold`).
+        ...removalHoldRoutes({
+          store: componentStoreOf(opts),
+          holds: requireRemovalHolds,
+          countPlacements,
         }),
         // How many placements chose one of a component's variants, for the
         // dialog that confirms deleting it: the usage index lists the hosts,

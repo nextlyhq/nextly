@@ -994,7 +994,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done, publishOffer } = useHostCommit({
+  const { done, publishOffer, removalHold } = useHostCommit({
     name,
     control,
     editor,
@@ -1002,6 +1002,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     onCommit,
     onClose,
     savePoint,
+    // The count the removal dialog says, read when a publish starts.
+    confirmedRemoval: () => mount.componentFacts?.reach,
   });
 
   const page = usePageFacts(control);
@@ -1226,6 +1228,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             returnFocusTo={makeComponent.returnFocusTo}
           />
           {publishOffer}
+          {removalHold}
           {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>
