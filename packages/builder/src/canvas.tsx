@@ -1080,9 +1080,13 @@ function useSiteSurfaceMarks(
     });
     const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
     scheme?.addEventListener("change", mark);
+    // And when the canvas's window resizes: a site can override the ground
+    // under a width or height query, which a resized frame crosses.
+    view?.addEventListener("resize", mark);
     return () => {
       theme?.disconnect();
       scheme?.removeEventListener("change", mark);
+      view?.removeEventListener("resize", mark);
     };
   });
 }

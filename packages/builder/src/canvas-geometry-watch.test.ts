@@ -88,12 +88,49 @@ describe("a block an authored state rule moves", () => {
     expect(moved).toHaveBeenCalledTimes(2);
     // And when a press ends, which ends an authored :active state with no
     // pointer leaving and no focus changing.
-    // Space releases a keyboard-activated :active state on keyup.
-    for (const type of ["pointerup", "pointercancel", "keyup"]) {
+    for (const type of ["pointerup", "pointercancel"]) {
       block.dispatchEvent(new Event(type, { bubbles: true }));
       for (const run of frames.splice(0)) run(0);
     }
+    // Space releases a keyboard-activated :active state on keyup.
+    block.dispatchEvent(
+      new KeyboardEvent("keyup", { key: " ", bubbles: true })
+    );
+    for (const run of frames.splice(0)) run(0);
     expect(moved).toHaveBeenCalledTimes(5);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not re-measure for ordinary typing, only for a change of modality", () => {
+    // Every keystroke re-measuring would run each overlay's measurement once
+    // a frame while an author types. Only the first key after a pointer
+    // changes the modality; letters after it change nothing a style reads.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    const press = (key: string, target: Element = block) => {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true })
+      );
+      target.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true }));
+      for (const run of frames.splice(0)) run(0);
+    };
+    press("a");
+    expect(moved).toHaveBeenCalledTimes(1);
+    for (const key of ["b", "c", "Shift", "Backspace"]) press(key);
+    expect(moved).toHaveBeenCalledTimes(1);
+    // A space typed into editable text activates nothing either.
+    const text = block.ownerDocument.createElement("p");
+    text.setAttribute("contenteditable", "true");
+    block.append(text);
+    press(" ", text);
+    expect(moved).toHaveBeenCalledTimes(1);
     stop?.();
     vi.unstubAllGlobals();
   });

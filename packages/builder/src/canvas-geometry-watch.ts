@@ -215,26 +215,62 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     });
   };
   /*
-   * The input modality too: `:focus-visible` can start or stop matching with
-   * no focus event at all, when a block a pointer focused is then reached by
-   * the keyboard, or the other way about, so a key or a pointer press is a
-   * change of state as well.
+   * Hover and focus entering or leaving a block, and a press ending. The
+   * input modality, which `:focus-visible` can follow with no focus event at
+   * all, is heard by the key and pointer listeners below.
    */
   const STATE_EVENTS = [
     "pointerover",
     "pointerout",
     "focusin",
     "focusout",
-    "keydown",
-    "pointerdown",
     // A press ending ends an authored `:active` state, with no pointer
     // leaving and no focus changing.
     "pointerup",
     "pointercancel",
-    // A key release ends a keyboard-activated `:active` state (Space).
-    "keyup",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
+  /*
+   * The keyboard is heard for what it can change, not for every key: an
+   * author typing would otherwise re-measure every overlay once a frame. A
+   * key changes what a style reads when it is the first after a pointer (the
+   * modality, which `:focus-visible` follows), or when it activates a
+   * control — Space or Enter down and up, outside editable text — which
+   * `:active` follows. A pointer press is always a change: it starts
+   * `:active`, and hands the modality back to the pointer.
+   */
+  let modality: "keyboard" | "pointer" | undefined;
+  const activates = (event: Event): boolean => {
+    // Read by shape: a canvas in a frame dispatches the frame's own
+    // KeyboardEvent, which no `instanceof` against this window matches.
+    const key = "key" in event ? event.key : undefined;
+    if (key !== " " && key !== "Enter") return false;
+    const target = event.target;
+    return !(
+      isElement(target) &&
+      target.closest(
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
+      ) !== null
+    );
+  };
+  const keyDown = (event: Event): void => {
+    if (modality !== "keyboard") {
+      modality = "keyboard";
+      restated();
+    } else if (activates(event)) {
+      restated();
+    }
+  };
+  const keyUp = (event: Event): void => {
+    if (activates(event)) restated();
+  };
+  const pointerDown = (): void => {
+    modality = "pointer";
+    restated();
+  };
+  root.addEventListener("keydown", keyDown);
+  root.addEventListener("keyup", keyUp);
+  root.addEventListener("pointerdown", pointerDown);
   root.addEventListener("scroll", settled, true);
   /*
    * And the root's DOCUMENT, in the bubble phase, for the viewport itself
@@ -255,6 +291,9 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     root.removeEventListener("animationend", settled);
     root.removeEventListener("animationcancel", settled);
     for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    root.removeEventListener("keydown", keyDown);
+    root.removeEventListener("keyup", keyUp);
+    root.removeEventListener("pointerdown", pointerDown);
     if (frame !== undefined) view?.cancelAnimationFrame(frame);
     root.removeEventListener("scroll", settled, true);
     doc.removeEventListener("scroll", settled);
