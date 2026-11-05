@@ -138,6 +138,22 @@ describe("collecting plugin schedules", () => {
     expect(error.message).toContain("@acme/plugin");
   });
 
+  it("refuses a key that fits in characters but not in the bytes stored, naming the plugin", () => {
+    // 100 two-byte characters: under 191 characters, over 191 bytes.
+    const name = "é".repeat(100);
+    const error = refusal(
+      plugin([{ slug: "tick", cron: "@daily", job: "acme:tick" }], {
+        name,
+        contributes: {
+          jobs: [tick],
+          schedules: [{ slug: "tick", cron: "@daily", job: "acme:tick" }],
+        },
+      })
+    );
+    expect(error.message).toContain(name);
+    expect(error.message).toContain("bytes");
+  });
+
   it("refuses to start on a duplicate slug, naming the plugin", () => {
     const error = refusal(
       plugin([

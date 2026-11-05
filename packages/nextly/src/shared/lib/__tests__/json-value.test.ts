@@ -48,6 +48,13 @@ describe("isJsonValue", () => {
       Object.defineProperty({}, "hidden", { enumerable: false, value: 1 }),
     ],
     ["negative zero", -0],
+    [
+      "a hidden toJSON",
+      Object.defineProperty({ a: 1 }, "toJSON", {
+        enumerable: false,
+        value: () => "replaced",
+      }),
+    ],
     ["a nested bigint", { n: [1n] }],
   ])("refuses %s", (_case, value) => {
     expect(isJsonValue(value)).toBe(false);

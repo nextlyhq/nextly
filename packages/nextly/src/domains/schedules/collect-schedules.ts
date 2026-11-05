@@ -172,11 +172,14 @@ function keyOf(
   timeZone: string
 ): string {
   const key = scheduleKeyOf(plugin, slug, cron, timeZone);
-  if (key.length > MAX_PORTABLE_KEY_LENGTH) {
+  // Measured in bytes, as MySQL's binary key column stores it: a name of
+  // multibyte characters can fit in characters and still be cut short there,
+  // and a cut key would never find its own windows.
+  if (Buffer.byteLength(key, "utf8") > MAX_PORTABLE_KEY_LENGTH) {
     throw refuse(
       plugin,
       slug,
-      `its key "${key}" is longer than ${MAX_PORTABLE_KEY_LENGTH} characters`
+      `its key "${key}" is longer than ${MAX_PORTABLE_KEY_LENGTH} bytes`
     );
   }
   return key;
