@@ -384,13 +384,20 @@ describe.each(getConfiguredTestDialects())(
       const monthlyWindows = scheduleWindows(t.adapter, [monthly]);
       await monthlyWindows.sweep(new Date("2026-08-10T00:00:00.000Z"));
       await monthlyWindows.sweep(new Date("2026-09-10T00:00:00.000Z"));
-      // Another schedule with windows older than the edge of this prune.
-      const other = scheduleWindows(t.adapter, [
-        { ...monthly, key: `${PLUGIN}:other`, slug: "other" },
-      ]);
+      // Another declared schedule, its latest window at the edge of the
+      // monthly one's prune.
+      const otherSchedule: CollectedSchedule = {
+        ...monthly,
+        key: `${PLUGIN}:other`,
+        slug: "other",
+      };
+      const other = scheduleWindows(t.adapter, [otherSchedule]);
       await other.sweep(new Date("2026-07-10T00:00:00.000Z"));
       await other.sweep(new Date("2026-08-10T00:00:00.000Z"));
-      await monthlyWindows.prune(new Date("2026-10-15T00:00:00.000Z"), 100);
+      await scheduleWindows(t.adapter, [monthly, otherSchedule]).prune(
+        new Date("2026-10-15T00:00:00.000Z"),
+        100
+      );
       const kept = await t.adapter.select<WindowRow>(
         "nextly_schedule_windows",
         {
@@ -404,7 +411,8 @@ describe.each(getConfiguredTestDialects())(
       expect(kept.map(row => iso(row.windowAt))).toEqual([
         "2026-09-01T00:00:00.000Z",
       ]);
-      // Pruning one schedule left another's windows alone, older ones too.
+      // Each schedule is pruned by its own latest window: the monthly
+      // schedule's prune reaching 1 August did not take the other's latest.
       const others = await t.adapter.select<WindowRow>(
         "nextly_schedule_windows",
         {
@@ -414,7 +422,6 @@ describe.each(getConfiguredTestDialects())(
         }
       );
       expect(others.map(row => iso(row.windowAt)).sort()).toEqual([
-        "2026-07-01T00:00:00.000Z",
         "2026-08-01T00:00:00.000Z",
       ]);
       const before = (await jobsOf(t)).length;
