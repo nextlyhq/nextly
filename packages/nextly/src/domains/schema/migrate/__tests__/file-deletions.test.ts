@@ -421,6 +421,24 @@ describe("code a table carries, when a row change reaches it", () => {
     ).toEqual([]);
   });
 
+  it("reads a SQLite conflict clause and a MySQL INSERT without INTO as the write they are", () => {
+    const triggers = { posts: ["insert"] as const };
+    for (const [dialect, statement] of [
+      ["sqlite", "INSERT OR IGNORE INTO posts (id) VALUES (1)"],
+      ["sqlite", "INSERT OR ROLLBACK INTO posts (id) VALUES (1)"],
+      ["sqlite", "UPDATE OR ABORT posts SET title = 'x'"],
+      ["mysql", "INSERT posts (id) VALUES (1)"],
+    ] as const) {
+      expect(read(dialect, [statement], { triggers }), statement).toEqual([
+        written("posts"),
+      ]);
+    }
+    // On a table carrying no code, the write asks nothing.
+    expect(
+      read("sqlite", ["INSERT OR IGNORE INTO pages (id) VALUES (1)"])
+    ).toEqual([]);
+  });
+
   it("stands for code on a child whose key a removal blanks through ON DELETE SET NULL", () => {
     expect(
       read("postgresql", ["DELETE FROM authors"], {

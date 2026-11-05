@@ -810,6 +810,9 @@ function readUnplacedRows(tokens: readonly Token[], first: string): Step[] {
   return tokens[1] !== "(" && tokens.includes("FROM") ? [unread(tokens)] : [];
 }
 
+/** SQLite's conflict actions other than REPLACE, after `INSERT OR` or `UPDATE OR`. */
+const SQLITE_CONFLICT_ACTIONS = ["IGNORE", "ABORT", "FAIL", "ROLLBACK"];
+
 /** Upper-cased words of a MySQL INSERT or UPDATE that may stand before its table. */
 const WRITE_MODIFIERS = ["LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "IGNORE"];
 
@@ -823,8 +826,15 @@ function readWrite(tokens: readonly Token[]): Step[] {
   const cursor = new StatementCursor(tokens);
   const insert = cursor.accept("INSERT");
   if (!insert) cursor.accept("UPDATE");
+  // SQLite's conflict clause (`INSERT OR IGNORE`, `UPDATE OR ROLLBACK`)
+  // changes what a conflict does, not what the write is; `OR REPLACE`, which
+  // deletes, is read before this (`readSqliteReplace`).
+  if (cursor.accept("OR")) {
+    SQLITE_CONFLICT_ACTIONS.some(action => cursor.accept(action));
+  }
   for (const modifier of WRITE_MODIFIERS) cursor.accept(modifier);
-  if (insert && !cursor.accept("INTO")) return [];
+  // MySQL lets an INSERT leave out INTO.
+  if (insert) cursor.accept("INTO");
   const only = !insert && cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return [unread(tokens)];

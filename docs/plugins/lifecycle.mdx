@@ -166,6 +166,8 @@ nextly plugins install @acme/notes --accept-data-loss=acme__drafts
 ```
 
 A no at the terminal stops the install with exit code 1, and nothing is changed.
+With `--all`, each plugin is judged before its own install changes anything, and the
+run stops at the first refusal: the plugins installed before it stay installed.
 
 A disabled plugin (`enabled: false`) is not installed, by `--all` or by name, and a
 production boot does not require it to be: you can keep a plugin disabled, never
