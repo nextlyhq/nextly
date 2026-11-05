@@ -1144,7 +1144,10 @@ async function restWithKey(
     }),
     { params: Promise.resolve({ params: path }) }
   );
-  return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
 }
 
 /** The refusal message a REST answer carries, whole or for its first item. */
@@ -1295,6 +1298,10 @@ describe.each(getConfiguredTestDialects())(
         data: { status: "published", ...OVERWRITE },
       });
       expect(byIds.json.errors, JSON.stringify(byIds.json)).toEqual([]);
+      // Both rows took the publish before it is undone, so a route that
+      // answered without writing cannot pass.
+      expect((await stored(POSTS, id)).status).toBe("published");
+      expect((await stored(POSTS, other)).status).toBe("published");
       const unpublished = await restWithKey(key, "POST", bulk, {
         ids: [id, other],
         data: { status: "draft", ...OVERWRITE },
@@ -1325,7 +1332,9 @@ describe.each(getConfiguredTestDialects())(
         )
         .toEqual({ status: 403, message: "You can't publish posts." });
       expect
-        .soft(refusalMessage((await restWithKey(key, "PATCH", entry, publish)).json))
+        .soft(
+          refusalMessage((await restWithKey(key, "PATCH", entry, publish)).json)
+        )
         .toBe("You can't publish this posts.");
       expect
         .soft(
@@ -1343,9 +1352,7 @@ describe.each(getConfiguredTestDialects())(
         .toMatch(/^You can't publish/);
       // And the same body naming a field is an edit, refused as one.
       expect
-        .soft(
-          await restRefusal(READER, entry, { ...publish, title: "edited" })
-        )
+        .soft(await restRefusal(READER, entry, { ...publish, title: "edited" }))
         .toEqual({ status: 403, message: "You can't edit this posts." });
       expect((await stored(POSTS, id)).status).toBe("draft");
     });
@@ -1376,7 +1383,12 @@ describe.each(getConfiguredTestDialects())(
       const edit = { status: "published", title: "edited", ...OVERWRITE };
 
       expect(
-        await rest(PUBLISHER, "PATCH", ["collections", POSTS, "entries", id], edit)
+        await rest(
+          PUBLISHER,
+          "PATCH",
+          ["collections", POSTS, "entries", id],
+          edit
+        )
       ).toBe(403);
       await expect(
         as(PUBLISHER).update({

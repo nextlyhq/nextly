@@ -40,9 +40,13 @@ describe("isStatusOnlyWrite", () => {
           entity
         )
       ).toBe(true);
-      expect(
-        isStatusOnlyWrite({ status: "draft", _overwrite: true }, entity)
-      ).toBe(true);
+      // Whatever its value: the key is never content, so `false` is no edit
+      // either.
+      for (const choice of [true, false]) {
+        expect(
+          isStatusOnlyWrite({ status: "draft", _overwrite: choice }, entity)
+        ).toBe(true);
+      }
       // Still an edit when a field is named beside them.
       expect(
         isStatusOnlyWrite(
