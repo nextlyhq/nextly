@@ -622,6 +622,12 @@ export interface StoredSiteStyle {
    * nothing recorded.
    */
   readonly spacingMode?: unknown;
+  /**
+   * The Single's version as read, which a save of a section sends back so a
+   * save made from an older version is refused rather than replacing what
+   * someone saved since. Absent where the read carries none.
+   */
+  readonly _rev?: string;
 }
 
 /**

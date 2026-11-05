@@ -398,6 +398,8 @@ function storedSiteStyleOf(
     classes: record.classes ?? null,
     breakpoints: record.breakpoints ?? null,
     spacingMode,
+    // The version the sections were read at, for a save of one to send back.
+    ...(typeof record._rev === "string" ? { _rev: record._rev } : {}),
   };
 }
 
