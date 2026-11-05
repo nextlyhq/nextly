@@ -8,7 +8,7 @@
  * newer version the refetch after it brings must not reset what the author
  * typed until they choose to load it, or to save theirs anyway.
  */
-import { renderHook } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
@@ -203,6 +203,50 @@ describe("the version the editor's copy started from", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       expect.objectContaining({ _rev: "6" })
+    );
+  });
+
+  it("is not moved by a save's answer once the form shows another entry", async () => {
+    // Counters are small, so two entries often stand at the same version:
+    // taking one's answer for the other would let a save of the second pass
+    // over a colleague's change to it.
+    let answerFirst: (answer: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          answerFirst = resolve;
+        })
+    );
+    const rendered = render({ ...stored, _rev: "5" });
+    act(() => {
+      rendered.result.current.form.setValue("title", "First's edit", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    // The editor moves to another entry, at the same version.
+    const second = {
+      id: "e2",
+      title: "Second",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "5",
+    };
+    act(() => rendered.rerender({ entry: second }));
+    await act(async () => {
+      answerFirst(answered({ ...stored, _rev: "6" }));
+      await saving;
+    });
+
+    update.mockResolvedValueOnce(answered({ ...second, _rev: "6" }));
+    await typeAndSave(rendered, "Second's edit");
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _rev: "5" })
     );
   });
 

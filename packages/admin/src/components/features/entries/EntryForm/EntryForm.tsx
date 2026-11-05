@@ -473,6 +473,13 @@ export function EntryForm({
   // offered, so a create form supplies none and nothing renders.
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
+    // The copy on screen, read as the editor reads it, so a publish of every
+    // language is refused when that language changed since it opened.
+    shown: () => ({
+      version: versionStartedFrom(),
+      locale,
+      draft: readDraft ?? collection.draftsEnabled === true,
+    }),
   });
   // Publishing every language waits for the entry's recordings in flight.
   const { run: runAfterRecordings, pending: publishAllPending } =
@@ -613,8 +620,21 @@ export function EntryForm({
           entryApi.findByID(collection.name, String(entry?.id ?? ""), {
             locale: inLocale,
           }),
+        readShown: () =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale,
+            draft: readDraft ?? collection.draftsEnabled === true,
+          }),
       }),
-    [locale, defaultLocale, versionStartedFrom, collection.name, entry?.id]
+    [
+      locale,
+      defaultLocale,
+      versionStartedFrom,
+      collection.name,
+      collection.draftsEnabled,
+      entry?.id,
+      readDraft,
+    ]
   );
   const viewedVersionHost = useViewedVersion(
     allFields,

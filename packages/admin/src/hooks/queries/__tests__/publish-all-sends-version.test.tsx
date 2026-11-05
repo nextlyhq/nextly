@@ -86,6 +86,89 @@ describe("publishing every language", () => {
     );
   });
 
+  it("from an editor, sends it when the language on screen is as the editor opened it", async () => {
+    api.findByID.mockImplementation(
+      async (_slug: string, _id: string, options: { locale?: string }) =>
+        options.locale === "all"
+          ? { id: "e1", _rev: "7.en:3,es:2" }
+          : { id: "e1", _rev: "7.en:3" }
+    );
+    api.publishAllEntryLocales.mockResolvedValue({ id: "e1" });
+    const { result } = renderHook(
+      () =>
+        usePublishAllLocales({
+          collectionSlug: "posts",
+          silent: true,
+          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
+        }),
+      { wrapper }
+    );
+
+    await result.current.mutateAsync("e1");
+
+    expect(api.findByID).toHaveBeenCalledWith(
+      "posts",
+      "e1",
+      expect.objectContaining({ locale: "en", draft: true })
+    );
+    expect(api.publishAllEntryLocales).toHaveBeenCalledWith(
+      "posts",
+      "e1",
+      "7.en:3,es:2"
+    );
+  });
+
+  it("from an editor, is refused when a save lands between the two reads", async () => {
+    // Every language is read first, then the language on screen: a save in
+    // between makes the second read differ from what the editor opened, so
+    // the publish cannot carry a change the editor never saw.
+    let counter = 7;
+    api.findByID.mockImplementation(
+      async (_slug: string, _id: string, options: { locale?: string }) => {
+        const read =
+          options.locale === "all"
+            ? { id: "e1", _rev: `${counter}.en:3,es:2` }
+            : { id: "e1", _rev: `${counter}.en:3` };
+        // A colleague saves right after this read.
+        counter = 8;
+        return read;
+      }
+    );
+    const { result } = renderHook(
+      () =>
+        usePublishAllLocales({
+          collectionSlug: "posts",
+          silent: true,
+          shown: () => ({ version: "7.en:3", locale: "en", draft: true }),
+        }),
+      { wrapper }
+    );
+
+    await expect(result.current.mutateAsync("e1")).rejects.toThrow();
+    expect(api.publishAllEntryLocales).not.toHaveBeenCalled();
+  });
+
+  it("of a Single from its editor, is refused when the language on screen changed since", async () => {
+    api.getDocument.mockImplementation(
+      async (_slug: string, options: { locale?: string }) =>
+        options.locale === "all"
+          ? { id: "s1", _rev: "5.en:2,es:1" }
+          : { id: "s1", _rev: "5.en:2" }
+    );
+    const { result } = renderHook(
+      () =>
+        usePublishAllSingleLocales({
+          slug: "settings",
+          silent: true,
+          shown: () => ({ version: "4.en:1", locale: "en", draft: false }),
+        }),
+      { wrapper }
+    );
+
+    await expect(result.current.mutateAsync()).rejects.toThrow();
+    expect(api.publishAllSingleLocales).not.toHaveBeenCalled();
+  });
+
   it("of a Single sends the version a read of every language gives", async () => {
     api.getDocument.mockResolvedValue({ id: "s1", _rev: "4.en:1,es:1" });
     api.publishAllSingleLocales.mockResolvedValue({ id: "s1" });

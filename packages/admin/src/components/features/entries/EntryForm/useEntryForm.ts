@@ -739,10 +739,11 @@ function useConflictChoices(choices: {
     if (!payload || !entry?.id || submissionLatch.current) return;
     submissionLatch.current = true;
     ownSave.current.inFlight = true;
+    const adopt = version.answerFor();
     try {
       const result = await updateMutation.mutateAsync(payload as never);
       ownSave.current.storedVersion = storedVersionOf(result.item);
-      version.adoptAnswered(result.item);
+      adopt(result.item);
       version.release();
       form.reset(storedAfterSave(fields, payload, result.item));
       onSuccess?.(result.item);
@@ -1083,6 +1084,7 @@ export function useEntryForm({
             // entryId is passed to useUpdateEntry hook, so we just pass data
             // here, with the version the copy started from.
             ownSave.current.inFlight = true;
+            const adopt = version.answerFor();
             const result = await updateMutation
               .mutateAsync(version.withVersion(payload))
               // A save made from an older version holds the edits on
@@ -1095,7 +1097,7 @@ export function useEntryForm({
               typeof result.item.updatedAt === "string"
                 ? result.item.updatedAt
                 : undefined;
-            version.adoptAnswered(result.item);
+            adopt(result.item);
             // Saved, so the copy is the current version: nothing a change
             // told before still holds it.
             version.release();
@@ -1155,10 +1157,11 @@ export function useEntryForm({
       if (isSubmitting || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
       try {
+        const adopt = version.answerFor();
         const result = await updateMutation.mutateAsync(
           version.withVersion({ status })
         );
-        version.adoptAnswered(result.item);
+        adopt(result.item);
         version.release();
         onSuccess?.(result.item);
         return { ok: true, item: result.item };

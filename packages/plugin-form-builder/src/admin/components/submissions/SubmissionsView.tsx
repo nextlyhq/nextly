@@ -458,11 +458,18 @@ export function SubmissionsView({
         actions.push({
           id: "not-spam",
           label: "Not spam",
+          // A refusal is said beside the list, as a failed read is: the
+          // row is read again, and without this the click would seem to do
+          // nothing.
           onSelect: target =>
             void patchSubmission(target.id, {
               status: "new",
               spamReason: null,
-            }),
+            }).catch((reason: unknown) =>
+              setError(
+                reason instanceof Error ? reason.message : "Update failed."
+              )
+            ),
         });
       }
       if (canDelete) {

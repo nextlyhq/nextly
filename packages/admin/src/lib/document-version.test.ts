@@ -116,6 +116,7 @@ describe("versionForLanguage", () => {
           shown: "en",
           startedFrom: "7.en:1",
           readIn,
+          readShown: readIn.bind(null, "en"),
         })
       ).resolves.toBe("7.en:1");
       expect(readIn).not.toHaveBeenCalled();
@@ -129,9 +130,34 @@ describe("versionForLanguage", () => {
         shown: "en",
         startedFrom: "7.en:1",
         readIn,
+        readShown: () => Promise.resolve({ id: "e1", _rev: "7.en:1" }),
       })
     ).resolves.toBe("9.es:2");
     expect(readIn).toHaveBeenCalledWith("es");
+  });
+
+  it("refuses another language's when the language on screen changed since", async () => {
+    // A restore also writes the fields every language shares: taking the
+    // fresh version would pass over a change to them the editor never saw.
+    const order: string[] = [];
+    await expect(
+      versionForLanguage({
+        wanted: "es",
+        shown: "en",
+        startedFrom: "7.en:1",
+        readIn: locale => {
+          order.push(locale);
+          return Promise.resolve({ id: "e1", _rev: `8.${locale}:2` });
+        },
+        readShown: () => {
+          order.push("shown");
+          return Promise.resolve({ id: "e1", _rev: "8.en:1" });
+        },
+      })
+    ).rejects.toThrow(/changed since you opened it/);
+    // The language on screen is read last, so a save between the two reads
+    // is caught by it.
+    expect(order).toEqual(["es", "shown"]);
   });
 });
 

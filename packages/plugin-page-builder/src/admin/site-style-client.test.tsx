@@ -51,6 +51,8 @@ let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
  */
 let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
+/** Whether each write, in order, said to overwrite; kept apart from `writes`. */
+const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
@@ -101,7 +103,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     writeOptions = options;
     return {
       mutateAsync: async (data: Record<string, unknown>) => {
-        writes.push(data);
+        const { _overwrite, ...sections } = data;
+        overwrites.push(_overwrite);
+        writes.push(sections);
         return writeBehaviour();
       },
       isPending: false,
@@ -136,6 +140,7 @@ beforeEach(() => {
   writeBehaviour = async () => ({ id: "1" });
   issuesAnswer = [];
   writes.length = 0;
+  overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
   readFails = false;
@@ -245,6 +250,61 @@ describe("saving the space between blocks", () => {
   });
 });
 
+describe("a save across two studios", () => {
+  it("stores both sections, refusing neither", async () => {
+    // A page save releases each studio's held edit at once. The server is
+    // modelled as the Single's update judges a write: one that names neither
+    // the current version nor an overwrite is refused. Both writes are this
+    // editor's, so both must be stored.
+    let current = 3;
+    readAnswer = {
+      data: {
+        tokens: null,
+        fonts: null,
+        classes: null,
+        breakpoints: null,
+        _rev: "3",
+      },
+      isPending: false,
+      error: null,
+    };
+    writeBehaviour = async () => {
+      const sent = writes[writes.length - 1] ?? {};
+      const overwrite = overwrites[overwrites.length - 1];
+      if (overwrite !== true && sent._rev !== String(current)) {
+        throw Object.assign(
+          new Error("This document changed since the version you gave."),
+          {
+            status: 409,
+            code: "STALE_VERSION",
+            data: { currentVersion: String(current) },
+          }
+        );
+      }
+      current += 1;
+      return { id: "1", _rev: String(current) };
+    };
+    const tokens = renderHook(() => useSaveSiteStyle());
+    const fonts = renderHook(() => useSaveSiteStyle());
+
+    let results: unknown[] = [];
+    await act(async () => {
+      results = await Promise.all([
+        tokens.result.current.save("tokens", { tokens: [] }),
+        fonts.result.current.save("fonts", []),
+      ]);
+    });
+
+    expect(results).toEqual([
+      { saved: true, issues: {} },
+      { saved: true, issues: {} },
+    ]);
+    // Last writer wins, on purpose: each write says so, and names no version.
+    expect(writes).toEqual([{ tokens: { tokens: [] } }, { fonts: [] }]);
+    expect(overwrites).toEqual([true, true]);
+  });
+});
+
 describe("writing one section", () => {
   it("sends ONLY the section named", async () => {
     // The property the whole four-studio arrangement rests on. A write carrying
@@ -258,124 +318,6 @@ describe("writing one section", () => {
 
     expect(writes).toHaveLength(1);
     expect(Object.keys(writes[0] ?? {})).toEqual(["tokens"]);
-  });
-
-  it("sends the version the style was read at, then the version each save answered", async () => {
-    // A save is refused when the Single changed since the version it sends, so
-    // a second save must send the version the first answered, or the
-    // studio's own earlier save would refuse it.
-    readAnswer = {
-      data: {
-        tokens: null,
-        fonts: null,
-        classes: null,
-        breakpoints: null,
-        _rev: "3",
-      },
-      isPending: false,
-      error: null,
-    };
-    writeBehaviour = async () => ({ id: "1", _rev: "4" });
-    const { result } = renderHook(() => useSaveSiteStyle());
-
-    await act(async () => {
-      await result.current.save("tokens", { tokens: [] });
-    });
-    await act(async () => {
-      await result.current.save("fonts", []);
-    });
-
-    expect(writes).toEqual([
-      { tokens: { tokens: [] }, _rev: "3" },
-      { fonts: [], _rev: "4" },
-    ]);
-  });
-
-  it("keeps the version a save sends when a read arrives after this editor saved", async () => {
-    // Once a studio has saved it keeps its own copy, the authority while it
-    // is open, so a newer read it never shows must not move the version: its
-    // next save would pass over the change it replaces.
-    const style = {
-      tokens: null,
-      fonts: null,
-      classes: null,
-      breakpoints: null,
-      _rev: "3",
-    };
-    readAnswer = { data: style, isPending: false, error: null };
-    writeBehaviour = async () => ({ id: "1", _rev: "4" });
-    const { result, rerender } = renderHook(() => useSaveSiteStyle());
-    await act(async () => {
-      await result.current.save("tokens", { tokens: [] });
-    });
-
-    // Someone else saves; the studio's read brings their version.
-    readAnswer = {
-      data: { ...style, _rev: "6" },
-      isPending: false,
-      error: null,
-    };
-    rerender();
-    await act(async () => {
-      await result.current.save("tokens", { tokens: [{ id: "t1" }] });
-    });
-
-    expect(writes[1]).toMatchObject({ _rev: "4" });
-  });
-
-  it("takes a newer read's version while this editor has saved nothing", async () => {
-    const style = {
-      tokens: null,
-      fonts: null,
-      classes: null,
-      breakpoints: null,
-      _rev: "3",
-    };
-    readAnswer = { data: style, isPending: false, error: null };
-    const { result, rerender } = renderHook(() => useSaveSiteStyle());
-    readAnswer = {
-      data: { ...style, _rev: "5" },
-      isPending: false,
-      error: null,
-    };
-    rerender();
-
-    await act(async () => {
-      await result.current.save("fonts", []);
-    });
-
-    expect(writes[0]).toMatchObject({ _rev: "5" });
-  });
-
-  it("says who changed the style since, against the section a refused save was for", async () => {
-    writeBehaviour = () =>
-      Promise.reject(
-        Object.assign(
-          new Error("This document changed since the version you gave."),
-          {
-            status: 409,
-            code: "STALE_VERSION",
-            data: {
-              currentVersion: "5",
-              changedBy: { kind: "person", name: "Ana Ruiz" },
-            },
-          }
-        )
-      );
-    const { result } = renderHook(() => useSaveSiteStyle());
-
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("tokens", { tokens: [] });
-    });
-
-    expect(verdict).toEqual({
-      saved: false,
-      issues: {
-        tokens:
-          "Ana Ruiz changed the site style since you opened it. Reload to see their change; yours was not saved.",
-      },
-    });
   });
 
   it("writes the breakpoints through Settings' route, and reads the document again", async () => {

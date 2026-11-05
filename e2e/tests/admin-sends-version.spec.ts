@@ -105,16 +105,40 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .click();
     await sent;
 
-    // A publish.
+    // A publish. The form takes in the published entry once the read after
+    // the publish comes back, and an edit typed before that is reset by it,
+    // so the next edit waits for that read and for the form to show it.
     sent = nextWrite(page, toThis);
+    let publishAnswered = false;
+    const readAfterPublish = page.waitForResponse(
+      r => {
+        const sameEntry = new URL(r.url()).pathname === `${POSTS}/${id}`;
+        if (sameEntry && r.request().method() === "PATCH") {
+          publishAnswered = true;
+          return false;
+        }
+        return publishAnswered && sameEntry && r.request().method() === "GET";
+      },
+      { timeout: 30_000 }
+    );
     await page
       .getByRole("button", { name: "Publish", exact: true })
       .first()
       .click();
     await sent;
+    await readAfterPublish;
+    await expect(
+      page.locator("main").getByText("Published", { exact: true }).first()
+    ).toBeVisible({ timeout: 30_000 });
 
     // A held working-draft save, of the published entry.
-    await excerpt(page).fill(`Pending ${tag}`);
+    const saveChanges = page
+      .getByRole("button", { name: /^Save( draft| changes)?$/ })
+      .first();
+    await expect(async () => {
+      await excerpt(page).fill(`Pending ${tag}`);
+      await expect(saveChanges).toBeEnabled({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000 });
     sent = nextWrite(page, toThis);
     await page
       .getByRole("button", { name: /^Save( draft| changes)?$/ })
