@@ -435,6 +435,49 @@ describeEachDialect("the archive's entity kind", dialect => {
     ]);
   });
 
+  it.each([
+    { archive: "without the kind column", migrated: false },
+    { archive: "whose rows are of unknown kind", migrated: true },
+  ])(
+    "a dry run over an older archive $archive counts what the restore then restores, and changes nothing",
+    async ({ migrated }) => {
+      const collectionId = await seedCollection();
+      // `hero` created between the two rows' archiving: one row is its, one predates it.
+      await createdLongAgo("dynamic_collections", "hero", BETWEEN);
+      await archiveWithoutTheKind();
+      // One row the labelling gives to `hero`, one archived before `hero` existed.
+      await legacyRow("hero", collectionId, "Antes");
+      await legacyRow("hero", "older-entry", "Antiguo", LONG_AGO);
+      if (migrated) await migrateCore();
+      const rowsBefore = await query(
+        `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+      );
+
+      const plan = await restoreI18nArchive({
+        adapter: restoreAdapter(),
+        collection: "hero",
+        kind: "collection",
+        companionTableName: "dc_hero_locales",
+        dryRun: true,
+      });
+
+      // Nothing changed, the archive's columns included.
+      expect(
+        await query(
+          `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+        )
+      ).toEqual(rowsBefore);
+      expect(await spanishOf("dc_hero", collectionId)).toBe("Colección");
+
+      const restored = await restoreHero();
+      expect(plan.rowsRead).toBe(restored.rowsRead);
+      expect(plan.rowsRestored).toBe(restored.rowsRestored);
+      expect(plan.locales).toEqual(restored.locales);
+      expect(plan.rowsUnattributed).toBe(restored.rowsUnattributed);
+      expect(restored.rowsRead).toBe(1);
+    }
+  );
+
   it("keeps a row archived before its slug's entity existed unresolved, and reports it", async () => {
     // A slug can be reused: a row archived before today's `hero` was created belongs to whatever
     // held `hero` then, such as a collection since deleted.

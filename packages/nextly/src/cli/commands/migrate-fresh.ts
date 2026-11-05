@@ -62,7 +62,7 @@ import { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
-  openCommandAdapter,
+  openDryRunAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -324,22 +324,22 @@ async function previewMigrateFresh(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
-  const adapter = await openCommandAdapter(
-    {
-      dialect: dbValidation.dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-      dryRun: true,
-    },
-    logger
-  );
-  // Its database is not there, which the open has already said.
-  if (adapter === undefined) return;
+  const opened = await openDryRunAdapter({
+    dialect: dbValidation.dialect,
+    databaseUrl: dbValidation.databaseUrl,
+    logger: options.verbose ? logger : undefined,
+  });
+  // A database that is not there is one a real run makes and finds empty, so
+  // it has no tables to drop and every migration still to run.
+  const adapter = "missing" in opened ? undefined : opened;
   try {
-    const tables = await tablesToDrop(
-      adapter as unknown as DrizzleAdapter,
-      dbValidation.dialect
-    );
+    const tables =
+      adapter === undefined
+        ? []
+        : await tablesToDrop(
+            adapter as unknown as DrizzleAdapter,
+            dbValidation.dialect
+          );
     const migrationsDir = resolve(
       options.cwd ?? process.cwd(),
       configResult.config.db.migrationsDir
@@ -361,6 +361,17 @@ async function previewMigrateFresh(
           action: "run" as const,
           target: `migration ${name}`,
         })),
+        // The order a real run takes them in: on MySQL, a reconciliation pass
+        // that fills what a migration set is missing, before the seeders.
+        ...(options.seed && dbValidation.dialect === "mysql"
+          ? [
+              {
+                action: "run" as const,
+                target:
+                  "the MySQL schema reconciliation that adds tables or columns the migrations left out",
+              },
+            ]
+          : []),
         ...(options.seed
           ? [{ action: "run" as const, target: "the seeders" }]
           : []),
@@ -370,7 +381,7 @@ async function previewMigrateFresh(
       ],
     });
   } finally {
-    await adapter.disconnect();
+    await adapter?.disconnect();
   }
 }
 

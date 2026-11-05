@@ -393,7 +393,14 @@ export async function runCreateAdmin(
 ): Promise<number> {
   const { logger } = context;
   const details = await gatherDetails(options, io);
-  if ("problem" in details) return refuse(logger, details.problem);
+  if ("problem" in details) {
+    // A dry run names it as the real run's refusal, and exits 0.
+    if (options.dryRun === true) {
+      reportDryRun(logger, { changes: [], refusals: [details.problem.what] });
+      return 0;
+    }
+    return refuse(logger, details.problem);
+  }
   const dryRun = options.dryRun === true;
   const connection = await io.connect(dryRun);
   // A dry run whose database is not there names that as the refusal.

@@ -31,6 +31,7 @@ import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage
 import { pruneWebhookData } from "../../domains/webhooks/prune";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
+import { openCommandAdapter } from "../utils/adapter";
 import {
   connectOrExit,
   requireDatabaseEnv,
@@ -95,13 +96,16 @@ export async function runWebhooksPruneCommand(
   const dbValidation = requireDatabaseEnv(logger);
   const configuredDialect = dbValidation.dialect;
 
-  const adapter = await connectOrExit(
-    {
-      dialect: configuredDialect,
-      databaseUrl: dbValidation.databaseUrl,
-    },
-    logger
-  );
+  const connection = {
+    dialect: configuredDialect,
+    databaseUrl: dbValidation.databaseUrl,
+  };
+  // A dry run opens the database read-only, and one that is not there has
+  // said so and ends here.
+  const adapter = dryRun
+    ? await openCommandAdapter({ ...connection, dryRun: true }, logger)
+    : await connectOrExit(connection, logger);
+  if (adapter === undefined) return;
 
   try {
     // The ORM resolves table names through a SchemaRegistry, and this command

@@ -135,6 +135,15 @@ describe.each(getConfiguredTestDialects())(
         expect(run.stdout).toMatch(/Would run migration \S+_init/);
         expect(run.stdout).toContain("Dry run: nothing was changed.");
         expect((await instance!.adapter.listTables()).sort()).toEqual(before);
+
+        // With --seed, the step a real MySQL run takes before the seeders.
+        const seeded = await nextly(["migrate:fresh", "--dry-run", "--seed"]);
+        expect(seeded.status, seeded.stdout + seeded.stderr).toBe(0);
+        expect(seeded.stdout.includes("MySQL schema reconciliation")).toBe(
+          dialect === "mysql"
+        );
+        expect(seeded.stdout).toContain("Would run the seeders");
+        expect((await instance!.adapter.listTables()).sort()).toEqual(before);
       },
       3 * NEXTLY_RUN_TIMEOUT
     );
