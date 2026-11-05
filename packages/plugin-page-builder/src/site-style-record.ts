@@ -30,6 +30,7 @@ import {
   emitTokenBlocks,
   isPlainRecord,
   isSpacingMode,
+  isDefaultLook,
   isLook,
   isUsableNamedClass,
   ownLooksRead,
@@ -807,12 +808,15 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
-    if (slugs.has(entry.slug)) {
+    // A block's own look is never written as a class and claims no slug, as
+    // the engine's claim rules have it, so a style may share its name.
+    const claimsSlug = !isDefaultLook(entry);
+    if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
     }
     ids.add(entry.id);
-    slugs.add(entry.slug);
+    if (claimsSlug) slugs.add(entry.slug);
     // Reported but still returned, as this module's two postures require: a
     // write refuses the section on any issue, while a read keeps the entry the
     // compiler will narrow for itself.

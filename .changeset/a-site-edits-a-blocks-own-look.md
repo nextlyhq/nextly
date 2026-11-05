@@ -48,5 +48,13 @@ Published pages and the canvas read the same edits, from the class library they
 already receive. A route that states classes of its own keeps them, with the
 site's own looks carried in. `overlaidStyles()`, the layering the editor uses
 for Detach, now lives in the engine and also lays an own look over its base.
+A second own look for one block type is reported (`duplicate-own-look`) instead
+of being ignored silently, and a stored shared style may share an own look's
+name.
+
+An own look stays with its site. A page builder export never carries one, and
+an import leaves out any a file holds, so importing an item never changes the
+target site's own looks. The item draws with them instead.
+
 Nothing to migrate: stored libraries without own looks compile byte for byte as
 before.

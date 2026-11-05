@@ -62,6 +62,8 @@ export function blockLooks(definitions: Iterable<LookSource>): NamedClass[] {
  * Primary), as a class bound to its block type with no styles and the
  * `isDefault` mark: where a site's edits to the block's base are stored. Kept
  * apart from {@link blockLooks}, because no block wears one.
+ *
+ * @experimental
  */
 export function blockOwnLooks(definitions: Iterable<LookSource>): NamedClass[] {
   return looksOf(definitions, true);

@@ -150,6 +150,17 @@ describe("a block's own look, which a site edits as its type's base", () => {
     ]);
   });
 
+  it("may be stored beside a shared style holding its name", () => {
+    const named = {
+      id: "c-named",
+      slug: "button-primary",
+      orderIndex: 0,
+      styles: { base: { base: { color: "black" } } },
+    };
+    expect(checkStoredClasses([edited, named], policy).issues).toEqual([]);
+    expect(checkStoredClasses([named, edited], policy).issues).toEqual([]);
+  });
+
   it("keeps an override that only takes its mark away", () => {
     const { isDefault: _mark, ...unmarked } = primary;
     expect(classOverrideOf(configured, [unmarked])).toEqual([unmarked]);

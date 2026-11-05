@@ -110,6 +110,8 @@ export function isLook(cls: NamedClass): boolean {
 /**
  * Whether a class is its block type's own look, which edits the type's base rather than being
  * worn. Read from data that may not be a record, as {@link isLook} is.
+ *
+ * @experimental
  */
 export function isDefaultLook(cls: NamedClass): boolean {
   return (
@@ -124,6 +126,8 @@ export function isDefaultLook(cls: NamedClass): boolean {
  *
  * The one reading of a default look, so a renderer laying them over the bases and anything asking
  * what a block's own look holds see the same styles.
+ *
+ * @experimental
  */
 export function blockDefaultsOf(library: unknown): Record<string, NodeStyles> {
   const defaults: Record<string, NodeStyles> = {};
@@ -136,6 +140,8 @@ export function blockDefaultsOf(library: unknown): Record<string, NodeStyles> {
 /**
  * The own looks {@link blockDefaultsOf} reads, one per block type at most: what a check asking
  * whether a stored own look takes effect asks, since an own look is never written as a class.
+ *
+ * @experimental
  */
 export function ownLooksRead(library: unknown): NamedClass[] {
   // The library is one site-settings record, read whether or not anything validated it, so a

@@ -102,7 +102,9 @@ function overlaidBreakpoints(
   return merged;
 }
 
-/** The under envelope with the over one laid on it, at every state, breakpoint and property. */
+/** The under envelope with the over one laid on it, at every state, breakpoint and property. *
+ * @experimental
+ */
 export function overlaidStyles(
   under: NodeStyles | undefined,
   over: NodeStyles | undefined

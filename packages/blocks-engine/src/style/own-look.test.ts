@@ -119,4 +119,23 @@ describe("a block's own look in the stylesheet", () => {
     const named = { ...card, slug: "button-primary", id: "c-named" };
     expect(usableNamedClasses([primary, named])).toEqual([named]);
   });
+
+  it("reports a second own look of a type, which is never read", () => {
+    const second = {
+      ...primary,
+      id: "look:core/button:main",
+      slug: "button-main",
+      orderIndex: 9,
+      styles: colour("green"),
+    };
+    const { warnings } = compiled([primary, outline, second]);
+    expect(warnings.map(each => [each.code, each.path])).toEqual([
+      ["duplicate-own-look", "/classes/2"],
+    ]);
+    // The first one is read, the second named as left out.
+    expect(blockDefaultsOf([primary, outline, second])).toEqual({
+      "core/button": colour("purple"),
+    });
+    expect(warnings[0]?.message).toContain("look:core/button:main");
+  });
 });
