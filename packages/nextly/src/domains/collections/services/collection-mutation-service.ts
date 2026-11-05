@@ -12516,11 +12516,35 @@ export class CollectionMutationService extends BaseService {
     // Read before any hook has split the body, so taken from the request:
     // every language for a sweep, else the one it names or the default.
     const companion = await this.readyCompanionOf(params.collectionName);
+    const requested = this.localization
+      ? resolveRequestedLocale(this.localization, params.locale)
+      : undefined;
+    // Before the translation table is ready, a save in another language than
+    // the default has nowhere to go, and a read then gave a version naming
+    // no language: judged on that language all the same, it is refused here
+    // as the validation error it is, before any hook runs.
+    if (
+      !companion &&
+      !sweep &&
+      requested !== undefined &&
+      requested !== this.localization?.defaultLocale &&
+      (await this.fileManager.loadCompanionSchema(params.collectionName))
+    ) {
+      try {
+        judgedLanguage(check.given, requested);
+      } catch (error) {
+        return errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        );
+      }
+    }
     const locales =
-      companion && this.localization
+      companion && this.localization && requested !== undefined
         ? sweep
           ? this.localization.locales.map(l => l.code)
-          : [resolveRequestedLocale(this.localization, params.locale)]
+          : [requested]
         : [];
     // A version from a read of another language, or for a sweep one that
     // does not name every language, can't be judged: refused here, before

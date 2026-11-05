@@ -85,6 +85,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         access: OPEN,
         hooks: {
+          // Every phase that runs before the write, so a check moved behind
+          // any one of them shows.
+          beforeOperation: [
+            (args: unknown) => {
+              docsBeforeChangeCalls += 1;
+              return args as never;
+            },
+          ],
+          beforeValidate: [
+            ({ data }: { data?: unknown }) => {
+              docsBeforeChangeCalls += 1;
+              return data;
+            },
+          ],
           beforeChange: [
             ({ data }: { data?: unknown }) => {
               docsBeforeChangeCalls += 1;

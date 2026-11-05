@@ -129,6 +129,20 @@ describe("localized single without a companion table (integration)", () => {
         locale: "en",
       } as never);
     expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await current.adapter.executeQuery<{ headline: string }>(
+      "SELECT headline FROM single_swin_settings"
+    );
+    expect(rows[0]?.headline).toBe("Edited");
+
+    // A Spanish save with that version has nowhere to go: refused as a
+    // version naming no Spanish, before any hook runs.
+    const spanish = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Editado", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "es",
+      } as never);
+    expect(spanish).toMatchObject({ success: false, statusCode: 400 });
 
     const stale = await current
       .getService<SingleEntryService>("singleEntryService")

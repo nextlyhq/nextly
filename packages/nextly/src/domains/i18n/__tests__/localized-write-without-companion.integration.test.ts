@@ -255,6 +255,20 @@ describe("localized write without a companion table (integration)", () => {
       { title: "First (edited)", _rev: read._rev }
     );
     expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await physicalTitle(current)).toBe("First (edited)");
+
+    // A Spanish save with that version has nowhere to go: refused as a
+    // version naming no Spanish, before any hook runs.
+    const spanish = await handler.updateEntry(
+      {
+        collectionName: "i18nwin_posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "es",
+      },
+      { title: "Primero", _rev: read._rev }
+    );
+    expect(spanish).toMatchObject({ success: false, statusCode: 400 });
 
     const stale = await handler.updateEntry(
       {

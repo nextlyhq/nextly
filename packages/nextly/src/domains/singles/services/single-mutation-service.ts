@@ -2054,9 +2054,15 @@ export class SingleMutationService extends BaseService {
       // a read names a language only then: a version a read gave before the
       // table existed names none, and the save it is sent with writes the
       // main row alone.
+      // A save in another language than the default, with no table to go to,
+      // is judged on that language all the same, and so refused here, before
+      // any hook runs, as a version from another language's read.
       const judgedLocale = judgedLanguage(
         givenOf(versionCheck),
-        companionPhysicallyExists ? writeLocale : undefined
+        companionPhysicallyExists ||
+          writeLocale !== this.localization?.defaultLocale
+          ? writeLocale
+          : undefined
       );
       // A sweep of every language is judged on each, so its version must
       // name each; one that does not is refused before any hook runs.
