@@ -302,23 +302,18 @@ export function useSetDefaultProvider(): UseMutationResult<
 }
 
 /**
- * useTestProvider — Send a test email via the specified provider.
- * Mutation variable: `{ id, email? }` — email is the destination address.
+ * useTestProvider — Send a test email via the specified provider. The
+ * destination is the signed-in person's own address, decided by the server.
  */
 export function useTestProvider(): UseMutationResult<
   TestProviderResult,
   Error,
-  {
-    id: string;
-    email?: string;
-  },
+  { id: string },
   unknown
 > {
-  return useMutation<TestProviderResult, Error, { id: string; email?: string }>(
-    {
-      mutationFn: ({ id, email }) => testProvider(id, email),
-    }
-  );
+  return useMutation<TestProviderResult, Error, { id: string }>({
+    mutationFn: ({ id }) => testProvider(id),
+  });
 }
 
 /** The default sender, the provider set in code, and the environment. */

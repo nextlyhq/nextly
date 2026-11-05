@@ -27,13 +27,13 @@ The email pages that used to live under Settings (`/admin/settings/email-templat
 2. **Connect** it with only that type's settings. Where the provider can be asked without sending (an SMTP server's sign-in, a Resend key), Nextly checks the settings with it before saving and says plainly what failed. SendLayer can't be checked without sending, so the test in the next step is its check. A provider whose transport package isn't installed yet (SMTP without `nodemailer`) is saved without a check, and the form shows the command to install it.
 3. **Send a test**, a real email to your own address. A provider's test always goes to the address of the person who sends it, so it can't be pointed at anyone else.
 
-A new provider is saved **off**, and never as the default, until its test is accepted or you turn it on. Turning it on is an edit, so it needs permission to edit providers: someone who may only add providers can send the test and leave the provider off for someone who can. An accepted test is reported as accepted by the provider, not as delivered: check the inbox. A test through Log is reported as logged, not sent.
+A new provider is saved **off**, and never as the default. An accepted test doesn't turn it on by itself: at the last step you choose **Turn on**, and separately **Make it the default**, and both apply when you press **Done**. Turning it on is an edit, so it needs permission to edit providers: someone who may only add providers can send the test and leave the provider off for someone who can. An accepted test is reported as accepted by the provider, not as delivered: check the inbox. A test through Log is reported as logged, not sent.
 
 When a check or a test fails, the hub says what to check:
 
 | What went wrong                  | What to check                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------- |
-| The sign-in was refused          | The API key, or the username and password. Google Workspace and Microsoft 365 need an app password. |
+| The sign-in was refused          | The API key, or the username and password. Google Workspace and Microsoft 365 need an app password; a Microsoft 365 mailbox also needs SMTP sending allowed, which tenants often disable. |
 | The sender isn't allowed         | That the From address uses a domain verified with the provider.                                     |
 | The recipient was refused        | Your own address, on your account, and whether the provider is blocking it.                         |
 | The provider is rate limiting    | Wait a minute, then send again.                                                                     |
@@ -58,7 +58,7 @@ The form builder does this from a form's **Notifications** tab, opening the chos
 
 ## Provider configuration
 
-Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (added in the admin at **Email -> Sending**, see [Adding a provider](#adding-a-provider)) take priority over code-defined config.
+Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (added in the admin at **Email -> Sending**, see [Adding a provider](#adding-a-provider)) take priority over code-defined config when one is on and set as the default; the full order is under [Provider resolution order](#provider-resolution-order).
 
 > **Note:** `email.providerConfig` is **required** when the `email` block is set. If you only want database-managed providers, you can omit the `email` block entirely.
 

@@ -373,20 +373,17 @@ export async function setDefaultProvider(id: string): Promise<void> {
 }
 
 /**
- * Send a test email using the specified provider.
- * When `email` is supplied it is used as the destination; otherwise
- * the server falls back to the provider's configured fromEmail.
+ * Send a test email using the specified provider. The server decides the
+ * destination: the signed-in person's own address, never one the caller
+ * names, so no destination is sent or accepted here.
  */
-export async function testProvider(
-  id: string,
-  email?: string
-): Promise<TestProviderResult> {
+export async function testProvider(id: string): Promise<TestProviderResult> {
   const body = await fetcher<ActionResponse<{ result: TestProviderResult }>>(
     `/email-providers/${id}/test`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(email ? { email } : {}),
+      body: JSON.stringify({}),
     },
     true
   );

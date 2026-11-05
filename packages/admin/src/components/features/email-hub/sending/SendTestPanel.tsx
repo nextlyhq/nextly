@@ -131,12 +131,14 @@ function SendButtonLabel({
 }
 
 /**
- * Sending a test and keeping its result with the address it went to. A
+ * Sending a test and keeping its result with the address it went to — the
+ * caller's own, read here because the server decides it, never the request. A
  * request that fails is a result too: the person is told it failed, not
  * left with a button that did nothing.
  */
 function useTestSend(
   providerId: string,
+  to: string,
   onResult?: (result: TestProviderResult) => void
 ) {
   const [sent, setSent] = useState<{
@@ -145,19 +147,19 @@ function useTestSend(
   } | null>(null);
   const { mutate: send, isPending } = useTestProvider();
 
-  const record = (to: string, result: TestProviderResult) => {
+  const record = (result: TestProviderResult) => {
     setSent({ to, result });
     onResult?.(result);
   };
 
-  const submit = (address: string) => {
-    if (!address) return;
+  const submit = () => {
+    if (!to.trim()) return;
     send(
-      { id: providerId, email: address },
+      { id: providerId },
       {
-        onSuccess: next => record(address, next),
+        onSuccess: record,
         onError: error =>
-          record(address, {
+          record({
             success: false,
             error: error.message,
             setup: "other",
@@ -193,7 +195,7 @@ export function SendTestPanel({
   const inputId = useId();
   const { user } = useDashboardUser();
   const to = user?.email ?? "";
-  const { sent, submit, isPending } = useTestSend(provider.id, onResult);
+  const { sent, submit, isPending } = useTestSend(provider.id, to, onResult);
 
   const isLog = provider.type === LOG_PROVIDER_TYPE;
   const from = provider.fromName
@@ -206,7 +208,7 @@ export function SendTestPanel({
         className="grid gap-4 md:grid-cols-2"
         onSubmit={event => {
           event.preventDefault();
-          submit(to.trim());
+          submit();
         }}
       >
         <div className="space-y-1.5">
