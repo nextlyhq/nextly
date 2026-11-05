@@ -13,8 +13,9 @@
  * 4. The public route is built ahead of time, and an author's preview shows a
  *    draft at the preview address while the public address never does.
  *
- * Run against a production build (`E2E_SERVER=production`), where the public
- * route is pre-rendered and cached; under `next dev` nothing is.
+ * Meant for a production build (`E2E_SERVER=production`), where the public
+ * route is pre-rendered and cached. Under `next dev` nothing is, so there the
+ * build-output check is skipped and the rest holds as it does in production.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -240,12 +241,15 @@ test("the public route is built ahead of time, and only the preview address show
   const baseURL = testInfo.project.use.baseURL;
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
 
-  // 4a. The seeded page is in the build's pre-rendered output.
-  const manifest = readFileSync(
-    join(PLAYGROUND, ".next-e2e-start", "prerender-manifest.json"),
-    "utf8"
-  );
-  expect(manifest).toContain('"/blocks/kitchen-sink"');
+  // 4a. The seeded page is in the build's pre-rendered output. Only a
+  // production build writes that manifest: a dev server pre-renders nothing.
+  if (process.env.E2E_SERVER === "production") {
+    const manifest = readFileSync(
+      join(PLAYGROUND, ".next-e2e-start", "prerender-manifest.json"),
+      "utf8"
+    );
+    expect(manifest).toContain('"/blocks/kitchen-sink"');
+  }
 
   const signedIn = await playwright.request.newContext({
     baseURL,
