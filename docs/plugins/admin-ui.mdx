@@ -77,18 +77,32 @@ import "../../../types/generated/plugin-admin-imports.generated";
 ```
 
 ```tsx
-// src/app/admin/[[...params]]/layout.tsx: with the other imports
+// src/app/admin/[[...params]]/layout.tsx
+import { connection } from "next/server";
+import { Suspense } from "react";
 import { checkAdminComponents } from "nextly/runtime";
+
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
 
-// ...in the component that renders for each request, beneath the layout's
-// <Suspense> boundary, after `await connection()`:
-await checkAdminComponents({ config, registeredComponentPaths });
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={null}>
+      <ForThisRequest>{children}</ForThisRequest>
+    </Suspense>
+  );
+}
+
+async function ForThisRequest({ children }: { children: React.ReactNode }) {
+  await connection();
+  await checkAdminComponents({ config, registeredComponentPaths });
+  return children;
+}
 ```
 
-The call goes beneath the boundary because, under Cache Components, request work outside one
-fails the build.
+Keep anything your layout already renders, such as branding styles, around the `<Suspense>`
+element. The check goes in the component beneath the boundary because, under Cache
+Components, request work outside one fails the build.
 
 Then run `npx nextly generate:types` once and commit the two generated files. The paths
 assume the default types location (`./src/types/generated/`); use the folder your
