@@ -59,8 +59,16 @@ export function boundLooksOf(
   library: readonly NamedClass[],
   blockType: string
 ): NamedClass[] {
+  // An id a rendering shared style holds is that style's, as the engine gives
+  // it: never taken off as though it were the look that lost it.
+  const styles = new Set(
+    usableSiteClasses(library)
+      .filter(entry => !isLook(entry))
+      .map(entry => entry.id)
+  );
   return library.filter(
-    entry => isLook(entry) && entry.blockType === blockType
+    entry =>
+      isLook(entry) && entry.blockType === blockType && !styles.has(entry.id)
   );
 }
 
@@ -115,6 +123,32 @@ export function withLook(
   const ids = new Set(looks.map(look => look.id));
   const kept = (classes ?? []).filter(each => !ids.has(each));
   return id === null ? kept : [id, ...kept];
+}
+
+/**
+ * What choosing a tile does to a block's classes: nothing, when they would
+ * stay as they are (the no-op is the stored list's, not the visible tiles',
+ * so a hidden look still comes off); a refusal, when the new list would pass
+ * the classes the engine reads per node; else the classes to store.
+ */
+export function lookChoice(
+  classes: readonly string[] | undefined,
+  removable: readonly NamedClass[],
+  id: string | null
+):
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "full" }
+  | { readonly kind: "apply"; readonly classes: string[] } {
+  const current = classes ?? [];
+  const next = withLook(current, removable, id);
+  if (
+    next.length === current.length &&
+    next.every((each, index) => each === current[index])
+  ) {
+    return { kind: "unchanged" };
+  }
+  if (next.length > MAX_CLASSES_PER_NODE) return { kind: "full" };
+  return { kind: "apply", classes: next };
 }
 
 /** A token reference's value in one mode, or the reference left as it is. */

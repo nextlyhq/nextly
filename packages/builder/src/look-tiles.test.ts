@@ -8,6 +8,8 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  boundLooksOf,
+  lookChoice,
   lookLineWords,
   lookTiles,
   lookTileStyle,
@@ -127,6 +129,35 @@ describe("wearing a look", () => {
       card.id,
     ]);
     expect(withLook([card.id, outline.id], looks, null)).toEqual([card.id]);
+  });
+});
+
+describe("choosing a tile", () => {
+  it("is refused when the block already lists the most classes it can", () => {
+    const full = Array.from(
+      { length: MAX_CLASSES_PER_NODE },
+      (_, index) => `c-${index}`
+    );
+    expect(lookChoice(full, [outline, secondary], outline.id)).toEqual({
+      kind: "full",
+    });
+  });
+
+  it("never takes off a shared style that holds a look's id", () => {
+    // The engine gives the id to the shared style; the look that lost it is
+    // not this block's to take off.
+    const holder = {
+      id: outline.id,
+      slug: "holder",
+      orderIndex: 0,
+      styles: {},
+    };
+    const library = [holder, outline, secondary];
+    const removable = boundLooksOf(library, "core/button");
+    expect(removable.map(look => look.id)).toEqual([secondary.id]);
+    expect(lookChoice([outline.id], removable, null)).toEqual({
+      kind: "unchanged",
+    });
   });
 });
 

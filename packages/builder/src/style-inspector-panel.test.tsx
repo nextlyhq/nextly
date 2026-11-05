@@ -70,7 +70,8 @@ beforeAll(() => {
 });
 
 function register(
-  supports: Record<string, boolean | Record<string, boolean>>
+  supports: Record<string, boolean | Record<string, boolean>>,
+  variations?: readonly { name: string; label?: string; isDefault?: boolean }[]
 ): void {
   registerBlocks(
     [
@@ -79,7 +80,10 @@ function register(
         version: 1,
         description: "A box.",
         example: { props: {} },
-        editor: { label: "Box" },
+        editor: {
+          label: "Box",
+          ...(variations === undefined ? {} : { variations }),
+        },
         props: { text: { type: "text" } },
         supports,
         render: () => null,
@@ -266,9 +270,15 @@ describe("the shared style target", () => {
       raise?: (message: string) => void;
       /** The site's breakpoints, which Detach weighs. */
       breakpoints?: BreakpointSet;
+      /** The block's variations, its own look among them. */
+      variations?: readonly {
+        name: string;
+        label?: string;
+        isDefault?: boolean;
+      }[];
     } = {}
   ) {
-    register(options.supports ?? { effects: true });
+    register(options.supports ?? { effects: true }, options.variations);
     const document = {
       formatVersion: 1,
       kind: "page",
@@ -810,6 +820,37 @@ describe("the shared style target", () => {
       fireEvent.click(within(looks()).getByRole("radio", { name: /Filled/ }));
       expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
         { kind: "update", id: "a", patch: { classes: [filled.id] } },
+      ]);
+    });
+
+    it("clears a look the library hides when the block's own look is chosen", () => {
+      // Default reads as chosen while Outline is hidden, and choosing it still
+      // takes Outline off, so it cannot return when the style holding its
+      // name goes.
+      const mine = { ...card, id: "c-mine", slug: outline.slug, orderIndex: 5 };
+      const { editor } = mountTarget({
+        classes: [outline.id],
+        library: [card, outline, filled, mine],
+      });
+      fireEvent.click(within(looks()).getByRole("radio", { name: /Default/ }));
+      expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+        { kind: "update", id: "a", patch: {}, unset: ["classes"] },
+      ]);
+    });
+
+    it("names the block's own look by its variation's name when it has no label", () => {
+      mountTarget({
+        library: [card, outline],
+        variations: [{ name: "plain", isDefault: true }],
+      });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual([
+        // Its own name, then the tag that says it is the block's own look.
+        "plainDefault",
+        "Outline",
       ]);
     });
 

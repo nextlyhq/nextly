@@ -17,12 +17,13 @@ import { Check } from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
+import { variationLabel } from "./inserter";
 import {
   boundLooksOf,
+  lookChoice,
   lookTiles,
   lookTileStyle,
   looksOfType,
-  withLook,
   wornLook,
   type LookTile,
 } from "./look-tiles";
@@ -53,21 +54,16 @@ const SPECIMEN_WORDS = { button: "Button", band: "Section", text: "Aa" };
 
 /** The block's own look's name, as its definition names it. */
 function ownLookName(blockType: string): string | undefined {
-  return getBlock(blockType)?.editor?.variations?.find(
+  const own = getBlock(blockType)?.editor?.variations?.find(
     each => each.isDefault === true
-  )?.label;
+  );
+  return own === undefined ? undefined : variationLabel(own);
 }
 
 /** The node's classes after choosing a tile, as the op that stores them. */
-function lookOp(
-  nodeId: string,
-  classes: readonly string[] | undefined,
-  looks: readonly NamedClass[],
-  id: string | null
-) {
-  const next = withLook(classes, looks, id);
+function lookOp(nodeId: string, next: readonly string[]) {
   return next.length > 0
-    ? { kind: "update" as const, id: nodeId, patch: { classes: next } }
+    ? { kind: "update" as const, id: nodeId, patch: { classes: [...next] } }
     : {
         kind: "update" as const,
         id: nodeId,
@@ -102,13 +98,18 @@ export function LookTiles({
   const removable = boundLooksOf(library, node.type);
   const base = getBlock(node.type)?.baseStyles;
   const choose = (tile: LookTile): void => {
-    if (held !== undefined || tile.id === worn) return;
-    // A page at its limits takes nothing, and the radio stays where it was:
-    // said, so the click does not read as ignored.
-    if (
-      editor.applyAll([lookOp(node.id, node.classes, removable, tile.id)]) ===
-      null
-    ) {
+    if (held !== undefined) return;
+    const choice = lookChoice(node.classes, removable, tile.id);
+    if (choice.kind === "unchanged") return;
+    // A refused choice leaves the radio where it was: said, so the click does
+    // not read as ignored.
+    if (choice.kind === "full") {
+      onRefused(
+        `${tile.name} could not be applied to this block: it already lists the most classes a block can.`
+      );
+      return;
+    }
+    if (editor.applyAll([lookOp(node.id, choice.classes)]) === null) {
       onRefused(
         `${tile.name} could not be applied to this block: the page could not take the change.`
       );
