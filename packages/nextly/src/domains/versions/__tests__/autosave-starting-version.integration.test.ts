@@ -14,7 +14,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
+import {
+  superAdminUser,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import { runWithAccessMemo } from "../../../auth/access/request-memo";
 import { defineCollection, defineSingle, text } from "../../../config";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
 import {
@@ -36,6 +40,12 @@ afterEach(async () => {
 
 const POSTS = "sv_posts";
 const BANNER = "sv_banner";
+/** Notes a read rule lets a reader see only where they are public. */
+const NOTES = "sv_notes";
+const READER = "user-sv-reader";
+
+/** A read rule answering `value`, unchecked by the filter type, as untyped code may. */
+const answering = (value: unknown) => () => value as boolean;
 const ADMIN_ID = "user-sv-admin";
 /** A colleague whose save is named to the point's author. */
 const ANA = { id: "user-sv-ana", name: "Ana Ruiz", email: "ana-sv@x.test" };
@@ -54,6 +64,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title", localized: true }),
           text({ name: "note" }),
         ],
+      }),
+      defineCollection({
+        slug: NOTES,
+        versions: { drafts: { autosave: true } },
+        access: { read: answering({ team: { equals: "public" } }) },
+        fields: [text({ name: "team" }), text({ name: "note" })],
       }),
     ],
     singles: [
@@ -328,6 +344,65 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await point(undefined)).toEqual({
         changedSince: { currentVersion: await readRev(t, id, "en") },
+      });
+    });
+
+    it("tells a caller a read rule keeps from the document no who or when", async () => {
+      const t = await boot(dialect);
+      // The rule narrows the read permission, so the reader holds it.
+      await userWhoMay(t, READER, "read", [NOTES]);
+      const changedByAna = async (team: string) => {
+        const created = await handlerOf(t).createEntry(
+          { collectionName: NOTES, overrideAccess: true },
+          { team, note: "first" }
+        );
+        const id = String((created.data as Doc).id);
+        const read = (await t.nextly.findByID({
+          collection: NOTES as never,
+          id,
+          overrideAccess: true,
+        } as never)) as Doc;
+        await handlerOf(t).updateEntry(
+          {
+            collectionName: NOTES,
+            entryId: id,
+            overrideAccess: true,
+            user: ANA as never,
+          },
+          { note: "Ana's change" }
+        );
+        return { id, startedFrom: String(read._rev) };
+      };
+      const inside = await changedByAna("public");
+      const outside = await changedByAna("staff");
+      // Inside a request, as the editor's read of its point is: the rule's
+      // filter is kept for the read that decides.
+      const point = ({
+        id,
+        startedFrom,
+      }: {
+        id: string;
+        startedFrom: string;
+      }) =>
+        runWithAccessMemo(() =>
+          changesSinceRecoveryPoint(t.adapter, {
+            scopeKind: "collection",
+            slug: NOTES,
+            entryId: id,
+            snapshot: { note: "typing", _rev: startedFrom },
+            locale: null,
+            reader: { user: { id: READER } as never, trusted: false },
+          })
+        );
+
+      // A note the rule shows the reader names who changed it; one it keeps
+      // from them, only the version.
+      expect(await point(inside)).toMatchObject({
+        changedSince: { changedBy: { kind: "person", name: ANA.name } },
+      });
+      const keptFrom = await point(outside);
+      expect(keptFrom).toEqual({
+        changedSince: { currentVersion: expect.any(String) },
       });
     });
   }

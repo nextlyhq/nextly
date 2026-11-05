@@ -118,9 +118,11 @@ import {
   assertFilterableFields,
   assertGroupableField,
   assertNoHiddenColumnFilter,
+  assertNoHiddenFieldQueried,
   assertSortableField,
   filterKeys,
   filterSearchableFields,
+  type HiddenFieldPaths,
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
@@ -800,6 +802,8 @@ interface FilteredReadParams {
    * `where` yields it one probe at a time.
    */
   groupBy?: string;
+  /** See `listEntries`' `hiddenFields`: the same refusal, for an aggregate. */
+  hiddenFields?: HiddenFieldPaths;
 }
 
 /**
@@ -1350,6 +1354,10 @@ export class CollectionQueryService extends BaseService {
     /** The redaction basis, when it is not `user`; it wins, as it does for rows. */
     fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    /** Declared paths of the fields this read leaves out of its rows. */
+    hiddenFields?: HiddenFieldPaths;
+    /** Set for a timeline, whose `groupBy` is the caller's `dateField`. */
+    requireTimestampGroupKey?: boolean;
   }): Promise<void> {
     // A caller's release condition is judged first, before any read hook
     // runs: a hook may write an audit entry or spend a rate-limit budget, and
@@ -1397,10 +1405,11 @@ export class CollectionQueryService extends BaseService {
     );
     // The keys the ORDER BY sorts by, from the parser it reads them with, so
     // a refused field cannot ride in any position the guard did not judge.
+    const sortFields = parseSortKeys(params.sort).map(key => key.field);
     await assertSortableField(
       "collection",
       params.collectionName,
-      parseSortKeys(params.sort).map(key => key.field),
+      sortFields,
       opts
     );
     // A group key discloses by a third route: the buckets it returns ARE the
@@ -1419,6 +1428,25 @@ export class CollectionQueryService extends BaseService {
       params.collectionName,
       params.groupBy,
       { overrideAccess: opts.overrideAccess, caller: opts.caller }
+    );
+    // A field the read leaves out of its rows, named in any of the three
+    // positions. Here, past the collection read gate, so a caller who may not
+    // read the collection is refused for that alone and learns nothing of
+    // which of its fields are hidden; and before the read hooks, as every
+    // refusal here is. Whatever the caller's trust: the read asked for them
+    // to be left out. The paths are resolved here and not by the caller, so a
+    // read the gate refused never reads the declarations they come from.
+    assertNoHiddenFieldQueried(
+      {
+        where: params.where,
+        sort: sortFields,
+        groupBy: params.groupBy,
+        // A timeline's `dateField` travels as `groupBy`.
+        ...(params.requireTimestampGroupKey
+          ? { labels: { groupBy: "dateField" } }
+          : {}),
+      },
+      await params.hiddenFields?.()
     );
   }
 
@@ -3099,6 +3127,16 @@ export class CollectionQueryService extends BaseService {
      * quietly changing order.
      */
     unknownSort?: "drop" | "refuse";
+    /**
+     * Declared paths of the fields this read leaves out of its rows (a Direct
+     * API read passing `showHiddenFields: false`). A `where`, `sort` or group
+     * key naming one is refused after the collection read gate and before any
+     * read hook, since which rows match, their order and the buckets would
+     * each reveal the value. Resolved only there, past the gate, so a read
+     * the gate refuses never reaches the declarations. Absent or resolving
+     * to an empty set, nothing is refused on this ground.
+     */
+    hiddenFields?: HiddenFieldPaths;
     /**
      * Number of documents per page.
      * Maximum allowed is 500 to prevent abuse.

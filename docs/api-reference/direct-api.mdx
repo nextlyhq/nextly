@@ -75,7 +75,9 @@ A collection's `read` rule may also answer with a filter, which limits a list an
 
 Pass `showHiddenFields: false` before you hand a trusted read to a client component, so values your server code maintains don't reach the browser. For example, in a Server Component: `const { items } = await nextly.find({ collection: "products", showHiddenFields: false })`, then pass `items` to the client component. It also covers related documents populated with `depth`: each loses its own collection's hidden fields.
 
-With `showHiddenFields: false`, filtering or sorting on a hidden field is refused with a validation error, because which rows match, and in what order, would reveal it.
+With `showHiddenFields: false`, filtering or sorting on a hidden field is refused with a validation error, because which rows match, and in what order, would reveal it. So are a `count`'s filter, a `group`'s `groupBy` and a `timeseries`' `dateField`. A caller who may not read the collection is refused for that first, as any read of it is.
+
+`nextly.users.find`, `findOne` and `findByID` take the option too: with `false`, custom user fields declared `admin.hidden` are left out, a `sortBy` naming one is refused, and a `search` does not match them.
 
 Password fields are never returned by any read, whatever `showHiddenFields` says.
 
