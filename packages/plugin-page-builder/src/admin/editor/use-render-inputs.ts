@@ -25,6 +25,7 @@ import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
   registrySlotSource,
+  slotsShowingEmpty,
   type SlotSource,
 } from "@nextlyhq/builder";
 import {
@@ -260,7 +261,11 @@ function useCanvasRender({
   componentLibrary,
   canvasSiteStyle,
   stylePolicy,
-}: Pick<EditorMount, "clientConfig" | "documentLimits" | "componentLibrary"> &
+  editor,
+}: Pick<
+  EditorMount,
+  "clientConfig" | "documentLimits" | "componentLibrary" | "editor"
+> &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
   /*
    * What the canvas hands `PageRenderer` beyond the document and the sheet.
@@ -324,7 +329,8 @@ function useCanvasRender({
 
   // The canvas's own page context, one object for the editor's life: see
   // `canvas-page-context.ts`.
-  const canvasContext = useCanvasPageContext();
+  // The lists the author chose to see empty, drawn so on the canvas.
+  const canvasContext = useCanvasPageContext(editor.listsShowingEmpty);
   const canvasRender = useMemo(
     () => ({
       ...pageRenderInputs({
@@ -582,7 +588,12 @@ function useCanvasWiring({
    * and a block would behave differently depending on how the author reached
    * it.
    */
-  const slots = useMemo(registrySlotSource, []);
+  // Inside a list the canvas shows empty, a block goes to its empty state.
+  const showingEmpty = editor.listsShowingEmpty;
+  const slots = useMemo(
+    () => slotsShowingEmpty(registrySlotSource(), showingEmpty),
+    [showingEmpty]
+  );
   const nesting = useMemo(registryNestingSource, []);
   // The canvas root, published by `Canvas` below and read by the drag when a
   // gesture begins somewhere that is not the canvas — a palette row, whose

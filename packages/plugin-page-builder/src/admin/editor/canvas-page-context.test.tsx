@@ -51,4 +51,32 @@ describe("the canvas's page context", () => {
     rerender();
     expect(result.current).toBe(first);
   });
+
+  it("draws a list as an author looks at it, with entries read for the canvas", () => {
+    const { result } = renderHook(() => useCanvasPageContext());
+    expect(result.current.diagnostics).toBe(true);
+    // The canvas's own reader, not the stand-in that answers no rows.
+    expect(typeof result.current.data?.find).toBe("function");
+    expect(result.current.listsShowingEmpty).toBeUndefined();
+  });
+
+  it("names the lists shown empty, and is the editor's one object again when none is", () => {
+    const { result, rerender } = renderHook(
+      ({ empty }: { empty: ReadonlySet<string> | undefined }) =>
+        useCanvasPageContext(empty),
+      {
+        initialProps: { empty: undefined } as {
+          empty: ReadonlySet<string> | undefined;
+        },
+      }
+    );
+    const first = result.current;
+    const chosen = new Set(["list"]);
+    rerender({ empty: chosen });
+    expect(result.current).not.toBe(first);
+    expect(result.current.listsShowingEmpty).toBe(chosen);
+    expect(result.current.resolveMedia).toBe(first.resolveMedia);
+    rerender({ empty: new Set() });
+    expect(result.current).toBe(first);
+  });
 });

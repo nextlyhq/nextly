@@ -145,6 +145,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { listEntriesRoute } from "./list-entries-route";
 import { loopCollectionsRoute } from "./loop-collections-route";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
@@ -2036,6 +2037,9 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
+        // A collection list's entries on the canvas, read as a visitor reads
+        // them, for a collection the author may read.
+        listEntriesRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),

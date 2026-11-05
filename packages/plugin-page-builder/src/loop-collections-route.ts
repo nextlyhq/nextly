@@ -253,7 +253,7 @@ async function collectionItem(
   // declared fields, and those the public may read.
   const fields = await listFieldsFrom({
     record: () => Promise.resolve(record),
-    readable: reads.publicFields,
+    readable: collection => reads.publicFields(collection),
   })(slug);
   const declared = declaredByName(record);
   const shapes = timestampsLast(fields?.readable ?? []);

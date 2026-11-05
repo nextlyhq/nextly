@@ -1,0 +1,151 @@
+/**
+ * The read behind a collection list on the editor's canvas: one read of a
+ * list's entries, as a VISITOR reads them.
+ *
+ * The canvas draws a list with the renderer's own `readList`, which builds
+ * its reads from the stored query exactly as on a published page; this route
+ * answers each read through the public reader a published page reads with
+ * (`createPublicReader`), so the entries the author designs around, the
+ * order they come in and a sort or a filter the reader refuses are the
+ * visitor's. Its refusals travel unchanged, so the canvas tells the author
+ * what a visitor's page would hide.
+ *
+ * ## Who may ask
+ *
+ * The route is authenticated, and a read of a collection the caller may not
+ * read (`caller.can("read", slug)`) is refused before anything is read, as
+ * the loop collections route lists only those. The rows themselves are the
+ * public's: published entries and public fields only, whoever asks.
+ *
+ * @module list-entries-route
+ */
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { respondList } from "nextly";
+import { z } from "nextly/zod";
+
+import { readBodyWith } from "./composition-route-kit";
+import {
+  LIST_ENTRIES_ROUTE_PATH,
+  LIST_ENTRY_OPS,
+  type ListEntriesRequest,
+  type ListEntriesResponse,
+} from "./list-entries-contract";
+
+/** A field name a list may name: no paths, operators or quoting. */
+const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+
+/** One literal a filter compares with. */
+const SCALAR = z.union([z.string(), z.number().finite(), z.boolean()]);
+
+/**
+ * The read, as the renderer sends it. Bounded as the reader bounds it, so a
+ * body no list could build is refused here, before the caller is judged.
+ */
+const ListEntriesBody = z
+  .object({
+    query: z
+      .object({
+        collection: z.string().min(1),
+        filters: z
+          .array(
+            z
+              .object({
+                field: FIELD,
+                op: z.enum(LIST_ENTRY_OPS),
+                value: z.union([SCALAR, z.array(SCALAR).max(100)]),
+              })
+              .strict()
+          )
+          // A list's own rows, and the `in` row a related list adds.
+          .max(21)
+          .optional(),
+        sort: z
+          .union([z.string().max(1000), z.array(z.string()).max(50)])
+          .optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+        offset: z.number().int().min(0).optional(),
+        page: z.number().int().min(1).optional(),
+        locale: z.string().optional(),
+        select: z.array(FIELD).max(200).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * What the route reads with, injected so the gate and the read are tested
+ * without a server.
+ */
+export interface ListEntriesReads {
+  /** Whether the caller may read this collection. */
+  mayRead(slug: string): Promise<boolean>;
+  /** One read as a visitor reads it, in the read's language. */
+  publicFind(query: ListEntriesRequest["query"]): Promise<ListEntriesResponse>;
+}
+
+/**
+ * Answer one read: refused unless the caller may read the collection, and
+ * otherwise the public's rows.
+ */
+export async function readListEntries(
+  request: ListEntriesRequest,
+  reads: ListEntriesReads
+): Promise<ListEntriesResponse> {
+  // The precondition runs first: nothing is read for a caller who may not
+  // read the collection, and the refusal names nothing about it.
+  if (!(await reads.mayRead(request.query.collection))) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "list-entries-forbidden",
+        collection: request.query.collection,
+      },
+    });
+  }
+  return reads.publicFind(request.query);
+}
+
+/** The reads the route binds: the caller's permission and the public reader. */
+function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
+  return {
+    // No caller is no reader: the route is authenticated, so this is a guard
+    // for a caller the dispatcher could not resolve.
+    mayRead: slug =>
+      ctx.caller === null
+        ? Promise.resolve(false)
+        : ctx.caller.can("read", slug),
+    // Imported at call time, so loading this module costs none of the
+    // runtime, as the route's other reads are.
+    publicFind: async query => {
+      const { createPublicReader, requireNextly } = await import(
+        "nextly/runtime"
+      );
+      const nextly = requireNextly();
+      const reader = createPublicReader(
+        { find: async args => await nextly.find(args) },
+        query.locale === undefined ? {} : { locale: query.locale }
+      );
+      return reader.find(query);
+    },
+  };
+}
+
+/**
+ * The route declaration. Authenticated (no `public: true`), with no
+ * permission of its own: the collection read is asked of the caller above.
+ * A POST because a read carries a query, never because it writes.
+ */
+export function listEntriesRoute(): {
+  method: "POST";
+  path: string;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "POST",
+    path: LIST_ENTRIES_ROUTE_PATH,
+    handler: async (req, ctx) => {
+      const body = await readBodyWith(req, ListEntriesBody, "list entries");
+      const answer = await readListEntries(body, directListEntriesReads(ctx));
+      return respondList([...answer.items], answer.meta);
+    },
+  };
+}

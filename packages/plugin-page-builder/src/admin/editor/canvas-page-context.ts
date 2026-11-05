@@ -10,7 +10,14 @@
  * ONE object for the editor's life. The renderer keeps an async block's
  * output per context, so the page drawn again for a selection does not run an
  * image or a button again and blink; a context made afresh per render would
- * be a different one each time and keep nothing.
+ * be a different one each time and keep nothing. The one exception is the
+ * set of lists an author chose to see empty: choosing is a deliberate act,
+ * and the page is drawn again under a context naming them, while none being
+ * chosen is the editor's one object again, with everything it kept.
+ *
+ * A collection list draws the entries a visitor would see (`canvasListData`),
+ * and, since an author is looking, says what it could not do as stored
+ * (`diagnostics`): a sort that fell back to id order, a read that failed.
  *
  * @module canvas-page-context
  */
@@ -21,6 +28,8 @@ import {
 } from "@nextlyhq/blocks-react";
 import { useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
+
+import { canvasListData } from "../list-entries-client";
 
 /** What a media item read through the admin gives a block to draw. */
 interface MediaItem {
@@ -45,13 +54,24 @@ function drawnMedia(item: MediaItem | null): ResolvedMedia | null {
  * The canvas's page context: its images resolve through the admin's media
  * read, which caches each item by id and shares a read in flight.
  */
-export function useCanvasPageContext(): PageContext {
+export function useCanvasPageContext(
+  listsShowingEmpty?: ReadonlySet<string>
+): PageContext {
   const readMedia = useMediaResolver();
-  return useMemo(
+  const base = useMemo(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
+        data: canvasListData(),
+        diagnostics: true,
       }),
     [readMedia]
+  );
+  return useMemo(
+    () =>
+      listsShowingEmpty === undefined || listsShowingEmpty.size === 0
+        ? base
+        : { ...base, listsShowingEmpty },
+    [base, listsShowingEmpty]
   );
 }
