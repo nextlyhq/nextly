@@ -12,7 +12,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import type { RequestActor } from "../../auth/request-actor";
+import { webhookActorOf, type RequestActor } from "../../auth/request-actor";
 import {
   recordWriteEvent,
   type WriteEventDeps,
@@ -32,6 +32,7 @@ import {
   type ReviewDocument,
   type ReviewState,
 } from "./review-state-repository";
+import { recordStageChanged } from "./stage-changed";
 import { releasePartPins } from "./workflow-pins";
 
 /**
@@ -102,6 +103,17 @@ export async function closeReviewOnDiscard(
     if (!state) continue;
     await deletePartReviewState(tx, state);
     await releasePartPins(tx, discard.document, part);
+    // The part's review closes with no stage left: its outbox event, as the discarder's act.
+    await recordStageChanged(tx, {
+      document: discard.document,
+      part,
+      from: state.stage,
+      to: null,
+      cause: "discard",
+      approvalWithdrawn: state.approval !== null,
+      definitionHash: registered.definitionHash,
+      actor: webhookActorOf(discard.actor),
+    });
     closed.push(state);
   }
   if (closed.length === 0) return;

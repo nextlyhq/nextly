@@ -47,6 +47,7 @@ import {
   type ReviewDocument,
   type ReviewState,
 } from "./review-state-repository";
+import { recordStageChanged, type StageChangeCause } from "./stage-changed";
 import { pinEnteredReview } from "./stranded-stages";
 import { workflowPins } from "./workflow-pins";
 
@@ -106,6 +107,19 @@ async function detachDocument(
     { executor: tx.getDrizzle() }
   );
   if (!removedFromCode) await workflowPins.releaseAll(tx, document);
+  // Each part's review state goes, so each leaves its stage for none: an outbox event per part.
+  for (const state of states) {
+    await recordStageChanged(tx, {
+      document,
+      part: state.part,
+      from: state.stage,
+      to: null,
+      cause: "detach",
+      approvalWithdrawn: state.approval !== null,
+      definitionHash: state.definitionHash,
+      actor: { type: "system" },
+    });
+  }
   await recordContentEvent(tx, {
     subject: {
       kind: document.scopeKind,
@@ -140,6 +154,8 @@ interface DeployMove {
   targets: ReadonlyMap<string, string>;
   /** Whether the move withdraws the approval a part holds. */
   withdraws: boolean;
+  /** What the move is, as its outbox event names it. */
+  cause: Extract<StageChangeCause, "rename" | "redirect">;
   kind: (typeof REVIEW_STATE_EVENT_KINDS)["stageRenamed" | "stageRemoved"];
 }
 
@@ -156,11 +172,13 @@ function deployMovesOf(registered: RegisteredWorkflow): DeployMove[] {
         )
       ),
       withdraws: false,
+      cause: "rename",
       kind: REVIEW_STATE_EVENT_KINDS.stageRenamed,
     },
     {
       targets: new Map(Object.entries(workflow.removedStages)),
       withdraws: true,
+      cause: "redirect",
       kind: REVIEW_STATE_EVENT_KINDS.stageRemoved,
     },
   ];
@@ -183,7 +201,10 @@ function hashAfterMove(
   return state.definitionHash;
 }
 
-/** Moves one part as `move` says, on `tx`. Answers whether it held an approval it lost. */
+/**
+ * Moves one part as `move` says, on `tx`, with its outbox event. Answers whether it held an
+ * approval it lost.
+ */
 async function movePart(
   tx: TransactionContext,
   registered: RegisteredWorkflow,
@@ -202,7 +223,18 @@ async function movePart(
   if (move.withdraws && entersReview(workflow, workflow.firstStage, to)) {
     await pinEnteredReview(tx, documentOf(state), state.part);
   }
-  return move.withdraws && state.approval !== null;
+  const withdrawn = move.withdraws && state.approval !== null;
+  await recordStageChanged(tx, {
+    document: documentOf(state),
+    part: state.part,
+    from: state.stage,
+    to,
+    cause: move.cause,
+    approvalWithdrawn: withdrawn,
+    definitionHash: registered.definitionHash,
+    actor: { type: "system" },
+  });
+  return withdrawn;
 }
 
 /** Moves one document's parts as `move` says, on `tx`, and records one event per stage left. */
