@@ -82,7 +82,7 @@ import {
 
 import type { Point, Rect } from "./geometry";
 import type { PlacementTarget, SlotSource } from "./inserter";
-import type { OpPosition } from "./ops";
+import type { OpPosition } from "./op-vocabulary";
 
 /**
  * The direction a region lays its children out.

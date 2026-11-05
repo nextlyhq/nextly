@@ -95,6 +95,7 @@ import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
 import {
+  editedLanguageUntranslated,
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
@@ -1045,6 +1046,7 @@ export function EntryForm({
   const editedStatus = {
     status: effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
     hasWorkingDraft: hasPendingWorkingDraft(entry),
+    untranslated: editedLanguageUntranslated(entry, locale, defaultLocale),
   };
   const contextDocumentStatus =
     mode === "create" ? {} : { documentStatus: editedStatus };

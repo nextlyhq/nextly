@@ -131,7 +131,7 @@ import {
 } from "./layers-drag";
 import { lockRefusalWording } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import { revealNode } from "./reveal-node";
 
 export interface LayersPanelProps {

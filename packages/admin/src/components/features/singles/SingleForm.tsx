@@ -50,6 +50,10 @@ import {
   DocumentViewBody,
   type DocumentViewMount,
 } from "@admin/components/features/entries/EntryForm/DocumentViewBody";
+import {
+  editedLanguageUntranslated,
+  effectiveEntryStatus,
+} from "@admin/components/features/entries/EntryForm/entry-address";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -1346,14 +1350,6 @@ export function SingleForm({
     slugFieldName,
     enabled: false,
   });
-  const documentStatus =
-    (document as { status?: string } | undefined)?.status ?? "draft";
-  // The status the bar's pill shows and the context carries, once, so the two
-  // cannot disagree.
-  const editedStatus = {
-    status: documentStatus,
-    hasWorkingDraft: hasPendingWorkingDraft(document),
-  };
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
@@ -1362,6 +1358,17 @@ export function SingleForm({
     defaultLocale,
     enabled: localizationEnabled,
   } = useLocalization();
+  // The status of the language being edited, read as the entry editor reads
+  // it, not the main row's: an untranslated language of a published Single
+  // is not published. The status the bar's pill shows and the context
+  // carries, once, so the two cannot disagree.
+  const documentStatus =
+    effectiveEntryStatus(document, locale, defaultLocale) ?? "draft";
+  const editedStatus = {
+    status: documentStatus,
+    hasWorkingDraft: hasPendingWorkingDraft(document),
+    untranslated: editedLanguageUntranslated(document, locale, defaultLocale),
+  };
 
   // One decision rather than three: which language the link is for, whether it
   // can be offered at all, and the mint itself. No site URL is computed here —
