@@ -135,6 +135,17 @@ describe("nextly build --dry-run", () => {
 
     expect(lines).toContain("Would write src/types/nextly-types.ts");
     expect(lines.some(line => /zod/.test(line))).toBe(false);
+
+    // And the other way round: no types file, the Zod files still named.
+    lines.length = 0;
+    await runBuild(
+      { cwd: dir, skipMigrationsCheck: true, dryRun: true, types: false },
+      context
+    );
+    expect(lines.some(line => line.includes("nextly-types.ts"))).toBe(false);
+    expect(lines.some(line => /^Would write .*zod.*posts/.test(line))).toBe(
+      true
+    );
   });
 
   it("ends a project with no schema as every dry run ends", async () => {
@@ -154,6 +165,44 @@ describe("nextly build --dry-run", () => {
       "Dry run: nothing was changed.",
     ]);
   });
+
+  it.each([
+    {
+      name: "a field type no plugin offers",
+      collection: {
+        slug: "posts",
+        fields: [{ name: "body", type: "no-such-type" }],
+      },
+    },
+    {
+      name: "a workflow that did not come from defineWorkflow",
+      collection: {
+        ...posts,
+        workflow: { kind: "something-else" },
+      },
+    },
+  ])(
+    "names the refusal of $name before planning, and exits 0",
+    async ({ collection }) => {
+      const dir = project([collection]);
+      const before = folderSnapshot(dir);
+      const { logger, lines } = captureLogger();
+      const exit = stubExit();
+      const context: CommandContext = { logger, options: {}, cwd: dir };
+
+      await runBuild(
+        { cwd: dir, skipMigrationsCheck: true, dryRun: true },
+        context
+      );
+
+      expect(exit).not.toHaveBeenCalled();
+      expect(
+        lines.some(line => line.startsWith("A real run would refuse: "))
+      ).toBe(true);
+      expect(lines.at(-1)).toBe("Dry run: nothing was changed.");
+      expect(folderSnapshot(dir)).toEqual(before);
+    }
+  );
 
   it("names the failure a real build would end with, and exits 0", async () => {
     // Two collections with one slug: the build's own validation refuses it.

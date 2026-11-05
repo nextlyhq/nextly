@@ -89,6 +89,7 @@ import {
   convertToSingleRecords,
   convertToUserFieldRecords,
   publishConfiguredWorkflows,
+  reportedAsRefusal,
 } from "./generate-types";
 
 // ============================================================================
@@ -275,14 +276,21 @@ export async function runBuild(
       fieldGroups: configResult.config.fieldGroups,
     });
   } catch (error) {
-    // Reported and exited rather than thrown, so an invalid declaration reads
-    // like every other build failure instead of an unhandled crash.
+    // A dry run names the refusal; a real run reports it and exits rather
+    // than throwing, so an invalid declaration reads like every other build
+    // failure instead of an unhandled crash.
+    if (reportedAsRefusal(logger, error, options.dryRun === true)) return;
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
 
   // A workflow that cannot be attached fails the build rather than the
   // deploy, and the types this build generates carry the workflows' names.
-  await publishConfiguredWorkflows(configResult, logger);
+  const published = await publishConfiguredWorkflows(
+    configResult,
+    logger,
+    options.dryRun === true
+  );
+  if (!published) return;
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);

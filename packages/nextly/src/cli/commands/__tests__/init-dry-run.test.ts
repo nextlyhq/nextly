@@ -107,6 +107,22 @@ describe("nextly init --dry-run", () => {
     expect(info).toContain("Would write ./db/migrations/.gitkeep");
   });
 
+  it("says a real run would refuse a folder it needs that is a file", async () => {
+    const cwd = project(["db"]);
+    // Where `init` makes the migrations folder, a file of that name.
+    writeFileSync(join(cwd, "db/migrations"), "not a folder\n");
+    const before = folderSnapshot(cwd);
+    const { context, info } = recording(cwd);
+
+    await runInit({ cwd, yes: true, dryRun: true }, context);
+
+    expect(folderSnapshot(cwd)).toEqual(before);
+    expect(info).toContain(
+      "A real run would refuse: ./db/migrations is a file, where a folder is needed."
+    );
+    expect(info.at(-1)).toBe("Dry run: nothing was changed.");
+  });
+
   it("says a real run would refuse an initialized project, and ends normally", async () => {
     const cwd = project();
     const configPath = join(cwd, "nextly.config.ts");

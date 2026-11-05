@@ -206,4 +206,41 @@ describe("generate:types --dry-run", () => {
       path.endsWith(COMPONENT_PATHS_FILENAME);
     expect(named.filter(isMap)).toEqual(changed.filter(isMap));
   });
+
+  it("names a workflow the real run would refuse, and exits 0", async () => {
+    const cwd = await project();
+    loadConfig.mockResolvedValue({
+      configPath: "nextly.config.ts",
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            fields: [{ name: "title", type: "text" }],
+            // Not from defineWorkflow, which the attachment check refuses.
+            workflow: { kind: "something-else" },
+          },
+        ],
+        singles: [],
+        fieldGroups: [],
+        users: { fields: [] },
+        plugins: [],
+        typescript: { outputFile: "src/types/nextly-types.ts" },
+        db: { schemasDir: "src/db/schemas" },
+      },
+    });
+    const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+      throw new Error(`exit ${String(code)}`);
+    });
+    const before = folderSnapshot(cwd);
+
+    const printed = await run(cwd, { dryRun: true });
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(
+      printed.some(line => line.startsWith("A real run would refuse: "))
+    ).toBe(true);
+    expect(printed.at(-1)).toBe("Dry run: nothing was changed.");
+    expect(folderSnapshot(cwd)).toEqual(before);
+    exit.mockRestore();
+  });
 });

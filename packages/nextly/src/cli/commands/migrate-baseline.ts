@@ -57,6 +57,7 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   loadLatestSnapshot,
+  snapshotPathOf,
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
@@ -642,12 +643,8 @@ export async function baselineCore(
     return {
       kind: "would-baseline",
       sqlPath: planned.sqlPath,
-      // A snapshot is named for its migration, `meta/<name>.snapshot.json`: the pairing every
-      // reader of a migrations folder relies on, and the name `writeSnapshot` gives it.
-      snapshotPath: resolve(
-        planned.metaDir,
-        `${planned.baseName}.snapshot.json`
-      ),
+      // Where `writeSnapshot` would put it, by the writer's own rule.
+      snapshotPath: snapshotPathOf(planned.metaDir, planned.baseName),
       filename: `${planned.baseName}.sql`,
       createsLedger: !(await ledgerExists(adapter)),
       tableCount: planned.snapshot.tables.length,

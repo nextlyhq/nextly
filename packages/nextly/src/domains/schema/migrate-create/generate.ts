@@ -117,6 +117,7 @@ import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  snapshotPathOf,
   writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
@@ -1046,12 +1047,8 @@ async function writeMigrationPair(
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
   if (args.dryRun === true) {
-    // A snapshot is named for its migration, `meta/<name>.snapshot.json`: the pairing every
-    // reader of a migrations folder relies on, and the name `writeSnapshot` gives it.
-    return {
-      sqlPath,
-      snapshotPath: resolve(pair.metaDir, `${baseName}.snapshot.json`),
-    };
+    // Where `writeSnapshot` would put it, by the writer's own rule.
+    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
   }
   await mkdir(args.migrationsDir, { recursive: true });
   await writeFile(sqlPath, pair.sqlContent, "utf-8");

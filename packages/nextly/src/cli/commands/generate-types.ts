@@ -38,6 +38,7 @@ import {
 } from "../../domains/workflows/registry";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
+import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import {
   planComponentMapFiles,
@@ -233,7 +234,9 @@ export async function runGenerateTypes(
     logger.warn("No config file found, using defaults");
   }
 
-  await publishConfiguredWorkflows(configResult, logger);
+  if (!(await publishConfiguredWorkflows(configResult, logger, dryRun))) {
+    return;
+  }
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
@@ -382,8 +385,9 @@ export async function runGenerateTypes(
  */
 export async function publishConfiguredWorkflows(
   configResult: LoadConfigResult,
-  logger: Pick<Logger, "getOptions">
-): Promise<void> {
+  logger: Logger,
+  dryRun = false
+): Promise<boolean> {
   try {
     publishWorkflows(
       await buildWorkflowRegistry(
@@ -397,9 +401,47 @@ export async function publishConfiguredWorkflows(
         }
       )
     );
+    return true;
   } catch (error) {
+    if (reportedAsRefusal(logger, error, dryRun)) return false;
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
+}
+
+/**
+ * A declaration the real run refuses, as a dry run names it: the
+ * field-declaration check's issues, or a workflow that cannot attach.
+ * Undefined for anything else, which ends a dry run as it ends a real one.
+ */
+export function declarationRefusalOf(error: unknown): string | undefined {
+  const declared = configDeclarationError(error);
+  if (declared) return `${declared.what} ${declared.why}`;
+  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
+    return undefined;
+  }
+  const data = error.publicData as
+    | { errors?: Array<{ path?: string; message?: string }> }
+    | undefined;
+  const issues = (data?.errors ?? []).map(issue =>
+    `${issue.path ?? ""}: ${issue.message ?? ""}`.trim()
+  );
+  return issues.length > 0 ? issues.join("; ") : error.publicMessage;
+}
+
+/**
+ * Under `--dry-run`, reports a declaration refusal as the real run's refusal
+ * and answers true, so the caller ends the run with exit 0. Answers false for
+ * a real run, or an error that is no declaration refusal.
+ */
+export function reportedAsRefusal(
+  logger: Logger,
+  error: unknown,
+  dryRun: boolean
+): boolean {
+  const refusal = dryRun ? declarationRefusalOf(error) : undefined;
+  if (refusal === undefined) return false;
+  reportDryRun(logger, { changes: [], refusals: [refusal] });
+  return true;
 }
 
 /**

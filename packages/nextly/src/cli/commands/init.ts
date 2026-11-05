@@ -25,7 +25,7 @@
  * ```
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -197,6 +197,7 @@ export async function runInit(
         const change = stepChange(cwd, step);
         return change ? [change] : [];
       }),
+      refusals: filesInTheWay(cwd, steps),
     });
     return;
   }
@@ -312,6 +313,28 @@ function stepChange(cwd: string, step: InitStep): DryRunChange | null {
   if (step.kind === "file") return { action: "write", target: step.path };
   if (existsSync(resolve(cwd, step.path))) return null;
   return { action: "write", target: `${step.path}/` };
+}
+
+/**
+ * Each folder the steps need that is a file on disk, which the real run's
+ * `mkdir` fails on: a folder step's own path, and every folder above a file.
+ * A dry run names each as the real run's refusal.
+ */
+function filesInTheWay(cwd: string, steps: readonly InitStep[]): string[] {
+  const needed = new Set<string>();
+  for (const step of steps) {
+    let folder = step.kind === "folder" ? step.path : dirname(step.path);
+    while (folder !== "." && folder !== "" && folder !== dirname(folder)) {
+      needed.add(folder);
+      folder = dirname(folder);
+    }
+  }
+  return [...needed]
+    .filter(folder => {
+      const at = resolve(cwd, folder);
+      return existsSync(at) && !statSync(at).isDirectory();
+    })
+    .map(folder => `${folder} is a file, where a folder is needed.`);
 }
 
 function generateConfigTemplate(
