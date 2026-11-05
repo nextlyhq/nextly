@@ -102,11 +102,6 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // consult what was declared. Discarding it left every declared payload
   // schema checking nothing.
   publishHookPoints(collectHookPoints(plugins));
-  // Admin places, for the same reasons: a place two plugins both name, or one
-  // in another plugin's namespace or core's, would otherwise surface as a
-  // contribution rendered in the wrong place or nowhere. Published only once
-  // every declaration passes.
-  publishAdminPlaces(collectAdminPlaces(plugins));
   // Kinds of signed-in person, checked and published for the same reasons:
   // a kind with no usable resolver, or one two plugins both name, would
   // otherwise surface as a route that refuses everyone, and recognition runs
@@ -174,6 +169,12 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so a refused
+  // start publishes none, and two plugins sharing a slug are refused for the
+  // slug before their places collide on it.
+  publishAdminPlaces(collectAdminPlaces(plugins));
 }
 
 /**

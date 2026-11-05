@@ -166,6 +166,26 @@ describe("collecting the places plugins declare", () => {
     });
   });
 
+  it("refuses a place that is not a string, as a plugin in plain JavaScript may give one", () => {
+    const refused = refusalOf(() =>
+      collectAdminPlaces([
+        {
+          name: "@acme/billing",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            admin: { places: ["acme-billing.invoice"] as never },
+          },
+        },
+      ])
+    );
+    expect(refused).toMatchObject({
+      code: "PLUGIN_RESOLUTION_ERROR",
+      reason: "admin-place-malformed",
+      logContext: { plugin: "@acme/billing", place: undefined },
+    });
+  });
+
   it("refuses a place two plugins both declare, naming both", () => {
     // `@acme/billing` and `acme-billing` share the slug `acme-billing`, so
     // each passes the namespace rule with the same name.
@@ -282,6 +302,24 @@ describe("at start", () => {
       code: "PLUGIN_RESOLUTION_ERROR",
       reason: "admin-place-outside-namespace",
     });
+  });
+
+  it("refuses two plugins sharing a slug for the slug, and publishes none of their places", () => {
+    resolveDeclaredPlugins([], { coreVersion: "1.0.0" });
+    expect(
+      refusalOf(() =>
+        resolveDeclaredPlugins(
+          [
+            plugin("@acme/crm", ["acme-crm.contact"]),
+            plugin("@acme/billing", ["acme-billing.invoice"]),
+            plugin("acme-billing", ["acme-billing.receipt"]),
+          ],
+          { coreVersion: "1.0.0" }
+        )
+      )
+    ).toMatchObject({ reason: "duplicate-admin-slug" });
+    // A start refused by any check, not only the places', publishes none.
+    expect(getDeclaredAdminPlaces().has("acme-crm.contact")).toBe(false);
   });
 
   it("publishes the places once every declaration passes, and keeps the last good set when one fails", () => {

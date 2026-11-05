@@ -37,5 +37,5 @@ Admin pages now have named places a plugin can add to (experimental).
   - outside the plugin's namespace;
   - under a segment core reserves, including a plugin whose own slug is one;
   - that is malformed;
-  - that two plugins declare.
+  - that is declared twice.
 - Nothing renders at a place yet.

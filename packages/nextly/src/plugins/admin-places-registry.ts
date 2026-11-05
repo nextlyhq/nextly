@@ -12,6 +12,7 @@
  * @experimental
  */
 import {
+  adminPlaceNamespaceOf,
   CORE_ADMIN_PLACES,
   isWellFormedAdminPlaceName,
   reservedAdminPlaceSegmentOf,
@@ -70,14 +71,16 @@ export function getDeclaredAdminPlaces(): ReadonlyMap<
  */
 function assertPlaceDeclarable(
   places: ReadonlyMap<string, DeclaredAdminPlace>,
-  name: string,
+  name: unknown,
   pluginName: string,
   slug: string
-): void {
-  if (!isWellFormedAdminPlaceName(name)) {
+): asserts name is string {
+  // Not a string at all from a plugin written in plain JavaScript, which the
+  // spelling check would otherwise read as the word "undefined".
+  if (typeof name !== "string" || !isWellFormedAdminPlaceName(name)) {
     throw resolutionError(
       "admin-place-malformed",
-      `Plugin "${pluginName}" declares the admin place "${name}", which is not a place name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
+      `Plugin "${pluginName}" declares the admin place ${JSON.stringify(name)}, which is not a place name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
       { plugin: pluginName, place: name }
     );
   }
@@ -139,9 +142,12 @@ export function collectAdminPlaces(
     const slug = pluginAdminSlug(plugin.name);
 
     for (const place of plugin.contributes?.admin?.places ?? []) {
-      assertPlaceDeclarable(places, place.name, plugin.name, slug);
-      places.set(place.name, {
-        name: place.name,
+      // Read from what was given, which a plugin in plain JavaScript may have
+      // written as a bare string.
+      const name: unknown = (place as { name?: unknown } | null)?.name;
+      assertPlaceDeclarable(places, name, plugin.name, slug);
+      places.set(name, {
+        name,
         owner: plugin.name,
         ...(place.description ? { description: place.description } : {}),
       });
@@ -177,8 +183,11 @@ export function assertPlacesExist(
   for (const { plugin, place, what } of references) {
     if (places.has(place)) continue;
 
-    const dot = place.indexOf(".");
-    if (dot === -1 || reservedAdminPlaceSegmentOf(place) !== undefined) {
+    const owningPrefix = adminPlaceNamespaceOf(place);
+    if (
+      owningPrefix === place ||
+      reservedAdminPlaceSegmentOf(place) !== undefined
+    ) {
       throw resolutionError(
         "admin-place-unknown",
         `Plugin "${plugin}" adds ${what} to the admin place "${place}", which is not one of core's places.`,
@@ -186,7 +195,6 @@ export function assertPlacesExist(
       );
     }
 
-    const owningPrefix = place.slice(0, dot);
     throw resolutionError(
       "admin-place-unknown",
       `Plugin "${plugin}" adds ${what} to the admin place "${place}", which no enabled plugin declares. It belongs to the plugin whose slug is "${owningPrefix}": enable that plugin and list it in "${plugin}"'s \`requires\`, or correct the name.`,

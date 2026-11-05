@@ -73,17 +73,6 @@ export interface PluginHeaderContributions {
  * intentionally NOT supported because menus are serialized to the client.
  */
 /**
- * @experimental One place a plugin declares on its own admin pages, under its
- * namespace: see `PluginAdminContributions.places`.
- */
-export interface PluginAdminPlaceDeclaration {
-  /** `<plugin-slug>.<name>`, e.g. `"acme-billing.invoice"`. */
-  name: string;
-  /** What the place is for, for the authors of plugins that add to it. */
-  description?: string;
-}
-
-/**
  * @experimental Where a plugin's admin surfaces appear in the sidebar.
  *
  * A closed vocabulary rather than a free string, so a typo is a compile error
@@ -242,6 +231,17 @@ export interface PluginDocumentView {
 export interface PluginFieldTypeDocumentView extends PluginDocumentView {
   /** The field type, one of this plugin's own `contributes.fieldTypes`. */
   fieldType: string;
+}
+
+/**
+ * @experimental One place a plugin declares on its own admin pages, under its
+ * namespace: see `PluginAdminContributions.places`.
+ */
+export interface PluginAdminPlaceDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-billing.invoice"`. */
+  name: string;
+  /** What the place is for, for the authors of plugins that add to it. */
+  description?: string;
 }
 
 /**

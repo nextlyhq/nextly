@@ -723,7 +723,7 @@ prefixes (`hook-point-reserved`), outside the plugin's slug
 ### Admin places
 
 Admin pages have named places a plugin can add to (`@experimental`). Core names
-one per page: `dashboard`, `collection.list`, `collection.edit`, `single.edit`,
+one per page, and the entry form within the edit pages: `dashboard`, `collection.list`, `collection.edit`, `single.edit`,
 `entry.form`, `settings`, `user.detail`, `account` and `login`, exported as
 `CORE_ADMIN_PLACES`. A place id is typed `AdminPlaceId`, a closed set, so a
 misspelled place does not compile.
@@ -751,8 +751,8 @@ Boot fails, naming the plugin and the place, on a place that is malformed
 (`admin-place-malformed`), declared by a plugin whose slug is a segment core
 reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
-(`admin-place-outside-namespace`), or declared by two plugins
-(`admin-place-collision`, naming both). Nothing renders at a place yet.
+(`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
+Nothing renders at a place yet.
 
 ### Reading what other plugins declared
 

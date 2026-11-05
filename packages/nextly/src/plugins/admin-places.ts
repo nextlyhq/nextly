@@ -4,19 +4,22 @@
  * Its own module, with no imports, so the admin's browser bundle can read the
  * same catalogue the server checks plugins against, as `plugin-slug.ts` is for
  * the same reason. A place is a name in a contract between a page and the
- * plugins that extend it: the server refuses a plugin naming one that does not
- * exist, and the admin renders a page's contributions where its place is.
+ * plugins that extend it. The server refuses a plugin declaring one outside
+ * its namespace; a contribution naming one that does not exist is refused
+ * through `assertPlacesExist`, and the admin is to render a place's
+ * contributions where the page puts it.
  *
  * @module nextly/plugins/admin-places
  * @experimental
  */
 
 /**
- * @experimental Core's admin places: one for each page a plugin may add to,
- * keyed by its id.
+ * @experimental Core's admin places, keyed by id: one for each page a plugin
+ * may add to, and the entry form, which is part of a collection entry's and a
+ * Single's edit pages.
  *
- * Page-scoped: where on the page a contribution appears is said by what it
- * is (a block, a tab, a column, an action) and its order, not by its place.
+ * Where within its place a contribution appears is said by what it is (a
+ * block, a tab, a column, an action) and its order, not by its place.
  * Frozen, so no code can add a core place at run time that the type of
  * {@link AdminPlaceId} does not know.
  */
@@ -107,8 +110,11 @@ export function isWellFormedAdminPlaceName(name: string): boolean {
   return PLACE_NAME.test(name);
 }
 
-/** The first segment of a place name: core's page, or a plugin's slug. */
-function firstSegmentOf(name: string): string {
+/**
+ * @experimental The first segment of a place name: core's page, or the slug of
+ * the plugin whose namespace the place is in.
+ */
+export function adminPlaceNamespaceOf(name: string): string {
   const dot = name.indexOf(".");
   return dot === -1 ? name : name.slice(0, dot);
 }
@@ -118,7 +124,7 @@ function firstSegmentOf(name: string): string {
  * place core adds reserves its segment the day it is added.
  */
 const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(
-  Object.keys(CORE_ADMIN_PLACES).map(firstSegmentOf)
+  Object.keys(CORE_ADMIN_PLACES).map(adminPlaceNamespaceOf)
 );
 
 /**
@@ -129,6 +135,6 @@ const RESERVED_SEGMENTS: ReadonlySet<string> = new Set(
  * not core's though they begin like `collection` and `user`.
  */
 export function reservedAdminPlaceSegmentOf(name: string): string | undefined {
-  const segment = firstSegmentOf(name);
+  const segment = adminPlaceNamespaceOf(name);
   return RESERVED_SEGMENTS.has(segment) ? segment : undefined;
 }
