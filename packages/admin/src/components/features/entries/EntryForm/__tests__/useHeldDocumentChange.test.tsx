@@ -79,12 +79,15 @@ describe("someone else's change to a document this editor holds", () => {
     expect(options.hold).not.toHaveBeenCalled();
     expect(options.loadCurrent).not.toHaveBeenCalled();
     expect(options.settleChange).toHaveBeenCalled();
-    expect(result.current.notice).toMatchObject({
-      tone: "updated",
-      message: expect.stringMatching(
-        /^Ana changed this document at .+, so it now shows the latest version\.$/
-      ),
-    });
+    // Said once the latest version has loaded, not as it is asked for.
+    await waitFor(() =>
+      expect(result.current.notice).toMatchObject({
+        tone: "updated",
+        message: expect.stringMatching(
+          /^Ana changed this document at .+, so it now shows the latest version\.$/
+        ),
+      })
+    );
   });
 
   it("keeps unsaved edits on screen, held, and offers to load the current version or keep editing", async () => {
