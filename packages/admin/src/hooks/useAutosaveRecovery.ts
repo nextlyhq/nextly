@@ -401,10 +401,13 @@ function useRestoreOffer({
   // not be the one the restore was asked in: the author can switch language
   // during the round trip. Kept in a ref, since the answer arrives after the
   // render that asked.
+  //
+  // Set during render, not in an effect: an answer can settle after the
+  // render that switched language has committed and before its passive
+  // effects run, and a ref still holding the old language then would let the
+  // old language's work through.
   const currentLocale = useRef(locale);
-  useEffect(() => {
-    currentLocale.current = locale;
-  }, [locale]);
+  currentLocale.current = locale;
   const take = useCallback(() => {
     if (!offer) return;
     /*

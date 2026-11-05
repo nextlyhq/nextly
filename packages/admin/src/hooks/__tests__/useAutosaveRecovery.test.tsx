@@ -12,7 +12,8 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { useForm } from "react-hook-form";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -736,7 +737,17 @@ describe("after a save", () => {
     // The re-read takes a round trip, and the author may switch language
     // meanwhile. The answer then belongs to the language the restore was asked
     // in, and written now it would put French work in the English fields.
-    it("restores nothing when the editor switched language while it was asked about again", async () => {
+    // The re-read takes a round trip, and the author may switch language
+    // meanwhile. The answer then belongs to the language the restore was
+    // asked in: written now, it would put French work in the English fields.
+    //
+    // The answer here arrives in the narrowest gap there is: after the switch
+    // has committed and before its passive effects run. A layout effect on the
+    // new language releases it, and the switch renders outside `act`, which
+    // would otherwise flush passive effects before any promise settles. So a
+    // guard that learns the language from a passive effect still holds the
+    // old one when the answer is read, as it can in a browser.
+    it("restores nothing when the editor switched language before the answer, even before its effects ran", async () => {
       const french = { ...CURRENT, locale: "fr" };
       let answer: (point: typeof french) => void = () => {};
       getSpy.mockResolvedValueOnce(french).mockReturnValueOnce(
@@ -744,22 +755,44 @@ describe("after a save", () => {
           answer = resolve;
         })
       );
-      const { result, rerender } = renderHook(
-        ({ locale }: { locale: string | null }) =>
-          useRecoveryHarness(SCOPE, STORED, locale),
-        { wrapper, initialProps: { locale: "fr" as string | null } }
-      );
-      await waitFor(() => expect(result.current.recovery.offer).not.toBeNull());
-
-      act(() => result.current.recovery.restore());
-      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
-      rerender({ locale: "en" });
-      await act(async () => {
-        answer(french);
-        await Promise.resolve();
+      const seen: { current?: ReturnType<typeof useRecoveryHarness> } = {};
+      function Editor({ locale }: { locale: string }) {
+        const harness = useRecoveryHarness(SCOPE, STORED, locale);
+        seen.current = harness;
+        useLayoutEffect(() => {
+          if (locale === "en") answer(french);
+        }, [locale]);
+        return null;
+      }
+      // One client for both renders, so the switch keeps the read it made.
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
       });
+      const editorIn = (locale: string) => (
+        <QueryClientProvider client={client}>
+          <Editor locale={locale} />
+        </QueryClientProvider>
+      );
+      const root = createRoot(document.createElement("div"));
+      act(() => root.render(editorIn("fr")));
+      await waitFor(() => expect(seen.current?.recovery.offer).not.toBeNull());
 
-      expect(result.current.form.getValues()).toEqual(STORED);
+      act(() => seen.current?.recovery.restore());
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+
+      const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+      const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+      environment.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        root.render(editorIn("en"));
+        // Long enough for the render, its effects, and the answer to settle.
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } finally {
+        environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+      }
+
+      expect(seen.current?.form.getValues()).toEqual(STORED);
+      act(() => root.unmount());
     });
 
     it("restores it when it is still current, which is the control", async () => {
