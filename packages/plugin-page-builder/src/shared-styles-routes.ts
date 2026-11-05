@@ -110,7 +110,6 @@ export const LOCK_SHARED_STYLES_DECLARATION: {
 /** The same permission as a route declares it. */
 export const LOCK_SHARED_STYLES_PERMISSION: string = `${LOCK_SHARED_STYLES.action}-${LOCK_SHARED_STYLES.resource}`;
 
-/** The stored class list, read and written as the routes need it. */
 /** The stored entries, as stored, and the version of the read they came from. */
 export interface SharedStyleRead {
   /** As stored, unknown keys kept. */
@@ -119,6 +118,7 @@ export interface SharedStyleRead {
   readonly rev: string | undefined;
 }
 
+/** The stored class list, read and written as the routes need it. */
 export interface SharedStyleStore {
   read(): Promise<SharedStyleRead>;
   /**
