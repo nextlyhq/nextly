@@ -22,6 +22,7 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
+import { documentVersionOf } from "./document-version";
 import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
@@ -403,12 +404,21 @@ export async function readStoredSiteStyle(args: {
   /** Read past the Single's own read permission. */
   overrideAccess?: true;
 }): Promise<StoredSiteStyle> {
-  return storedSiteStyleOf(
-    await args.nextly.findSingle({
-      slug: args.slug ?? SITE_STYLE_SLUG,
-      ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
-    })
-  );
+  return (await readStoredSiteStyleVersioned(args)).stored;
+}
+
+/**
+ * The stored site style, and the Single's version as the same read gave it,
+ * for a write made from that read to send back.
+ */
+export async function readStoredSiteStyleVersioned(
+  args: Parameters<typeof readStoredSiteStyle>[0]
+): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
+  const doc = await args.nextly.findSingle({
+    slug: args.slug ?? SITE_STYLE_SLUG,
+    ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
+  });
+  return { stored: storedSiteStyleOf(doc), rev: documentVersionOf(doc) };
 }
 
 /**
@@ -430,15 +440,24 @@ export async function loadSiteStyle(args: {
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
 }): Promise<SiteStyleData> {
-  return resolveSiteStyle(
-    args.defaults,
-    readSiteStyleRecord(
-      // The slug alone, never an access override: this is published, and
-      // its read keeps the posture of the reader it was handed.
-      await readStoredSiteStyle({
-        nextly: args.nextly,
-        ...(args.slug === undefined ? {} : { slug: args.slug }),
-      })
-    )
-  );
+  return (await loadSiteStyleVersioned(args)).style;
+}
+
+/**
+ * The site style as {@link loadSiteStyle} gives it, and the Single's version
+ * as that read gave it, for a write made from the style to send back.
+ */
+export async function loadSiteStyleVersioned(
+  args: Parameters<typeof loadSiteStyle>[0]
+): Promise<{ style: SiteStyleData; rev: string | undefined }> {
+  // The slug alone, never an access override: this is published, and its
+  // read keeps the posture of the reader it was handed.
+  const { stored, rev } = await readStoredSiteStyleVersioned({
+    nextly: args.nextly,
+    ...(args.slug === undefined ? {} : { slug: args.slug }),
+  });
+  return {
+    style: resolveSiteStyle(args.defaults, readSiteStyleRecord(stored)),
+    rev,
+  };
 }

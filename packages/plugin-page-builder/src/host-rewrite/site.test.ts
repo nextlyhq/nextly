@@ -6,9 +6,13 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
 import {
   singleToWalk,
+  siteHostReader,
   siteHostSource,
+  siteHostWriter,
   type RewriteSite,
   type SingleToWalk,
 } from "./site";
@@ -152,5 +156,75 @@ describe("the languages each host is read in", () => {
     }
 
     expect(scans).toEqual([[["content"]], [["content"]]]);
+  });
+});
+
+describe("the version a host write sends", () => {
+  // A rewrite's write is made from its read of the host, so it sends that
+  // read's version: a save of the row in between refuses it, and the run
+  // reports the host as changed rather than overwriting the save.
+  const host = {
+    kind: "collection" as const,
+    slug: "notes",
+    id: "n1",
+    path: ["content"],
+  };
+
+  function siteOver(nextly: Record<string, unknown>): RewriteSite {
+    return {
+      ...siteWith({ fields: [] }),
+      nextly: async () => nextly as never,
+    };
+  }
+
+  it("reads the live row's version", async () => {
+    const read = await siteHostReader(
+      siteOver({
+        findByID: async () => ({ id: "n1", content: { nodes: [] }, _rev: "7" }),
+      })
+    )(host);
+    expect(read.rev).toBe("7");
+  });
+
+  it("writes with the version the host was read at", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const writer = siteHostWriter(
+      siteOver({
+        update: async (args: { data: Record<string, unknown> }) => {
+          updates.push(args.data);
+          return {};
+        },
+      })
+    );
+    const result = await writer({
+      host,
+      value: { nodes: [] },
+      mode: "save",
+      expected: { form: "published", hash: "h" },
+      rev: "7",
+    });
+    expect(result).toEqual({ kind: "written" });
+    expect(updates).toEqual([{ content: { nodes: [] }, _rev: "7" }]);
+  });
+
+  it("reports a write refused as made from an out-of-date version as changed", async () => {
+    const writer = siteHostWriter(
+      siteOver({
+        update: async () => {
+          throw new NextlyError({
+            code: "STALE_VERSION",
+            publicMessage: "This document changed since the version you gave.",
+          });
+        },
+      })
+    );
+    const result = await writer({
+      host,
+      value: { nodes: [] },
+      mode: "save",
+      expected: { form: "published", hash: "h" },
+      rev: "7",
+    });
+    expect(result).toEqual({ kind: "changed" });
   });
 });
