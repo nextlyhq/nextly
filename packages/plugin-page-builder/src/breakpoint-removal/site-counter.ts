@@ -22,12 +22,7 @@ import {
 } from "../host-rewrite/site";
 import { readingAsUser } from "../library-route";
 
-import {
-  countRemoval,
-  NAMED_AT_MOST,
-  type RemovalDryRun,
-  type RemovalPlace,
-} from "./dry-run";
+import { countRemoval, type RemovalDryRun, type RemovalPlace } from "./dry-run";
 
 /** How long one dry run may walk before it answers with what it has. */
 const WALK_MS = 20_000;
@@ -83,11 +78,7 @@ async function entryNamesAsCaller(
   slug: string,
   hosts: readonly HostAddress[]
 ): Promise<Map<string, string>> {
-  const record = await site.resolveCollection(slug);
-  const titleField =
-    typeof record === "object" && record !== null
-      ? titleFieldIn(record)?.name
-      : undefined;
+  const titleField = await titleFieldOf(site, slug);
   const ids = hosts.map(host => host.id ?? "");
   const names = new Map<string, string>();
   const select = {
@@ -110,25 +101,57 @@ async function entryNamesAsCaller(
   for (const row of page.items) {
     const entry = entryOf(row, titleField);
     if (entry === undefined) continue;
-    // The list read answers with the live row; a pending working draft may
-    // have renamed it, and the editor shows the saved name. Read as saved
-    // only for the few a list can name; the rest keep the live title, which
-    // is never shown.
-    const saved =
-      names.size < NAMED_AT_MOST
-        ? await readSavedAsCaller(ctx, {
-            collection: slug,
-            id: entry.id,
-            select,
-          })
-        : null;
-    const title =
-      saved === null
-        ? entry.title
-        : (entryOf(saved, titleField)?.title ?? entry.title);
-    names.set(documentKeyOf({ kind: "collection", slug, id: entry.id }), title);
+    names.set(
+      documentKeyOf({ kind: "collection", slug, id: entry.id }),
+      entry.title
+    );
   }
   return names;
+}
+
+/** A collection's title field, as every entries list names its rows by. */
+async function titleFieldOf(
+  site: Pick<DocumentSite, "resolveCollection">,
+  slug: string
+): Promise<string | undefined> {
+  const record = await site.resolveCollection(slug);
+  return typeof record === "object" && record !== null
+    ? titleFieldIn(record)?.name
+    : undefined;
+}
+
+/**
+ * Each entry of `hosts` by its title as saved, read as the caller: the list
+ * read names a row by its live title, and a pending working draft may have
+ * renamed it, which is what the editor shows. Asked only for the few a list
+ * names, all at once rather than one after another; a Single is named by its
+ * slug and is left out.
+ */
+async function savedTitlesAsCaller(
+  site: Pick<DocumentSite, "resolveCollection">,
+  ctx: Pick<PluginRouteContext, "caller">,
+  hosts: readonly HostAddress[]
+): Promise<Map<string, string>> {
+  const entries = hosts.filter(host => host.kind === "collection");
+  const read = await Promise.all(
+    entries.map(async host => {
+      const titleField = await titleFieldOf(site, host.slug);
+      const row = await readSavedAsCaller(ctx, {
+        collection: host.slug,
+        id: host.id ?? "",
+        select: {
+          id: true,
+          ...(titleField === undefined ? {} : { [titleField]: true }),
+        },
+      });
+      const title = row === null ? undefined : entryOf(row, titleField)?.title;
+      return [documentKeyOf(host), title] as const;
+    })
+  );
+  const titles = new Map<string, string>();
+  for (const [key, title] of read)
+    if (title !== undefined) titles.set(key, title);
+  return titles;
 }
 
 /**
@@ -220,6 +243,7 @@ export async function countRemovalOnSite(
     read: siteHostReader(site),
     placeOf: host => placeOf(slugs, host),
     namesFor: hosts => namesAsCaller(install, site, ctx, hosts),
+    savedTitles: hosts => savedTitlesAsCaller(site, ctx, hosts),
     limits: install.limits(),
     classes,
     deadline: new Date(Date.now() + WALK_MS),

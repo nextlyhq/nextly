@@ -56,16 +56,33 @@ function site(
     readable?: (host: HostAddress) => boolean;
     /** Milliseconds every naming answer takes. */
     slowNames?: number;
+    /** A document's title as saved, where a draft renamed it. */
+    saved?: (host: HostAddress) => string | undefined;
     classes?: NamedClass[];
     deadline?: Date;
   } = {}
-): DryRunDeps & { named: HostAddress[]; batches: number[] } {
+): DryRunDeps & {
+  named: HostAddress[];
+  batches: number[];
+  savedAsks: HostAddress[][];
+} {
   const named: HostAddress[] = [];
   const batches: number[] = [];
+  const savedAsks: HostAddress[][] = [];
   const byKey = new Map(stored.map(s => [JSON.stringify(s.host), s]));
   return {
     named,
     batches,
+    savedAsks,
+    savedTitles: async hosts => {
+      savedAsks.push([...hosts]);
+      const titles = new Map<string, string>();
+      for (const host of hosts) {
+        const title = options.saved?.(host);
+        if (title !== undefined) titles.set(documentKeyOf(host), title);
+      }
+      return titles;
+    },
     documents: async function* () {
       for (const s of stored) {
         const document: HostDocument = {
@@ -227,6 +244,24 @@ describe("a breakpoint removal counted across the site", () => {
     expect(mobile?.documents.unnamed).toBe(110);
     // Asked in one batch; once a list holds its names, nothing more is asked.
     expect(deps.batches).toEqual([50]);
+  });
+
+  it("asks for saved titles of exactly the documents it names, in walk order, once", async () => {
+    // 15 readable pages, each renamed in a draft: the ten named first in the
+    // walk are asked about in one call and shown by their saved titles.
+    const pages: Stored[] = Array.from({ length: 15 }, (_, i) => ({
+      host: entry("pages", `p${String(i).padStart(2, "0")}`),
+      published: page(styled("a", { locked: true })),
+    }));
+    const deps = site(pages, { saved: host => `${host.id ?? ""} (draft)` });
+    const [mobile] = (await countRemoval(MOBILE, deps)).removed;
+    const firstTen = pages.slice(0, NAMED_AT_MOST).map(p => p.host);
+    expect(mobile?.documents.named).toEqual(
+      firstTen.map(host => `${host.id ?? ""} (draft)`)
+    );
+    // The locked list names the same documents, without asking again.
+    expect(mobile?.locked.named).toEqual(mobile?.documents.named);
+    expect(deps.savedAsks).toEqual([firstTen]);
   });
 
   it("counts the whole site however slowly the caller's names come", async () => {
