@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -29,6 +30,7 @@ export function registerMigrateCommand(program: Command): void {
       "Clear a stale migrate lock before running",
       false
     )
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .option(
       "--repair-localization",
       "Copy existing content into the translation tables of localized entities that have no record of transitioning (for installs that enabled localization before Nextly recorded it)",

@@ -110,6 +110,8 @@ describe.each(getConfiguredTestDialects())(
           asked = true;
           return true;
         },
+        // A dry run takes no lock: one that fails when taken proves it.
+        lock: () => Promise.reject(new Error("a dry run took the schema lock")),
         dryRun: true,
       });
 

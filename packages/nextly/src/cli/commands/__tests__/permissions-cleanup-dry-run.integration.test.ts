@@ -21,13 +21,13 @@ afterEach(async () => {
   current = undefined;
 });
 
-/** A permission whose resource is no collection, Single or component: orphaned. */
-const ORPHAN = {
-  action: "read",
-  resource: "gone_things",
-  slug: "read-gone_things",
-  name: "Read Gone Things",
-};
+/**
+ * A collection the registry does not hold, as one deleted leaves its
+ * permissions behind: no collection, Single or component names their
+ * resource, so they are orphaned. `ORPHAN` is one of them.
+ */
+const GONE = "gone_things";
+const ORPHAN = { slug: `read-${GONE}` };
 
 /** Slugs in the permissions table. */
 async function slugs(handle: TestNextly): Promise<string[]> {
@@ -51,7 +51,7 @@ describe.each(getConfiguredTestDialects())(
       }
       await current
         .getService("permissionSeedService")
-        .seedCustomPermissions([ORPHAN]);
+        .seedCollectionPermissions(GONE);
       const before = await slugs(current);
       expect(before).toContain(ORPHAN.slug);
       const lines: string[] = [];
