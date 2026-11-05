@@ -20,7 +20,12 @@
 
 import { parseSortKeys } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
-import type { SourceEntity } from "../../runtime/routing/declared-fields";
+import {
+  expandedFields,
+  hiddenFieldPaths,
+  withoutHidden,
+  type SourceEntity,
+} from "../../runtime/routing/declared-fields";
 import { filterKeys, spellings } from "../../shared/lib/filterable-fields";
 
 /** The option that decides whether a read leaves hidden fields out. */
@@ -36,18 +41,13 @@ function stripsHiddenFields(config: HiddenFieldOptions): boolean {
 const NONE: ReadonlySet<string> = new Set();
 
 /**
- * The hidden paths this read leaves out: none when it keeps them. Loaded on
- * demand, as the public reader loads them, so a read that keeps them never
- * loads the registry's graph for it.
+ * The hidden paths this read leaves out: none when it keeps them.
  */
 export async function hiddenPathsFor(
   config: HiddenFieldOptions,
   source: SourceEntity
 ): Promise<ReadonlySet<string>> {
   if (!stripsHiddenFields(config)) return NONE;
-  const { hiddenFieldPaths } = await import(
-    "../../runtime/routing/declared-fields"
-  );
   return hiddenFieldPaths(source);
 }
 
@@ -209,7 +209,16 @@ async function stripRelated(
 ): Promise<void> {
   for (const field of fields) {
     const { name } = field;
-    if (name !== undefined && name !== "") {
+    if (name?.startsWith("#") === true) {
+      // A dynamic zone's member type: its fields apply to an instance whose
+      // `_componentType` names it, at the instance's own level.
+      if (
+        holder._componentType === name.slice(1) &&
+        field.fields !== undefined
+      ) {
+        await stripRelated(holder, field.fields, level);
+      }
+    } else if (name !== undefined && name !== "") {
       await stripRelatedField(holder, { ...field, name }, level);
     } else if (field.fields !== undefined) {
       await stripRelated(holder, field.fields, level);
@@ -223,9 +232,6 @@ async function withoutHiddenAt(
   source: SourceEntity,
   level: number
 ): Promise<Record<string, unknown>> {
-  const { expandedFields, hiddenFieldPaths, withoutHidden } = await import(
-    "../../runtime/routing/declared-fields"
-  );
   const hidden = await hiddenFieldPaths(source);
   const stripped =
     hidden.size === 0 ? { ...document } : withoutHidden(document, hidden);
