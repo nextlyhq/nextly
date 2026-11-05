@@ -103,6 +103,7 @@ function fakeService(over: Partial<BreakpointRemovalService> = {}) {
         id: "run-1",
         removedIds,
         before: null,
+        beforeEmitted: null,
         startedBy: "user:user-1",
         phase: "converting",
         cursor: null,
@@ -127,9 +128,11 @@ function removalOver(
     count?: () => Promise<void>;
     logError?: (message: string, meta: Record<string, unknown>) => void;
     stored?: () => Promise<VersionedSiteStyle>;
+    defaults?: BreakpointRemoval["defaults"];
   } = {}
 ): BreakpointRemoval {
   return {
+    ...(over.defaults === undefined ? {} : { defaults: over.defaults }),
     stored: over.stored ?? (async () => single.read()),
     count: async () => {
       await over.count?.();
@@ -157,7 +160,7 @@ const ctx: BreakpointsRouteContext = {
 const post = (breakpoints: unknown) =>
   new Request("http://local/site/breakpoints", {
     method: "POST",
-    body: JSON.stringify({ breakpoints }),
+    body: JSON.stringify({ breakpoints, confirmRemoval: true }),
   });
 
 async function refusal(run: Promise<unknown>): Promise<unknown> {
@@ -274,6 +277,47 @@ describe("a breakpoint save racing another save of the site style", () => {
     expect(refused).toMatchObject({ code: "STALE_VERSION" });
     // The removal's set stands: Tablet is not defined again under it.
     expect(single.doc.breakpoints).toEqual(set(DESKTOP));
+  });
+});
+
+describe("a removal of a breakpoint a code-supplied shared style holds", () => {
+  it("stores the code's style stripped as its override, and leaves untouched code styles to the code", async () => {
+    const coded = {
+      id: "c-coded",
+      slug: "coded",
+      orderIndex: 2,
+      locked: true,
+      styles: {
+        base: { base: { color: "#333333" }, tablet: { color: "#444" } },
+      },
+    };
+    const plain = {
+      id: "c-plain",
+      slug: "plain",
+      orderIndex: 3,
+      styles: { base: { base: { color: "#666666" } } },
+    };
+    const single = versionedSingle({
+      breakpoints: set(DESKTOP, TABLET),
+      classes: [BAND],
+    });
+    const { service } = fakeService();
+    const removal = removalOver(single, service, {
+      defaults: { classes: [coded, plain] },
+    });
+
+    const response = await writeSiteBreakpoints(
+      post(set(DESKTOP)),
+      ctx,
+      single.nextly,
+      removal
+    );
+
+    expect(response.status).toBe(200);
+    expect(single.doc.classes).toEqual([
+      { ...BAND, styles: { base: { base: { color: "#111111" } } } },
+      { ...coded, styles: { base: { base: { color: "#333333" } } } },
+    ]);
   });
 });
 

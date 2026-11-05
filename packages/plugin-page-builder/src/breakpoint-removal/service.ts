@@ -39,7 +39,12 @@ import {
   type BreakpointRun,
   type HoldingRun,
 } from "./run-store";
-import { removalOf, stripBreakpointsStep, type Removal } from "./strip";
+import {
+  emittedBreakpoints,
+  removalOf,
+  stripBreakpointsStep,
+  type Removal,
+} from "./strip";
 
 /** The name the service is contributed under. */
 export const BREAKPOINT_REMOVAL_SERVICE = "breakpointRemoval";
@@ -197,8 +202,18 @@ export function breakpointRemovalService(
   return {
     openRun: () => runs().openRun(),
     runById: runId => runs().runById(runId),
+    // The set the stylesheet is emitted under is recorded as it is now, so
+    // carrying the run on later does not depend on the configured defaults
+    // staying as they are.
     begin: (removedIds, before, startedBy) =>
-      runs().open(removedIds, before, startedBy),
+      runs().open(
+        removedIds,
+        {
+          stored: before,
+          emitted: emittedBreakpoints(before, install().defaults) ?? null,
+        },
+        startedBy
+      ),
     abandon: runId => runs().abandon(runId),
     holding: () => runs().holding(),
     openRemoval: async () => {

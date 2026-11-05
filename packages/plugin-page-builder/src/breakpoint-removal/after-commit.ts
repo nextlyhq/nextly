@@ -27,6 +27,11 @@
  * defined again is the site's own, and the walk strips only the ids still
  * removed (`service`).
  *
+ * A write to a document a done run left goes back to that run as well, holding
+ * anything or not: a published page left because its pending draft could not
+ * be stripped under is resolved by publishing the stripped draft, a write that
+ * holds nothing removed, and the run walks it again to find it clean.
+ *
  * After commit, because only then is the stored value the one a later read
  * sees. A failure here is logged, never thrown: the write has committed, and
  * the final walk reads every document again regardless.
@@ -45,7 +50,10 @@ import { removedIdsIn } from "./strip";
 /** What the report is wired with. */
 export interface RemovalWriteReportArgs {
   readonly ctx: FencedWriteReportContext;
-  readonly runs: () => Pick<RemovalRunStore, "runs" | "requeueDocument">;
+  readonly runs: () => Pick<
+    RemovalRunStore,
+    "runs" | "requeueDocument" | "leftWith"
+  >;
   /** The breakpoint ids the site's stylesheet is emitted under now. */
   readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
 }
@@ -71,12 +79,22 @@ async function reportWrite(
     // is the store's to read when it acts.
     const runs = await args.runs().runs();
     if (runs.length === 0) return;
-    const held = heldIds(written.documents, runs);
-    if (held.size === 0) return;
-    const defined = await args.definedBreakpoints();
     const key = documentKeyOf(written.at);
+    const held = heldIds(written.documents, runs);
+    const defined =
+      held.size === 0 ? new Set<string>() : await args.definedBreakpoints();
+    // A document a done run left (a published page whose pending draft it
+    // could not strip under, say) goes back too, holding anything or not:
+    // this write may be what resolved it (the stripped draft published), and
+    // the run keeps its ids from being defined again until it walks the
+    // document and finds it clean.
+    const left = await args.runs().leftWith(
+      key,
+      runs.filter(run => !run.open).map(run => run.id)
+    );
     for (const run of runs) {
-      if (run.removedIds.some(id => held.has(id) && !defined.has(id))) {
+      const holds = run.removedIds.some(id => held.has(id) && !defined.has(id));
+      if (holds || left.has(run.id)) {
         await args.runs().requeueDocument(run.id, key);
       }
     }

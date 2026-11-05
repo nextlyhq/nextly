@@ -319,16 +319,42 @@ describe("removalOf", () => {
     const run = {
       removedIds: ["mobile"],
       before: { viewport: [TABLET, MOBILE], container: [] },
+      beforeEmitted: null,
     };
     expect(
       removalOf(run, undefined).before?.viewport.map(def => def.id)
     ).toEqual(expect.arrayContaining(["tablet", "mobile"]));
     const configured = { breakpoints: { viewport: [SMALL], container: [] } };
     const fromDefaults = removalOf(
-      { removedIds: ["small"], before: null },
+      { removedIds: ["small"], before: null, beforeEmitted: null },
       configured
     );
     expect(fromDefaults.before?.viewport.map(def => def.id)).toContain("small");
     expect([...fromDefaults.ids]).toEqual(["small"]);
+  });
+
+  it("carries hides under the set recorded when the removal began, whatever the configured set is now", () => {
+    // Begun on the configured set Tablet and Small; the code since configures
+    // Small alone.
+    const run = {
+      removedIds: ["small"],
+      before: null,
+      beforeEmitted: { viewport: [TABLET, SMALL], container: [] },
+    };
+    const now = { breakpoints: { viewport: [SMALL], container: [] } };
+    expect(removalOf(run, now).before?.viewport.map(def => def.id)).toEqual(
+      expect.arrayContaining(["tablet", "small"])
+    );
+  });
+
+  it("leaves out an id the site defines again", () => {
+    const run = {
+      removedIds: ["tablet", "mobile"],
+      before: { viewport: [TABLET, MOBILE], container: [] },
+      beforeEmitted: null,
+    };
+    expect([...removalOf(run, undefined, new Set(["tablet"])).ids]).toEqual([
+      "mobile",
+    ]);
   });
 });

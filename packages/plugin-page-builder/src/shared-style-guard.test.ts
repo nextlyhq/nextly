@@ -244,9 +244,13 @@ describe("writes the guard lets through", () => {
 /** Every hook the Single runs before validation, in order, on one write. */
 async function wiredRefusal(
   hook: Hook,
-  openRemoval?: () => Promise<Removal | null>
+  openRemoval?: () => Promise<Removal | null>,
+  /** The code's classes the Single is configured with. */
+  classes?: readonly (typeof lockedCard)[]
 ): Promise<unknown> {
-  const hooks = siteStyleSingle({}, openRemoval).hooks?.beforeValidate ?? [];
+  const policy = classes === undefined ? {} : { defaults: { classes } };
+  const hooks =
+    siteStyleSingle(policy, openRemoval).hooks?.beforeValidate ?? [];
   try {
     for (const run of hooks) await run(hook as never);
   } catch (error) {
@@ -336,5 +340,43 @@ describe("a locked shared style while a breakpoint removal is open", () => {
     expect(await wiredRefusal(settingsWrite(stripped, {}), open)).toMatchObject(
       { code: "CONFLICT" }
     );
+  });
+  describe("supplied by the code, not stored", () => {
+    // A refusal here is the guard's for a style written already locked: a
+    // lock moved outside its route.
+    /** The settings write storing the code's class as its stripped override. */
+    const overriding = (now: unknown) => ({
+      data: { classes: [now] },
+      originalData: { classes: [] },
+      user: author,
+      context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+    });
+
+    it("accepts the override that is exactly the code's style stripped", async () => {
+      expect(
+        await wiredRefusal(overriding(stripped), open, [lockedAtMobile])
+      ).toBeUndefined();
+    });
+
+    it("refuses an override with anything else changed", async () => {
+      const more = {
+        ...stripped,
+        styles: { base: { base: { color: "#ff0000" } } },
+      };
+      expect(
+        await wiredRefusal(overriding(more), open, [lockedAtMobile])
+      ).toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("refuses the override with no removal open, or for a style the code does not supply", async () => {
+      expect(
+        await wiredRefusal(overriding(stripped), async () => null, [
+          lockedAtMobile,
+        ])
+      ).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await wiredRefusal(overriding(stripped), open, [])).toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+    });
   });
 });

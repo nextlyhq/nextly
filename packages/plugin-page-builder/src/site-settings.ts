@@ -36,7 +36,7 @@ import {
 } from "./breakpoint-removal/dry-run";
 import type { BreakpointRun, HoldingRun } from "./breakpoint-removal/run-store";
 import type { BreakpointRemovalService } from "./breakpoint-removal/service";
-import { stripClasses } from "./breakpoint-removal/strip";
+import { stripClass, stripClasses } from "./breakpoint-removal/strip";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./default-layout/settings-single";
 import {
@@ -114,6 +114,10 @@ const BreakpointsBody = z.strictObject({
   breakpoints: z.unknown(),
   // Count what saving this set would drop, and save nothing.
   dryRun: z.boolean().optional(),
+  // Strip what the removed breakpoints held, as the person confirmed after
+  // seeing the dry run. Without it a set removing breakpoints is stored and
+  // nothing stored under them is touched.
+  confirmRemoval: z.boolean().optional(),
 });
 
 /** A refusal naming what is wrong with the breakpoints sent. */
@@ -131,6 +135,7 @@ function invalidBreakpoints(messages: readonly string[]): NextlyError {
 async function readBreakpoints(req: Request): Promise<{
   breakpoints: SiteBreakpointsRequest["breakpoints"];
   dryRun: boolean;
+  confirmRemoval: boolean;
 }> {
   let raw: unknown;
   try {
@@ -147,7 +152,11 @@ async function readBreakpoints(req: Request): Promise<{
   // site's configured breakpoints apply again.
   const { value, issues } = checkStoredBreakpoints(parsed.data.breakpoints);
   if (issues.length > 0) throw invalidBreakpoints(issues);
-  return { breakpoints: value ?? null, dryRun: parsed.data.dryRun === true };
+  return {
+    breakpoints: value ?? null,
+    dryRun: parsed.data.dryRun === true,
+    confirmRemoval: parsed.data.confirmRemoval === true,
+  };
 }
 
 /**
@@ -396,17 +405,39 @@ function refuseReadding(
 }
 
 /**
- * The stored shared styles without their values under `ids`, or `undefined`
- * when none holds any, so a removal that strips no shared style writes none.
+ * The stored class tier a removal writes, or `undefined` when no shared style
+ * holds anything under `ids`, so a removal that strips none writes none.
+ *
+ * The library the site compiles is the code's classes with the stored tier
+ * over them, by id. So every stored entry is stripped, and each code-supplied
+ * class that holds values under `ids` and that no stored entry overrides yet
+ * is stored as its stripped override: the code's class, without them, which
+ * is the stored tier's rule for what differs from the code (`classOverrideOf`).
+ * Otherwise the code's values would stay in the library, and a breakpoint
+ * added again under the same id would find them.
  */
-function strippedStoredClasses(
+function strippedClassTier(
   stored: unknown,
+  supplied: readonly NamedClass[] | undefined,
   ids: ReadonlySet<string>
 ): readonly unknown[] | undefined {
-  const list = readStoredJson(stored);
-  if (!Array.isArray(list)) return undefined;
+  const read = readStoredJson(stored);
+  const list: readonly unknown[] = Array.isArray(read) ? read : [];
   const stripped = stripClasses(list, ids);
-  return stripped === list ? undefined : stripped;
+  const overridden = new Set(
+    list.map(entry =>
+      typeof entry === "object" && entry !== null
+        ? (entry as { id?: unknown }).id
+        : undefined
+    )
+  );
+  const fromCode = (supplied ?? [])
+    .filter(entry => !overridden.has(entry.id))
+    .map(entry => ({ entry, without: stripClass(entry, ids) }))
+    .filter(({ entry, without }) => without !== entry)
+    .map(({ without }) => without);
+  if (stripped === list && fromCode.length === 0) return undefined;
+  return [...stripped, ...fromCode];
 }
 
 /** The audit kind each removed breakpoint is recorded under. */
@@ -554,7 +585,11 @@ async function writeRemovalSet(args: {
 }): Promise<void> {
   let read = args.stored;
   for (let attempt = 1; ; attempt += 1) {
-    const classes = strippedStoredClasses(read.classes, args.removedIds);
+    const classes = strippedClassTier(
+      read.classes,
+      args.removal.defaults?.classes,
+      args.removedIds
+    );
     try {
       await writeSiteStyle(
         args.nextly,
@@ -633,18 +668,20 @@ const SAVED = {
 };
 
 /**
- * Store a set that removes breakpoints, and strip what they held from the
- * whole site: the shared styles in the same write as the set, then every
- * document holding blocks, as far as the time allows. Only one removal is
- * open at a time, and a set defining a breakpoint it is still removing is
- * refused.
+ * Store a set, and where it removes breakpoints and the person confirmed
+ * stripping them, strip what they held from the whole site: the shared styles
+ * in the same write as the set, then every document holding blocks, as far as
+ * the time allows. Only one removal is open at a time, and a set defining a
+ * breakpoint a removal still holds is refused.
  */
 async function saveBreakpoints(
   req: Request,
   breakpoints: SiteBreakpointsRequest["breakpoints"],
   ctx: BreakpointsRouteContext,
   nextly: SiteSettingsDirectApi,
-  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade }
+  removal: BreakpointRemoval & { readonly cascade: BreakpointCascade },
+  /** Whether the person confirmed stripping what removed breakpoints held. */
+  confirmed: boolean
 ): Promise<Response> {
   const service = removal.cascade.service();
   // Read BEFORE the runs are asked, and every write below hands its version
@@ -656,7 +693,10 @@ async function saveBreakpoints(
   const after = breakpointsAfter(removal, breakpoints);
   refuseReadding(await service.holding(), now, after);
   const removed = removedBreakpoints(now, after);
-  if (removed.size === 0) {
+  // Stripping the site is what the person confirmed after the dry run, never
+  // a side effect of an ordinary save: unconfirmed, the set is stored and the
+  // values under a removed breakpoint stay, inert, as they always have.
+  if (removed.size === 0 || !confirmed) {
     await writeSiteStyle(nextly, ctx, { breakpoints }, versionToWrite(stored));
     return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
       breakpoints,
@@ -719,7 +759,7 @@ export async function writeSiteBreakpoints(
   nextly: SiteSettingsDirectApi,
   removal?: BreakpointRemoval
 ): Promise<Response> {
-  const { breakpoints, dryRun } = await readBreakpoints(req);
+  const { breakpoints, dryRun, confirmRemoval } = await readBreakpoints(req);
   if (dryRun) {
     // Counted only where the installed plugin can walk the site.
     if (removal === undefined) {
@@ -731,10 +771,14 @@ export async function writeSiteBreakpoints(
   }
   const cascade = removal?.cascade;
   if (removal !== undefined && cascade !== undefined) {
-    return saveBreakpoints(req, breakpoints, ctx, nextly, {
-      ...removal,
-      cascade,
-    });
+    return saveBreakpoints(
+      req,
+      breakpoints,
+      ctx,
+      nextly,
+      { ...removal, cascade },
+      confirmRemoval
+    );
   }
   await writeSiteStyle(nextly, ctx, { breakpoints });
   return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {

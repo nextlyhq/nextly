@@ -42,6 +42,13 @@ export interface BreakpointRun extends WalkedRun {
    * where it stored none and the configured set applied.
    */
   readonly before: unknown;
+  /**
+   * The breakpoints the stylesheet was emitted under when the removal began:
+   * `before` over the configured defaults as they were then, kept so a run
+   * carried on after the defaults changed carries hides under the cascade it
+   * began with. Read strictly by its reader (`removalOf`).
+   */
+  readonly beforeEmitted: unknown;
   /** Who saved the removal: `user:<id>` or `api-key:<id>`. */
   readonly startedBy: string;
   /** Whether the run is still open: not yet walked to the end. */
@@ -56,7 +63,7 @@ export interface RemovalRunStore extends RunStore {
    */
   open(
     removedIds: readonly string[],
-    before: unknown,
+    before: { readonly stored: unknown; readonly emitted: unknown },
     startedBy: string
   ): Promise<BreakpointRun>;
   /** One run by its id, open or done; `null` when there is none. */
@@ -77,6 +84,14 @@ export interface RemovalRunStore extends RunStore {
     runId: string,
     documentKey: string
   ): Promise<"requeued" | "reopened" | "left" | "none">;
+  /**
+   * Which of `runIds` recorded this document as left: each such run holds its
+   * ids until it walks the document again.
+   */
+  leftWith(
+    documentKey: string,
+    runIds: readonly string[]
+  ): Promise<ReadonlySet<string>>;
   /** Remove a run that wrote nothing, with its progress, closing it. */
   abandon(runId: string): Promise<void>;
   /** Every run, open or done: the record of every removal. */
@@ -134,13 +149,22 @@ function removedIdsOf(text: string, runId: string): string[] {
   });
 }
 
-/** The stored set before, decoded; text that is not JSON reads as none. */
-function beforeOf(text: string): unknown {
+/**
+ * The sets before, decoded from the `before` column's `{ stored, emitted }`;
+ * text that is not JSON, or not that record, reads as none.
+ */
+function beforeOf(text: string): { stored: unknown; emitted: unknown } {
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as unknown;
+    parsed = JSON.parse(text) as unknown;
   } catch {
-    return null;
+    parsed = null;
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { stored: null, emitted: null };
+  }
+  const record = parsed as Record<string, unknown>;
+  return { stored: record.stored ?? null, emitted: record.emitted ?? null };
 }
 
 /** A run row as this module hands it out. */
@@ -153,10 +177,12 @@ function runOf(row: {
   cursor: string | null;
   openKey: string | null;
 }): BreakpointRun {
+  const before = beforeOf(row.before);
   return {
     id: row.id,
     removedIds: removedIdsOf(row.removedIds, row.id),
-    before: beforeOf(row.before),
+    before: before.stored,
+    beforeEmitted: before.emitted,
     startedBy: row.startedBy,
     phase: phaseOf(row.phase),
     cursor: row.cursor,
@@ -215,7 +241,10 @@ export function removalRunStore(
         const row = await db.transaction(tx =>
           tx.insertReturning(breakpointRemovals, {
             removedIds: JSON.stringify(removedIds),
-            before: JSON.stringify(before ?? null),
+            before: JSON.stringify({
+              stored: before.stored ?? null,
+              emitted: before.emitted ?? null,
+            }),
             startedBy,
             phase: "converting",
             openKey: OPEN,
@@ -302,6 +331,19 @@ export function removalRunStore(
         await markLeft(db, runId, documentKey, WRITTEN_BACK);
         return "left";
       }
+    },
+    leftWith: async (documentKey, runIds) => {
+      if (runIds.length === 0) return new Set<string>();
+      const h = db.table(componentDeletionHosts);
+      // The unique (run, document) index answers this per run named.
+      const where = and(
+        inArray(h.deletionId, [...runIds]),
+        eq(h.hostKey, documentKey),
+        eq(h.state, "left")
+      );
+      if (where === undefined) return new Set<string>();
+      const rows = await db.select(componentDeletionHosts).where(where).all();
+      return new Set(rows.map(row => row.deletionId));
     },
     abandon: async runId =>
       db.transaction(async tx => {

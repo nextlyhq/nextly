@@ -326,9 +326,11 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
+    /** A save the person confirmed after the dry run, as the editor sends it. */
     const save = (cookie: string, viewport: unknown[]) =>
       post(cookie, ["site", "breakpoints"], {
         breakpoints: { viewport, container: [] },
+        confirmRemoval: true,
       });
 
     /** A stored blocks value's nodes, in one form. */
@@ -1012,6 +1014,97 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await svc.runById(runId)).toMatchObject({ open: false });
       expect(await svc.openRun()).toBeNull();
+    });
+
+    it("stores a set removing a breakpoint without stripping anything when the removal is not confirmed", async () => {
+      const { t, cookie, runs } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+
+      const saved = await post(cookie, ["site", "breakpoints"], {
+        breakpoints: { viewport: [TABLET], container: [] },
+      });
+
+      expect(saved.status).toBe(200);
+      expect(saved.body.item).not.toHaveProperty("removal");
+      const stored = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as { breakpoints?: unknown };
+      const breakpoints =
+        typeof stored.breakpoints === "string"
+          ? (JSON.parse(stored.breakpoints) as unknown)
+          : stored.breakpoints;
+      expect(breakpoints).toEqual({ viewport: [TABLET], container: [] });
+      // Nothing opened, and nothing stripped: the page and the shared style
+      // keep their Mobile values.
+      expect(await runs().runs()).toEqual([]);
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAtMobile)
+      );
+      expect(JSON.stringify((await storedClasses(t)).get("c-band"))).toContain(
+        "mobile"
+      );
+    });
+
+    it("lets a breakpoint a published draft resolved be added again once the removal job has run", async () => {
+      const { t, svc, cookie, jobPass } = await boot();
+      const id = await create(t, "pages", {
+        title: "Pending",
+        slug: "pending",
+        status: "published",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+        },
+        overrideAccess: true,
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+      // CONTROL: done, with the page left and Mobile refused.
+      expect(saved.body.item).toMatchObject({
+        removal: { finished: true, left: 1 },
+      });
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(409);
+
+      // The author publishes the draft, which the removal had stripped: the
+      // write holds nothing under Mobile.
+      const draft = await nodesOf(t, "pages", id, true);
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { content: doc("page", draft), status: "published" },
+        overrideAccess: true,
+      });
+      await jobPass();
+
+      // No carry-on route called: the run walked the page again and closed.
+      expect(await svc.runById(runId)).toMatchObject({ open: false });
+      expect(await svc.holding()).toEqual([]);
+      expect((await save(cookie, [TABLET, MOBILE])).status).toBe(200);
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+    });
+
+    it("records the breakpoints the stylesheet was emitted under when a removal begins", async () => {
+      const { svc, cookie } = await boot();
+      const saved = await save(cookie, [TABLET]);
+      const runId = (saved.body.item as { removal: { runId: string } }).removal
+        .runId;
+
+      expect(await svc.runById(runId)).toMatchObject({
+        before: { viewport: [TABLET, MOBILE], container: [] },
+        beforeEmitted: { viewport: [TABLET, MOBILE], container: [] },
+      });
     });
 
     it("refuses a save of the site style from a version another save replaced", async () => {

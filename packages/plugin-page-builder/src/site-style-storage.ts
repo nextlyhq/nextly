@@ -273,7 +273,12 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(
    * The breakpoints an open removal is stripping, for the settings write that
    * strips them; absent for every other write, and where none is open.
    */
-  removed?: ReadonlySet<string>
+  removed?: ReadonlySet<string>,
+  /**
+   * The code's classes, which that write may store a stripped override of: a
+   * locked one comes in as a new stored entry already locked.
+   */
+  supplied?: ReadonlyMap<string, unknown>
 ): void {
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "classes")) return;
@@ -285,9 +290,16 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(
     refuseStoredEntryChange(id, was, after.get(id), lockRoute, removed);
   }
   for (const [id, now] of after) {
-    // A style written already locked is a lock moved outside its route.
+    // A style written already locked is a lock moved outside its route,
+    // except the removal's override of a locked code class: exactly that
+    // class with the removed breakpoints' values stripped.
     if (!before.has(id) && now.locked === true && !lockRoute) {
-      throw lockOutsideItsRoute();
+      const code = supplied?.get(id);
+      const stripped =
+        removed !== undefined &&
+        code !== undefined &&
+        sameStoredValue(stripClass(code, removed), now);
+      if (!stripped) throw lockOutsideItsRoute();
     }
   }
 }
@@ -299,7 +311,8 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(
  * Where the removal cannot be read, nothing extra is accepted.
  */
 function sharedStyleGuard(
-  openRemoval: OpenRemovalReader | undefined
+  openRemoval: OpenRemovalReader | undefined,
+  supplied: SiteStyleData["classes"]
 ): (
   hook: Parameters<typeof refuseSharedStyleChangesOutsideTheirRoutes>[0]
 ) => Promise<void> {
@@ -313,7 +326,11 @@ function sharedStyleGuard(
       settingsWrite && touchesClasses
         ? await openRemovalFor(openRemoval, { inTransaction: false })
         : null;
-    refuseSharedStyleChangesOutsideTheirRoutes(hook, removal?.ids);
+    refuseSharedStyleChangesOutsideTheirRoutes(
+      hook,
+      removal?.ids,
+      new Map((supplied ?? []).map(entry => [entry.id, entry]))
+    );
   };
 }
 
@@ -347,7 +364,7 @@ export function siteStyleSingle(
     hooks: {
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
-        sharedStyleGuard(openRemoval),
+        sharedStyleGuard(openRemoval, policy.defaults?.classes),
       ],
     },
     // No `access` block, deliberately: read and update both fall through to

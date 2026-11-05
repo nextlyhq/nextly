@@ -314,9 +314,11 @@ type BreakpointRemovalsColumns = {
  * in {@link componentDeletionHosts} under this row's id.
  *
  * - `removedIds` is the JSON list of the breakpoint ids removed.
- * - `before` is the JSON of the breakpoint set the site stored before the
- *   removal (`null` where it stored none and the configured set applied), so
- *   the removal can be told apart from what it removed and undone later.
+ * - `before` is the JSON record `{ stored, emitted }`: the breakpoint set the
+ *   site stored before the removal (`null` where it stored none and the
+ *   configured set applied), so the removal can be undone later, and the set
+ *   the stylesheet was emitted under then, so a run carried on after the
+ *   configured defaults changed carries hides under the cascade it began with.
  * - `startedBy` names who saved the removal, as `user:<id>` or `api-key:<id>`.
  *   The writes themselves are made as the system: every value under a removed
  *   breakpoint goes, whoever may open the document holding it.

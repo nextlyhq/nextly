@@ -65,19 +65,34 @@ export interface Removal {
  * ids still removed.
  */
 export function removalOf(
-  run: Pick<BreakpointRun, "removedIds" | "before">,
+  run: Pick<BreakpointRun, "removedIds" | "before" | "beforeEmitted">,
   defaults: SiteStyleData | undefined,
   defined?: ReadonlySet<string>
 ): Removal {
-  const stored = checkStoredBreakpoints(run.before).value;
+  // The set as the run recorded it when it began: the configured defaults
+  // may have changed since, and a hide is carried under the cascade that was
+  // in force then. Resolved now only for a run that recorded none.
+  const emitted = checkStoredBreakpoints(run.beforeEmitted).value;
   return {
     ids: new Set(
       run.removedIds.filter(id => defined === undefined || !defined.has(id))
     ),
-    before: siteBreakpoints(
-      resolveSiteStyle(defaults, { breakpoints: stored ?? undefined })
-    ),
+    before: emitted ?? emittedBreakpoints(run.before, defaults),
   };
+}
+
+/**
+ * The breakpoints the stylesheet is emitted under for a stored set: the stored
+ * set over the configured defaults, which a stored `null` gives back.
+ */
+export function emittedBreakpoints(
+  stored: unknown,
+  defaults: SiteStyleData | undefined
+): BreakpointSet | undefined {
+  const set = checkStoredBreakpoints(stored).value;
+  return siteBreakpoints(
+    resolveSiteStyle(defaults, { breakpoints: set ?? undefined })
+  );
 }
 
 /** The set `before` with the removed breakpoints left out. */

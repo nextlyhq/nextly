@@ -594,6 +594,15 @@ export interface SiteBreakpointsRequest {
    * @experimental
    */
   readonly dryRun?: boolean;
+  /**
+   * Strip every style and hide stored under each breakpoint this set removes,
+   * across the site, as the person confirmed after seeing the dry run. Without
+   * it a set removing breakpoints is stored and what they held stays, unused
+   * by the stylesheet, as it would if the breakpoint were added again.
+   *
+   * @experimental
+   */
+  readonly confirmRemoval?: boolean;
 }
 
 /**
