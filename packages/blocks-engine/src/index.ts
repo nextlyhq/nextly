@@ -943,6 +943,7 @@ export {
 } from "./style/node-class";
 export {
   compileStyleValues,
+  scaledTokenText,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
   // The prefix tokens are actually written under, which is not the one that was
@@ -950,8 +951,16 @@ export {
   // Exported so a reader keyed on the emitted custom-property names asks this
   // rather than the setting, which changes without the output changing.
   safeTokenPrefix,
+  paintsBackgroundImage,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
+/**
+ * A background overlay's two custom properties, for an editor drawing their
+ * controls.
+ *
+ * @experimental
+ */
+export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {
