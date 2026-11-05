@@ -235,6 +235,16 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     if (created.status() !== 409) {
       await expectOk(created, `seeding ${PAGE_SLUG}`);
     }
+
+    // `/blocks` is public, so its pages are cached. This app installs no
+    // Nextly cache handlers, and Next's default cache serves a page its
+    // previous render once after a write expires its tags. So the tests below
+    // start once the page shows the stored style, within a bound.
+    await expect
+      .poll(async () => await (await api.get(`/blocks/${PAGE_SLUG}`)).text(), {
+        timeout: 30_000,
+      })
+      .toContain(`${TOKEN_PROPERTY}:${TOKEN_LIGHT}`);
   } finally {
     await api.dispose();
   }

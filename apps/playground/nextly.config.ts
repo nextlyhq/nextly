@@ -30,6 +30,7 @@ import { defineCollection, defineConfig, text } from "nextly/config";
 
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
+import { BoundEntries } from "./src/collections/bound-entries";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -156,6 +157,10 @@ export default defineConfig({
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatorNotes] : []),
+    // The browser test of bindings served to the public needs a list whose
+    // fields include one the public may not read; registered for the e2e run
+    // only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [BoundEntries] : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
     ...(seoPluginEnabled ? [SeoPages] : []),
   ],
