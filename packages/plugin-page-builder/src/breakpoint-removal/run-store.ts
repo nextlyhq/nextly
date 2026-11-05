@@ -300,6 +300,18 @@ export function removalRunStore(
       }
     },
     reopenFor: async (runId, documentKey) => {
+      // Asked first rather than left to the unique index: this runs from a
+      // hook, whose writes may join the writer's own transaction, and on MySQL
+      // a refused statement there fails that whole transaction. The index
+      // still decides a race between the read and the write.
+      const held = await db
+        .select(breakpointRemovals)
+        .where(eq(columns().openKey, OPEN))
+        .first();
+      if (held !== null && held.id !== runId) {
+        await markLeft(db, runId, documentKey, WRITTEN_BACK);
+        return "left";
+      }
       try {
         await db.transaction(async tx => {
           await reopenDone(tx, runId);
