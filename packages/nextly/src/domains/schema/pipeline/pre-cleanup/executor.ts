@@ -29,7 +29,10 @@ import type {
   Operation,
 } from "../diff/types";
 import { PromptCancelledError } from "../prompt-dispatcher/errors";
-import type { PreCleanupExecutor } from "../pushschema-pipeline-interfaces";
+import type {
+  PreCleanupExecutor,
+  PreCleanupField,
+} from "../pushschema-pipeline-interfaces";
 import type { ClassifierEvent, Resolution } from "../resolution/types";
 import { generateSQL } from "../sql-templates";
 
@@ -69,7 +72,7 @@ function assertSafeIdent(name: string): void {
 export function assertPreCleanupAccepted(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
-  fields: Array<{ name: string; type: string }>;
+  fields: PreCleanupField[];
   /** Which encodings a value may arrive in: SQLite's columns store booleans and dates as numbers. */
   dialect: SupportedDialect;
 }): void {
@@ -99,7 +102,9 @@ export function assertPreCleanupAccepted(args: {
   const threshold = readDeleteThreshold();
   for (const { resolution, event } of sideEffectResolutions(args)) {
     if (resolution.kind === "provide_default") {
-      const fieldType = fieldTypeOf(args.fields, event.columnName);
+      const field = fieldOf(args.fields, event.tableName, event.columnName);
+      // Text when the event names no declared field.
+      const fieldType = field?.type ?? "text";
       const validation = validateDefaultValue(
         { name: event.columnName, type: fieldType },
         resolution.value,
@@ -110,6 +115,7 @@ export function assertPreCleanupAccepted(args: {
           `INVALID_DEFAULT_FOR_TYPE: ${event.columnName} (${fieldType}) - ${validation.error}`
         );
       }
+      assertFillCanBeUnique(event, field);
     } else if (
       event.kind === "add_not_null_with_nulls" &&
       event.nullCount >= threshold
@@ -124,14 +130,53 @@ export function assertPreCleanupAccepted(args: {
 }
 
 /**
- * A field's declared type, or text when the event names no declared field. Found by its column,
- * which the event names: a camelCase field's column is its snake_case name.
+ * Refuses one value for a unique column that it would fill in two or more rows: a fill writes the
+ * same value to every row it fills (each row of a column added over the table, an existing
+ * column's null rows), so the unique index that follows would fail, on MySQL after earlier
+ * statements committed. Refused before any statement.
  */
-function fieldTypeOf(
-  fields: Array<{ name: string; type: string }>,
+function assertFillCanBeUnique(
+  event: Extract<
+    ClassifierEvent,
+    { kind: "add_not_null_with_nulls" | "add_required_field_no_default" }
+  >,
+  field: PreCleanupField | undefined
+): void {
+  if (field?.unique !== true) return;
+  const rows =
+    event.kind === "add_required_field_no_default"
+      ? event.tableRowCount
+      : event.nullCount;
+  if (rows < 2) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${event.columnName}`,
+        code: "UNIQUE_FILL_WOULD_REPEAT",
+        message: `Table '${event.tableName}': column '${event.columnName}' is unique, so one value for its ${String(rows)} rows would repeat in them. Give each of those rows its own value first, or keep the field optional.`,
+      },
+    ],
+    logContext: {
+      reason: "unique-fill-would-repeat",
+      eventId: event.id,
+      rows,
+    },
+  });
+}
+
+/**
+ * The declared field an event's column belongs to, found by the event's table and its column: a
+ * camelCase field's column is its snake_case name, and a same-named field on another table is
+ * another field.
+ */
+function fieldOf(
+  fields: readonly PreCleanupField[],
+  tableName: string,
   columnName: string
-): string {
-  return fields.find(f => toSnakeCase(f.name) === columnName)?.type ?? "text";
+): PreCleanupField | undefined {
+  return fields.find(
+    f => f.tableName === tableName && toSnakeCase(f.name) === columnName
+  );
 }
 
 /**
@@ -384,7 +429,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     resolutions: Resolution[];
     events: ClassifierEvent[];
     operations: readonly Operation[];
-    fields: Array<{ name: string; type: string }>;
+    fields: PreCleanupField[];
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot> {
     assertPreCleanupAccepted(args);

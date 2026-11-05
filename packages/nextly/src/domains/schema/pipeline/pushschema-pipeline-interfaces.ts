@@ -118,6 +118,18 @@ export interface PreRenameExecutor {
 // The fields argument carries field-type metadata (name + type) so
 // provide_default values can be Zod-validated against the column's type
 // before the UPDATE fires.
+/**
+ * A declared field as pre-cleanup judges a fill for it: found by its entity's table and its
+ * column (a same-named field elsewhere is another field), with the type the value must have and
+ * whether its column is unique.
+ */
+export interface PreCleanupField {
+  tableName: string;
+  name: string;
+  type: string;
+  unique?: boolean;
+}
+
 export interface PreCleanupExecutor {
   execute(args: {
     tx: unknown;
@@ -129,7 +141,7 @@ export interface PreCleanupExecutor {
      * renamed into place before pre-cleanup, so pre-cleanup fills it rather than adding it.
      */
     operations: readonly Operation[];
-    fields: Array<{ name: string; type: string }>;
+    fields: PreCleanupField[];
     dialect: SupportedDialect;
   }): Promise<NextlySchemaSnapshot>;
 }

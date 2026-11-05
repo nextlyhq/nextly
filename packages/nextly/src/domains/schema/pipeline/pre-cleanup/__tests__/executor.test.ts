@@ -54,7 +54,7 @@ describe("RealPreCleanupExecutor", () => {
       ],
       events: [notNullEvent],
       operations: [],
-      fields: [{ name: "email", type: "text" }],
+      fields: [{ tableName: "dc_users", name: "email", type: "text" }],
       dialect: "postgresql",
     });
     expect(execute).toHaveBeenCalledOnce();
@@ -75,7 +75,7 @@ describe("RealPreCleanupExecutor", () => {
         ],
         events: [notNullEvent],
         operations: [],
-        fields: [{ name: "email", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       })
     ).rejects.toThrow(/INVALID_DEFAULT_FOR_TYPE/);
@@ -91,7 +91,7 @@ describe("RealPreCleanupExecutor", () => {
   /** Run one provide_default for `columnName` against these fields on this dialect. */
   const provide = (
     columnName: string,
-    field: { name: string; type: string },
+    field: { name: string; type: string; unique?: boolean },
     value: unknown,
     dialect: "postgresql" | "mysql" | "sqlite"
   ) =>
@@ -111,7 +111,7 @@ describe("RealPreCleanupExecutor", () => {
       ],
       events: [addedOver(columnName)],
       operations: [],
-      fields: [field],
+      fields: [{ tableName: "dc_users", ...field }],
       dialect,
     });
 
@@ -144,6 +144,116 @@ describe("RealPreCleanupExecutor", () => {
     );
   });
 
+  // The fill's field is the one on the event's table: a same-named field elsewhere has its own type.
+  it("provide_default: judges the value by the field on the event's own table", async () => {
+    const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
+    await expect(
+      new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          {
+            kind: "provide_default",
+            eventId: addedOver("tally").id,
+            value: "plenty",
+          },
+        ],
+        events: [addedOver("tally")],
+        operations: [],
+        fields: [
+          { tableName: "dc_posts", name: "tally", type: "number" },
+          { tableName: "dc_users", name: "tally", type: "text" },
+        ],
+        dialect: "postgresql",
+      })
+    ).resolves.toBeDefined();
+  });
+
+  // One value written to every row it fills repeats in a unique column filling two or more of them,
+  // so the unique index after it would fail: refused before any statement, for a column added over
+  // existing rows and for an existing one's null rows alike.
+  it.each([
+    ["an added column over 3 rows", "add_required_field_no_default", 3, 0],
+    ["an existing column's 3 null rows", "add_not_null_with_nulls", 47, 3],
+  ] as const)(
+    "provide_default: refuses one value for a unique column filling %s",
+    async (_case, kind, tableRowCount, nullCount) => {
+      const execute = vi.fn();
+      const event: ClassifierEvent =
+        kind === "add_required_field_no_default"
+          ? {
+              id: `${kind}:dc_users.handle`,
+              kind,
+              tableName: "dc_users",
+              columnName: "handle",
+              tableRowCount,
+              applicableResolutions: [
+                "provide_default",
+                "make_optional",
+                "abort",
+              ],
+            }
+          : { ...addedOver("handle"), nullCount, tableRowCount };
+      const rows =
+        kind === "add_required_field_no_default" ? tableRowCount : nullCount;
+      await expect(
+        new RealPreCleanupExecutor().execute({
+          tx: { execute },
+          desiredSnapshot: baseSnapshot,
+          resolutions: [
+            { kind: "provide_default", eventId: event.id, value: "same" },
+          ],
+          events: [event],
+          operations: [],
+          fields: [
+            {
+              tableName: "dc_users",
+              name: "handle",
+              type: "text",
+              unique: true,
+            },
+          ],
+          dialect: "postgresql",
+        })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "fields.handle",
+              code: "UNIQUE_FILL_WOULD_REPEAT",
+              message: `Table 'dc_users': column 'handle' is unique, so one value for its ${rows} rows would repeat in them. Give each of those rows its own value first, or keep the field optional.`,
+            },
+          ],
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+    }
+  );
+
+  it("provide_default: takes one value for a unique column filling a single row", async () => {
+    const execute = vi.fn().mockResolvedValue({ rowCount: 1 });
+    await expect(
+      new RealPreCleanupExecutor().execute({
+        tx: { execute },
+        desiredSnapshot: baseSnapshot,
+        resolutions: [
+          {
+            kind: "provide_default",
+            eventId: addedOver("handle").id,
+            value: "only",
+          },
+        ],
+        events: [{ ...addedOver("handle"), nullCount: 1 }],
+        operations: [],
+        fields: [
+          { tableName: "dc_users", name: "handle", type: "text", unique: true },
+        ],
+        dialect: "postgresql",
+      })
+    ).resolves.toBeDefined();
+  });
+
   it("delete_nonconforming: runs DELETE", async () => {
     const execute = vi.fn().mockResolvedValue({ rowCount: 3 });
     const exec = new RealPreCleanupExecutor();
@@ -153,7 +263,7 @@ describe("RealPreCleanupExecutor", () => {
       resolutions: [{ kind: "delete_nonconforming", eventId: notNullEvent.id }],
       events: [notNullEvent],
       operations: [],
-      fields: [{ name: "email", type: "text" }],
+      fields: [{ tableName: "dc_users", name: "email", type: "text" }],
       dialect: "postgresql",
     });
     expect(execute).toHaveBeenCalledOnce();
@@ -173,7 +283,7 @@ describe("RealPreCleanupExecutor", () => {
         resolutions: [{ kind: "delete_nonconforming", eventId: bigEvent.id }],
         events: [bigEvent],
         operations: [],
-        fields: [{ name: "email", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       })
     ).rejects.toThrow(/DELETE_THRESHOLD_EXCEEDED/);
@@ -189,7 +299,7 @@ describe("RealPreCleanupExecutor", () => {
       resolutions: [{ kind: "make_optional", eventId: notNullEvent.id }],
       events: [notNullEvent],
       operations: [],
-      fields: [{ name: "email", type: "text" }],
+      fields: [{ tableName: "dc_users", name: "email", type: "text" }],
       dialect: "postgresql",
     });
     expect(execute).not.toHaveBeenCalled();
@@ -206,7 +316,7 @@ describe("RealPreCleanupExecutor", () => {
         resolutions: [{ kind: "abort", eventId: notNullEvent.id }],
         events: [notNullEvent],
         operations: [],
-        fields: [{ name: "email", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       })
     ).rejects.toThrow(PromptCancelledError);
@@ -245,7 +355,7 @@ describe("RealPreCleanupExecutor", () => {
         ],
         events: [notNullEvent],
         operations: [],
-        fields: [{ name: "email", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       })
     ).rejects.toThrow(/DUPLICATE_RESOLUTION_FOR_EVENT/);
@@ -318,7 +428,7 @@ describe("RealPreCleanupExecutor", () => {
           resolutions: [resolution as Resolution],
           events: [addedEvent],
           operations: [],
-          fields: [{ name: "nickname", type: "text" }],
+          fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
           dialect: "postgresql",
         });
         expect(await rendered(execute)).toEqual([
@@ -349,7 +459,7 @@ describe("RealPreCleanupExecutor", () => {
         resolutions,
         events: [addedEvent],
         operations: [renamed],
-        fields: [{ name: "nickname", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
         dialect: "postgresql",
       });
       expect(await rendered(execute)).toEqual([
@@ -385,7 +495,7 @@ describe("RealPreCleanupExecutor", () => {
         ],
         events: [notNullEvent],
         operations: [],
-        fields: [{ name: "email", type: "text" }],
+        fields: [{ tableName: "dc_users", name: "email", type: "text" }],
         dialect: "postgresql",
       });
       expect(await rendered(execute)).toEqual([
@@ -457,7 +567,7 @@ describe("RealPreCleanupExecutor", () => {
           resolutions,
           events: [addedEvent],
           operations: [],
-          fields: [{ name: "nickname", type: "text" }],
+          fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
           dialect: "postgresql",
         })
       ).rejects.toMatchObject({
@@ -479,7 +589,7 @@ describe("RealPreCleanupExecutor", () => {
         assertPreCleanupAccepted({
           resolutions,
           events: [addedEvent],
-          fields: [{ name: "nickname", type: "text" }],
+          fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
           dialect: "postgresql",
         })
       ).toThrow();
@@ -496,7 +606,7 @@ describe("RealPreCleanupExecutor", () => {
           ],
           events: [addedEvent],
           operations: [],
-          fields: [{ name: "nickname", type: "text" }],
+          fields: [{ tableName: "dc_users", name: "nickname", type: "text" }],
           dialect: "postgresql",
         })
       ).rejects.toThrow();

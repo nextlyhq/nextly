@@ -119,6 +119,7 @@ import type {
   MigrationJournalSummary,
   Notifier,
   PreCleanupExecutor,
+  PreCleanupField,
   PreRenameExecutor,
   PromptDispatcher,
   RenameCandidate,
@@ -1114,7 +1115,9 @@ export class PushSchemaPipeline {
         // patches collections + singles + components — keeping the two in
         // sync so a future classifier-on-singles event has field metadata
         // to validate provide_default values against.
-        const aggregatedFields: Array<{ name: string; type: string }> = [
+        // Each tagged with its entity's table, so a fill is judged by the field on the event's own
+        // table, and with whether its column is unique.
+        const aggregatedFields: PreCleanupField[] = [
           ...Object.values(desired.collections),
           ...Object.values(desired.singles),
           ...Object.values(desired.components),
@@ -1124,7 +1127,12 @@ export class PushSchemaPipeline {
               (f): f is typeof f & { name: string } =>
                 typeof f.name === "string"
             )
-            .map(f => ({ name: f.name, type: f.type }))
+            .map(f => ({
+              tableName: c.tableName,
+              name: f.name,
+              type: f.type,
+              unique: "unique" in f && f.unique === true,
+            }))
         );
         try {
           assertPreCleanupAccepted({
