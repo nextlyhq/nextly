@@ -224,13 +224,42 @@ function pastItsFinalCheck(removal: LayoutRemoval): boolean {
   );
 }
 
+/** How many times a clear is tried while saves of the page keep landing. */
+const CLEAR_ATTEMPTS = 3;
+
 /**
  * Clear `layoutId` from the page `pageId`, where it can be cleared without
  * publishing anything: the working draft of a published page, or the row of an
  * unpublished one. Answers whether it cleared anything. The write leaves the
  * status out, so a published page's live row is untouched.
+ *
+ * Sent with the version of the read it was decided on, so a save of the page
+ * in between refuses it rather than being undone. The page is then read
+ * again and judged afresh: cleared if it still names the Layout, left alone
+ * if the save changed that.
  */
 export async function clearPageReference(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await clearOnce(nextly, pages, pageId, layoutId);
+    } catch (error) {
+      if (
+        attempt >= CLEAR_ATTEMPTS ||
+        !NextlyError.isCode(error, "STALE_VERSION")
+      ) {
+        throw error;
+      }
+    }
+  }
+}
+
+/** One read of the page, and the clear it decides, as {@link clearPageReference}. */
+async function clearOnce(
   nextly: PageReads,
   pages: string,
   pageId: string,
@@ -242,9 +271,7 @@ export async function clearPageReference(
   }
   const isDraft = current._isWorkingDraft === true;
   if (!isDraft && current.status === "published") return false;
-  // A page deleted since the read has nothing left to clear. Sent with the
-  // version the page was read at above, so a save of the page between that
-  // read and this write refuses it rather than being undone.
+  // A page deleted since the read has nothing left to clear.
   const cleared = await unlessGone(
     nextly.update({
       collection: pages,
