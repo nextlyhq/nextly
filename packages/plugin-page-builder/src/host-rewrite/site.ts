@@ -669,6 +669,11 @@ function writeFailure(error: unknown): WriteResult {
   // read the write was made from.
   if (NextlyError.isCode(error, "STALE_VERSION")) return { kind: "changed" };
   if (!NextlyError.isCode(error, "VALIDATION_ERROR")) throw error;
+  return validationFailure(error);
+}
+
+/** What a validation refusal came to: the host changed, or refused, and why. */
+function validationFailure(error: NextlyError): WriteResult {
   const issues = (error.publicData as { errors?: unknown } | undefined)?.errors;
   const list = Array.isArray(issues)
     ? (issues as { code?: unknown; message?: unknown }[])
