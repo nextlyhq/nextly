@@ -77,6 +77,9 @@ export interface BuildContextOptions<T = any> {
    * pool (see {@link HookContext.executor}). Omitted outside a transaction.
    */
   executor?: unknown;
+
+  /** Holds an effect until the write is durable; see {@link HookContext.afterCommit}. */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
 }
 
 /**
@@ -150,6 +153,7 @@ export function buildContext<T = any>(
     context,
     req: options.req,
     executor: options.executor,
+    afterCommit: options.afterCommit,
   };
 }
 

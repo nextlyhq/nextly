@@ -345,6 +345,21 @@ export interface HookContext<T = any> {
    * the pooled connection is correct.
    */
   executor?: unknown;
+  /**
+   * @experimental Run `effect` once the write this hook belongs to is durable.
+   *
+   * Inside a transaction (a caller-owned one, or a plugin's `ctx.db.transaction`)
+   * the effect is held until the OUTERMOST transaction commits, and dropped if
+   * it rolls back; it runs after the commit, before that transaction's call
+   * resolves, and a failure then is logged rather than thrown, since the write
+   * has committed. Outside a transaction it runs at once. For what a rollback
+   * cannot take back, such as sending an email: done from an after-hook
+   * directly, it would happen for a write that never landed.
+   *
+   * Absent on a context a hook test builds by hand; core sets it on every
+   * context it builds for a collection hook.
+   */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
 }
 
 /**
