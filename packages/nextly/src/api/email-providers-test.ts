@@ -54,7 +54,9 @@ const testProviderSchema = z.object({
  *
  * Requires authentication, as a signed-in person: the test goes to that
  * person's own address, and an API key, which names no one, is refused.
- * Provider must be active.
+ * A provider may be tested while it is off — the guided flow saves a new
+ * provider off, tests it, and only then offers to turn it on — so an
+ * integration never has to enable untested credentials to check them.
  *
  * Request Body (optional, ignored):
  * - email: accepted for compatibility and ignored; the destination is always
