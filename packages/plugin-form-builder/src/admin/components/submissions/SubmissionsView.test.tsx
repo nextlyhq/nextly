@@ -95,6 +95,9 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+// The row carries the version the list read it at, and the server answers
+// that the submission changed since: the action stores nothing, and the list
+// says so rather than leaving the click looking like it did nothing.
 describe("a row's Not spam refused because the submission changed since", () => {
   it("says the submission changed, and shows the list read again", async () => {
     const spam = {
