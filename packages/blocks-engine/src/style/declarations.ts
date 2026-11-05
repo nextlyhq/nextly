@@ -306,7 +306,13 @@ function scalarText(
       );
       return undefined;
     }
-    const reference = `var(${tokenCustomProperty(name, walk.prefix)})`;
+    const property = `var(${tokenCustomProperty(name, walk.prefix)})`;
+    // Scaled where it says so: validated before this, so a factor here is a
+    // finite number in range, and `String` writes it without a locale.
+    const reference =
+      typeof value.times === "number"
+        ? `calc(${property} * ${String(value.times)})`
+        : property;
     // A token names an image, never a keyword, so an overlaid leaf's always
     // carries the overlay's layer.
     return paintsOverlaid(leaf) ? overlaid(reference) : reference;

@@ -255,3 +255,23 @@ describe("a background's overlay", () => {
     );
   });
 });
+
+describe("a scaled token reference, written", () => {
+  it("is the token's own property times the factor, under the site's prefix", () => {
+    const { declarations } = compileStyleValues(
+      { rowGap: { $token: "space.4", times: 0.75 } },
+      "/s",
+      "--brand-"
+    );
+    expect(declarations[0]?.value).toBe("calc(var(--brand-space-4) * 0.75)");
+  });
+
+  it("is the token alone when it is not scaled", () => {
+    const { declarations } = compileStyleValues(
+      { rowGap: { $token: "space.4" } },
+      "/s",
+      "--brand-"
+    );
+    expect(declarations[0]?.value).toBe("var(--brand-space-4)");
+  });
+});
