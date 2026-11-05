@@ -56,6 +56,16 @@ describe("isTextEntry", () => {
     expect(isTextEntry(mount("<input />"))).toBe(true);
     const editable = mount('<div contenteditable="true"></div>');
     expect(isTextEntry(editable)).toBe(true);
+    // A control inside a non-editable island in editable text is a control
+    // again: the NEAREST contenteditable decides, as the browser's does.
+    const island = mount(
+      '<div contenteditable="true"><span contenteditable="false"><button>Go</button></span></div>'
+    );
+    expect(isTextEntry(island.querySelector("button"))).toBe(false);
+    // The canvas's own line editor is plain-text-only editable.
+    expect(
+      isTextEntry(mount('<span contenteditable="plaintext-only"></span>'))
+    ).toBe(true);
   });
 
   it("follows editability down to the node the caret is actually in", () => {
