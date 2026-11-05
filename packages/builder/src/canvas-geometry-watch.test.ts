@@ -86,6 +86,13 @@ describe("a block an authored state rule moves", () => {
     block.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     for (const run of frames.splice(0)) run(0);
     expect(moved).toHaveBeenCalledTimes(2);
+    // And when a press ends, which ends an authored :active state with no
+    // pointer leaving and no focus changing.
+    for (const type of ["pointerup", "pointercancel"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+      for (const run of frames.splice(0)) run(0);
+    }
+    expect(moved).toHaveBeenCalledTimes(4);
     stop?.();
     vi.unstubAllGlobals();
   });

@@ -227,6 +227,10 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     "focusout",
     "keydown",
     "pointerdown",
+    // A press ending ends an authored `:active` state, with no pointer
+    // leaving and no focus changing.
+    "pointerup",
+    "pointercancel",
   ];
   for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   root.addEventListener("scroll", settled, true);

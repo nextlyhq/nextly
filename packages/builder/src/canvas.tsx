@@ -1031,6 +1031,19 @@ function setMark(
  * ground of its own resolves to (a page the site serves), and a transparent
  * ground repeated on the page paints nothing either way.
  */
+/**
+ * The alpha of a computed colour written as a function this module's colour
+ * reader does not otherwise read — `color(display-p3 0 0 0 / 0.5)`, which a
+ * browser can keep in a computed value — from its `/ alpha` part, 1 without
+ * one; `undefined` for anything that is not a colour function.
+ */
+function computedAlphaOf(text: string): number | undefined {
+  const call = /^[a-z-]+\(([^()]*)\)$/i.exec(text);
+  if (call === null) return undefined;
+  const alpha = (call[1] ?? "").split("/")[1];
+  return alpha === undefined ? 1 : fractionOf(alpha.trim(), 1);
+}
+
 function useSiteSurfaceMarks(
   rootRef: React.RefObject<HTMLElement | null>,
   opaqueByTokens: boolean
@@ -1041,8 +1054,10 @@ function useSiteSurfaceMarks(
     if (root === null) return;
     const view = root.ownerDocument.defaultView;
     const mark = (): void => {
-      const resolved = view?.getComputedStyle(root).backgroundColor ?? "";
-      const alpha = alphaOf(resolved.trim());
+      const resolved = (
+        view?.getComputedStyle(root).backgroundColor ?? ""
+      ).trim();
+      const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
       setFlag(
         root,
         "data-nx-site-ground-opaque",

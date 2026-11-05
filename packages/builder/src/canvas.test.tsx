@@ -2241,6 +2241,43 @@ describe("the site's ground and text on the canvas root", () => {
     }
   });
 
+  it("reads the alpha of a wide-gamut colour the ground resolves to", () => {
+    // A browser can keep `color(display-p3 …)` in the computed value; a
+    // half-transparent one must not be taken for the opaque token.
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((element, pseudo) => {
+        const style = computed(element, pseudo);
+        if (!element.classList.contains(CANVAS_ROOT_CLASS)) return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "backgroundColor")
+              return "color(display-p3 0 0 0 / 0.5)";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+    try {
+      const root = rootOf({
+        breakpoints,
+        tokens: {
+          tokens: [
+            {
+              name: "color.background",
+              kind: "color",
+              values: { light: "#ffffff" },
+            },
+          ],
+        },
+      });
+      expect(root?.hasAttribute("data-nx-site-ground-opaque")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("judges the ground again when the site's theme changes, with no render", async () => {
     // The theme marker writes the root's theme without a render; a light
     // ground that is opaque and a dark one that is not must each be judged.

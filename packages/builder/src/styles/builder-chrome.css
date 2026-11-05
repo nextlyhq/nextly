@@ -3628,7 +3628,8 @@
  * halo band would run along edges the page does not show, so only the ring is
  * drawn.
  */
-.nx-canvas-mark[data-clipped] {
+.nx-canvas-mark[data-clipped],
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-clipped] {
   box-shadow: none;
 }
 
@@ -3637,7 +3638,8 @@
  * box's corners, which the shape leaves showing the page behind, so only the
  * ring is drawn, still outside the box.
  */
-.nx-canvas-mark[data-shaped] {
+.nx-canvas-mark[data-shaped],
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-shaped] {
   box-shadow: none;
 }
 
