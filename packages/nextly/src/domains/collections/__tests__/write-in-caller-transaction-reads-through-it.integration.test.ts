@@ -71,17 +71,23 @@ const TRUSTED = roleSlugOf("read", AUTHOR);
 const holdsTrustedRole = ({ roles }: AccessRuleContext) =>
   roles.includes(TRUSTED);
 
+/**
+ * The pool size the run was started with, put back after each case: a case
+ * that sets its own must not leave it for the next file in this worker.
+ */
+const CALLERS_POOL_MAX = process.env.DB_POOL_MAX;
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   const instance = current;
   current = undefined;
-  delete process.env.DB_POOL_MAX;
+  if (CALLERS_POOL_MAX === undefined) delete process.env.DB_POOL_MAX;
+  else process.env.DB_POOL_MAX = CALLERS_POOL_MAX;
   if (!instance) return;
-  // Bounded, so a write still waiting on the pool does not hold the file.
-  await Promise.race([
-    instance.destroy().catch(() => {}),
-    new Promise(resolve => setTimeout(resolve, 10_000)),
-  ]);
+  // Bounded, so a write still waiting on the pool does not hold the file; a
+  // teardown that fails or runs out the bound fails the case rather than
+  // leaving an instance behind unremarked.
+  await within(instance.destroy(), 10_000);
 });
 
 /**
