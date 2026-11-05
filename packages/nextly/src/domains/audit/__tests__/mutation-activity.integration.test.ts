@@ -263,7 +263,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { title: "edited in bulk" },
+        // The activity recorded is under test, not versions.
+        data: { title: "edited in bulk", _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "user", id: ACTOR.id },
@@ -298,7 +299,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { title: "by the key" },
+        // The activity recorded is under test, not versions.
+        data: { title: "by the key", _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "apiKey", id: "key_bulk_probe" },
@@ -353,7 +355,8 @@ describe.each(getConfiguredTestDialects())(
       await handler.bulkUpdateEntries({
         collectionName: "posts",
         ids: [id],
-        data: { tags: [tagId] },
+        // The activity recorded is under test, not versions.
+        data: { tags: [tagId], _overwrite: true },
         overrideAccess: true,
         user: { id: ACTOR.id, email: ACTOR.email },
         actor: { type: "user", id: ACTOR.id },

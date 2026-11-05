@@ -152,7 +152,8 @@ describe.each(getConfiguredTestDialects())(
             await entries.bulkUpdateEntries({
               collectionName: SLUG,
               ids: [id],
-              data: { title },
+              // What the hooks are handed is under test, not versions.
+              data: { title, _overwrite: true },
               overrideAccess: true,
             });
           },

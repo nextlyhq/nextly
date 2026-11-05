@@ -27,6 +27,7 @@ import type { CommittedWriteReconciler } from "./class-usage-hook";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
+import { documentVersionOf } from "./document-version";
 import { asServiceCaller, type ComponentStore } from "./library-route";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
@@ -239,6 +240,22 @@ export async function savesLive(
   return !(await resolvedCollectionDraftSplit(view)).eligible;
 }
 
+/** A stored page's blocks document, and the version of the read it came from. */
+export interface StoredPageRead {
+  readonly document: BlockDocument;
+  /** The row's version as read; absent from a server that issues none. */
+  readonly rev: string | undefined;
+}
+
+/** A row's blocks field with the row's version, or `null` when it holds none. */
+export function storedPageReadOf(
+  row: unknown,
+  field: string
+): StoredPageRead | null {
+  const document = blocksDocumentOf(row, field);
+  return document === null ? null : { document, rev: documentVersionOf(row) };
+}
+
 /**
  * A slug from the title, with a random suffix so two rows named alike never
  * collide on the unique column; a title `slugify` cannot spell yields the
@@ -265,17 +282,17 @@ export function createdId(item: unknown): string {
 
 /**
  * Refuse, rolling back what the transaction made, when the stored page
- * changed since the action was planned against it. The write has no
- * compare-and-swap on the page's version, so the page is read again as late
- * as the write allows: an edit landing between this read and the update is
- * still overwritten, a window of one statement rather than the whole request.
+ * changed since the action was planned against it, and give the version of
+ * the page as read here. The page is read again as late as the write allows,
+ * and the write sends this read's version back, so an edit landing between
+ * the two is refused by the update rather than overwritten.
  */
 export async function requireUnchangedPage(
-  readNow: () => Promise<BlockDocument | null>,
+  readNow: () => Promise<StoredPageRead | null>,
   planned: BlockDocument
-): Promise<void> {
+): Promise<string | undefined> {
   const now = await readNow();
-  if (now !== null && sameStoredValue(now, planned)) return;
+  if (now !== null && sameStoredValue(now.document, planned)) return now.rev;
   throw NextlyError.conflict({
     reason: "state",
     message:
