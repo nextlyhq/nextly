@@ -1066,3 +1066,24 @@ describe("a look, a class bound to one block type", () => {
     );
   });
 });
+
+describe("a look and a shared style wanting one name", () => {
+  it("leaves the name with the shared style, so a site's own style is never dropped", () => {
+    const look: NamedClass = {
+      id: "look:core/box:outline",
+      slug: "box-outline",
+      orderIndex: 0,
+      blockType: "core/box",
+      styles: styles({ color: "red" }),
+    };
+    const own: NamedClass = {
+      id: "c-own",
+      slug: "box-outline",
+      orderIndex: 9,
+      styles: styles({ color: "blue" }),
+    };
+    const { css } = compile(doc({ classes: [own.id, look.id] }), [look, own]);
+    expect(css).toContain(".nx-c-box-outline { color: blue }");
+    expect(css).not.toContain("color: red");
+  });
+});

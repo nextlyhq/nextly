@@ -125,9 +125,10 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
 }
 
 /**
- * The part of a class library the compiler reads: its first `MAX_NAMED_CLASSES` entries, as an
- * array prefix, before any ordering or claim rule. An entry past the cap is never read, so it
- * neither renders nor takes a slug or an id from an entry that does.
+ * The part of a class library the compiler reads: its first `MAX_NAMED_CLASSES` shared styles
+ * and its first `MAX_LOOKS` looks, in library order, before any ordering or claim rule. An entry
+ * past either cap is never read, so it neither renders nor takes a slug or an id from an entry
+ * that does.
  *
  * The one statement of the cap's reading, so a caller asking which classes a page can use asks
  * exactly what the compiler reads rather than a library the compiler would cut short.
@@ -135,10 +136,23 @@ export function isUsableNamedClass(value: unknown): value is NamedClass {
 export function namedClassesRead(
   library: readonly NamedClass[]
 ): readonly NamedClass[] {
-  return library.length > MAX_NAMED_CLASSES
-    ? library.slice(0, MAX_NAMED_CLASSES)
-    : library;
+  if (library.length <= MAX_NAMED_CLASSES) return library;
+  // Looks are counted apart, under a cap of their own, so the looks a site's
+  // blocks supply never take a shared style's place under the cap: a site at
+  // the cap keeps every style it had. Relative order is kept.
+  let shared = 0;
+  let looks = 0;
+  return library.filter(entry => {
+    if (isLook(entry)) return (looks += 1) <= MAX_LOOKS;
+    return (shared += 1) <= MAX_NAMED_CLASSES;
+  });
 }
+
+/**
+ * How many looks the compiler reads, apart from the shared-style cap: well
+ * above what any site's blocks declare, so only data already wrong reaches it.
+ */
+const MAX_LOOKS = 512;
 
 /**
  * The classes the engine will actually use, in the order they override one another.
@@ -174,22 +188,30 @@ export function usableNamedClassPositions(
 ): number[] {
   const takenSlugs = new Set<string>();
   const takenIds = new Set<string>();
-  const usable: number[] = [];
-  for (const position of orderedNamedClassPositions(classes)) {
-    const cls = classes[position];
-    if (!isUsableNamedClass(cls)) continue;
-    if (takenSlugs.has(cls.slug)) continue;
-    // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
-    // document references a class by id, so two entries sharing one make that reference
-    // ambiguous: whichever is looked up last is the only one reachable, while both were written.
-    // Dropping the later keeps one id to one class in both the rules emitted and the class list
-    // put on the element, which read this same list.
-    if (takenIds.has(cls.id)) continue;
-    takenSlugs.add(cls.slug);
-    takenIds.add(cls.id);
-    usable.push(position);
-  }
-  return usable;
+  const usable = new Set<number>();
+  const ordered = orderedNamedClassPositions(classes);
+  // Shared styles claim their names first, then looks: a look is written first, but a
+  // site's own style holding a name a look would take keeps it, so seeding a look never
+  // drops a style documents already use. The emitted order is unchanged.
+  const claim = (looks: boolean): void => {
+    for (const position of ordered) {
+      const cls = classes[position];
+      if (!isUsableNamedClass(cls) || isLook(cls) !== looks) continue;
+      if (takenSlugs.has(cls.slug)) continue;
+      // An id claimed twice is as unusable as a name claimed twice, and quieter about it. A
+      // document references a class by id, so two entries sharing one make that reference
+      // ambiguous: whichever is looked up last is the only one reachable, while both were
+      // written. Dropping the later keeps one id to one class in both the rules emitted and
+      // the class list put on the element, which read this same list.
+      if (takenIds.has(cls.id)) continue;
+      takenSlugs.add(cls.slug);
+      takenIds.add(cls.id);
+      usable.add(position);
+    }
+  };
+  claim(false);
+  claim(true);
+  return ordered.filter(position => usable.has(position));
 }
 
 /** The emitted class name for a slug. */

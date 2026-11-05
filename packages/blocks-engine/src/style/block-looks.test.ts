@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { BlockDocument, NodeStyles } from "../document";
 import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
+import { MAX_NAMED_CLASSES } from "../document";
+
 import { blockLooks, lookClassId } from "./block-looks";
 import { compilePageCss } from "./compile-page";
+import { isLook, namedClassesRead } from "./named-class";
 
 const colour = (color: string): NodeStyles =>
   ({ base: { base: { color } } }) as unknown as NodeStyles;
@@ -51,6 +54,37 @@ describe("a block type's looks, as the site receives them", () => {
     expect(blockLooks([odd])).toEqual([]);
   });
 
+  it("applies only to its own block type", () => {
+    const [outline] = blockLooks([button]);
+    if (outline === undefined) throw new Error("no look");
+    const on = (type: string) =>
+      compilePageCss(
+        {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "n1",
+              type,
+              version: 1,
+              props: {},
+              classes: [outline.id],
+            },
+          ],
+        } as unknown as BlockDocument,
+        { breakpoints: FIXTURE_BREAKPOINTS, namedClasses: [outline] }
+      );
+    // The control: on a button the look's class is put on the element.
+    expect(on("core/button").classes.get("n1")).toContain(
+      "nx-c-button-outline"
+    );
+    const box = on("core/box");
+    expect(box.classes.get("n1") ?? "").not.toContain("nx-c-button-outline");
+    expect(box.warnings.map(each => each.code)).toContain(
+      "look-for-another-block"
+    );
+  });
+
   it("styles a block that wears it, and a shared style still wins over it", () => {
     const [outline] = blockLooks([button]);
     if (outline === undefined) throw new Error("no look");
@@ -66,7 +100,7 @@ describe("a block type's looks, as the site receives them", () => {
       nodes: [
         {
           id: "n1",
-          type: "core/box",
+          type: "core/button",
           version: 1,
           props: {},
           classes: [outline.id, card.id],
@@ -82,5 +116,21 @@ describe("a block type's looks, as the site receives them", () => {
     expect(css.indexOf(".nx-c-button-outline")).toBeLessThan(
       css.indexOf(".nx-c-card")
     );
+  });
+});
+
+describe("looks and the library cap", () => {
+  it("never take a shared style's place under the cap", () => {
+    // A site at the cap, with the core looks put in front of it.
+    const shared = Array.from({ length: MAX_NAMED_CLASSES }, (_, index) => ({
+      id: `c-${index}`,
+      slug: `s${index}`,
+      orderIndex: index,
+      styles: colour("red"),
+    }));
+    const looks = blockLooks([button]);
+    const read = namedClassesRead([...looks, ...shared]);
+    expect(read.filter(each => !isLook(each))).toHaveLength(MAX_NAMED_CLASSES);
+    expect(read.filter(each => isLook(each))).toHaveLength(looks.length);
   });
 });
