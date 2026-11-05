@@ -2289,7 +2289,7 @@ describe("the overlay's two properties", () => {
     );
     expect(
       used.startsWith(
-        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; }\n"
+        ":where(.nx-pb-page *) { --nx-pb-overlay: initial; --nx-pb-overlay-strength: initial; --nx-pb-overlay-layer: initial; --nx-pb-overlay-position: initial; --nx-pb-overlay-size: initial; --nx-pb-overlay-repeat: initial; --nx-pb-overlay-attachment: initial; }\n"
       )
     ).toBe(true);
   });

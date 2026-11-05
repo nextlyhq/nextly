@@ -8,7 +8,10 @@
  */
 import {
   getBlock,
+  getStyleProperty,
+  isStyleLeaf,
   isTokenRef,
+  tokenCustomProperty,
   type BlockNode,
   type BreakpointId,
   type StyleState,
@@ -16,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { chainedStyleOp } from "./columns-layout";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import { readStyleValue } from "./style-values";
 
 /** The core blocks these shortcuts belong to. */
@@ -191,7 +194,7 @@ export function sizeOf(
   const padding = storedAt(node, at, "padding");
   const text = storedAt(node, at, "fontSize");
   if (padding === undefined && text === undefined) {
-    return reachingSize(reaching);
+    return reachingSize(node, reaching);
   }
   for (const size of ["small", "large"] as const) {
     const scaled = scaledPadding(node, SIZES[size].times);
@@ -207,18 +210,78 @@ export function sizeOf(
 }
 
 /**
- * The size a value reaching from elsewhere draws, as the cascade writes it:
- * a scaled padding token compiles to `calc(<token> * <times>)` beside its
- * text size, Medium is neither reaching, and anything else is none.
+ * Each padding side's CSS property, as the catalog compiles the side: what
+ * the cascade reports reaching, side by side.
  */
-function reachingSize(reaching: Reaching): SizeChoice | undefined {
-  const text = reaching("font-size");
-  const padding = reaching("padding-block-start");
-  if (text === undefined && padding === undefined) return "medium";
+const PADDING_SIDES: ReadonlyMap<string, string> = (() => {
+  const shape = getStyleProperty("padding")?.shape;
+  if (
+    shape === undefined ||
+    isStyleLeaf(shape) ||
+    shape.kind !== "logicalSides"
+  ) {
+    return new Map();
+  }
+  return new Map(
+    Object.entries(shape.sides).map(
+      ([side, leaf]) => [side, leaf.cssProperty] as const
+    )
+  );
+})();
+
+/** Whether a side's padding, or the text size, reaches from elsewhere. */
+function sizeReaches(reaching: Reaching): boolean {
+  return (
+    reaching("font-size") !== undefined ||
+    [...PADDING_SIDES.values()].some(
+      cssProperty => reaching(cssProperty) !== undefined
+    )
+  );
+}
+
+/**
+ * Whether a side's reaching text is its own token scaled by `times`, as the
+ * compiler writes it: `calc(var(<prefix><token>) * <times>)`, under whatever
+ * prefix the site's tokens carry.
+ */
+function reachesScaled(
+  text: string | undefined,
+  token: string,
+  times: number
+): boolean {
+  const name = tokenCustomProperty(token, "");
+  const match = /^calc\(var\((--[\w-]*)\) \* ([\d.]+)\)$/.exec(text ?? "");
+  return (
+    match !== null &&
+    (match[1] === `--${name}` || match[1]?.endsWith(`-${name}`) === true) &&
+    Number(match[2]) === times
+  );
+}
+
+/**
+ * The size a value reaching from elsewhere draws, as the cascade writes it:
+ * Medium where neither the text size nor any padding side reaches, Small or
+ * Large where the text size and all four sides are what that size writes,
+ * each side its own token at the size's factor, and anything else none.
+ */
+function reachingSize(
+  node: BlockNode,
+  reaching: Reaching
+): SizeChoice | undefined {
+  if (!sizeReaches(reaching)) return "medium";
+  const own = scaledPadding(node, 1);
+  if (own === undefined) return undefined;
   for (const size of ["small", "large"] as const) {
+    const { times, text } = SIZES[size];
     if (
-      text === SIZES[size].text &&
-      padding?.endsWith(`* ${String(SIZES[size].times)})`) === true
+      reaching("font-size") === text &&
+      [...PADDING_SIDES].every(([side, cssProperty]) => {
+        const token = own[side];
+        return (
+          isTokenRef(token) &&
+          reachesScaled(reaching(cssProperty), token.$token, times)
+        );
+      })
     ) {
       return size;
     }
@@ -238,9 +301,7 @@ export function planSize(
   reaching: Reaching = NOTHING_REACHES
 ): BuilderOp | null {
   if (size === "medium") {
-    const over =
-      reaching("font-size") !== undefined ||
-      reaching("padding-block-start") !== undefined;
+    const over = sizeReaches(reaching);
     return written(node, at, [
       ["padding", over ? (scaledPadding(node, 1) ?? null) : null],
       ["fontSize", over ? "inherit" : null],

@@ -51,5 +51,59 @@ export function overlaid(image: string): string {
   return `var(${OVERLAY_LAYER_PROPERTY},) ${image}`;
 }
 
+/**
+ * The background longhands a browser pairs with the image's layers one by
+ * one, each with the custom property holding the overlay layer's own entry
+ * and that entry, its comma included: each longhand's initial value, which
+ * a flat fill covers the box with. Written beside the layer, so a list the
+ * image's longhands carry (`cover, contain`) keeps lining up with the image
+ * once the layer is in front of it; without the entry, the layer would take
+ * the image's first item and shift the rest.
+ */
+export const OVERLAY_ALIGNED: ReadonlyMap<
+  string,
+  { readonly property: string; readonly value: string }
+> = new Map([
+  [
+    "background-position",
+    { property: "--nx-pb-overlay-position", value: "0% 0%," },
+  ],
+  ["background-size", { property: "--nx-pb-overlay-size", value: "auto," }],
+  [
+    "background-repeat",
+    { property: "--nx-pb-overlay-repeat", value: "repeat," },
+  ],
+  [
+    "background-attachment",
+    { property: "--nx-pb-overlay-attachment", value: "scroll," },
+  ],
+]);
+
+/**
+ * A background longhand's declared value, reading the overlay layer's entry in
+ * front of it: as is when the property pairs with no layer, and for a CSS-wide
+ * keyword, which names the whole value and takes nothing in front of it.
+ */
+export function alignedWithOverlay(
+  cssProperty: string,
+  text: string,
+  cssWide: boolean
+): string {
+  const aligned = OVERLAY_ALIGNED.get(cssProperty);
+  return aligned === undefined || cssWide
+    ? text
+    : `var(${aligned.property},) ${text}`;
+}
+
+/** What every custom property the overlay writes starts with, for a reader. */
+export const OVERLAY_PREFIX: string = OVERLAY_COLOR;
+
 /** The reset a sheet using the overlay carries, once: what stops it inheriting. */
-export const OVERLAY_RESET: string = `:where(.${PAGE_ROOT_CLASS} *) { ${OVERLAY_COLOR}: initial; ${OVERLAY_STRENGTH}: initial; ${OVERLAY_LAYER_PROPERTY}: initial; }`;
+export const OVERLAY_RESET: string = `:where(.${PAGE_ROOT_CLASS} *) { ${[
+  OVERLAY_COLOR,
+  OVERLAY_STRENGTH,
+  OVERLAY_LAYER_PROPERTY,
+  ...[...OVERLAY_ALIGNED.values()].map(aligned => aligned.property),
+]
+  .map(property => `${property}: initial;`)
+  .join(" ")} }`;

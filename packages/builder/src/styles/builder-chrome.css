@@ -9090,7 +9090,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: none;
 }
 
-.nx-icon-choice__option:not(:disabled):hover,
+/* Not over the chosen one, whose fill says which is chosen. */
+.nx-icon-choice__option:not(:disabled):not([aria-checked="true"]):hover,
 .nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);

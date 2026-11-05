@@ -188,12 +188,44 @@ describe("a shortcut over a value reaching from a wider device", () => {
     expect(planHeight(section, "auto", mobile)).toBeNull();
   });
 
-  it("reads a Small reaching from above, and Medium writes the button's own over it", () => {
+  /** Each padding side as a scaled token compiles, under a site's prefix. */
+  const scaledSides = (times: number) => ({
+    "padding-block-start": `calc(var(--site-button-padding-y) * ${times})`,
+    "padding-block-end": `calc(var(--site-button-padding-y) * ${times})`,
+    "padding-inline-start": `calc(var(--site-button-padding-x) * ${times})`,
+    "padding-inline-end": `calc(var(--site-button-padding-x) * ${times})`,
+  });
+
+  it("overrides a reaching inline side alone, which no other side shows", () => {
     const button = node("core/button");
-    const small = reaching({
+    const inline = reaching({ "padding-inline-start": "2rem" });
+    expect(sizeOf(button, mobile, inline)).toBeUndefined();
+    const medium = applied(button, planSize(button, "medium", mobile, inline));
+    expect(medium.styles?.base?.sm).toEqual({ padding, fontSize: "inherit" });
+  });
+
+  it("reads no size where only one side matches it", () => {
+    const button = node("core/button");
+    const oneSide = reaching({
       "font-size": "0.875em",
       "padding-block-start": "calc(var(--site-button-padding-y) * 0.75)",
+      "padding-block-end": "1px",
+      "padding-inline-start": "1px",
+      "padding-inline-end": "1px",
     });
+    expect(sizeOf(button, mobile, oneSide)).toBeUndefined();
+    // Each side's own token, not merely its factor.
+    const swapped = reaching({
+      "font-size": "0.875em",
+      ...scaledSides(0.75),
+      "padding-inline-end": "calc(var(--site-button-padding-y) * 0.75)",
+    });
+    expect(sizeOf(button, mobile, swapped)).toBeUndefined();
+  });
+
+  it("reads a Small reaching from above, and Medium writes the button's own over it", () => {
+    const button = node("core/button");
+    const small = reaching({ "font-size": "0.875em", ...scaledSides(0.75) });
     expect(sizeOf(button, mobile, small)).toBe("small");
     const medium = applied(button, planSize(button, "medium", mobile, small));
     expect(medium.styles?.base?.sm).toEqual({ padding, fontSize: "inherit" });

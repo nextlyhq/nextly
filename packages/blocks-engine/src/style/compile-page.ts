@@ -71,7 +71,7 @@ import {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
-import { OVERLAY_LAYER_PROPERTY, OVERLAY_RESET } from "./overlay";
+import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
 import {
   partRouting,
   routeDeclarations,
@@ -2724,7 +2724,9 @@ function withOverlayReset(
   gated: Readonly<Record<string, string>>
 ): string {
   const css = serializeRules(rules);
-  const reading = `var(${OVERLAY_LAYER_PROPERTY}`;
+  // Any of the overlay's properties read: the image's layer, or a longhand's
+  // entry lined up with it.
+  const reading = `var(${OVERLAY_PREFIX}`;
   // A gated node's rules are kept apart, and appended for a reader who sees
   // it: the reset stays in the sheet, so the page put back together is the
   // one an ungated compile writes.

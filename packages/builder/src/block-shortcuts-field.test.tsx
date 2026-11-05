@@ -18,6 +18,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
+import { applyOp } from "./ops";
 import { pickedReference, StyleInspectorPanel } from "./style-inspector-panel";
 
 beforeAll(() => {
@@ -48,7 +49,11 @@ const padding = {
   inlineEnd: { $token: "button.padding-x" },
 };
 
-function mount(type: string, styles?: BlockNode["styles"]) {
+function mount(
+  type: string,
+  styles?: BlockNode["styles"],
+  target?: React.ComponentProps<typeof StyleInspectorPanel>["target"]
+) {
   const block = (name: string, extra: Record<string, unknown>) => ({
     name,
     version: 1,
@@ -99,7 +104,12 @@ function mount(type: string, styles?: BlockNode["styles"]) {
     lockRefusalFor: () => undefined,
     composed: () => undefined,
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
-  render(<StyleInspectorPanel editor={editor} />);
+  render(
+    <StyleInspectorPanel
+      editor={editor}
+      {...(target === undefined ? {} : { target })}
+    />
+  );
   return editor;
 }
 
@@ -146,6 +156,47 @@ describe("a Section's Min height presets", () => {
     const presets = document.querySelector('[data-control="section-height"]');
     const field = document.querySelector('[data-property="minHeight"]');
     expect(presets?.nextElementSibling).toBe(field);
+  });
+});
+
+describe("a Section's Min height presets, chosen from the keyboard", () => {
+  it("keep focus on the chosen preset as the field they stand over comes and goes", () => {
+    // A live editor: each write redraws the panel, so Full screen draws the
+    // Min height field and the presets move over it, and Auto moves them back.
+    const editor = mount("core/section");
+    let document = editor.document;
+    const view = (): React.JSX.Element => (
+      <StyleInspectorPanel editor={{ ...editor, document }} />
+    );
+    editor.apply.mockImplementation(op => {
+      document = applyOp(document, op).document;
+      rerender();
+      return document;
+    });
+    cleanup();
+    const rendered = render(view());
+    function rerender(): void {
+      rendered.rerender(view());
+    }
+    open("Size");
+    const auto = screen.getByRole("radio", { name: "Auto" });
+    auto.focus();
+    fireEvent.keyDown(auto, { key: "ArrowRight" });
+    expect(
+      screen.getByRole("radiogroup", { name: "Min height presets" })
+    ).toBeDefined();
+    expect(globalThis.document.activeElement).toBe(
+      screen.getByRole("radio", { name: "Full screen" })
+    );
+    fireEvent.keyDown(globalThis.document.activeElement as Element, {
+      key: "ArrowLeft",
+    });
+    expect(
+      screen.getByRole("radiogroup", { name: "Min height" })
+    ).toBeDefined();
+    expect(globalThis.document.activeElement).toBe(
+      screen.getByRole("radio", { name: "Auto" })
+    );
   });
 });
 
@@ -234,6 +285,41 @@ describe("a background's overlay", () => {
         .getByRole("slider", { name: /overlay strength/i })
         .getAttribute("aria-valuenow")
     ).toBe("50");
+  });
+});
+
+describe("a shared style's overlay", () => {
+  const overlayLabels = () =>
+    screen.queryAllByText(/^Overlay/).map(each => each.textContent);
+  /** A shared style storing what is given, as the panel's target. */
+  const shared = (styles: BlockNode["styles"]) => ({
+    kind: "shared" as const,
+    worn: [],
+    style: { id: "cls-1", name: "Hero", styles } as never,
+    readOnly: undefined,
+    write: async () => undefined,
+  });
+
+  it("is offered over the style's own image while the block has none", () => {
+    mount(
+      "core/section",
+      undefined,
+      shared({
+        base: { [BASE_BREAKPOINT]: { background: { url: "/hills.jpg" } } },
+      })
+    );
+    open("Background");
+    expect(overlayLabels()).toEqual(["Overlay", "Overlay strength"]);
+  });
+
+  it("is not offered over the block's image while the style has none", () => {
+    mount(
+      "core/section",
+      { base: { [BASE_BREAKPOINT]: { background: { url: "/hills.jpg" } } } },
+      shared({ base: { [BASE_BREAKPOINT]: { color: "#fff" } } })
+    );
+    open("Background");
+    expect(overlayLabels()).toEqual([]);
   });
 });
 

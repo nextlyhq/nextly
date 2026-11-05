@@ -29,7 +29,7 @@ import {
   type SizeChoice,
 } from "./block-shortcuts";
 import type { EditorState } from "./editor-state";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import { SegmentChoices } from "./segment-choices";
 
 const HEIGHT_LABELS: Readonly<Record<HeightChoice, string>> = {
@@ -97,6 +97,25 @@ interface ShortcutProps {
 }
 
 /**
+ * The Section whose presets held focus when a choice moved them, if any.
+ * Choosing Full screen draws the Min height field and the presets move over
+ * it, and Auto moves them back: two places in the panel, so the focused radio
+ * is unmounted with the old row. The row drawn in the new place takes the
+ * focus back, read once by whichever row draws next and cleared.
+ */
+let focusMovesWith: string | undefined;
+
+/** The radio a moved row's focus lands on: the chosen one, else the first. */
+function takeMovedFocus(group: HTMLElement | null, nodeId: string): void {
+  if (focusMovesWith !== nodeId) return;
+  focusMovesWith = undefined;
+  const radio =
+    group?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]') ??
+    group?.querySelector<HTMLElement>('[role="radio"]');
+  radio?.focus();
+}
+
+/**
  * A Section's Min height presets, Auto and Full screen: on the Min height
  * row, as a row over its input where that field is drawn (`over`), else as
  * the row itself, named Min height, until a value draws the field.
@@ -109,11 +128,14 @@ export function MinHeightPresets({
   reaching,
   over,
 }: ShortcutProps & { over: boolean }): React.JSX.Element | null {
+  const row = React.useRef<HTMLDivElement>(null);
+  // After every draw: a row that moved takes back the focus its old place had.
+  React.useLayoutEffect(() => takeMovedFocus(row.current, nodeId));
   const node = findNode(editor.document.nodes, nodeId);
   if (node?.type !== SECTION_BLOCK) return null;
   const at: ShortcutAt = { state, breakpoint };
   return (
-    <div className="nx-block-shortcuts" data-control="section-height">
+    <div ref={row} className="nx-block-shortcuts" data-control="section-height">
       <ChoiceRow
         label={over ? "Min height presets" : "Min height"}
         shownLabel={!over}
@@ -129,7 +151,18 @@ export function MinHeightPresets({
         }
         onChoose={choice => {
           const op = planHeight(node, choice, at, reaching);
-          if (op !== null) editor.apply(op);
+          if (op === null) return;
+          // Marked before the write, which may move this row elsewhere.
+          if (row.current?.contains(document.activeElement) === true) {
+            focusMovesWith = nodeId;
+            // Only for the draw this write makes, committed within the event:
+            // a write that draws nothing (refused) leaves no mark to steal
+            // focus from a field typed in later.
+            setTimeout(() => {
+              if (focusMovesWith === nodeId) focusMovesWith = undefined;
+            }, 0);
+          }
+          editor.apply(op);
         }}
       />
     </div>

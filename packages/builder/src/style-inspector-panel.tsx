@@ -44,6 +44,7 @@ import {
   type ContrastResult,
   type FontFaceDef,
   type NodeStyles,
+  type StyleValues,
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
@@ -1183,6 +1184,7 @@ function SectionFields({
   readOnly: boolean;
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element {
+  const target = React.useContext(StyleTargetContext);
   const rings =
     sectionKey === "spacing"
       ? spacingRings(shown, surroundings.orientation)
@@ -1214,7 +1216,7 @@ function SectionFields({
               <BlockPresetsOver surroundings={surroundings} />
             ) : null}
             <StylePropertyFields
-              property={withOverlayOffered(property, surroundings)}
+              property={withOverlayOffered(property, surroundings, target)}
               namesSection={property.property === sectionKey}
               {...surroundings}
             />
@@ -1388,16 +1390,17 @@ const BACKGROUND_IMAGE_LEAF: StyleLeaf = {
 
 /**
  * The background's controls without its overlay while there is nothing for
- * one to cover: no image or gradient reaching the block (from the cascade
- * where it answers, else from what the block stores anywhere), and no
- * overlay of its own to clear.
+ * one to cover: no image or gradient reaching what is edited (from the
+ * cascade where it answers, else from what the target stores anywhere), and
+ * no overlay of its own to clear.
  */
 function withOverlayOffered(
   property: InspectedStyleProperty,
-  surroundings: StyleFieldSurroundings
+  surroundings: StyleFieldSurroundings,
+  target: StyleTarget
 ): InspectedStyleProperty {
   if (property.property !== "background") return property;
-  if (overlayCovers(surroundings)) return property;
+  if (overlayCovers(surroundings, target)) return property;
   return {
     ...property,
     controls: property.controls.filter(
@@ -1406,42 +1409,56 @@ function withOverlayOffered(
   };
 }
 
-/** Whether an image or a gradient, or an overlay itself, reaches the block. */
-function overlayCovers(surroundings: StyleFieldSurroundings): boolean {
-  const node = findNode(
-    surroundings.editor.document.nodes,
+/**
+ * Whether an image or a gradient, or an overlay itself, reaches what is
+ * edited: read from the styles the fields show, the shared style's while it
+ * is the target, whose cascade the panel does not trace.
+ */
+function overlayCovers(
+  surroundings: StyleFieldSurroundings,
+  target: StyleTarget
+): boolean {
+  const { styles } = fieldStyles(
+    target,
+    surroundings.editor,
     surroundings.nodeId
   );
-  if (storesBackgroundImage(node?.styles)) return true;
+  if (storesBackgroundImage(styles)) return true;
   const answer = surroundings.provenanceOf(BACKGROUND_IMAGE_LEAF);
   return answer !== undefined && answer.provenance.kind !== "unset";
 }
 
 /**
- * Whether a block stores, at any state or device, an image, a gradient or an
+ * Whether styles store, at any state or device, an image, a gradient or an
  * overlay: what keeps the overlay offered where no cascade answers.
  */
 function storesBackgroundImage(styles: NodeStyles | undefined): boolean {
-  for (const byBreakpoint of Object.values(styles ?? {})) {
-    for (const values of Object.values(byBreakpoint ?? {})) {
-      // Judged as the compiler judges it: `none` clears an image, and an
-      // overlay over it would cover nothing.
-      if (paintsBackgroundImage("gradient", values?.backgroundGradient)) {
-        return true;
-      }
-      const background = values?.background;
-      if (
-        typeof background === "object" &&
-        background !== null &&
-        !Array.isArray(background) &&
-        (paintsBackgroundImage("url", (background as { url?: unknown }).url) ||
-          [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field)))
-      ) {
-        return true;
-      }
-    }
+  return Object.values(styles ?? {}).some(byBreakpoint =>
+    Object.values(byBreakpoint ?? {}).some(paintsOrOverlays)
+  );
+}
+
+/**
+ * Whether one address's values paint an image or a gradient, judged as the
+ * compiler judges it (`none` clears an image, and an overlay over it would
+ * cover nothing), or store an overlay of their own.
+ */
+function paintsOrOverlays(values: StyleValues | undefined): boolean {
+  if (paintsBackgroundImage("gradient", values?.backgroundGradient)) {
+    return true;
   }
-  return false;
+  const background = values?.background;
+  if (
+    typeof background !== "object" ||
+    background === null ||
+    Array.isArray(background)
+  ) {
+    return false;
+  }
+  return (
+    paintsBackgroundImage("url", (background as { url?: unknown }).url) ||
+    [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field))
+  );
 }
 
 /** The catalog's leaf for a row's column template, which the trace records. */

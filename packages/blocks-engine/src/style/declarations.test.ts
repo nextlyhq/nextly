@@ -15,6 +15,24 @@ import {
 import { overlaid } from "./overlay";
 import { styleUnionVariant } from "./validate-style-value";
 
+/** A CSS list's items, split at its commas outside any parentheses. */
+function topLevelItems(list: string): string[] {
+  const items: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < list.length; index++) {
+    const char = list[index];
+    if (char === "(") depth++;
+    else if (char === ")") depth--;
+    else if (char === "," && depth === 0) {
+      items.push(list.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  items.push(list.slice(start).trim());
+  return items;
+}
+
 /** The union a catalog property declares, for the arm-choice tests. */
 function unionShapeOf(property: string): UnionShape {
   const entry = getStyleProperty(property);
@@ -296,7 +314,47 @@ describe("a background without an overlay keeps its layers", () => {
     expect(written["background-image"]).toBe(
       'var(--nx-pb-overlay-layer,) url("/a.png")'
     );
-    expect(written["background-size"]).toBe("cover, contain");
+    // The size reads the overlay's entry in front of it, empty with no overlay.
+    expect(written["background-size"]).toBe(
+      "var(--nx-pb-overlay-size,) cover, contain"
+    );
+    expect(written["--nx-pb-overlay-size"]).toBeUndefined();
+  });
+
+  it("keeps a list of sizes, places and repeats lined up with its image when an overlay is laid in front", () => {
+    // As a browser reads the declarations: each overlay property substituted,
+    // then every list split at its top-level commas.
+    const written = values({
+      url: "/a.png",
+      size: "cover, contain",
+      position: "center, 10px 20px",
+      repeat: "no-repeat",
+      attachment: "fixed",
+      overlay: "#000",
+    });
+    const list = (property: string): string[] =>
+      topLevelItems(
+        (written[property] ?? "").replace(
+          /var\((--nx-pb-overlay[\w-]*),\)/g,
+          (_whole, name: string) => written[name] ?? ""
+        )
+      );
+    const images = list("background-image");
+    const at = images.indexOf('url("/a.png")');
+    expect(at).toBe(1);
+    expect(list("background-size")[at]).toBe("cover");
+    expect(list("background-position")[at]).toBe("center");
+    expect(list("background-repeat")[at]).toBe("no-repeat");
+    expect(list("background-attachment")[at]).toBe("fixed");
+    // The overlay's own layer fills the box, however the image is placed.
+    expect(list("background-size")[0]).toBe("auto");
+    expect(list("background-position")[0]).toBe("0% 0%");
+    expect(list("background-repeat")[0]).toBe("repeat");
+    expect(list("background-attachment")[0]).toBe("scroll");
+  });
+
+  it("leaves a CSS-wide keyword whole, which takes no layer in front of it", () => {
+    expect(values({ size: "inherit" })["background-size"]).toBe("inherit");
   });
 
   it("has its overlay's layer written by the overlay alone, with its comma", () => {

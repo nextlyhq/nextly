@@ -30,6 +30,8 @@ import {
   trimCssWhitespace,
 } from "./css-value";
 import {
+  alignedWithOverlay,
+  OVERLAY_ALIGNED,
   OVERLAY_COLOR,
   OVERLAY_LAYER_PROPERTY,
   OVERLAY_LAYER_VALUE,
@@ -443,7 +445,13 @@ function shapeDeclarations(
     walk.placed.push({
       path,
       property: shape.cssProperty,
-      value: text,
+      // A longhand paired with the image's layers reads the overlay layer's
+      // entry in front of it, so its list stays lined up with the image.
+      value: alignedWithOverlay(
+        shape.cssProperty,
+        text,
+        isCssWideKeyword(asciiLower(decodeIdentifier(trimCssWhitespace(text))))
+      ),
       ...(shape.descendant === undefined
         ? {}
         : { descendant: shape.descendant }),
@@ -457,6 +465,14 @@ function shapeDeclarations(
         property: OVERLAY_LAYER_PROPERTY,
         value: OVERLAY_LAYER_VALUE,
       });
+      // And the layer's own entry in each longhand paired with it.
+      for (const aligned of OVERLAY_ALIGNED.values()) {
+        walk.placed.push({
+          path,
+          property: aligned.property,
+          value: aligned.value,
+        });
+      }
     }
     return;
   }
