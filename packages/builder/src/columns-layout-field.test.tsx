@@ -129,7 +129,7 @@ function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
 describe("a Columns row's layout", () => {
   it("offers its layouts as tiles, Auto first and chosen while nothing is set", () => {
     mount([column("a"), column("b")]);
-    const tiles = screen.getByRole("radiogroup", { name: "Layout" });
+    const tiles = screen.getByRole("radiogroup", { name: "Widths" });
     const names = [...tiles.querySelectorAll('[role="radio"]')].map(tile =>
       tile.getAttribute("aria-label")
     );
@@ -168,13 +168,22 @@ describe("a Columns row's layout", () => {
       column("c", [words]),
     ]);
     const tile = screen.getByRole("radio", { name: "50 / 50" });
-    expect((tile as HTMLButtonElement).disabled).toBe(true);
+    // Held, not disabled: it can still be reached to read why.
+    expect(tile.getAttribute("aria-disabled")).toBe("true");
+    expect((tile as HTMLButtonElement).disabled).toBe(false);
+    // The hint under the tiles says why while the tile is focused or hovered,
+    // and is the tile's description.
+    fireEvent.focus(tile);
     const why = document.getElementById(
       tile.getAttribute("aria-describedby") ?? ""
     );
-    expect(why?.textContent).toMatch(/every column holds content/);
+    expect(why?.textContent).toBe(
+      "Needs 2 columns. This row has 3 with content; empty one out first."
+    );
     fireEvent.click(tile);
     expect(editor.applyAll).not.toHaveBeenCalled();
+    fireEvent.blur(tile);
+    expect(why?.textContent).not.toMatch(/Needs 2 columns/);
   });
 
   it("stacks at Tablet and below, reversed, writing the row only", () => {
@@ -221,6 +230,6 @@ describe("a Columns row's layout", () => {
         }
       />
     );
-    expect(screen.queryByRole("radiogroup", { name: "Layout" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Widths" })).toBeNull();
   });
 });

@@ -190,12 +190,9 @@ function addedColumns(row: BlockNode, count: number): BuilderOp[] | undefined {
   }));
 }
 
-/** Why a layout cannot remove `extra` columns when only `empty` are empty. */
-function refusal(extra: number, empty: number): string {
-  if (empty === 0) {
-    return `Needs ${extra} ${extra === 1 ? "column" : "columns"} removed, and every column holds content. Empty one first.`;
-  }
-  return `Needs ${extra} columns removed, and only ${empty} ${empty === 1 ? "is" : "are"} empty. Empty another first.`;
+/** Why a layout of `count` columns cannot be laid out on this row. */
+function refusal(count: number, holding: number): string {
+  return `Needs ${count} ${count === 1 ? "column" : "columns"}. This row has ${holding} with content; empty one out first.`;
 }
 
 /**
@@ -210,7 +207,9 @@ function removedColumns(
   const extra = columns.length - count;
   if (extra <= 0) return [];
   const empty = columns.filter(isEmpty);
-  if (empty.length < extra) return { reason: refusal(extra, empty.length) };
+  if (empty.length < extra) {
+    return { reason: refusal(count, columns.length - empty.length) };
+  }
   return empty
     .reverse()
     .slice(0, extra)

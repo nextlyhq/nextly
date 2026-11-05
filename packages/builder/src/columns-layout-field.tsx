@@ -52,6 +52,24 @@ function Glyph({ layout }: { layout: ColumnsLayout }): React.JSX.Element {
   );
 }
 
+/** What the row's widths are, said under the tiles. */
+function hintFor(current: string): string {
+  if (current === "custom") return "A layout of its own, written as CSS below.";
+  if (current === "auto") return "Equal columns that wrap when narrow.";
+  return "Columns at these widths on this device.";
+}
+
+/** Why the pointed tile is held, if one is. */
+function heldReason(
+  row: Parameters<typeof planLayout>[0],
+  pointed: string | undefined,
+  at: Parameters<typeof planLayout>[2]
+): string | undefined {
+  if (pointed === undefined) return undefined;
+  const plan = planLayout(row, pointed, at);
+  return plan.ok ? undefined : plan.reason;
+}
+
 export function ColumnsLayoutControl({
   editor,
   nodeId,
@@ -67,7 +85,9 @@ export function ColumnsLayoutControl({
 }): React.JSX.Element | null {
   const labelId = React.useId();
   const stackId = React.useId();
-  const reasonId = React.useId();
+  const hintId = React.useId();
+  // The held tile being hovered or focused, whose reason the hint then says.
+  const [pointed, setPointed] = React.useState<string | undefined>(undefined);
   const row = findNode(editor.document.nodes, nodeId);
   if (row === undefined) return null;
   const current = layoutOf(
@@ -91,7 +111,7 @@ export function ColumnsLayoutControl({
     <div className="nx-columns-layout" data-control="columns-layout">
       <div className="nx-inspector__field nx-columns-layout__layout">
         <span className="nx-inspector__field-name" id={labelId}>
-          Layout
+          Widths
         </span>
         <div
           role="radiogroup"
@@ -101,6 +121,8 @@ export function ColumnsLayoutControl({
           {COLUMNS_LAYOUTS.map(layout => {
             const plan = planLayout(row, layout.key, { state, breakpoint });
             const refused = plan.ok ? undefined : plan.reason;
+            const point = (on: boolean) =>
+              setPointed(on && refused !== undefined ? layout.key : undefined);
             return (
               <button
                 key={layout.key}
@@ -109,39 +131,35 @@ export function ColumnsLayoutControl({
                 aria-checked={layout.key === current}
                 aria-label={layout.label}
                 title={
-                  refused ??
-                  (layout.key === "auto"
+                  layout.key === "auto"
                     ? "Equal columns that wrap when narrow"
-                    : undefined)
+                    : undefined
                 }
+                // Held, not disabled: still reachable, so its reason can be
+                // read; the hint under the tiles says it, as its description.
                 {...(refused === undefined
                   ? {}
-                  : { "aria-describedby": `${reasonId}-${layout.key}` })}
-                disabled={refused !== undefined}
+                  : { "aria-disabled": true, "aria-describedby": hintId })}
                 className="nx-columns-layout__tile"
+                onMouseEnter={() => point(true)}
+                onMouseLeave={() => point(false)}
+                onFocus={() => point(true)}
+                onBlur={() => point(false)}
                 onClick={() => {
-                  if (plan.ok && plan.ops.length > 0)
+                  if (plan.ok && plan.ops.length > 0) {
                     editor.applyAll([...plan.ops]);
+                  }
                 }}
               >
                 <Glyph layout={layout} />
                 <span>{layout.label}</span>
-                {refused === undefined ? null : (
-                  <span id={`${reasonId}-${layout.key}`} hidden>
-                    {refused}
-                  </span>
-                )}
               </button>
             );
           })}
         </div>
       </div>
-      <p className="nx-inspector__note">
-        {current === "custom"
-          ? "A layout of its own, written as CSS below."
-          : current === "auto"
-            ? "Equal columns that wrap when narrow."
-            : "Columns at these widths on this device."}
+      <p id={hintId} className="nx-inspector__note" aria-live="polite">
+        {heldReason(row, pointed, { state, breakpoint }) ?? hintFor(current)}
       </p>
       {options.length > 1 ? (
         <>

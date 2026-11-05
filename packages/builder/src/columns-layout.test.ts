@@ -161,7 +161,7 @@ describe("planLayout", () => {
     expect(plan.ok).toBe(false);
     if (plan.ok) return;
     expect(plan.reason).toBe(
-      "Needs 1 column removed, and every column holds content. Empty one first."
+      "Needs 2 columns. This row has 3 with content; empty one out first."
     );
   });
 });

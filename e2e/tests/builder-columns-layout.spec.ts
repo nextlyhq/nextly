@@ -111,7 +111,7 @@ async function openRow(page: Page, id: string): Promise<void> {
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
   await page.getByRole("tab", { name: "Style" }).click();
-  await expect(page.getByRole("radiogroup", { name: "Layout" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Widths" })).toBeVisible();
 }
 
 async function storedRow(page: Page, id: string) {
@@ -161,9 +161,10 @@ test.describe("a Columns row's layout", () => {
     ]);
     await openRow(page, id);
     const tile = page.getByRole("radio", { name: "50 / 50" });
-    await expect(tile).toBeDisabled();
+    await expect(tile).toHaveAttribute("aria-disabled", "true");
+    await tile.hover();
     await expect(tile).toHaveAccessibleDescription(
-      /every column holds content/
+      "Needs 2 columns. This row has 3 with content; empty one out first."
     );
   });
 

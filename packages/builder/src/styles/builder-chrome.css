@@ -8471,7 +8471,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-foreground);
 }
 
-.nx-columns-layout__tile:disabled {
+.nx-columns-layout__tile[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
 }
