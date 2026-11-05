@@ -7,7 +7,13 @@
  * contributes none, as it contributes no jobs.
  *
  * A schedule in the earlier shape (`{ name, schedule, handler? }`, published
- * as reserved and never executed) is left as it always was: not run.
+ * as reserved and never executed) is mapped to the current one, with a
+ * deprecation notice: its `name` is the slug, a cron string or an interval in
+ * milliseconds that fits a cron step is the cron, and its handler runs as a
+ * job of its own. One that cannot be mapped is left unexecuted, as before,
+ * with a notice saying why. Either way it never stops the start: it was
+ * published as accepted, so refusing it would break an installation that
+ * started yesterday.
  *
  * @module domains/schedules/collect-schedules
  * @experimental
@@ -17,10 +23,18 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import { NextlyError } from "../../errors";
+import type { ScheduledTask } from "../../plugins/contributions";
 import type { CollectedJob } from "../../plugins/jobs/collect-jobs";
-import type { PluginDefinition } from "../../plugins/plugin-context";
+import type {
+  PluginContext,
+  PluginDefinition,
+} from "../../plugins/plugin-context";
+import {
+  noticeDeprecation,
+  type DeprecationSink,
+} from "../../shared/lib/deprecation-notice";
 import { isJsonValue } from "../../shared/lib/json-value";
-import { normalizeJobSlug } from "../jobs/job-registry";
+import { defineJob, normalizeJobSlug } from "../jobs/job-registry";
 import { MAX_PORTABLE_KEY_LENGTH } from "../jobs/portable-key";
 
 import { isTimeZone, parseCron, type CronExpression } from "./cron";
@@ -84,7 +98,8 @@ function isEarlierShape(entry: unknown): boolean {
 function refuse(plugin: string, slug: string, reason: string): NextlyError {
   return NextlyError.invalidInput({
     message: `NEXTLY_SCHEDULE_INVALID: plugin "${plugin}" declares schedule "${slug}", which cannot run: ${reason}.`,
-    logContext: { plugin, slug },
+    // The reason alone, for the notice an earlier-shape schedule gets instead.
+    logContext: { plugin, slug, reason },
   });
 }
 
@@ -249,18 +264,130 @@ function collectOne(
   };
 }
 
+/** What mapping the earlier shape needs of the installation. */
+export interface EarlierScheduleOptions {
+  /** Where its deprecation notice, or the notice that it is not run, goes. */
+  notice: DeprecationSink;
+  /**
+   * The started context of `plugin`, which an earlier-shape handler is given
+   * when its job runs; none when the plugin was not started in this process.
+   */
+  contextOf: (plugin: string) => Promise<PluginContext | undefined>;
+}
+
+/** The plugins' schedules, and the jobs earlier-shape schedules run. */
+export interface CollectedSchedules {
+  schedules: CollectedSchedule[];
+  /** One per mapped earlier-shape schedule: its handler, as a job. */
+  jobs: CollectedJob[];
+}
+
+/**
+ * An interval in milliseconds as the cron that fires on it: whole hours that
+ * divide a day, or whole minutes that divide an hour. Any other interval has
+ * no cron that keeps it, so none.
+ */
+function intervalCron(ms: number): string | undefined {
+  if (!Number.isSafeInteger(ms) || ms <= 0) return undefined;
+  const HOUR = 3_600_000;
+  const MINUTE = 60_000;
+  if (ms % HOUR === 0 && 24 % (ms / HOUR) === 0)
+    return `0 */${ms / HOUR} * * *`;
+  if (ms % MINUTE === 0 && 60 % (ms / MINUTE) === 0) {
+    return `*/${ms / MINUTE} * * * *`;
+  }
+  return undefined;
+}
+
+/**
+ * `task`, in the earlier shape, as a schedule of the current shape and the
+ * job that runs its handler, or refused saying why it cannot be: the same
+ * checks as the current shape, on the slug, cron and key it maps to.
+ */
+function mapEarlier(
+  plugin: string,
+  task: ScheduledTask,
+  declaredJobs: ReadonlySet<string>,
+  contextOf: EarlierScheduleOptions["contextOf"]
+): { schedule: CollectedSchedule; job: CollectedJob } {
+  const slug = String(task.name);
+  const source =
+    typeof task.schedule === "number"
+      ? intervalCron(task.schedule)
+      : typeof task.schedule === "string"
+        ? task.schedule
+        : undefined;
+  if (source === undefined) {
+    throw refuse(
+      plugin,
+      slug,
+      typeof task.schedule === "number"
+        ? `its interval of ${task.schedule} ms is not whole minutes dividing an hour or whole hours dividing a day, so no cron keeps it`
+        : "its schedule is neither a cron expression nor an interval in milliseconds"
+    );
+  }
+  const handler = task.handler;
+  if (typeof handler !== "function") {
+    throw refuse(plugin, slug, "it has no handler to run");
+  }
+  // In the plugin's own namespace, apart from the jobs it declares.
+  const runs = `${plugin}:schedule:${slug}`;
+  if (declaredJobs.has(runs)) {
+    throw refuse(
+      plugin,
+      slug,
+      `the job "${runs}" it would run is declared already`
+    );
+  }
+  const schedule = collectOne(
+    plugin,
+    { slug, cron: source, job: runs },
+    new Set([runs])
+  );
+  const definition = defineJob({
+    slug: schedule.job,
+    handler: async () => {
+      // The context the plugin was started with, as its other code is given.
+      const context = await contextOf(plugin);
+      if (context === undefined) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "plugin-not-started",
+            plugin,
+            slug,
+            detail:
+              "An earlier-shape schedule's handler needs its plugin started in this process.",
+          },
+        });
+      }
+      await handler(context);
+    },
+  });
+  return { schedule, job: { definition, owner: plugin, plugin } };
+}
+
+/** Why `error` refused an earlier-shape schedule, in its own words. */
+function reasonOf(error: NextlyError): string {
+  const reason = (error.logContext as { reason?: unknown } | undefined)?.reason;
+  return typeof reason === "string" ? reason : error.message;
+}
+
 /**
  * Every enabled plugin's schedules, checked.
  *
  * @throws NextlyError.invalidInput naming the plugin, for a schedule that
  *   cannot run: an invalid cron, an unknown time zone, a job the plugin does
- *   not declare, a slug it uses twice, or input that is not an object.
+ *   not declare, a slug it uses twice, or input that is not an object. An
+ *   earlier-shape schedule is never refused: one that cannot run is told of.
  */
 export function collectSchedules(
   plugins: readonly PluginDefinition[],
-  jobs: readonly CollectedJob[]
-): CollectedSchedule[] {
+  jobs: readonly CollectedJob[],
+  earlier: EarlierScheduleOptions
+): CollectedSchedules {
   const out: CollectedSchedule[] = [];
+  const earlierJobs: CollectedJob[] = [];
+  const declaredJobs = new Set(jobs.map(job => job.definition.slug));
   // Keys across the installation, compared as stored, byte for byte: two
   // schedules with one key would share each other's windows.
   const keys = new Set<string>();
@@ -273,10 +400,7 @@ export function collectSchedules(
         .map(collected => collected.definition.slug)
     );
     const seen = new Set<string>();
-    for (const entry of plugin.contributes?.schedules ?? []) {
-      // The earlier shape was never executed, and is left so.
-      if (isEarlierShape(entry)) continue;
-      const schedule = collectOne(plugin.name, entry, ownJobs);
+    const admit = (schedule: CollectedSchedule) => {
       if (seen.has(schedule.slug)) {
         throw refuse(
           plugin.name,
@@ -294,7 +418,38 @@ export function collectSchedules(
       }
       keys.add(schedule.key);
       out.push(schedule);
+    };
+    for (const entry of plugin.contributes?.schedules ?? []) {
+      if (!isEarlierShape(entry)) {
+        admit(collectOne(plugin.name, entry, ownJobs));
+        continue;
+      }
+      const task = entry as ScheduledTask;
+      // Said once per schedule: each is its own surface.
+      const surface = `Plugin "${plugin.name}"'s schedule "${String(task.name)}" in the { name, schedule, handler } shape`;
+      const replacement = "{ slug, cron, job } with a job the plugin declares";
+      try {
+        const mapped = mapEarlier(
+          plugin.name,
+          task,
+          declaredJobs,
+          earlier.contextOf
+        );
+        admit(mapped.schedule);
+        earlierJobs.push(mapped.job);
+        noticeDeprecation({ surface, replacement }, earlier.notice);
+      } catch (error) {
+        if (!NextlyError.is(error)) throw error;
+        noticeDeprecation(
+          {
+            surface,
+            replacement,
+            message: `${surface} is not run: ${reasonOf(error)}. Declare it as ${replacement} instead.`,
+          },
+          earlier.notice
+        );
+      }
     }
   }
-  return out;
+  return { schedules: out, jobs: earlierJobs };
 }
