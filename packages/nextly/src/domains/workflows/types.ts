@@ -36,6 +36,26 @@ export interface WorkflowStage<S extends string = string> {
   label: string;
   /** Whether content in this stage may be published. */
   allowsPublish?: boolean;
+  /**
+   * The name this stage had before it was renamed. A deploy moves the parts
+   * still recorded under that name to this stage, keeping their approvals, and
+   * records each move. Not a stage of the workflow: it may name no current
+   * stage, nor a stage `removedStages` lists.
+   */
+  renamedFrom?: string;
+}
+
+/**
+ * A stage as the system reads it: whether it allows publishing decided, and
+ * the name it was renamed from kept only where the definition gave one.
+ *
+ * @experimental
+ */
+export interface ResolvedWorkflowStage<S extends string = string> {
+  name: S;
+  label: string;
+  allowsPublish: boolean;
+  renamedFrom?: string;
 }
 
 /**
@@ -162,7 +182,7 @@ export interface Workflow<
   readonly kind: "nextly-workflow";
   readonly slug: string;
   readonly label: string;
-  readonly stages: readonly Required<WorkflowStage<S>>[];
+  readonly stages: readonly ResolvedWorkflowStage<S>[];
   readonly steps: readonly ResolvedWorkflowStep<S, T>[];
   readonly firstStage: S;
   readonly onEdit: { readonly to: S; readonly exemptFields: readonly string[] };

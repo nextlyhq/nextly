@@ -1,0 +1,267 @@
+/**
+ * `nextly workflow:stranded` and `nextly workflow:move-stranded`, on every configured dialect: the
+ * list names each part in a stage its workflow no longer has, and the move takes them to a named
+ * stage in one transaction, recording one event per document with the person `--as` names and
+ * the comment. A move refused, for an unknown or deactivated person, a stage the workflow does not
+ * have or one that allows publishing, or no comment, moves nothing.
+ *
+ * Driven through the two functions the commands run, `strandedReviewStates` and
+ * `moveStrandedReviewStates`, on the workflows the configuration registers, as the commands hand
+ * them.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection, text } from "../../../config";
+import { defineWorkflow } from "../../../domains/workflows/define-workflow";
+import { workflowDefinitionHash } from "../../../domains/workflows/hash";
+import { registeredWorkflows } from "../../../domains/workflows/registry";
+import {
+  moveStrandedReviewStates,
+  strandedReviewStates,
+} from "../../../domains/workflows/stranded-stages";
+import {
+  entry,
+  partOf,
+  person,
+  seedState,
+  stateOf,
+  workflowEvents,
+} from "../../../domains/workflows/__tests__/helpers/step-harness";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+
+/** A workflow whose stored states include a stage it no longer has: `archive`. */
+const desk = defineWorkflow({
+  slug: "desk",
+  label: "Desk",
+  stages: [
+    { name: "draft", label: "Draft" },
+    { name: "legal", label: "Legal check" },
+    { name: "approved", label: "Approved", allowsPublish: true },
+  ],
+  steps: [
+    {
+      name: "submit",
+      label: "Submit",
+      kind: "submit",
+      from: "draft",
+      to: "legal",
+    },
+    {
+      name: "approve",
+      label: "Approve",
+      kind: "approve",
+      from: "legal",
+      to: "approved",
+      primary: true,
+    },
+    {
+      name: "sendBack",
+      label: "Send back",
+      kind: "request-changes",
+      from: ["legal", "approved"],
+      to: "draft",
+    },
+  ],
+});
+const HASH = workflowDefinitionHash(desk);
+const drafts = { status: true, versions: { drafts: true } } as const;
+
+let t: TestNextly | undefined;
+
+afterEach(async () => {
+  await t?.destroy();
+  t = undefined;
+});
+
+const app = (): TestNextly => {
+  if (!t) throw new Error("not booted");
+  return t;
+};
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  t = await createTestNextly({
+    dialect,
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    collections: [
+      defineCollection({
+        slug: "posts",
+        localized: true,
+        ...drafts,
+        workflow: desk,
+        fields: [text({ name: "title", localized: true })],
+      }),
+      defineCollection({
+        slug: "pages",
+        ...drafts,
+        workflow: desk,
+        fields: [text({ name: "title" })],
+      }),
+    ],
+  });
+  return t;
+}
+
+/** Two posts and a page, each with a part stranded in `archive`, and one post part in `legal`. */
+async function strandedInstall() {
+  const n = app();
+  const both = await entry(n, "posts");
+  const one = await entry(n, "posts");
+  const page = await entry(n, "pages");
+  const seed = (slug: string, id: string, part: string | null, stage: string) =>
+    seedState(n, partOf(slug, id, part), stage, { definitionHash: HASH });
+  await seed("posts", both, "en", "archive");
+  await seed("posts", both, "es", "archive");
+  await seed("posts", one, "en", "archive");
+  await seed("posts", one, "es", "legal");
+  await seed("pages", page, null, "archive");
+  await person(n, "ann", []);
+  await person(n, "zed", [], { active: false });
+  return { both, one, page };
+}
+
+const moves = (slug: string, id: string) =>
+  workflowEvents(app(), slug, id).then(events =>
+    events.filter(event => event.kind === "workflow-stranded-moved")
+  );
+
+describe.each(getConfiguredTestDialects())(
+  "nextly workflow:stranded and workflow:move-stranded (%s)",
+  dialect => {
+    it("lists the stranded parts, then moves one collection's to a named stage, one event per document", async () => {
+      await boot(dialect);
+      const { both, one, page } = await strandedInstall();
+      const workflows = registeredWorkflows();
+
+      const listed = await strandedReviewStates(app().adapter, { workflows });
+      expect(
+        listed.map(state => [state.scopeSlug, state.entryId, state.part])
+      ).toEqual(
+        [
+          ["pages", page, null],
+          ["posts", both, "en"],
+          ["posts", both, "es"],
+          ["posts", one, "en"],
+        ].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+      );
+      expect(listed[0]?.message).toBe("Stage 'archive' no longer exists");
+
+      const moved = await moveStrandedReviewStates(app().adapter, {
+        workflows,
+        collection: "posts",
+        to: "draft",
+        as: "ANN@example.test",
+        comment: "Archive was retired.",
+      });
+      expect(moved).toHaveLength(2);
+
+      for (const [id, part] of [
+        [both, "en"],
+        [both, "es"],
+        [one, "en"],
+      ] as const) {
+        expect(await stateOf(app(), partOf("posts", id, part))).toMatchObject({
+          stage: "draft",
+          enteredBy: "ann",
+          approval: null,
+        });
+      }
+      // A part in a stage the workflow has is no part of the move.
+      expect(await stateOf(app(), partOf("posts", one, "es"))).toMatchObject({
+        stage: "legal",
+        revision: 1,
+      });
+      const [bothMove, ...bothMore] = await moves("posts", both);
+      expect(bothMore).toEqual([]);
+      expect(bothMove).toMatchObject({
+        actorKind: "person",
+        actorId: "ann",
+        note: "Archive was retired.",
+        fromState: "archive",
+        toState: "draft",
+        payload: { from: ["archive"] },
+        definitionHash: HASH,
+      });
+      expect([...(bothMove?.parts ?? [])].sort()).toEqual(["en", "es"]);
+      expect(await moves("posts", one)).toEqual([
+        expect.objectContaining({ actorId: "ann", parts: ["en"] }),
+      ]);
+
+      // The page was not named, and stays stranded.
+      expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject({
+        stage: "archive",
+      });
+      expect(await moves("pages", page)).toEqual([]);
+      expect(
+        (await strandedReviewStates(app().adapter, { workflows })).map(
+          state => state.entryId
+        )
+      ).toEqual([page]);
+    });
+
+    it("refuses an unknown or deactivated person, a stage the workflow lacks or one that allows publishing, and no comment, moving nothing", async () => {
+      await boot(dialect);
+      const { page } = await strandedInstall();
+      const workflows = registeredWorkflows();
+      const move = (
+        over: Partial<Parameters<typeof moveStrandedReviewStates>[1]>
+      ) =>
+        moveStrandedReviewStates(app().adapter, {
+          workflows,
+          to: "draft",
+          as: "ann@example.test",
+          comment: "Moving on.",
+          ...over,
+        });
+      const codeOf = async (attempt: Promise<unknown>) => {
+        const error = await attempt.then(
+          () => null,
+          (thrown: unknown) => thrown
+        );
+        return (
+          error as {
+            publicData?: { errors?: { path: string; code: string }[] };
+          } | null
+        )?.publicData?.errors?.[0];
+      };
+
+      expect(await codeOf(move({ as: "nobody@example.test" }))).toMatchObject({
+        path: "as",
+        code: "WORKFLOW_PERSON_NOT_FOUND",
+      });
+      expect(await codeOf(move({ as: "zed@example.test" }))).toMatchObject({
+        path: "as",
+        code: "WORKFLOW_PERSON_DEACTIVATED",
+      });
+      expect(await codeOf(move({ to: "archive" }))).toMatchObject({
+        path: "to",
+        code: "WORKFLOW_UNKNOWN_STAGE",
+      });
+      expect(await codeOf(move({ to: "approved" }))).toMatchObject({
+        path: "to",
+        code: "WORKFLOW_STAGE_ALLOWS_PUBLISH",
+      });
+      expect(await codeOf(move({ comment: "  " }))).toMatchObject({
+        path: "comment",
+        code: "WORKFLOW_COMMENT_REQUIRED",
+      });
+      expect(await codeOf(move({ collection: "nowhere" }))).toMatchObject({
+        path: "collection",
+        code: "WORKFLOW_NOT_ATTACHED",
+      });
+
+      expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject({
+        stage: "archive",
+        revision: 1,
+      });
+      expect(await moves("pages", page)).toEqual([]);
+      expect(
+        await strandedReviewStates(app().adapter, { workflows })
+      ).toHaveLength(4);
+    });
+  }
+);

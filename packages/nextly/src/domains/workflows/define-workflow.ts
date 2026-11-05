@@ -427,6 +427,11 @@ function resolve(input: WorkflowInput): Workflow {
       name: stage.name,
       label: stage.label,
       allowsPublish: stage.allowsPublish === true,
+      // Kept only where given, so a definition that renames nothing resolves
+      // as it did before stages could record a rename.
+      ...(stage.renamedFrom !== undefined
+        ? { renamedFrom: stage.renamedFrom }
+        : {}),
     })),
     steps: input.steps.map(resolveStep),
     firstStage: first,
@@ -473,6 +478,52 @@ function checkStages(problems: Problems, input: WorkflowInput): void {
   }
 }
 
+/**
+ * Each stage's `renamedFrom`: a stage name the workflow no longer has, given
+ * to one stage only. A name the workflow still has would make the deploy move
+ * that stage's parts into another.
+ */
+function checkRenames(problems: Problems, input: WorkflowInput): void {
+  const names = input.stages.map(stage => stage.name);
+  const renamedTo = new Map<string, string>();
+  input.stages.forEach((stage, index) => {
+    if (stage.renamedFrom === undefined) return;
+    const path = `stages[${index}].renamedFrom`;
+    const before = problems.list.length;
+    checkName(problems, path, stage.renamedFrom, "stage");
+    if (problems.list.length > before) return;
+    if (names.includes(stage.renamedFrom)) {
+      problems.add(
+        path,
+        "workflow_renamed_stage_present",
+        `\`${stage.renamedFrom}\` is still a stage of this workflow, so no stage can be renamed from it.`
+      );
+      return;
+    }
+    const earlier = renamedTo.get(stage.renamedFrom);
+    if (earlier !== undefined) {
+      problems.add(
+        path,
+        "workflow_duplicate_renamed_from",
+        `\`${stage.renamedFrom}\` is already the name \`${earlier}\` was renamed from; a name was renamed to one stage only.`
+      );
+      return;
+    }
+    renamedTo.set(stage.renamedFrom, stage.name);
+  });
+  // A name both renamed and removed would send its parts two ways.
+  for (const removed of Object.keys(input.removedStages ?? {})) {
+    const renamed = renamedTo.get(removed);
+    if (renamed !== undefined) {
+      problems.add(
+        `removedStages.${removed}`,
+        "workflow_stage_renamed_and_removed",
+        `\`${renamed}\` was renamed from \`${removed}\`, so its parts go there; it cannot also be removed.`
+      );
+    }
+  }
+}
+
 /** The stages a part is moved to without a step, each named. */
 function automaticTargets(
   input: WorkflowInput,
@@ -499,6 +550,7 @@ function automaticTargets(
         `\`${removed}\` is still a stage of this workflow, so it cannot also be removed.`
       );
     }
+
     checkStageRef(problems, `removedStages.${removed}`, to, names);
   }
 }
@@ -627,6 +679,7 @@ function problemsOf(input: WorkflowInput): Problems {
     "step"
   );
   checkPrimaries(problems, input.stages, input.steps);
+  checkRenames(problems, input);
   automaticTargets(input, names, problems);
   // The graph is read only once every name in it resolves; otherwise its
   // errors would describe a workflow nobody declared.

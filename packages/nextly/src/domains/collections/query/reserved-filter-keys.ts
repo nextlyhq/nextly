@@ -1,6 +1,6 @@
 /**
  * The reserved keys a filter may carry only at its TOP level, each a condition
- * on another table rather than a field: the language filter and the two
+ * on another table rather than a field: the language filter and the
  * workflow keys.
  *
  * Its own module, importing nothing, because two very different readers need
@@ -29,6 +29,12 @@ export const PENDING_CHANGE_KEY = "_pendingChange";
 export const IN_RELEASE_KEY = "_inRelease";
 
 /**
+ * The reserved key keeping entries with a part in a stage their workflow no
+ * longer has. @experimental
+ */
+export const STRANDED_STAGE_KEY = "_strandedStage";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -37,6 +43,7 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   TRANSLATED_KEY,
   PENDING_CHANGE_KEY,
   IN_RELEASE_KEY,
+  STRANDED_STAGE_KEY,
 ] as const;
 
 /** @experimental */
