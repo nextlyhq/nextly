@@ -29,6 +29,7 @@ import {
   isCssWideKeyword,
   trimCssWhitespace,
 } from "./css-value";
+import { overlaid } from "./overlay";
 import {
   newStyleIssueBudget,
   normalizeStyleIssueBudget,
@@ -305,14 +306,39 @@ function scalarText(
       );
       return undefined;
     }
-    return `var(${tokenCustomProperty(name, walk.prefix)})`;
+    const reference = `var(${tokenCustomProperty(name, walk.prefix)})`;
+    // A token names an image, never a keyword, so an overlaid leaf's always
+    // carries the overlay's layer.
+    return paintsOverlaid(leaf) ? overlaid(reference) : reference;
   }
   // Written through `String`, which does not read a locale. A formatter that
   // did would emit "1,5" on half the machines in the world, breaking both the
   // CSS and the guarantee that the same document always produces the same bytes.
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return undefined;
-  return leaf.kind === "url" ? urlText(leaf, value) : value;
+  const text = leaf.kind === "url" ? urlText(leaf, value) : value;
+  return isOverlaid(leaf, value) ? overlaid(text) : text;
+}
+
+/** Whether a leaf paints an image a background's overlay covers. */
+function paintsOverlaid(leaf: StyleLeaf): boolean {
+  return (
+    (leaf.kind === "url" || leaf.kind === "cssValue") && leaf.overlaid === true
+  );
+}
+
+/**
+ * Whether a value is an image a background's overlay is laid over: one its
+ * leaf paints, and not a keyword, which clears or defers the image (`none`,
+ * `inherit`) rather than naming one.
+ */
+function isOverlaid(leaf: StyleLeaf, value: string): boolean {
+  if (!paintsOverlaid(leaf)) return false;
+  const written = asciiLower(decodeIdentifier(trimCssWhitespace(value)));
+  if (isCssWideKeyword(written)) return false;
+  return !(leaf.kind === "url" ? (leaf.keywords ?? []) : ["none"]).some(
+    keyword => asciiLower(keyword) === written
+  );
 }
 
 /**

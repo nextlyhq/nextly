@@ -17,6 +17,7 @@ import {
   previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
+import { overlaid } from "./overlay";
 import {
   CHILD_GAP_CLASS,
   nodeClassName,
@@ -150,7 +151,8 @@ describe("urls", () => {
     const out = css(
       doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
     );
-    expect(out).toContain('background-image: url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(out).toContain(`background-image: ${overlaid('url("/a.png")')}`);
   });
 
   it("leaves a keyword alone rather than going looking for a file", () => {
@@ -2275,5 +2277,26 @@ describe("the space a container puts between its children", () => {
       CTX
     );
     expect(out).not.toContain("> * + *");
+  });
+});
+
+describe("the overlay's two properties", () => {
+  it("are registered as not inherited where a page uses them", () => {
+    // Inherited, a section's overlay would darken every image nested in it.
+    const used = css(
+      doc([node("n1", { base: { base: { background: { url: "/a.png" } } } })])
+    );
+    expect(used).toContain(
+      '@property --nx-pb-overlay { syntax: "<color>"; inherits: false; initial-value: transparent; }'
+    );
+    expect(used).toContain(
+      '@property --nx-pb-overlay-strength { syntax: "<number>"; inherits: false; initial-value: 50; }'
+    );
+  });
+
+  it("are not registered on a page with no background to lay one over", () => {
+    expect(
+      css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
+    ).not.toContain("@property");
   });
 });

@@ -181,6 +181,12 @@ export interface ColorLeaf extends StyleLeafBase {
  */
 export interface CssValueLeaf extends StyleLeafBase {
   kind: "cssValue";
+  /**
+   * An image this value paints, which a background's overlay is laid over:
+   * written with the overlay's layer in front of it, so the overlay sits
+   * between the image and the content.
+   */
+  overlaid?: true;
 }
 
 /** A URL, emitted inside `url()`, with its scheme checked explicitly. */
@@ -194,6 +200,8 @@ export interface UrlLeaf extends StyleLeafBase {
    * The CSS-wide keywords are accepted everywhere and are not listed here.
    */
   keywords?: readonly string[];
+  /** As {@link CssValueLeaf.overlaid}: an image a background's overlay covers. */
+  overlaid?: true;
 }
 
 export type StyleLeaf =

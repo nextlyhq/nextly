@@ -8,6 +8,7 @@ import {
 import { isStyleLeaf } from "./catalog-types";
 import type { UnionShape, UrlLeaf } from "./catalog-types";
 import { compileStyleValues, urlText } from "./declarations";
+import { overlaid } from "./overlay";
 import { styleUnionVariant } from "./validate-style-value";
 
 /** The union a catalog property declares, for the arm-choice tests. */
@@ -69,7 +70,8 @@ describe("a url is written as a quoted CSS string", () => {
       { background: { url: "/a.png" } },
       "/styles"
     );
-    expect(declarations[0]?.value).toBe('url("/a.png")');
+    // Behind the overlay's layer, which is laid over every image.
+    expect(declarations[0]?.value).toBe(overlaid('url("/a.png")'));
   });
 });
 
@@ -203,5 +205,53 @@ describe("the emitter walks the catalog, not the stored map", () => {
     const noisy = compileStyleValues({ ...junk, ...real }, "/p");
 
     expect(noisy.declarations).toEqual(clean.declarations);
+  });
+});
+
+describe("a background's overlay", () => {
+  const written = (values: Record<string, unknown>) =>
+    Object.fromEntries(
+      compileStyleValues(values, "/s").declarations.map(each => [
+        each.property,
+        each.value,
+      ])
+    );
+
+  it("is its own two properties, each traced on its own", () => {
+    expect(
+      written({ background: { overlay: "#0a0e16", overlayStrength: 55 } })
+    ).toMatchObject({
+      "--nx-pb-overlay": "#0a0e16",
+      "--nx-pb-overlay-strength": "55",
+    });
+  });
+
+  it("is laid over an image, under the content, wherever each was set", () => {
+    // The image carries the overlay's layer whether or not an overlay is set
+    // beside it: set at another device, it still reaches this image.
+    const image = written({ background: { url: "/hills.jpg" } })[
+      "background-image"
+    ];
+    expect(image).toMatch(
+      /^linear-gradient\(color-mix\(in srgb, var\(--nx-pb-overlay, transparent\) /
+    );
+    expect(image).toMatch(/, url\("\/hills\.jpg"\)$/);
+  });
+
+  it("is laid over a gradient too", () => {
+    const gradient = written({
+      backgroundGradient: "linear-gradient(red, blue)",
+    })["background-image"];
+    expect(gradient).toMatch(/^linear-gradient\(color-mix\(/);
+    expect(gradient).toMatch(/, linear-gradient\(red, blue\)$/);
+  });
+
+  it("leaves a keyword alone: none clears the image, overlay and all", () => {
+    expect(written({ background: { url: "none" } })["background-image"]).toBe(
+      "none"
+    );
+    expect(written({ backgroundGradient: "inherit" })["background-image"]).toBe(
+      "inherit"
+    );
   });
 });
