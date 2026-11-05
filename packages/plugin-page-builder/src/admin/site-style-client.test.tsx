@@ -19,7 +19,7 @@
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type * as React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the stubbed read answers with for the test in hand. */
 let readAnswer: {
@@ -54,8 +54,12 @@ const writes: Record<string, unknown>[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
+/** Whether the read after a write answers that it failed. */
+let readFails = false;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
+/** What the form's storing gate was handed to wait for, in order. */
+const tracked: { label: string; settled: Promise<unknown> }[] = [];
 
 // The stored style arrives through the editor's one read of the plugin's
 // route; that read's own request is asserted in `site-style-read.test`.
@@ -64,14 +68,19 @@ vi.mock("./site-style-read", () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return { isError: false };
+      return { isError: readFails };
     },
   }),
 }));
 
 // No `useSingleDocument` here: the editor must not read the Single, which an
 // author without Design's permission is refused, so a read of it fails.
+// The admin's own sentence for a refusal, as a surface reads it.
+const { apiErrorMessage } =
+  await vi.importActual<typeof import("@nextlyhq/admin")>("@nextlyhq/admin");
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  apiErrorMessage,
   // The site's breakpoints go through Settings' route, answered like the
   // Single's own update so one switch drives both.
   writePluginRoute: async (write: unknown) => {
@@ -79,6 +88,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return writeBehaviour();
   },
   validationIssues: () => issuesAnswer,
+  // The form's storing gate, recording each write it is handed to wait for.
+  useTrackedWrite: () => (label: string, settled: Promise<unknown>) => {
+    tracked.push({ label, settled });
+  },
   readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,
@@ -97,9 +110,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 const {
+  SITE_STYLE_PAUSE_MS,
   SiteStyleHistoryContext,
+  extendHeldSiteStyle,
+  releaseHeldSiteStyle,
   useFontCatalogueClient,
   useSaveSiteStyle,
+  useSaveSpacingMode,
   useSiteStyle,
 } = await import("./site-style-client");
 
@@ -121,7 +138,9 @@ beforeEach(() => {
   writes.length = 0;
   routeWrites.length = 0;
   refetches = 0;
+  readFails = false;
   writeOptions = undefined;
+  tracked.length = 0;
 });
 
 describe("reading the site style", () => {
@@ -183,6 +202,49 @@ describe("reading the site style", () => {
   });
 });
 
+describe("saving the space between blocks", () => {
+  it("writes the model through its route, then reads the style again", async () => {
+    // Reading again is what moves the canvas: it compiles from that read.
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("classic");
+    });
+    expect(verdict).toEqual({ saved: true, refreshed: true });
+    expect(routeWrites).toEqual([
+      {
+        plugin: "@nextlyhq/plugin-page-builder",
+        path: "/site/style/spacing-mode",
+        body: { mode: "classic" },
+      },
+    ]);
+    expect(writes).toEqual([]);
+    expect(refetches).toBe(1);
+  });
+
+  it("says the choice is stored but not read back when the reread fails", async () => {
+    readFails = true;
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("classic");
+    });
+    expect(verdict).toMatchObject({ saved: true, refreshed: false });
+    expect(refetches).toBe(1);
+  });
+
+  it("answers a refusal in the route's words and reads nothing again", async () => {
+    writeBehaviour = () => Promise.reject(new Error("Not allowed."));
+    const { result } = renderHook(() => useSaveSpacingMode());
+    let verdict;
+    await act(async () => {
+      verdict = await result.current.save("gaps");
+    });
+    expect(verdict).toMatchObject({ saved: false });
+    expect(refetches).toBe(0);
+  });
+});
+
 describe("writing one section", () => {
   it("sends ONLY the section named", async () => {
     // The property the whole four-studio arrangement rests on. A write carrying
@@ -219,6 +281,9 @@ describe("writing one section", () => {
         plugin: "@nextlyhq/plugin-page-builder",
         path: "/site/breakpoints",
         body: { breakpoints: set },
+        // Unload-safe, as every site style write is: the browser finishes it
+        // if the page goes before it answers.
+        keepalive: true,
       },
     ]);
     expect(refetches).toBe(1);
@@ -603,6 +668,30 @@ describe("a save inside the editor, as a step of its history", () => {
     expect(writes.at(-1)).toEqual({ classes: [] });
   });
 
+  it("hands the storing gate a correction back to the stored value, after a refusal", async () => {
+    // A refused save leaves the form's gate holding a refusal. Typing the
+    // stored value back is a save like any other to the gate: tracked, so
+    // the gate's latest word on the section is that it saved, and Save works.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    await act(async () => {
+      await result.current.save("classes", [{ id: "a", slug: "a" }]);
+    });
+    const refused = tracked.length;
+    expect(refused).toBeGreaterThan(0);
+
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      await result.current.save("classes", []);
+    });
+    expect(tracked.length).toBe(refused + 1);
+    await expect(tracked.at(-1)?.settled).resolves.toBeUndefined();
+  });
+
   it("records no step for a save that leaves the section as it was", async () => {
     // Pressing Save on an unchanged set changes nothing: no Undo to take,
     // and the redo branch is left alone.
@@ -672,6 +761,203 @@ describe("a save inside the editor, as a step of its history", () => {
       await Promise.all([saving, undoing, redoing]);
     });
     expect(writes).toHaveLength(1);
+  });
+});
+
+describe("a save held for the author's pause", () => {
+  type Step = {
+    undo: () => Promise<{ stored: boolean }>;
+    redo: () => Promise<{ stored: boolean }>;
+  };
+
+  function editorHistory() {
+    const steps: Step[] = [];
+    const value = {
+      record: (step: Step) => {
+        steps.push(step);
+        return () => {
+          steps.splice(steps.indexOf(step), 1);
+        };
+      },
+      settled: new Map(),
+      preview: vi.fn(),
+    };
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <SiteStyleHistoryContext.Provider value={value}>
+        {children}
+      </SiteStyleHistoryContext.Provider>
+    );
+    return { steps, value, wrapper };
+  }
+
+  const set = (n: number) => ({ tokens: [{ name: `brand-${String(n)}` }] });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("writes a burst of saves once, as one step, after the pause", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const answers: Promise<unknown>[] = [];
+    act(() => {
+      for (let n = 1; n <= 10; n += 1) {
+        answers.push(result.current.save("tokens", set(n), { hold: true }));
+      }
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS - 1);
+    });
+    expect(writes).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // The last value only, once, and one step to take the whole burst back.
+    expect(writes).toEqual([{ tokens: set(10) }]);
+    expect(steps).toHaveLength(1);
+    // Every save of the burst answers with the write that stored it.
+    expect(await Promise.all(answers)).toEqual(
+      answers.map(() => ({ saved: true, issues: {} }))
+    );
+
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: null });
+    await act(async () => {
+      await steps[0]?.redo();
+    });
+    expect(writes.at(-1)).toEqual({ tokens: set(10) });
+  });
+
+  it("waits again for each save, and while the author is still at work", async () => {
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    act(() => {
+      void result.current.save("tokens", set(2), { hold: true });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // Typing in a field, with nothing committed yet, is still work.
+    act(() => extendHeldSiteStyle(value));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(writes).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS);
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+  });
+
+  it("writes at once when released, without waiting for the pause", async () => {
+    const { steps, value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+      void result.current.save("tokens", set(2), { hold: true });
+    });
+    await act(async () => {
+      await releaseHeldSiteStyle(value);
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+    expect(steps).toHaveLength(1);
+    // Nothing is left to write when the pause would have ended.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS * 2);
+    });
+    expect(writes).toHaveLength(1);
+  });
+
+  it("writes a held change before a save that is not held, as the same write", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await result.current.save("tokens", set(2));
+    });
+    expect(writes).toEqual([{ tokens: set(2) }]);
+    expect(steps).toHaveLength(1);
+  });
+
+  it("draws each held value, and says how the write that stores it went", async () => {
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    // Joined by a save that is not held: what is drawn is what is written.
+    await act(async () => {
+      await result.current.save("tokens", set(2));
+    });
+    expect(value.preview.mock.calls).toEqual([
+      ["tokens", set(1), "held"],
+      ["tokens", set(2), "held"],
+      ["tokens", set(2), "stored"],
+    ]);
+  });
+
+  it("draws nothing for a held save that changes nothing, which is not held", async () => {
+    readAnswer = {
+      data: { tokens: set(1) },
+      isPending: false,
+      error: null,
+    };
+    const { value, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    await act(async () => {
+      await result.current.save("tokens", set(1), { hold: true });
+    });
+    expect(value.preview).not.toHaveBeenCalled();
+    expect(writes).toEqual([{ tokens: set(1) }]);
+  });
+
+  it("writes a held change before undoing it", async () => {
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    act(() => {
+      void result.current.save("tokens", set(1), { hold: true });
+    });
+    await act(async () => {
+      await steps[0]?.undo();
+    });
+    expect(writes).toEqual([{ tokens: set(1) }, { tokens: null }]);
+  });
+
+  it("tells every save of the burst why its write was refused, and keeps no step", async () => {
+    writeBehaviour = () => Promise.reject(new Error("Validation failed."));
+    issuesAnswer = [
+      { path: "tokens", code: "CUSTOM", message: "That value is refused." },
+    ];
+    const { steps, wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    const answers: Promise<unknown>[] = [];
+    act(() => {
+      answers.push(result.current.save("tokens", set(1), { hold: true }));
+      answers.push(result.current.save("tokens", set(2), { hold: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SITE_STYLE_PAUSE_MS);
+    });
+    const refused = {
+      saved: false,
+      issues: { tokens: "That value is refused." },
+    };
+    expect(await Promise.all(answers)).toEqual([refused, refused]);
+    expect(writes).toHaveLength(1);
+    expect(steps).toEqual([]);
   });
 });
 

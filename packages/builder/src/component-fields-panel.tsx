@@ -35,10 +35,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@nextlyhq/ui";
 import {
   AlignLeft,
@@ -55,6 +52,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { commitOnEnter } from "./commit-on-enter";
 import {
   editedComponent,
@@ -257,26 +255,26 @@ function ExposeToggle({
 }): React.JSX.Element {
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            className="nx-expose__toggle"
-            aria-label={label}
-            aria-pressed={pressed}
-            aria-disabled={held === undefined ? undefined : true}
-            onClick={onPress}
-          >
-            <Component size={15} aria-hidden="true" />
-          </button>
-        </TooltipTrigger>
-        {/* Below the icon, ending at its right edge: the row's own label stays
-            readable beside the icon, and the tip lies over the next row, which
-            the author isn't reading while pointing here. */}
-        <TooltipContent side="bottom" align="end" className="nx-expose__tip">
-          {held ?? title}
-        </TooltipContent>
-      </Tooltip>
+      {/* Below the icon, ending at its right edge: the row's own label stays
+          readable beside the icon, and the tip lies over the next row, which
+          the author isn't reading while pointing here. */}
+      <ChromeTooltip
+        side="bottom"
+        align="end"
+        className="nx-expose__tip"
+        content={held ?? title}
+      >
+        <button
+          type="button"
+          className="nx-expose__toggle"
+          aria-label={label}
+          aria-pressed={pressed}
+          aria-disabled={held === undefined ? undefined : true}
+          onClick={onPress}
+        >
+          <Component size={15} aria-hidden="true" />
+        </button>
+      </ChromeTooltip>
     </TooltipProvider>
   );
 }

@@ -1513,3 +1513,68 @@ describe("a variable's plain label", () => {
     expect(css).toBe(":root{--site-color-brand:#123456}");
   });
 });
+
+describe("the default spacing", () => {
+  /**
+   * A length as a browser would resolve it at one viewport width, for the
+   * `rem`/`vw`/`clamp()` forms the spacing defaults are written in.
+   */
+  function pixelsAt(value: string, viewport: number): number {
+    const length = (text: string): number =>
+      text
+        .split("+")
+        .map(term => term.trim())
+        .reduce((sum, term) => {
+          const amount = Number.parseFloat(term);
+          if (term.endsWith("rem")) return sum + amount * 16;
+          if (term.endsWith("vw")) return sum + (amount * viewport) / 100;
+          if (term.endsWith("px")) return sum + amount;
+          throw new Error(`unreadable term ${term}`);
+        }, 0);
+    const clamp = /^clamp\((.+), (.+), (.+)\)$/.exec(value);
+    if (clamp === null) return length(value);
+    const [min, preferred, max] = clamp.slice(1).map(length);
+    return Math.min(Math.max(preferred, min), max);
+  }
+
+  function valueOf(name: string): string {
+    const token = defaultSiteTokens().find(entry => entry.name === name);
+    if (token === undefined) throw new Error(`no default token ${name}`);
+    return token.values.light ?? "";
+  }
+
+  const widths = [375, 768, 1280] as const;
+
+  it.each([
+    ["space.stack", [16, 18, 20]],
+    ["space.section-y", [48, 63, 80]],
+    ["space.gutter", [16, 31, 32]],
+    ["space.columns", [16, 23, 32]],
+    ["space.card", [16, 20, 24]],
+  ] as const)("resolves %s to %j px at 375, 768 and 1280", (name, px) => {
+    expect(
+      widths.map(width => Math.round(pixelsAt(valueOf(name), width)))
+    ).toEqual(px);
+  });
+
+  it("pads a button 12 by 20 at every width", () => {
+    expect(pixelsAt(valueOf("button.padding-y"), 375)).toBe(12);
+    expect(pixelsAt(valueOf("button.padding-x"), 1280)).toBe(20);
+  });
+
+  it("spaces paragraphs by their own size", () => {
+    expect(valueOf("space.paragraph")).toBe("1em");
+  });
+
+  it("emits every spacing token as a custom property the blocks can read", () => {
+    const { css, issues } = emitTokenBlocks(
+      { tokens: defaultSiteTokens() },
+      ":root"
+    );
+    expect(issues).toEqual([]);
+    expect(css).toContain(
+      "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
+    );
+    expect(css).toContain("--site-button-padding-x:1.25rem");
+  });
+});

@@ -30,13 +30,24 @@ export interface AutosaveRecoveryBannerProps {
   onRestore: () => void;
   /** Stop offering for this session, without deleting anything. */
   onDismiss: () => void;
+  /**
+   * Whether the changes are from an older version, written over since by
+   * someone else or by no one in particular: the offer then says restoring
+   * them replaces those changes.
+   */
+  olderVersion?: boolean;
   className?: string;
 }
+
+/** What an offer from an older version adds, in one place for every surface. */
+export const OLDER_VERSION_WARNING =
+  "These changes were made to an older version. Restoring them replaces changes made since.";
 
 export function AutosaveRecoveryBanner({
   savedAt,
   onRestore,
   onDismiss,
+  olderVersion = false,
   className,
 }: AutosaveRecoveryBannerProps): JSX.Element {
   return (
@@ -51,10 +62,15 @@ export function AutosaveRecoveryBanner({
       )}
     >
       <RotateCcw className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <p className="flex-1 text-foreground">
-        You have unsaved changes from{" "}
-        <span className="font-medium">{formatTimeAgo(savedAt)}</span>.
-      </p>
+      <div className="flex-1 space-y-0.5">
+        <p className="text-foreground">
+          You have unsaved changes from{" "}
+          <span className="font-medium">{formatTimeAgo(savedAt)}</span>.
+        </p>
+        {olderVersion ? (
+          <p className="text-muted-foreground">{OLDER_VERSION_WARNING}</p>
+        ) : null}
+      </div>
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onRestore}>
           Restore
@@ -102,8 +118,11 @@ export function LiveDocumentRecoveryOffer({
   return (
     <AutosaveRecoveryBanner
       savedAt={offer.savedAt}
-      onRestore={recovery.restore}
+      // Called with nothing: the recovery's restore takes an optional step of
+      // its own, and the click's event passed through would become that step.
+      onRestore={() => recovery.restore()}
       onDismiss={recovery.dismiss}
+      olderVersion={offer.olderVersion}
       className={className}
     />
   );

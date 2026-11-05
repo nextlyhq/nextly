@@ -63,6 +63,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -141,6 +142,12 @@ type EveryLanguageLifecycleParams = {
   routeAuthorized?: boolean;
   /** API-key scope; gates the unconditional publish or unpublish check. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   */
+  data?: Readonly<Record<string, unknown>>;
 };
 
 /**
@@ -314,9 +321,9 @@ export class CollectionEntryService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       /** A grant waiving the collection's read hooks, honoured by the query service. */
       hookExemptRead?: HookExemptRead;
-    } /** The sort and offset, as the query service reads them. */ & Pick<
+    } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort"
+      "sort" | "offset" | "unknownSort" | "hiddenFields"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -360,6 +367,8 @@ export class CollectionEntryService extends BaseService {
     status?: "published" | "draft" | "all";
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /** Fields the read leaves out, refused in its filter; see the query service. */
+    hiddenFields?: HiddenFieldPaths;
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return (
       refusedFilter(params.where) ??
@@ -874,6 +883,17 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it. Asked in every language, as the publish is,
+   * and writing nothing, so it owes none of a write's side effects.
+   */
+  previewPublishAllLocales(params: EveryLanguageLifecycleParams) {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.previewPublishAllLocales(params)
+    );
+  }
+
+  /**
    * Take every language of an entry down at once.
    *
    * The counterpart publishing has had since i18n M7 and withdrawing never did.
@@ -1139,6 +1159,11 @@ export class CollectionEntryService extends BaseService {
     actor?: RequestActor;
     /** API-key scope; judges each per-id transition on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, judged per document; see the bulk service's
+     * `bulkUpdateEntries`.
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, undefined),
@@ -1176,6 +1201,8 @@ export class CollectionEntryService extends BaseService {
       actor?: RequestActor;
       /** API-key scope; judges the collection gate + transitions on the key's own grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** Refused: an update by query names no ids to give versions for. */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {

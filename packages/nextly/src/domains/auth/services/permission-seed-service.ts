@@ -22,6 +22,10 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
+import {
+  WORKFLOW_PERMISSION_GROUP,
+  workflowPermissionActions,
+} from "../../workflows/permissions";
 
 import { entityPermissionSpelling } from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
@@ -727,6 +731,7 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
+    await this.seedWorkflowPermissions("collection", collectionSlug, result);
     return result;
   }
 
@@ -779,7 +784,67 @@ export class PermissionSeedService extends BaseService {
       }
     }
 
+    await this.seedWorkflowPermissions("single", singleSlug, result);
     return result;
+  }
+
+  /**
+   * Into `result`, the permissions the workflow attached to `entitySlug` adds
+   * (`workflowPermissionActions`): each of its steps' own actions, and `publish-without-review`.
+   * Seeded with the entity's built-in ones, so every path that seeds those, boot and the per-entity
+   * syncs alike, seeds these, idempotently. Nothing is attached until the workflows are published,
+   * so a pass before that seeds none and the next one does.
+   *
+   * One an app or a plugin already declared stays theirs: identity is the action and the resource,
+   * so a step asks for that permission either way, and taking it over would flip its owner on
+   * every boot.
+   */
+  private async seedWorkflowPermissions(
+    kind: "collection" | "single",
+    entitySlug: string,
+    result: SeedResult
+  ): Promise<void> {
+    // Loaded on demand: the registry reaches the versions domain, which the auth seeder need not
+    // load to seed an entity with no workflow.
+    const { workflowAttachedTo } = await import("../../workflows/registry");
+    const attached = workflowAttachedTo(kind, entitySlug);
+    if (!attached) return;
+    // Held as the class itself, so the call below is read as the service's own member.
+    const permissions: PermissionService = this.permissionService;
+    for (const action of workflowPermissionActions(attached.workflow)) {
+      result.total++;
+      try {
+        // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
+        // ownerless permission the step happens to name is not made the workflow's. Only a row
+        // the seeder creates is stored under the workflow group.
+        const owner = await permissions.ownerOf(action, entitySlug);
+        if (owner !== undefined) {
+          result.skipped++;
+          continue;
+        }
+        const { name, slug, description } = entityPermissionSpelling(
+          action,
+          entitySlug
+        );
+        // Stored under the workflow group, which is how the presets tell it is a workflow's.
+        const ensured = await permissions.ensurePermission(
+          action,
+          entitySlug,
+          name,
+          slug,
+          description,
+          { group: WORKFLOW_PERMISSION_GROUP }
+        );
+        if (ensured.created) {
+          result.created++;
+          result.newPermissionIds.push(ensured.id);
+        } else {
+          result.skipped++;
+        }
+      } catch {
+        result.errors++;
+      }
+    }
   }
 
   /**

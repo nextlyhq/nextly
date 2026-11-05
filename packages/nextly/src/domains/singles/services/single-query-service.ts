@@ -160,6 +160,14 @@ import {
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  attachDocumentVersions,
+  chainCoversVersion,
+  languageCountersBeforeContent,
+  type SelectsRows,
+  languageRevisionsOf,
+  storedRevisionsOf,
+} from "../../versions/document-revision";
+import {
   draftDocumentFacts,
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
@@ -1287,6 +1295,15 @@ export class SingleQueryService extends BaseService {
       // of one of its field values, derived while the row is expanded, so
       // redacting afterwards would leave a withheld value standing in the label
       // it was copied into.
+      // The stored counter, taken before anything below strips it with the
+      // other server-only columns or overlays a held draft on the document.
+      const storedRevisions = storedRevisionsOf([doc]);
+      // Not joined with the document — including one this read just created —
+      // the translation counters now, before the translated content is read.
+      const countersFirst = translations
+        ? undefined
+        : await this.languageCountersFirst(singleMeta, doc);
+
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta,
@@ -1373,6 +1390,15 @@ export class SingleQueryService extends BaseService {
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
+      // Last, so no hook can drop or forge it. The live row's version, a held
+      // draft overlaid on the document included.
+      this.attachVersion(doc, {
+        stored: storedRevisions,
+        translations,
+        countersFirst,
+        locale: options.locale,
+      });
+
       return {
         success: true,
         statusCode: 200,
@@ -1391,6 +1417,69 @@ export class SingleQueryService extends BaseService {
         "Failed to get Single document"
       );
     }
+  }
+
+  /**
+   * The Single's translation counters, read before its translated content
+   * (`languageCountersBeforeContent`); undefined without a document, or for a
+   * Single that keeps no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    singleMeta: DynamicSingleRecord,
+    doc: { id?: unknown } | null
+  ) {
+    if (!doc || typeof doc.id !== "string") return undefined;
+    const table = `${singleMeta.tableName}_locales`;
+    const translated =
+      this.localization !== undefined && singleMeta.localized === true;
+    return languageCountersBeforeContent(
+      this.adapter.getDrizzle<SelectsRows>(),
+      {
+        dialect: this.adapter.dialect,
+        languagesTable:
+          translated && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: [doc.id],
+      }
+    );
+  }
+
+  /**
+   * Publish the document's version on `doc`, from the counter read with it and
+   * the translation counters this read took: with the content in the joined
+   * read, or before it. A Single that keeps no translations, or whose table is
+   * not there yet, has none, and its version names no language.
+   */
+  private attachVersion(
+    doc: Record<string, unknown>,
+    args: {
+      stored: ReadonlyMap<string, unknown>;
+      translations: JoinedTranslations | undefined;
+      /** Counters read before the content, when it was not joined. */
+      countersFirst?: Awaited<ReturnType<typeof languageCountersBeforeContent>>;
+      locale: string | undefined;
+    }
+  ): void {
+    const joined = args.translations
+      ? languageRevisionsOf(args.translations.companionRows)
+      : undefined;
+    attachDocumentVersions([doc], {
+      stored: args.stored,
+      localization: this.localization,
+      locale: args.locale,
+      ...(args.translations && joined
+        ? {
+            known: {
+              revisions: joined,
+              locales: args.translations.localeChain,
+            },
+          }
+        : args.countersFirst
+          ? { known: args.countersFirst }
+          : {}),
+    });
   }
 
   /** The Single's translations table, as its reads describe it; null when it has none. */
@@ -1473,6 +1562,16 @@ export class SingleQueryService extends BaseService {
       fallbackLocale
     );
     if (!localeChain || singleMeta.localized !== true) return null;
+    // Joined only when the chain holds every language the version names:
+    // otherwise the counters are read before the content, apart from it.
+    if (
+      !chainCoversVersion(localeChain, {
+        localization: this.localization,
+        locale,
+      })
+    ) {
+      return null;
+    }
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (

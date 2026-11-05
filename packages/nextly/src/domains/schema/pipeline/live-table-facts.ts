@@ -691,6 +691,71 @@ export async function readUniqueColumns(
   );
 }
 
+/** An object of the database holding a name an index is about to take. */
+export interface NameHolder {
+  /** Its name as stored, which on SQLite may differ from the one asked for in letter case. */
+  name: string;
+  /** What it is: `index`, `table`, `view` and so on. */
+  type: string;
+  /** The table an index belongs to; null for any other object. */
+  table: string | null;
+}
+
+/**
+ * For each of `names`, an object outside `tableName`'s own indexes that already holds it, where
+ * the dialect's index names are shared beyond one table. SQLite keeps one name space for the whole
+ * database and compares names without regard to case, so an index under the name on another
+ * table, or under the name in other letter case, holds it. PostgreSQL gives an index the name
+ * space of every relation in its schema. MySQL names an index per table, so nothing elsewhere can
+ * hold one of its names, and the result is empty there. A `CREATE INDEX IF NOT EXISTS` under a held
+ * name does nothing, so a caller refuses rather than record an index nothing created.
+ */
+export async function readNameHoldersElsewhere(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  names: readonly string[]
+): Promise<Map<string, NameHolder>> {
+  const held = new Map<string, NameHolder>();
+  if (dialect === "mysql") return held;
+  for (const name of names) {
+    const rows =
+      dialect === "sqlite"
+        ? ((await (db as SqliteAll).all(
+            sql`SELECT name, type, CASE WHEN type = 'index' THEN tbl_name END AS tbl
+                FROM sqlite_master WHERE name = ${name} COLLATE NOCASE`
+          )) as { name: string; type: string; tbl: string | null }[])
+        : (
+            (await (db as PgMysqlExecute).execute(
+              sql`SELECT c.relname AS name,
+                    CASE c.relkind WHEN 'i' THEN 'index' WHEN 'r' THEN 'table' WHEN 'v' THEN 'view'
+                      WHEN 'S' THEN 'sequence' ELSE 'relation' END AS type,
+                    t.relname AS tbl
+                  FROM pg_class c
+                  JOIN pg_namespace ns ON ns.oid = c.relnamespace
+                  LEFT JOIN pg_index i ON i.indexrelid = c.oid
+                  LEFT JOIN pg_class t ON t.oid = i.indrelid
+                  WHERE ns.nspname = current_schema() AND c.relname = ${name}`
+            )) as {
+              rows: { name: string; type: string; tbl: string | null }[];
+            }
+          ).rows;
+    // The table's own index under exactly this name is the per-table check's to judge.
+    const holder = rows.find(
+      row =>
+        !(row.type === "index" && row.tbl === tableName && row.name === name)
+    );
+    if (holder) {
+      held.set(name, {
+        name: holder.name,
+        type: holder.type,
+        table: holder.tbl ?? null,
+      });
+    }
+  }
+  return held;
+}
+
 /**
  * Each index that stands on whole columns, with the columns it covers, by name. A save that has
  * to know whether a column's index already exists, after one MySQL refused part-way say, asks

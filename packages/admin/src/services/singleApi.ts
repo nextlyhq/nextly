@@ -16,12 +16,17 @@ import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
 
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
+import { keepaliveOptions } from "../lib/api/keepalive";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   ActionResponse,
   MutationResponse,
 } from "../lib/api/response-types";
 
+import type {
+  PublishAllLanguageOutcome,
+  PublishAllPreview,
+} from "./publishAllPreview";
 import type {
   FieldResolution,
   SchemaApplyResponse,
@@ -121,11 +126,16 @@ type SingleApiType = {
   readonly updateDocument: (
     slug: string,
     data: Record<string, unknown>,
-    options?: { locale?: string }
+    options?: { locale?: string; keepalive?: boolean }
   ) => Promise<SingleDocument>;
-  readonly publishAllLocales: (
+  readonly publishAllLocales: (slug: string) => Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }>;
+  readonly previewPublishAllLocales: (
     slug: string
-  ) => Promise<{ id: string; status?: string }>;
+  ) => Promise<PublishAllPreview>;
 };
 
 /**
@@ -324,14 +334,16 @@ export const singleApi: SingleApiType = {
     data: Record<string, unknown>,
     // i18n: `?locale=de` stores the translatable values for German only (the shared
     // columns are still updated). Omitted for non-localized singles.
-    options?: { locale?: string }
+    // `keepalive` asks for an update that outlives the page (lib/api/keepalive).
+    options?: { locale?: string; keepalive?: boolean }
   ): Promise<SingleDocument> => {
     const query = new URLSearchParams();
     if (options?.locale) query.set("locale", options.locale);
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
       `/singles/${slug}${qs ? `?${qs}` : ""}`,
-      data
+      data,
+      keepaliveOptions(data, options?.keepalive)
     );
     return result.item;
   },
@@ -345,17 +357,31 @@ export const singleApi: SingleApiType = {
    */
   publishAllLocales: async (
     slug: string
-  ): Promise<{ id: string; status?: string }> => {
+  ): Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }> => {
     // The route answers with the action envelope (`{ message, ...data }`)
     // rather than a document, since publishing changes status and returns no
-    // content the editor did not already have.
+    // content the editor did not already have. It carries each language's
+    // outcome, which the result message names language by language.
     return protectedApi.post<{
       message: string;
       slug: string;
       id: string;
       status?: string;
+      languages?: PublishAllLanguageOutcome[];
     }>(`/singles/${slug}/publish-all`, {});
   },
+
+  /**
+   * What publishing every language of a Single would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   * Hits `GET /api/singles/{slug}/publish-all`.
+   */
+  previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
+    protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
 } as const;
 
 // ============================================================

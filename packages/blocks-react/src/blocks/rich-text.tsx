@@ -68,6 +68,7 @@ export function renderRichText({
   className,
   markProp,
   hostPolicy,
+  spacingMode,
 }: BlockRenderArgs<RichTextBlockProps>): ReactElement {
   /*
    * The wrapper carries both the class and the mark, so the element an author
@@ -77,7 +78,11 @@ export function renderRichText({
    */
   return (
     <div className={className} {...markProp?.("content")}>
-      <RichText value={props.content} hostPolicy={hostPolicy} />
+      <RichText
+        value={props.content}
+        hostPolicy={hostPolicy}
+        {...(spacingMode === undefined ? {} : { spacingMode })}
+      />
     </div>
   );
 }
@@ -148,6 +153,10 @@ export const richText: BlockDefinition<RichTextBlockProps, PageContext> =
         },
       },
     },
+    // The space between this block's own paragraphs, headings and lists:
+    // inside the block, from the second element on, so none of it reaches the
+    // block's outer edge. `1em` follows the size of the element it spaces.
+    childGap: { $token: "space.paragraph" },
     supports: {
       typography: true,
       color: true,

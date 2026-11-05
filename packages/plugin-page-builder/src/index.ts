@@ -87,7 +87,8 @@ export { pagesCollection } from "./collections/pages";
  */
 export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
-export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export { SITE_STYLE_SLUG } from "./site-style-storage";
+export { loadSiteStyle } from "./site-style-load";
 export {
   previewViewportsFromSiteStyle,
   siteStyleViewports,
@@ -233,3 +234,27 @@ export type { BlockRegistrationService } from "./blocks/registration-service";
 // Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the export
 // is covered by the SDK's stability ledger.
 export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+
+// The composition API's requests and answers, for a script or an agent that
+// calls the routes rather than the editor. Experimental, as the routes are.
+export {
+  DEFINITION_ACTIONS_ROUTE_PATH,
+  definitionActionPath,
+  PAGE_ACTIONS_ROUTE_PATH,
+} from "./composition-actions-contract";
+export type {
+  ActionPosition,
+  DefinitionAction,
+  DefinitionActionRequest,
+  DefinitionActionResult,
+  ExposureTargetInput,
+  PageAction,
+  PageActionRequest,
+  PageActionResult,
+} from "./composition-actions-contract";
+export type { ActionBy } from "./component-actions-contract";
+export type {
+  SavePatternDryRun,
+  SavePatternDryRunResponse,
+  StoredPageAddress,
+} from "./library-contract";

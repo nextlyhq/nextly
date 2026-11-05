@@ -28,6 +28,8 @@ import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import { toSnakeCase } from "./case-conversion";
 import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_VERSION_KEY,
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
   systemColumnNames,
@@ -48,8 +50,20 @@ export type WritableEntityKind = SystemColumnEntity;
 const IMMUTABLE_BY_ENTITY: Readonly<
   Record<WritableEntityKind, ReadonlySet<string>>
 > = {
-  collection: new Set(immutableSystemColumnNames("collection")),
-  single: new Set(immutableSystemColumnNames("single")),
+  // The published version is no column, but a client re-saving what it read sends it, and it is
+  // the server's to decide like every column here. The overwrite choice beside it says how the
+  // version is judged and is never stored either, so a body naming only the status beside them
+  // is still a status-only write ({@link isStatusOnlyWrite}).
+  collection: new Set([
+    ...immutableSystemColumnNames("collection"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
+  single: new Set([
+    ...immutableSystemColumnNames("single"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
 };
 
 /**
@@ -58,9 +72,11 @@ const IMMUTABLE_BY_ENTITY: Readonly<
  * For callers that protect both kinds at once rather than one at a time: a restore refuses to
  * carry the owner column back even for a single, where it is not a system column.
  */
-export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set(
-  immutableSystemColumnNamesAnyEntity()
-);
+export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set([
+  ...immutableSystemColumnNamesAnyEntity(),
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
 
 /** The names a client may not write for the given entity. */
 export function immutableSystemFieldsFor(

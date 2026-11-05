@@ -37,19 +37,34 @@ vi.mock("../../helpers/di", () => ({
   getCollectionRegistryFromDI: vi.fn(),
   getCollectionsHandlerFromDI: vi.fn(),
   getMigrationJournalFromDI: vi.fn(),
+  getLoggerFromDI: vi.fn(),
   getSingleRegistryFromDI: vi.fn(),
   getComponentRegistryFromDI: vi.fn(),
   getSchemaRegistryFromDI: vi.fn(),
   getConfigFromDI: vi.fn(),
-  getLoggerFromDI: vi.fn(),
 }));
 
-// The exclusion is not what is judged here: it runs the guarded work at once.
+// The exclusion runs the guarded work at once, and says what ran inside it:
+// how deep the work is, and the label each claim was taken under.
+const { exclusion } = vi.hoisted(() => ({
+  exclusion: { depth: 0, labels: [] as string[] },
+}));
 vi.mock(
   "../../../domains/schema/services/schema-change-exclusion",
   async importOriginal => ({
     ...(await importOriginal<object>()),
-    withSchemaChangeExcluded: (_opts: unknown, work: () => unknown) => work(),
+    withSchemaChangeExcluded: async (
+      opts: { label: string },
+      work: () => Promise<unknown>
+    ) => {
+      exclusion.depth += 1;
+      exclusion.labels.push(opts.label);
+      try {
+        return await work();
+      } finally {
+        exclusion.depth -= 1;
+      }
+    },
   })
 );
 
@@ -952,8 +967,14 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
-    getDrizzle: vi.fn().mockReturnValue({}),
+    // The index names a change takes are looked up across the schema even for a table that does
+    // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
+    getDrizzle: vi.fn().mockReturnValue({
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    }),
     update: vi.fn().mockResolvedValue(undefined),
+    // Asked before the apply, for the index names a change takes and for the companion.
+    tableExists: vi.fn().mockResolvedValue(false),
   };
 }
 
@@ -1042,6 +1063,65 @@ describe("dispatchCollections, applySchemaChanges (respondAction)", () => {
     // Regression guards against the legacy CRUD shapes.
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("item");
+  });
+});
+
+describe("dispatchCollections, applySchemaChanges under the schema lock", () => {
+  it("reads the collection, checks its version, applies and writes its registry row inside one exclusion", async () => {
+    // A check outside the lock, or a write after it, lets another schema
+    // change land between them and the registry describe a different table.
+    exclusion.labels = [];
+    const registry = makeFakeRegistry({
+      slug: "posts",
+      tableName: "posts",
+      schemaVersion: 4,
+    });
+    const read = registry.getCollectionBySlug;
+    const readInside: number[] = [];
+    registry.getCollectionBySlug = vi.fn(async (slug: string) => {
+      readInside.push(exclusion.depth);
+      return read(slug);
+    });
+    const adapter = makeFakeAdapter();
+    const writtenInside: number[] = [];
+    adapter.update = vi.fn(async () => {
+      writtenInside.push(exclusion.depth);
+    });
+    vi.mocked(getCollectionRegistryFromDI).mockReturnValue(
+      registry as unknown as ReturnType<typeof getCollectionRegistryFromDI>
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    vi.mocked(createApplyDesiredSchema).mockReturnValue(
+      vi.fn().mockResolvedValue({
+        success: true,
+        newSchemaVersions: { posts: 5 },
+        statementsExecuted: 1,
+        renamesApplied: 0,
+        durationMs: 1,
+        summary: { added: 1, removed: 0, renamed: 0, changed: 0 },
+      }) as unknown as ReturnType<typeof createApplyDesiredSchema>
+    );
+
+    await dispatchCollections(
+      { collections: {} } as unknown as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [{ name: "title", type: "text" }],
+        confirmed: true,
+        schemaVersion: 4,
+      }
+    );
+
+    expect(exclusion.labels[0]).toBe(
+      'apply schema changes to collection "posts"'
+    );
+    expect(readInside.length).toBeGreaterThan(0);
+    expect(readInside.every(depth => depth > 0)).toBe(true);
+    expect(writtenInside).toHaveLength(1);
+    expect(writtenInside[0]).toBeGreaterThan(0);
   });
 });
 

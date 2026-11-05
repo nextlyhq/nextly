@@ -88,8 +88,10 @@ import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignmen
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+import { isPublishWithoutReview } from "../../workflows/permissions";
 
 import { refuseLinkingPublicRole } from "./public-role";
+import { wholeSecondExpiry } from "./token-account-binding";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -1057,6 +1059,27 @@ export class ApiKeyService extends BaseService {
     roleId: string | null,
     userId: string
   ): Promise<{ rows: GrantedPermission[]; validUntil?: number }> {
+    const resolved = await this.resolveGrantRowsOfKind(
+      tokenType,
+      roleId,
+      userId
+    );
+    // No key holds `publish-without-review-<slug>`, whatever its type, role or creator: publishing
+    // past a workflow is a person's act, and a key may act for an agent. Dropped here, where every
+    // key's grants and every summary of them are resolved, so no route that grants a role a
+    // permission, or gives its creator one, can put it within a key's reach.
+    return {
+      ...resolved,
+      rows: resolved.rows.filter(row => !isPublishWithoutReview(row)),
+    };
+  }
+
+  /** {@link resolveGrantRows} before the permissions no key holds are dropped. */
+  private async resolveGrantRowsOfKind(
+    tokenType: ApiKeyTokenType,
+    roleId: string | null,
+    userId: string
+  ): Promise<{ rows: GrantedPermission[]; validUntil?: number }> {
     // A role-based key holds its role directly, not through an assignment that
     // can lapse, so only a user-based key's answer has an end of this kind.
     if (tokenType === "role-based") {
@@ -1481,7 +1504,10 @@ export class ApiKeyService extends BaseService {
     };
     const days = daysMap[expiresIn];
     if (!days) return null;
-    return new Date(Date.now() + days * msPerDay);
+    // The whole second the instant falls in: a column that keeps whole
+    // seconds rounds milliseconds rather than cutting them, which would
+    // store the key as living longer than issued.
+    return wholeSecondExpiry(new Date(Date.now() + days * msPerDay));
   }
 
   private async checkPermissionCeiling(

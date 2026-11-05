@@ -184,7 +184,11 @@ const LIMITS = { ...DEFAULT_LIMITS, maxDepth: 4 };
 /** A field type whose validator records the write it is shown. */
 const PROBE_TYPE = "payload-probe";
 
-function payloadProbe(seen: Record<string, unknown>[]) {
+function payloadProbe(
+  seen: Record<string, unknown>[],
+  // The language of each write it is shown, where a case asks for it.
+  locales: (string | undefined)[] = []
+) {
   return definePlugin({
     name: "@test/payload-probe",
     version: "1.0.0",
@@ -200,9 +204,13 @@ function payloadProbe(seen: Record<string, unknown>[]) {
           validateEmpty: true,
           validate: (
             _value: unknown,
-            args: { data: Record<string, unknown> }
+            args: {
+              data: Record<string, unknown>;
+              write?: { locale?: string };
+            }
           ) => {
             seen.push(args.data);
+            locales.push(args.write?.locale);
             return true as const;
           },
         },
@@ -395,6 +403,81 @@ describe.each(getConfiguredTestDialects())(
         await refusalCodes(hold(id, { content: pageOf([sealedCard("left")]) }))
       ).toEqual([]);
       expect(await refusalCodes(publish(id))).toEqual([]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a held instance in a site with languages (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    const locales: (string | undefined)[] = [];
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder(), payloadProbe([], locales)],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "badgebox",
+            fields: [
+              text({ name: "title" }),
+              { name: "probe", type: PROBE_TYPE } as never,
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            // No languages of its own: its instances and the library they
+            // read are still kept per language.
+            slug: "banners",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "badge", component: "badgebox" }),
+            ],
+          }),
+        ],
+      });
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    /** The languages the probe was shown for a held save in `locale`. */
+    async function heldIn(locale?: string): Promise<(string | undefined)[]> {
+      const made = await t.nextly.create({
+        collection: "banners" as never,
+        data: { title: "Banner", status: "published" } as never,
+        overrideAccess: true,
+      });
+      locales.length = 0;
+      await t.nextly.update({
+        collection: "banners" as never,
+        id: String(made.item.id),
+        data: { badge: { title: "Held", probe: "seen" } } as never,
+        ...(locale === undefined ? {} : { locale }),
+        overrideAccess: true,
+      });
+      expect(locales.length).toBeGreaterThan(0);
+      return [...new Set(locales)];
+    }
+
+    it("judges a held save's instance in the language the save names", async () => {
+      expect(await heldIn("de")).toEqual(["de"]);
+    });
+
+    it("judges one that names an empty language in the default", async () => {
+      // An empty language is no language, as the write's locale check reads it.
+      expect(await heldIn("")).toEqual([undefined]);
+    });
+
+    it("judges one that names no language in the default", async () => {
+      // CONTROL: absent, which a reader takes as the default language.
+      expect(await heldIn()).toEqual([undefined]);
     });
   }
 );

@@ -288,6 +288,15 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   *
+   * @experimental
+   */
+  data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -299,6 +308,15 @@ export interface SingleDocument {
 
   /** Last update timestamp */
   updatedAt: Date | string;
+
+  /**
+   * The document's version: changed by every save and by no read, and naming
+   * each language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 
   /** Additional fields defined by the Single schema */
   [key: string]: unknown;

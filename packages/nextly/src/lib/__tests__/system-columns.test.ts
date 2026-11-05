@@ -58,6 +58,13 @@ describe("immutability projections", () => {
         "createdBy",
         "first_published_at",
         "firstPublishedAt",
+        "_revision",
+        "_changed_by_kind",
+        "_changed_by_id",
+        "_changed_by_principal_kind",
+        "_changed_at",
+        "_rev",
+        "_overwrite",
       ])
     );
   });
@@ -78,6 +85,13 @@ describe("immutability projections", () => {
         "updatedAt",
         "first_published_at",
         "firstPublishedAt",
+        "_revision",
+        "_changed_by_kind",
+        "_changed_by_id",
+        "_changed_by_principal_kind",
+        "_changed_at",
+        "_rev",
+        "_overwrite",
       ])
     );
   });
@@ -95,6 +109,13 @@ describe("immutability projections", () => {
         "createdBy",
         "first_published_at",
         "firstPublishedAt",
+        "_revision",
+        "_changed_by_kind",
+        "_changed_by_id",
+        "_changed_by_principal_kind",
+        "_changed_at",
+        "_rev",
+        "_overwrite",
       ])
     );
   });
@@ -615,6 +636,9 @@ describe("the declaration set itself", () => {
         .replace(/^_/, "");
 
     for (const column of SYSTEM_COLUMNS) {
+      // A name spelled the same both ways has nothing to convert: the per-document columns keep
+      // their leading underscore in both, which this conversion would strip.
+      if (column.camelName === column.name) continue;
       expect({ [column.name]: toSnake(column.camelName) }).toEqual({
         [column.name]: column.name,
       });
@@ -661,16 +685,19 @@ describe("the declaration set itself", () => {
         text: "PgText",
         varchar: "PgVarchar",
         timestamp: "PgTimestamp",
+        integer: "PgInteger",
       },
       mysql: {
         text: "MySqlText",
         varchar: "MySqlVarChar",
         timestamp: "MySqlTimestamp",
+        integer: "MySqlInt",
       },
       sqlite: {
         text: "SQLiteText",
         varchar: "SQLiteText",
         timestamp: "SQLiteTimestamp",
+        integer: "SQLiteInteger",
       },
     };
 
@@ -754,8 +781,13 @@ describe("the physical shape is pinned to the schema version", () => {
    * `CREATE TABLE` — who may write it, who publishes it, who reserves the name — are deliberately
    * absent, so changing one of those does not demand a schema-version bump.
    */
-  const physicalShape = (): string[] =>
-    SYSTEM_COLUMNS.map(column => {
+  const physicalShape = (
+    delivery: "schemaVersion" | "migrateStep" = "schemaVersion"
+  ): string[] =>
+    SYSTEM_COLUMNS.filter(
+      column =>
+        (column.addedByMigrateStep === true) === (delivery === "migrateStep")
+    ).map(column => {
       const shapes = (["postgresql", "mysql", "sqlite"] as const)
         .map(dialect => {
           const s = column.shape[dialect];
@@ -801,5 +833,20 @@ describe("the physical shape is pinned to the schema version", () => {
         "first_published_at | withStatusLifecycle | collection,single | po:timestamp:-:null:-:- my:timestamp:-:null:-:- sq:integer:-:null:-:-",
       ],
     });
+  });
+
+  it("pins the per-document columns, which existing tables receive from nextly migrate", () => {
+    // These reach an existing table through a step of `nextly migrate` that adds whichever of
+    // them a content table lacks, not through the schema hash: bumping SYSTEM_SCHEMA_VERSION would
+    // mark every collection on every site as awaiting a migration that no migration file carries.
+    // So they are pinned apart from the hash-tracked set, and a change here means changing that
+    // step and its upgrade test with it.
+    expect(physicalShape("migrateStep")).toEqual([
+      "_revision | always | collection,single | po:int4:-:notnull:-:1 my:int:-:notnull:-:1 sq:integer:-:notnull:-:1",
+      "_changed_by_kind | always | collection,single | po:varchar:16:null:-:- my:varchar(16):16:null:-:- sq:text:-:null:-:-",
+      "_changed_by_id | always | collection,single | po:text:-:null:-:- my:varchar(255):255:null:-:- sq:text:-:null:-:-",
+      "_changed_by_principal_kind | always | collection,single | po:varchar:64:null:-:- my:varchar(64):64:null:-:- sq:text:-:null:-:-",
+      "_changed_at | always | collection,single | po:timestamp:-:null:-:- my:timestamp:-:null:-:- sq:integer:-:null:-:-",
+    ]);
   });
 });

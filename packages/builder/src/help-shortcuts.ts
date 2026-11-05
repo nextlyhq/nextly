@@ -90,6 +90,10 @@ export function helpShortcuts(
     const sequence = sequenceOf(shortcut.keys);
     // A spec the parser refuses names no key anyone can press.
     if (sequence === null) continue;
+    // A sequence ("g d") is the admin's site navigation around the editor:
+    // the editor binds none, and its Help explains what the editor does. A
+    // sequence shares no key with a single press, so it takes none here.
+    if (sequence.length > 1) continue;
     if (taken.some(earlier => sameKeys(earlier, sequence, apple))) continue;
     taken.push(sequence);
     if (shortcut.description.trim() === "") continue;

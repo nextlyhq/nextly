@@ -24,6 +24,10 @@ import type { UnregisteredCollectionRow } from "../../dynamic-collections/servic
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import {
+  applyCollectionSchemaChange,
+  refuseNewCollectionIndexNamesTaken,
+} from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
@@ -441,6 +445,25 @@ export class CollectionMetadataService extends BaseService {
       // recorded, so a change the database refuses leaves no file, no registry row and nothing
       // reported as applied.
       if (this.isDevelopment()) {
+        // An index name the new table takes may already be held elsewhere, where the create's
+        // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
+        try {
+          await refuseNewCollectionIndexNamesTaken(this.adapter, {
+            slug: data.name,
+            tableName: artifacts.tableName,
+            fields: artifacts.metadata.fields,
+            localized: data.localized === true,
+          });
+        } catch (refusal: unknown) {
+          return errorToMetadataResult(
+            refusal,
+            {
+              statusCode: 400,
+              defaultMessage: "The collection's indexes could not be created",
+            },
+            this.dialect
+          );
+        }
         try {
           // The artefact carries the registry-row upsert so the committed file
           // recreates it where the Builder has never run. This database gets
@@ -834,11 +857,17 @@ export class CollectionMetadataService extends BaseService {
     );
   }
 
+  /** The save, once the schema lock is held. */
   private async updateCollectionExcluded(
     params: { collectionName: string },
     body: Parameters<CollectionMetadataService["updateCollection"]>[1]
   ): Promise<MetadataServiceResult> {
     try {
+      // The collection as it stands before the save, read inside the lock: what the apply changes
+      // it from.
+      const before = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const updateArtifacts =
         await this.collectionService.generateCollectionUpdate(
           params.collectionName,
@@ -854,12 +883,11 @@ export class CollectionMetadataService extends BaseService {
         // nothing reported as applied.
         if (this.isDevelopment()) {
           try {
-            // The file is what a fresh database will replay; this is what THIS one needs. They
-            // differ only where unattended provisioning left the local schema in a shape no
-            // migration history produces, and running the file here would then fail on a column
-            // that is already present.
-            // The file creates the archive when it is missing but cannot add the kind column to an
-            // archive from before rows recorded it, which its writes name.
+            // The file is what a database built from migrations replays; this database takes the
+            // change through one apply of the schema pipeline, as the schema dialog's does, which
+            // diffs the table as it is, so a save the database refused part-way is finished by the
+            // next. The file creates the archive when it is missing but cannot add the kind column
+            // to an archive from before rows recorded it, which the apply's writes name.
             if (updateArtifacts.needsArchive) {
               const { ensureI18nArchive } = await import(
                 "../../i18n/migration/ensure-archive"
@@ -869,9 +897,36 @@ export class CollectionMetadataService extends BaseService {
                 this.adapter.getCapabilities().dialect
               );
             }
-            await this.fileManager.runMigration(
-              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
-            );
+            const wasLocalized =
+              (before as { localized?: boolean }).localized === true;
+            const wasStatus = (before as { status?: boolean }).status === true;
+            const beforeFields = (before.fields ?? []) as FieldDefinition[];
+            await applyCollectionSchemaChange({
+              slug: params.collectionName,
+              collection: { tableName: before.tableName, fields: beforeFields },
+              fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+              wasLocalized,
+              isLocalized:
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalized,
+              status:
+                body.status !== undefined ? body.status === true : wasStatus,
+              wasStatus,
+              renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+              eventResolutions: [],
+              legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+              fills: updateArtifacts.pushAnswers.fills,
+              // The save detects its own renames; every other pair is a drop and an add.
+              dropAndAddUnansweredRenames: true,
+            });
+            // What the push leaves out of its diff, once it has run: a renamed field group's
+            // association and the junction tables, as the file carries them.
+            if (updateArtifacts.besideStatements) {
+              await this.fileManager.runMigration(
+                updateArtifacts.besideStatements
+              );
+            }
           } catch (migrationError: unknown) {
             return errorToMetadataResult(
               migrationError,

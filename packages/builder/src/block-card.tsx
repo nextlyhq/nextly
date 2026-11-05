@@ -46,6 +46,7 @@ export type CardVerbs = SharedBlockVerbs;
 /** The verbs from the shared set that the card's menu offers, in order. */
 const CARD_VERBS: readonly ToolbarActionId[] = [
   "duplicate",
+  "save-as-shared-style",
   "turn-into-component",
   "detach-component",
   "duplicate-component",
@@ -112,6 +113,9 @@ export function BlockCard({
           ) : (
             <h2
               className="nx-block-card__title"
+              // Cut short on screen like the description below, so the whole
+              // name is in its tooltip for a pointer.
+              title={wholeTitle(name, type)}
               onDoubleClick={
                 onRename === undefined ? undefined : () => setRenaming(true)
               }
@@ -323,6 +327,11 @@ function MenuItem({
   );
 }
 
+/** The card's title as one line: the author's name and the type, or the type. */
+function wholeTitle(name: string, type: string): string {
+  return name === "" ? type : `${name} · ${type}`;
+}
+
 /**
  * One line per lock that holds the block, each saying what it fixes and where
  * it is lifted. Words, never a colour or an icon alone.
@@ -374,7 +383,7 @@ function OwnLockLine({
       <span id={reasonId}>
         <strong>Locked</strong>: it can&apos;t be moved, deleted or edited.
       </span>
-      {layersLockChangeable(lock) ? " Unlock it from the menu." : null}
+      {layersLockChangeable(lock) ? " Unlock it from the block's menu." : null}
     </li>
   );
 }

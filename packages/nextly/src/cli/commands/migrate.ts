@@ -69,6 +69,7 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
   applyFailedError,
@@ -106,6 +107,10 @@ import {
   findRegistryDisagreements,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
+import {
+  previewRequiredColumns,
+  refuseRequiredColumnsOverNulls,
+} from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -164,10 +169,8 @@ import {
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import {
-  requireDatabaseEnv,
-  loadConfigOrExit,
-} from "../utils/command-prerequisites";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
+import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
   deletionSource,
@@ -262,6 +265,13 @@ interface ResolvedMigrateOptions extends MigrateCommandOptions {
   verbose?: boolean;
   quiet?: boolean;
   cwd?: string;
+  /**
+   * Throw a failure instead of ending the process with it, for a command that
+   * runs `nextly migrate` inside work of its own: `migrate:fresh` holds the
+   * schema lock around it and must release the lock before it exits. The
+   * caller ends the command with the error, through `exitWithError`.
+   */
+  throwOnFailure?: boolean;
 }
 
 /**
@@ -324,22 +334,40 @@ export async function runMigrate(
 
   logger.header("Migrate");
 
+  // Every failure below ends here: the command's exit, or with
+  // `throwOnFailure` a throw its caller ends the command with.
+  // Annotated so the checker reads a call to it as ending the path.
+  const fail: (error: unknown, status?: 1 | 2) => never = (
+    error,
+    status = 1
+  ) => {
+    if (options.throwOnFailure === true) throw error;
+    return exitWithError(logger, error, status);
+  };
+
   logger.debug("Validating database environment...");
-  const dbValidation = requireDatabaseEnv(logger);
+  let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
+  try {
+    dbValidation = databaseEnvOrThrow();
+  } catch (error) {
+    fail(error);
+  }
 
   const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   logger.info("Loading configuration...");
 
-  const configResult = await loadConfigOrExit(
-    {
+  let configResult: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    configResult = await loadConfig({
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    },
-    logger
-  );
+    });
+  } catch (error) {
+    fail(error);
+  }
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -365,7 +393,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    exitWithError(logger, error);
+    fail(error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);
@@ -518,7 +546,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      exitWithError(logger, err, migrateExitCode(err));
+      fail(err, migrateExitCode(err));
     }
 
     // Localization companions, once the schema is in step.
@@ -580,7 +608,7 @@ export async function runMigrate(
         }
       }
     } catch (err) {
-      exitWithError(logger, err);
+      fail(err);
     }
 
     // Read-only, once the run has done its own work: name every registry row
@@ -792,6 +820,11 @@ export interface MigrateCoreDeps {
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
   /**
+   * Seam for tests; defaults to adding the per-document columns each content table lacks
+   * (`addDocumentColumns`).
+   */
+  documentColumnsFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
    * Runs inside the lock once the migration files have applied and before their metadata is
    * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
    * ledger, and the registry keeps the definitions it had, so the next run judges the same change
@@ -949,7 +982,8 @@ export async function previewMigrate(args: {
     judged.slice(moduleRuns.length).map(({ deletions }) => deletions),
     pendingFiles,
     args,
-    logger
+    logger,
+    pendingModules.length > 0
   );
   await previewBeyondStep(
     allPendingFiles,
@@ -981,15 +1015,30 @@ function previewModules(
   }
 }
 
-/** Each pending app file within the step, with what it deletes (`deletions`, in the same order) and a Builder file's refusal. */
+/**
+ * Each pending app file within the step, with what it deletes (`deletions`,
+ * in the same order), the required columns a real run would refuse it over,
+ * and a Builder file's refusal. `modulesFirst`: plugin modules run before
+ * the files, so even the first file is not the first migration applied.
+ */
 async function previewFiles(
   deletions: readonly (readonly Deletion[])[],
   pendingFiles: readonly ParsedMigration[],
-  args: { dialect: SupportedDialect; migrationsDir: string },
-  logger: CommandContext["logger"]
+  args: { db: unknown; dialect: SupportedDialect; migrationsDir: string },
+  logger: CommandContext["logger"],
+  modulesFirst: boolean
 ): Promise<void> {
   for (const [at, m] of pendingFiles.entries()) {
     previewPendingFile(m, deletions[at] ?? [], args.dialect, logger);
+    // The required columns a real run would refuse it over, from the same count: only for the
+    // first migration the run applies, since nothing before a later one is run here.
+    await previewRequiredColumns(
+      args.db,
+      args.dialect,
+      m,
+      logger,
+      at > 0 || modulesFirst
+    );
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
@@ -1478,6 +1527,10 @@ export async function runPluginPhase(
       readLiveTables(deps.db, deps.dialect, [statements]),
     liveIndexTables: statements =>
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
+    // The same before-run count an app file gets: a plugin's module reaches the shared runner
+    // through this phase, not through `runFileMigrations`.
+    refuseRequiredColumns: (statements, source) =>
+      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -1779,6 +1832,15 @@ async function runMigrationStreams(
   return { pluginModulesApplied, applied };
 }
 
+/** The per-document columns every content table needs (`addDocumentColumns`). */
+async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
+  await addDocumentColumns({
+    db: deps.db,
+    dialect: deps.dialect,
+    logger: { info: m => deps.logger.info(m) },
+  });
+}
+
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
@@ -1926,6 +1988,10 @@ export async function migrateCore(
       });
       coreChanged = r.changed;
 
+      // Before the app's files as well as after them (below, once Phase 3 has
+      // recorded the registry): a file written after these columns existed may
+      // rebuild a SQLite table, copying them from the live one.
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
       await recordAppTableOwners(deps);
       ({ pluginModulesApplied, applied } = await runMigrationStreams(
         deps,
@@ -1984,6 +2050,11 @@ export async function migrateCore(
           }. The tables are in place; run \`nextly migrate\` again to record it.`
         );
       }
+
+      // After the files and after Phase 3: a file written before these
+      // columns creates tables without them, and an entity whose registry
+      // row only Phase 3 records is found only once it has.
+      await (deps.documentColumnsFn ?? addDocumentColumnsFor)(deps);
     },
     {
       command: deps.lockCommand ?? "nextly migrate",
@@ -2610,6 +2681,39 @@ async function refuseUniqueFileThatCannotHold(
 }
 
 /**
+ * Refuses a companion file whose header records the settings a move out of translation applies
+ * (an `archive` or `shared` file, or a `unique` file dropping a per-language index ahead of them),
+ * where the fields' default-language values cannot take them
+ * (`refuseLeavingFileThatCannotTakeItsSettings`). Any other file, and one written before headers
+ * recorded settings, passes untouched.
+ */
+async function refuseLeavingFileThatCannotTakeItsSettings(
+  adapter: DrizzleAdapter,
+  localization: LocalizationMigrationIntent | undefined,
+  filename: string
+): Promise<void> {
+  // The archive and shared files of a move out of translation carry its settings, and so does a
+  // per-language unique-index drop that runs before them for a field unique before and after.
+  if (
+    localization?.kind !== "archive" &&
+    localization?.kind !== "shared" &&
+    localization?.kind !== "unique"
+  )
+    return;
+  if (localization.spec.settings === undefined) return;
+  const { refuseLeavingFileThatCannotTakeItsSettings: refuse } = await import(
+    "../../domains/i18n/migration/leaving-constraint-preconditions"
+  );
+  // The shared file runs after the main file, so the main table has the fields' columns by then.
+  await refuse(
+    adapter,
+    localization.spec,
+    filename,
+    localization.kind === "shared"
+  );
+}
+
+/**
  * Phase 2 — apply pending user migration files via §4.7 drift reconciliation.
  * Walks files in lex order, carrying each file's target snapshot forward as the
  * next file's baseline. Returns the count actually applied.
@@ -2744,6 +2848,8 @@ export async function runFileMigrations(args: {
       transaction: m.transaction,
       unit: "file",
     });
+    // A column made required over rows that would break it: refused here, before any statement.
+    await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
     // A file adding per-language unique indexes is refused here, before the ledger records an
     // attempt and before any statement, where one cannot hold. It also answers with the UP to
     // run on THIS database, which leaves out an index already installed here.
@@ -2752,6 +2858,14 @@ export async function runFileMigrations(args: {
       m.localization,
       filename,
       m.upSql
+    );
+    // A file moving fields out of translation is refused here too, where their default language's
+    // values cannot take the Required or Unique setting the move applies after its copy: at the
+    // archive file, before the move's first statement, and again at the shared file.
+    await refuseLeavingFileThatCannotTakeItsSettings(
+      dz,
+      m.localization,
+      filename
     );
 
     if (!target) {

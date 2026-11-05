@@ -170,21 +170,23 @@ function useRestoreRemount(
 } {
   const [generation, setGeneration] = useState(0);
   const [withdrawn, setWithdrawn] = useState(false);
-  const { restore } = recovery;
+  const { take } = recovery;
   useEffect(() => {
     if (!withdrawn) return;
-    restore();
+    take();
     setGeneration(count => count + 1);
     setWithdrawn(false);
-  }, [withdrawn, restore]);
+  }, [withdrawn, take]);
   const offered = useMemo(
     () => ({
       ...recovery,
-      // The view's own restore first, as an edit it can undo; drawn afresh
-      // only when it has none or declines.
-      restore: () => {
-        if (!restoreInView()) setWithdrawn(true);
-      },
+      // Once the offer is confirmed (see `restore`), the view's own restore
+      // first, as an edit it can undo; drawn afresh only when it has none or
+      // declines. Nothing changes before then.
+      restore: () =>
+        recovery.restore(() => {
+          if (!restoreInView()) setWithdrawn(true);
+        }),
     }),
     [recovery, restoreInView]
   );
@@ -223,7 +225,7 @@ function useRestoreInView(
   fieldPath: string | undefined,
   registry: DocumentRestoreRegistry
 ): () => boolean {
-  const { offer, restore } = recovery;
+  const { offer, take } = recovery;
   return useCallback(() => {
     const handler = registry.current;
     if (handler === null || offer === null || fieldPath === undefined) {
@@ -232,13 +234,13 @@ function useRestoreInView(
     const snapshot = offer.snapshot as Record<string, unknown>;
     const held = form.getValues(fieldPath);
     if (!handler(valueAtPath(snapshot, fieldPath))) return false;
-    // The recovery's own restore, so a view and the form accept an offer the
+    // The recovery's own take, so a view and the form accept an offer the
     // same way; then the view's field takes back what the view holds, since
     // the view writes the restored value through its own edit.
-    restore();
+    take();
     form.setValue(fieldPath, held, { shouldDirty: true });
     return true;
-  }, [registry, offer, fieldPath, form, restore]);
+  }, [registry, offer, fieldPath, form, take]);
 }
 
 /** The value at a dotted form path (`hero.body`, `sections.0.body`), if any. */
@@ -260,7 +262,14 @@ function useChipRecoveryOffer(
   const { restore, dismiss } = recovery;
   return useMemo(
     () =>
-      offer === null ? null : { savedAt: offer.savedAt, restore, dismiss },
+      offer === null
+        ? null
+        : {
+            savedAt: offer.savedAt,
+            olderVersion: offer.olderVersion,
+            restore,
+            dismiss,
+          },
     [offer, restore, dismiss]
   );
 }

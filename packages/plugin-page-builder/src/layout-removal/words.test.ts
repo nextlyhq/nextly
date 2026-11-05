@@ -50,7 +50,7 @@ describe("the refusal when pages use the Layout", () => {
       unreadable: 0,
       complete: false,
     });
-    expect(told).toContain("more pages than one removal can check");
+    expect(told).toContain("Not every page could be checked");
     expect(told).toContain("can't be removed yet");
   });
 });

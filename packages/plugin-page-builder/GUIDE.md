@@ -174,7 +174,7 @@ npx nextly migrate
 
 (`npx nextly db:sync` also applies them in development.) Until then, saving a
 page fails on the missing columns. After the upgrade the plugin creates a
-published **Default (site)** Layout and makes it the default. Layouts are
+published Layout called **Site layout** and makes it the default. Layouts are
 experimental; a page route draws them once it passes
 `layouts: pageBuilderLayouts()` (section 7.8 and `docs/page-builder/layouts.mdx`).
 

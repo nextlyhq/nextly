@@ -174,7 +174,11 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
- *   refuses the action.
+ *   refuses the action; throwing an `AbortError` cancels it instead, for a
+ *   handler that asked the author and was told no. Its second argument,
+ *   `store.writesSettled()`, waits for the tracked writes below and answers
+ *   whether they all landed: a handler that acts on the server for the store
+ *   asks it first, since the store is refused when one failed.
  * - `useTrackedWrite()` counts a write the document depends on but does not
  *   contain. Storing actions wait for it and are refused, naming it, while its
  *   latest attempt has failed.
@@ -194,6 +198,7 @@ export {
   type DocumentActionOutcome,
   type DocumentSaveState,
   type BeforeDocumentAction,
+  type StoreReadiness,
   type SubmitRefusal,
 } from "@nextlyhq/admin";
 
@@ -691,6 +696,21 @@ export type {
  * carry into anything that names a format.
  */
 export { useUploadMedia } from "@nextlyhq/admin";
+/**
+ * A media item by id, as a query a component renders from: a thumbnail, a
+ * preview. The admin's own read of one item, cached by id.
+ *
+ * @experimental
+ */
+export { useMediaItem } from "@nextlyhq/admin";
+/**
+ * Read a media item by id from code that draws a page, outside a component's
+ * render. The same query as `useMediaItem`, so the two share one cache and
+ * one read in flight.
+ *
+ * @experimental
+ */
+export { useMediaResolver } from "@nextlyhq/admin";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
@@ -779,6 +799,10 @@ export { usePluginRouteMutation } from "@nextlyhq/admin";
  * moment it awaits can. Same session handling and CSRF token as the hook; not
  * cached, and it invalidates nothing. Experimental while its first caller
  * settles; the intent is to keep its name and options stable.
+ *
+ * `keepalive: true` (optional, additive) sends the write so the browser
+ * finishes it after the page is hidden or closed, while its body fits the
+ * 64 KB browsers allow; a larger one goes as an ordinary request.
  */
 export { writePluginRoute } from "@nextlyhq/admin";
 /**

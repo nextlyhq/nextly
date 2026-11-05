@@ -56,6 +56,26 @@ export function autosaveScopeFor(
 }
 
 /**
+ * The document a recording belongs to, as the recording machinery groups it,
+ * or `null` when there is none to record against.
+ *
+ * One spelling for every recorder of a document: the form's, and a field
+ * recording its own state. A save waits for that document's recordings in
+ * flight, and two spellings of one document would let it miss one.
+ *
+ * @param scope - the document's address, as `autosaveScopeFor` gives it
+ * @returns the document's key, without its language: an author has one
+ *   recovery point per document, whichever language it was recorded in
+ */
+export function documentRecordingKey(
+  scope: VersionScope | null
+): string | null {
+  if (!scope) return null;
+  const id = "entryId" in scope ? scope.entryId : scope.documentId;
+  return `${scope.kind}:${scope.slug}:${id}`;
+}
+
+/**
  * Re-exported so the indicators that read it keep one import.
  *
  * The vocabulary belongs to the recording machinery rather than to this
@@ -137,9 +157,8 @@ export function useDocumentAutosave({
    * compares identity for change, and an object rebuilt each render would look
    * like a different document every time.
    */
-  const identity = scope
-    ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
-    : null;
+  const document = documentRecordingKey(scope);
+  const identity = document === null ? null : `${document}:${locale ?? ""}`;
 
   /*
    * Whether the editor holds uncommitted changes, as the form last reported.
@@ -150,6 +169,7 @@ export function useDocumentAutosave({
 
   const { status, lastSavedAt, schedule, cancel } = useSnapshotAutosave({
     identity,
+    document,
     save,
     debounceMs,
     enabled,

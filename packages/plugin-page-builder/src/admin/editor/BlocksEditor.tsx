@@ -15,6 +15,7 @@ import {
   prepareDocumentForRead,
   registeredBlocks,
 } from "@nextlyhq/blocks-react";
+import { blockNameOf } from "@nextlyhq/builder";
 import {
   BlockContextMenu,
   BlockKeyboardActions,
@@ -28,6 +29,7 @@ import {
   DropIndicator,
   DropRefusal,
   EmptyContainerAppenders,
+  PageInserters,
   InspectorPanel,
   RepairNotice,
   OnboardingChecklist,
@@ -37,6 +39,7 @@ import {
   type ComponentFieldsHost,
   type ComponentVariantsHost,
   type OpenPassages,
+  type SharedStylesHost,
   type VariantPreviewState,
 } from "@nextlyhq/builder/shell";
 import {
@@ -44,9 +47,10 @@ import {
   DocumentSaveIndicator,
   loadInlineRichTextEditor,
   MediaPickerDialog,
+  useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useState, type ComponentProps, type JSX } from "react";
+import { useEffect, useState, type ComponentProps, type JSX } from "react";
 import {
   useFormState,
   useWatch,
@@ -61,9 +65,14 @@ import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
+import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
+import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
-import { SiteStyleHistoryContext } from "../site-style-client";
+import {
+  SiteStyleHistoryContext,
+  SiteStylePreviewContext,
+} from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
 import {
@@ -73,9 +82,18 @@ import {
 } from "./editor-panels";
 import { EditorSearch, SearchButton } from "./editor-search";
 import { HistoryButtons } from "./history-buttons";
+import {
+  useMediaSummaryReader,
+  type ReadMediaSummary,
+} from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
 import { useReveal, type Reveal } from "./reveal-hidden";
+import {
+  settingsAddressOf,
+  useSavedRevision,
+  type SettingsAddress,
+} from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
 import {
   sharePreview,
@@ -123,26 +141,11 @@ type EditorView = EditorMount &
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
+    /** A stored media id's name, picture and alt text, for the image fields. */
+    readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
   };
-
-/**
- * Whether the empty-container appender should be suppressed right now.
- *
- * Two independent reasons collapse into one boolean here, named, rather than
- * inlined at the JSX call site: a drag in progress, where the document is
- * mid-change, and the author having turned empty-container chrome off, where
- * the container this control would sit over has collapsed to zero height. A
- * bare `||` at the call site reads as one condition; naming it is what says
- * these are two unrelated causes that happen to share an operator.
- */
-function emptyContainerAppenderHidden(
-  dragging: boolean,
-  showEmptyElements: boolean
-): boolean {
-  return dragging || !showEmptyElements;
-}
 
 /**
  * What stands where the canvas will be, while a read it cannot draw without is
@@ -344,7 +347,9 @@ let contentServices: ContentServices | undefined;
  * What the inspector's Content tab borrows from the admin: the media library,
  * to choose an image, the shared rich-text editor, and the page builder's
  * entries route, to find an entry a `relation` prop points at with the
- * author's own access. Built on first use and
+ * author's own access, the pages search, to find a page a link points at
+ * the same way, and the loop collections route, to offer a collection loop
+ * the collections that author may read. Built on first use and
  * kept for the module's life, so the panel never sees a new object on a
  * render, and loading this module reads nothing from the admin's surface
  * until an editor is drawn.
@@ -354,6 +359,8 @@ function borrowedServices(): ContentServices {
     MediaPicker: MediaPickerDialog,
     loadRichTextEditor: loadInlineRichTextEditor,
     findEntries,
+    findLinkTargets,
+    listLoopCollections,
   };
   return contentServices;
 }
@@ -361,8 +368,8 @@ function borrowedServices(): ContentServices {
 /**
  * The borrowed services with this editor's open-passage registry and its
  * language, one object per registry and language so the panel sees the same
- * one on every render. A relation search reads titles in the language being
- * edited.
+ * one on every render. A relation search and a link's search read titles in
+ * the language being edited.
  */
 const servicesByPassages = new WeakMap<
   OpenPassages,
@@ -371,7 +378,8 @@ const servicesByPassages = new WeakMap<
 
 function servicesFor(
   passages: OpenPassages,
-  locale: string | undefined
+  locale: string | undefined,
+  readMedia: ReadMediaSummary
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -384,8 +392,12 @@ function servicesFor(
     services = {
       ...borrowedServices(),
       openPassages: passages,
+      readMedia,
       findEntries: query =>
         findEntries(locale === undefined ? query : { ...query, locale }),
+      // The same language for a link's search, so a page is found and named
+      // as the author reads it.
+      findLinkTargets: findLinkTargetsIn(locale),
     };
     byLocale.set(key, services);
   }
@@ -414,7 +426,8 @@ function editorChecklist({
 /** The inspector, given the same readings the canvas draws with. */
 function editorInspector(
   view: EditorView,
-  verbs: CardVerbs
+  verbs: CardVerbs,
+  sharedStyles: SharedStylesHost
 ): React.JSX.Element {
   const {
     editor,
@@ -457,11 +470,13 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale)}
+      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
-      onCreateClass={classes.create}
+      // The author's right, the style write and the reach reads, so a
+      // shared style the block wears can become the Style tab's target.
+      sharedStyles={sharedStyles}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
@@ -547,7 +562,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
     spacingScrub,
     slots,
     blocks,
-    showEmptyElements,
     openInsertPanel,
     locale,
     canvasSource,
@@ -629,7 +643,6 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
             // is drawn inside the site's own layout and stylesheets.
             source={canvasSource}
             onSourceFallback={onCanvasFallback}
-            showEmptyElements={showEmptyElements}
             overlay={
               <>
                 <VariantPreviewTag name={view.preview.previewing} />
@@ -641,6 +654,15 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                     breakpoints: canvasRender.styleContext.breakpoints,
                     id: view.editedBreakpoint,
                   }}
+                  // A selected placement's frame is tagged with the name its
+                  // Layers row reads.
+                  nameOf={address =>
+                    blockNameOf(
+                      editor.document,
+                      address,
+                      componentLibrary.titleOf
+                    )
+                  }
                 />
                 <DropIndicator target={drag.target} />
                 <DropRefusal drag={drag} document={editor.document} />
@@ -667,25 +689,38 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 />
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
-                  the bands are, and while the author has turned empty-container
-                  chrome off: the placeholder box collapses to zero height under
-                  the same preference, and a "+" left floating over nothing
-                  would make the preference lie about what a visitor sees.
+                  the bands are. Shown otherwise: empty containers always draw
+                  their placeholder box, so the "+" over it always has one.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
                   slots={slots}
                   blocks={blocks}
-                  hidden={emptyContainerAppenderHidden(
-                    dragging,
-                    showEmptyElements
-                  )}
+                  hidden={dragging}
                   onAppend={nodeId => {
                     // Select the container and open Add to add INSIDE it,
                     // said explicitly: selecting a container never implies
                     // inside, so a click on a selected block adds after it.
                     editor.select(nodeId);
                     openInsertPanel(nodeId);
+                  }}
+                />
+                {/*
+                  The empty page's start card and the "+" between sections.
+                  The "+" selects the section above its gap and opens Add,
+                  which adds after the selected block and names the place;
+                  the start card opens Add on a page with nothing to select.
+                  Hidden mid-drag, when the drag's own line says where a block
+                  lands.
+                */}
+                <PageInserters
+                  document={editor.document}
+                  componentTitle={componentLibrary.titleOf}
+                  hidden={dragging}
+                  onStart={() => openInsertPanel()}
+                  onAddAfter={nodeId => {
+                    editor.select(nodeId);
+                    openInsertPanel();
                   }}
                 />
               </>
@@ -734,18 +769,41 @@ interface PageFacts {
   title: string | undefined;
   /** The SEO plugin's fields, where the document has them. */
   seo: ShareSeoFields | undefined;
+  /**
+   * The page whose saved address Settings reads, and whether its slug has
+   * changed since the save, or null for a document never saved.
+   */
+  address: Omit<SettingsAddress, "locale"> | null;
 }
+
+/** The field a page's address is made from, where the collection has one. */
+const SLUG_FIELD = "slug";
 
 function usePageFacts<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): PageFacts {
-  const [title, seo]: unknown[] = useWatch({
+  const [title, seo, slug]: unknown[] = useWatch({
     control,
-    name: ["title", "seo"] as Path<TFieldValues>[],
+    name: ["title", "seo", SLUG_FIELD] as Path<TFieldValues>[],
   });
+  // The form's defaults are what the last load or save stored, so the slug
+  // there is the saved one, the slug the server's address is read for.
+  const { defaultValues } = useFormState({
+    control,
+    name: SLUG_FIELD as Path<TFieldValues>,
+  });
+  const saved: unknown = (
+    defaultValues as Record<string, unknown> | undefined
+  )?.[SLUG_FIELD];
   return {
     title: typeof title === "string" ? title : undefined,
     seo: seo !== null && typeof seo === "object" ? seo : undefined,
+    address: settingsAddressOf(
+      useDocumentIdentity(),
+      slug,
+      saved,
+      useSavedRevision(defaultValues)
+    ),
   };
 }
 
@@ -806,6 +864,18 @@ function editorSettings(
           // dialog on every pass, open or not.
           dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
         }
+        // The SEO plugin's group, where the page has one: its fields are then
+        // among the page's own, and the preview is not all there is.
+        seoFields={page.seo !== undefined}
+        // Read in the language being edited, as a localized slug is.
+        address={
+          page.address === null
+            ? null
+            : {
+                ...page.address,
+                ...(view.locale === undefined ? {} : { locale: view.locale }),
+              }
+        }
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
@@ -847,19 +917,22 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>(
   const style = useSiteStyleHistory();
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
-      <StyleRevisionContext.Provider value={style.replay}>
-        <ConnectStyleHistoryContext.Provider value={style.connect}>
-          {/*
+      {/* Held style edits, drawn before they are stored. */}
+      <SiteStylePreviewContext.Provider value={style.preview}>
+        <StyleRevisionContext.Provider value={style.replay}>
+          <ConnectStyleHistoryContext.Provider value={style.connect}>
+            {/*
             The canvas's frame, provided above the whole editor: the canvas
             registers it here, and the inspector, the toolbar, inline editing
             and the keys outside the canvas all ask it which document and
             window the page is drawn in.
           */}
-          <CanvasFrameProvider>
-            <EditorBody {...props} />
-          </CanvasFrameProvider>
-        </ConnectStyleHistoryContext.Provider>
-      </StyleRevisionContext.Provider>
+            <CanvasFrameProvider>
+              <EditorBody {...props} />
+            </CanvasFrameProvider>
+          </ConnectStyleHistoryContext.Provider>
+        </StyleRevisionContext.Provider>
+      </SiteStylePreviewContext.Provider>
     </SiteStyleHistoryContext.Provider>
   );
 }
@@ -924,7 +997,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done } = useHostCommit({
+  const { done, publishOffer } = useHostCommit({
     name,
     control,
     editor,
@@ -947,10 +1020,18 @@ function EditorBody<TFieldValues extends FieldValues>({
     here: page.title,
     inline,
   });
+  // The "Part of" toast offers the same Edit component the panel does.
+  useOfferedEditComponent(
+    mount.offerEditComponent,
+    componentView.onEditComponent
+  );
   // What the verbs provider shares for the card's menu; `undefined` until it
   // mounts, when the menu offers Rename and Lock alone.
   const [cardVerbs, setCardVerbs] = useState<CardVerbs>(undefined);
 
+  // Shared styles on a block: the Style tab's target and "Save as shared
+  // style…", from the same class surface the canvas compiles from.
+  const { sharedStyle } = canvas;
   // The page's title, for the canvas frame's accessible name.
   const pageTitle = page.title;
   // Over the document the canvas draws: in a component's view, the open
@@ -961,6 +1042,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas.canvasRender.styleContext.breakpoints,
     canvas.editedBreakpoint
   );
+  // A stored image's name and picture in the inspector, read as the canvas
+  // reads it.
+  const readMedia = useMediaSummaryReader();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -971,6 +1055,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView,
     layerVerbs: cardVerbs,
     reveal,
+    readMedia,
     preview: componentView.preview,
   };
   useOpenAtSection({
@@ -988,7 +1073,6 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentVerbs,
     availablePanels,
     openPanelRequest,
-    setShowEmptyElements,
     setZoom,
     appliedScale,
     deviceRequest,
@@ -1010,10 +1094,6 @@ function EditorBody<TFieldValues extends FieldValues>({
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
         openPanelRequest={openPanelRequest}
-        // The read half of the same gap: mirrors the shell's own preference
-        // so the appender below can be suppressed by the SAME switch that
-        // already suppresses the placeholder box it sits over.
-        onShowEmptyElementsChange={setShowEmptyElements}
         onZoomChange={setZoom}
         // The device being edited: chosen here, held and stored by the shell,
         // and reported back so the canvas and the inspector follow it.
@@ -1043,7 +1123,7 @@ function EditorBody<TFieldValues extends FieldValues>({
         // already holds and cannot enumerate one. This is the MERGED set the
         // canvas compiles with, so the picker offers exactly the tokens the
         // page will resolve.
-        inspector={editorInspector(view, cardVerbs)}
+        inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
@@ -1091,6 +1171,8 @@ function EditorBody<TFieldValues extends FieldValues>({
           */
           mayCreatePattern={mayCreatePattern}
           components={componentVerbs}
+          // "Save as shared style…", offered by every block menu.
+          sharedStyles={sharedStyle.verb}
           // Opening a placed component in its own view: the host's, since it
           // knows the view's address and whether this author may update
           // components. Absent, no surface offers it.
@@ -1146,6 +1228,8 @@ function EditorBody<TFieldValues extends FieldValues>({
             onClose={makeComponent.close}
             returnFocusTo={makeComponent.returnFocusTo}
           />
+          {publishOffer}
+          {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>
     </EditorFrame>
@@ -1184,4 +1268,17 @@ function EditorFrame({
       <div className="min-h-0 flex-1">{children}</div>
     </div>
   );
+}
+
+/**
+ * Hand the "Part of" toast the component opener the view built, so its Edit
+ * component action opens what the panel's button does.
+ */
+function useOfferedEditComponent(
+  offer: EditorMount["offerEditComponent"],
+  open: ComponentView["onEditComponent"]
+): void {
+  useEffect(() => {
+    offer(open);
+  }, [offer, open]);
 }
