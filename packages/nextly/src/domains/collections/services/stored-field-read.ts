@@ -1337,3 +1337,28 @@ function unknownForm(form: never): never {
     logContext: { reason: "stored-form-unknown", form: String(form) },
   });
 }
+
+/**
+ * The options of a write path's first read inside its transaction, for the
+ * write called with `context`: a locking read where a conditional write's
+ * expectation travels with it, and a plain one otherwise.
+ *
+ * A Single's first write may find, inside its transaction, a row another
+ * writer created since this request looked. On MySQL a transaction's first
+ * plain read fixes the snapshot every later plain read answers from, and the
+ * expectation is read plainly after the row lock; read before that lock, the
+ * row could change under a snapshot the expectation would then trust. A
+ * locking read takes the lock at once and fixes no snapshot, so the
+ * expectation's snapshot is taken under the lock, where no writer can move
+ * what it reads. A write without an expectation keeps its plain read: two
+ * first writes locking an empty table would each hold its gap and deadlock.
+ * An entry's update takes its row lock as its transaction's first statement,
+ * so it reads nothing before the lock.
+ */
+export function firstReadLock(context: Record<string, unknown> | undefined): {
+  readonly forUpdate?: boolean;
+} {
+  return context !== undefined && expectations.has(context)
+    ? { forUpdate: true }
+    : {};
+}

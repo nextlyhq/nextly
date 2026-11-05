@@ -174,6 +174,73 @@ function raceSeam(
   return { paused, locked, state, letCommit };
 }
 
+/** How long a racing write is given to commit before the seam moves on. */
+const RACE_GRACE_MS = 1_000;
+
+/**
+ * Pauses the plugin's first write transaction twice: before it begins, after
+ * the write has looked for the Single and found none, so another writer can
+ * create it; and inside it, right after its first read of the Single (the
+ * read that adopts the row the other writer created), so the other writer can
+ * try to change it before the write reaches its row lock.
+ */
+function adoptSeam(t: TestNextly) {
+  const adapter = t.adapter as unknown as {
+    transaction<T>(
+      work: (tx: {
+        selectOne(table: string, options: unknown): Promise<unknown>;
+      }) => Promise<T>,
+      ...rest: unknown[]
+    ): Promise<T>;
+  };
+  const original = adapter.transaction.bind(adapter);
+  const gate = () => {
+    let open = (): void => undefined;
+    const opened = new Promise<void>(resolve => {
+      open = resolve;
+    });
+    releases.push(() => open());
+    return { opened, open };
+  };
+  const reached = { start: gate(), read: gate() };
+  const proceed = { begin: gate(), lock: gate() };
+  const seen = { claimed: false, adopted: false };
+  vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) => {
+    if (isSnapshot(rest) || writerOf.getStore() !== "plugin" || seen.claimed) {
+      return original(work, ...rest);
+    }
+    seen.claimed = true;
+    reached.start.open();
+    return proceed.begin.opened.then(() =>
+      original(
+        async tx => {
+          const selectOne = tx.selectOne.bind(tx);
+          let first = true;
+          tx.selectOne = async (table, options) => {
+            const row = await selectOne(table, options);
+            if (first) {
+              first = false;
+              seen.adopted = row !== null && row !== undefined;
+              reached.read.open();
+              await proceed.lock.opened;
+            }
+            return row;
+          };
+          return work(tx);
+        },
+        ...rest
+      )
+    );
+  });
+  return {
+    atStart: reached.start.opened,
+    afterRead: reached.read.opened,
+    begin: proceed.begin.open,
+    lock: proceed.lock.open,
+    seen,
+  };
+}
+
 /** The error a promise rejected with. */
 async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
   try {
@@ -313,6 +380,18 @@ describe.each(getConfiguredTestDialects())(
                 slug,
                 fields: [
                   { name: "body", type: "doc", defaultValue: { v: "default" } },
+                ],
+              }) as never
+          ),
+          // Created by another writer while a conditional write is under way,
+          // with the field it expects left unset.
+          ...["adoptrace", "adoptcontrol"].map(
+            slug =>
+              ({
+                slug,
+                fields: [
+                  { name: "body", type: "doc" },
+                  { name: "note", type: "doc" },
                 ],
               }) as never
           ),
@@ -763,6 +842,85 @@ describe.each(getConfiguredTestDialects())(
         expect(await bodyOf("firstrace")).toEqual({
           kind: "found",
           values: { body: { kind: "value", value: { v: "author" } } },
+        });
+      });
+    });
+
+    describe("a Single another writer creates during the write", () => {
+      /** The Single's body as the stored read returns it, read as the owner. */
+      const bodyOf = (single: string) =>
+        readStoredFields(owner, {
+          single,
+          fields: ["body"],
+          form: "published",
+        });
+
+      /** As another writer: a save of the Single, judged by no expectation. */
+      const authorSavesSingle = (slug: string, data: Record<string, unknown>) =>
+        writerOf.run("author", () =>
+          t.nextly.updateSingle({ slug, data, overrideAccess: true } as never)
+        );
+
+      /**
+       * The plugin's conditional write expecting the body absent, as its read
+       * found it, paused so that another writer creates the Single first and
+       * the write adopts that row. Settles to "landed" or to its error.
+       */
+      async function adoptingWrite(slug: string) {
+        expect(await bodyOf(slug)).toEqual({ kind: "absent" });
+        const hash = await storedValueHash({ kind: "absent" });
+        const seam = adoptSeam(t);
+        const write = writerOf
+          .run("plugin", () =>
+            updateIfUnchanged(owner, {
+              single: slug,
+              data: { body: { v: "plugin" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          )
+          .then(
+            () => "landed" as const,
+            (error: unknown) => error
+          );
+        await seam.atStart;
+        await authorSavesSingle(slug, { note: { v: "created" } });
+        seam.begin();
+        await seam.afterRead;
+        expect(seam.seen.adopted).toBe(true);
+        return { seam, write };
+      }
+
+      it("loses no change another writer makes to the Single the write adopted before its row lock", async () => {
+        const { seam, write } = await adoptingWrite("adoptrace");
+        // The other writer changes the field the write expects: it commits
+        // now, or waits on the lock the write holds.
+        const edit = authorSavesSingle("adoptrace", { body: { v: "author" } });
+        await Promise.race([
+          edit,
+          new Promise(resolve => setTimeout(resolve, RACE_GRACE_MS)),
+        ]);
+        seam.lock();
+        const outcome = await write;
+        await edit;
+
+        // The write landed before the edit, or was refused after it; either
+        // way the edit is the value kept, never overwritten unseen.
+        expect(
+          outcome === "landed" || NextlyError.isCode(outcome, "CONFLICT")
+        ).toBe(true);
+        expect(await bodyOf("adoptrace")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "author" } } },
+        });
+      });
+
+      it("lands a write that adopts a Single another writer created with the field it expects still unset", async () => {
+        const { seam, write } = await adoptingWrite("adoptcontrol");
+        seam.lock();
+        expect(await write).toBe("landed");
+        expect(await bodyOf("adoptcontrol")).toEqual({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "plugin" } } },
         });
       });
     });
