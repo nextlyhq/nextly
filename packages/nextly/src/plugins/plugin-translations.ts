@@ -83,6 +83,31 @@ function assertDeclarableKey(pluginName: string, key: string): void {
 }
 
 /**
+ * Check each key of one plugin's catalog and record the plugin as its owner,
+ * refusing a key another plugin already owns, naming both.
+ */
+function claimKeys(
+  pluginName: string,
+  translations: PluginTranslations,
+  owners: Map<string, string>
+): void {
+  for (const entries of Object.values(translations)) {
+    for (const key of Object.keys(entries)) {
+      assertDeclarableKey(pluginName, key);
+      const owner = owners.get(key);
+      if (owner !== undefined && owner !== pluginName) {
+        throw resolutionError(
+          "plugin-translation-duplicate",
+          `Plugins "${owner}" and "${pluginName}" both declare the translation key "${key}".`,
+          { plugin: pluginName, otherPlugin: owner, key }
+        );
+      }
+      owners.set(key, pluginName);
+    }
+  }
+}
+
+/**
  * Every enabled plugin's translations, by plugin name, each checked.
  *
  * Refuses, naming what it refuses: a plugin slugged as the admin's own
@@ -108,20 +133,7 @@ export function collectPluginTranslations(
       );
     }
     assertCatalogShape(plugin.name, translations);
-    for (const entries of Object.values(translations)) {
-      for (const key of Object.keys(entries)) {
-        assertDeclarableKey(plugin.name, key);
-        const owner = owners.get(key);
-        if (owner !== undefined && owner !== plugin.name) {
-          throw resolutionError(
-            "plugin-translation-duplicate",
-            `Plugins "${owner}" and "${plugin.name}" both declare the translation key "${key}".`,
-            { plugin: plugin.name, otherPlugin: owner, key }
-          );
-        }
-        owners.set(key, plugin.name);
-      }
-    }
+    claimKeys(plugin.name, translations, owners);
     collected.set(plugin.name, translations);
   }
   return collected;
