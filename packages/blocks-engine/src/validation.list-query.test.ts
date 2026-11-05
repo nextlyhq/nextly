@@ -129,7 +129,7 @@ describe("a collection list's query at save", () => {
               op: "greater_than_equal",
               value: "2026-09-01",
             },
-            { field: "categories", op: "in", value: ["news", "guides"] },
+            { field: "author", op: "in", value: ["a1", "a2"] },
             { field: "author", op: "exists", value: true },
           ],
           sort: "-publishedAt,title",
@@ -281,6 +281,29 @@ describe("a collection list's query at save", () => {
       shapeOnly
     );
     expect(listIssues(issues)).toEqual([]);
+  });
+
+  it("refuses a filter on a field holding several values", () => {
+    // `in` on a has-many relation matches nothing on any database rather
+    // than reading as "includes any of", so such a filter is refused.
+    const issues = listIssues(
+      validate(
+        page(
+          list("l", {
+            collection: "posts",
+            filters: [{ field: "categories", op: "in", value: ["c1"] }],
+          })
+        ),
+        withSchema
+      )
+    );
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "list-field-unfilterable",
+        path: "/nodes/0/props/filters",
+        message: expect.stringContaining('"categories"'),
+      }),
+    ]);
   });
 
   it("refuses a sort on a field holding several values", () => {

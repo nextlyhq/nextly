@@ -135,6 +135,7 @@ export type ListFieldCode =
   | "list-field-unknown"
   | "list-field-protected"
   | "list-field-unsortable"
+  | "list-field-unfilterable"
   | "list-relation-unsuitable"
   | "list-too-deep";
 
@@ -157,6 +158,8 @@ export const LIST_ISSUE_CODES: {
     "A list filters or sorts by a field visitors may not see.",
   "list-field-unsortable":
     "A list sorts by a field that holds more than one value.",
+  "list-field-unfilterable":
+    "A list filters by a field that holds more than one value.",
   "list-relation-unsuitable":
     "A list's related source is not a to-many relation to its collection.",
   "list-too-deep":
@@ -607,13 +610,19 @@ function namedFieldFinding(
   const uses = named.use === "filter" ? "filters by" : "sorts by";
   const judged = readableField(named.field, fields, { uses, collection });
   if (!("shape" in judged)) return judged;
-  if (named.use === "sort" && judged.shape.hasMany === true) {
-    return {
-      code: "list-field-unsortable",
-      message: `This list sorts by "${named.field}", which holds more than one value, so it has no one value to order by.`,
-    };
-  }
-  return undefined;
+  if (judged.shape.hasMany !== true) return undefined;
+  // A field holding several values has no one value to order by, and its
+  // operators read it as one value, so `in` on a has-many relation matches
+  // nothing on any database rather than "includes any of".
+  return named.use === "sort"
+    ? {
+        code: "list-field-unsortable",
+        message: `This list sorts by "${named.field}", which holds more than one value, so it has no one value to order by.`,
+      }
+    : {
+        code: "list-field-unfilterable",
+        message: `This list filters by "${named.field}", which holds more than one value. A list cannot filter by such a field yet.`,
+      };
 }
 
 /** The judgement of the fields a list filters and sorts by. */
@@ -881,5 +890,6 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-unknown",
   "list-field-protected",
   "list-field-unsortable",
+  "list-field-unfilterable",
   "list-relation-unsuitable",
 ]);
