@@ -1747,7 +1747,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1794,7 +1799,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1843,7 +1853,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1927,7 +1942,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({

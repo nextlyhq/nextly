@@ -116,12 +116,13 @@ export async function readLayoutSettings(
  * decided on: the write sends its version, so a change to the settings made
  * since refuses the write rather than being overwritten. Settings never
  * stored have no version, and nothing to overwrite, so the first write says
- * it sets them whatever is there.
+ * it sets them whatever is there. `"overwrite"` is a write that sets its
+ * values whatever the settings hold, decided on no read of them.
  */
 export async function writeLayoutSettings(
   nextly: Pick<DefaultLayoutDirectApi, "updateSingle">,
   slugs: DefaultLayoutSlugs,
-  from: LayoutSettings,
+  from: LayoutSettings | "overwrite",
   data: {
     defaultLayout?: string | null;
     seededLayout?: string | null;
@@ -131,7 +132,7 @@ export async function writeLayoutSettings(
   await nextly.updateSingle({
     slug: slugs.settings,
     data:
-      from.rev === undefined
+      from === "overwrite" || from.rev === undefined
         ? asOverwrite(data)
         : withVersionFrom(data, from.rev),
     overrideAccess: true,

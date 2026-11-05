@@ -88,4 +88,16 @@ describe("writing the settings from a read of them", () => {
 
     expect(written).toEqual([{ defaultLayout: "b", _overwrite: true }]);
   });
+
+  // A write decided on no read of the settings, such as choosing a default,
+  // sets its values over whatever they hold, version or not.
+  it("sets the values whatever the settings hold when the write says so", async () => {
+    const { nextly, written } = settingsApi({ defaultLayout: "a", _rev: "4" });
+
+    await writeLayoutSettings(nextly, SLUGS, "overwrite", {
+      defaultLayout: "b",
+    });
+
+    expect(written).toEqual([{ defaultLayout: "b", _overwrite: true }]);
+  });
 });

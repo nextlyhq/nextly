@@ -140,7 +140,9 @@ async function makeDefault(
     );
   }
 
-  await writeLayoutSettings(nextly, slugs, before, {
+  // Whatever the settings hold now: choosing this Layout depends on none of
+  // it, so of two calls at once the later write wins, as said above.
+  await writeLayoutSettings(nextly, slugs, "overwrite", {
     defaultLayout: id,
     defaultLayoutChangedBy: by.userId,
   });
