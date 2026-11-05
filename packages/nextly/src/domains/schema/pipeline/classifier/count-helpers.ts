@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -302,4 +303,57 @@ export async function countParentsWithoutLocale(
     return asNumber(row?.count);
   }
   return extractCount(await (db as PgMysqlExecute).execute(query), dialect);
+}
+
+/** The rows that would break a column becoming NOT NULL. */
+export interface RowsBreakingNotNull {
+  total: number;
+  /**
+   * For a field group's table, the rows by the table of the collection or Single that holds
+   * them (its `_parent_table`), so a refusal can name each one; empty otherwise.
+   */
+  byParentTable: Map<string, number>;
+}
+
+/**
+ * How many rows would break a column becoming NOT NULL: those holding null in `column`, or
+ * every row when `column` is `null` (a required column added without a default, which each
+ * existing row would hold as null). With `byParent`, a field group's rows are also counted by
+ * the table that holds them. The one count every road that makes a column required asks before
+ * anything runs. Names go through `sql.identifier`, so a table named with a hyphen is quoted
+ * rather than refused.
+ */
+export async function countRowsBreakingNotNull(
+  db: unknown,
+  dialect: SupportedDialect,
+  target: { table: string; column: string | null; byParent?: boolean }
+): Promise<RowsBreakingNotNull> {
+  const table = sql.identifier(target.table);
+  const where =
+    target.column === null
+      ? sql``
+      : sql` WHERE ${sql.identifier(target.column)} IS NULL`;
+  if (!target.byParent) {
+    const total = await readCount(
+      db,
+      dialect,
+      sql`SELECT COUNT(*) AS count FROM ${table}${where}`
+    );
+    return { total, byParentTable: new Map() };
+  }
+  const parent = sql.identifier(STORAGE_FORMAT.columns.parentTable);
+  const rows = await querySqlRows<{ parent: string; count: string | number }>(
+    db,
+    dialect,
+    sql`SELECT ${parent} AS parent, COUNT(*) AS count FROM ${table}${where} GROUP BY ${parent}`
+  );
+  const byParentTable = new Map<string, number>();
+  let total = 0;
+  for (const row of rows) {
+    const n = asNumber(row.count);
+    if (n === 0) continue;
+    byParentTable.set(String(row.parent), n);
+    total += n;
+  }
+  return { total, byParentTable };
 }

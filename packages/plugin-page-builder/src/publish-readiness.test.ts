@@ -11,11 +11,12 @@ import {
   MAX_COMPOSED_DEPTH,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   documentsWithin,
   planPublishReadiness,
+  publishDependenciesRoute,
   systemReads,
   titlesAsCaller,
   type ReadinessReads,
@@ -358,5 +359,40 @@ describe("the work one request may ask for", () => {
     expect(() =>
       documentsWithin([props("x".repeat(8 * 1000))], limits)
     ).toThrow();
+  });
+});
+
+// The route reads nothing it publishes, so it has no version to send: each
+// write chooses to publish whatever the document holds, and says so.
+describe("publishing what a page needs", () => {
+  it("publishes each chosen document as an overwrite, as the caller", async () => {
+    const updateEntry = vi.fn(async () => ({}));
+    const route = publishDependenciesRoute({
+      store: { field: "content" },
+      enabled: true,
+      limits: () => LIMITS,
+    });
+    const res = await route.handler(
+      new Request("http://localhost/publish-dependencies", {
+        method: "POST",
+        body: JSON.stringify({
+          dependencies: [
+            { kind: "component", id: "c1" },
+            { kind: "layout", id: "l1" },
+          ],
+        }),
+      }),
+      {
+        self: { collections: {}, singles: {} },
+        user: { id: "u1" },
+        services: { collections: { updateEntry } },
+      } as never
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateEntry.mock.calls.map(call => call.slice(1, 3))).toEqual([
+      ["c1", { status: "published", _overwrite: true }],
+      ["l1", { status: "published", _overwrite: true }],
+    ]);
   });
 });

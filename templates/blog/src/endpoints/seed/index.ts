@@ -301,7 +301,7 @@ interface SeedMediaConfig {
   baseUrl?: string;
 }
 
-interface SeedData {
+export interface SeedData {
   // Optional. Lets the template fetch missing media from a public URL when
   // the local file is absent (e.g. user deleted it, scaffold skipped it).
   seedMedia?: SeedMediaConfig;
@@ -530,6 +530,66 @@ async function uploadMediaFile(
  * Schema is created via SQL migrations (boot-time auto-apply).
  * This function only populates demo content (Phase C).
  */
+/**
+ * Patch an existing post's categories and tags, sent with the version the
+ * lookup read it at, so a change to the post made since refuses the patch
+ * rather than being overwritten by it.
+ */
+export async function patchPostTaxonomy(
+  nextly: Pick<Nextly, "update">,
+  existing: Record<string, unknown>,
+  links: { categories: unknown[]; tags: unknown[] }
+): Promise<void> {
+  const rev = existing._rev;
+  await nextly.update({
+    collection: "posts",
+    id: String(existing.id),
+    data: {
+      categories: links.categories.length > 0 ? links.categories : undefined,
+      tags: links.tags.length > 0 ? links.tags : undefined,
+      ...(typeof rev === "string" ? { _rev: rev } : {}),
+    },
+  });
+}
+
+/**
+ * Write the demo content of the site's Singles: settings, navigation and the
+ * homepage. Seed content is set whatever the Singles hold, so each write
+ * says so with `_overwrite`.
+ *
+ * A write that fails fails the seed, naming the Single: a site without its
+ * Singles' demo copy is not seeded, and the load is recorded as failed so it
+ * can be run again. Running it again is safe, since each write overwrites.
+ */
+export async function seedSingles(
+  nextly: Pick<Nextly, "updateSingle">,
+  seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">
+): Promise<void> {
+  const write = async (slug: string, data: Record<string, unknown>) => {
+    console.log(`  Updating ${slug}...`);
+    try {
+      await nextly.updateSingle({
+        slug,
+        data: { ...data, _overwrite: true },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`The seed could not write the ${slug} Single: ${msg}`, {
+        cause: err,
+      });
+    }
+  };
+  await write("site-settings", {
+    title: seedData.siteSettings.siteName,
+    siteName: seedData.siteSettings.siteName,
+    tagline: seedData.siteSettings.tagline,
+    siteDescription: seedData.siteSettings.siteDescription,
+    social: seedData.siteSettings.social,
+  });
+  if (seedData.navigation) await write("navigation", seedData.navigation);
+  if (seedData.homepage) await write("homepage", seedData.homepage);
+}
+
 export async function seed({
   nextly,
   config,
@@ -769,19 +829,16 @@ export async function seed({
 
       if (existing.meta.total > 0) {
         // Post already exists — patch its categories/tags in case they
-        // were lost during a prior seed run.
-        const existingId = existing.items[0].id as string;
+        // were lost during a prior seed run. Non-critical, so it is reported
+        // as a warning rather than stopping the seed, never dropped.
         try {
-          await nextly.update({
-            collection: "posts",
-            id: existingId,
-            data: {
-              categories: categoryIds.length > 0 ? categoryIds : undefined,
-              tags: tagIds.length > 0 ? tagIds : undefined,
-            },
+          await patchPostTaxonomy(nextly, existing.items[0], {
+            categories: categoryIds,
+            tags: tagIds,
           });
-        } catch {
-          // Non-critical: the post exists, just the taxonomy link is stale.
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`post "${post.slug}" taxonomy: ${msg}`);
         }
         continue;
       }
@@ -810,53 +867,7 @@ export async function seed({
     }
   }
 
-  console.log("  Updating site settings...");
-  try {
-    await nextly.updateSingle({
-      slug: "site-settings",
-      data: {
-        title: seedData.siteSettings.siteName,
-        siteName: seedData.siteSettings.siteName,
-        tagline: seedData.siteSettings.tagline,
-        siteDescription: seedData.siteSettings.siteDescription,
-        social: seedData.siteSettings.social,
-      },
-    });
-  } catch {
-    console.log("  Could not update site settings (will be set up in admin).");
-  }
-
-  // Navigation single: seed default link arrays + UI toggles. Wrapped in
-  // try/catch since Single DDL may not have landed on every install path
-  if (seedData.navigation) {
-    console.log("  Updating navigation...");
-    try {
-      await nextly.updateSingle({
-        slug: "navigation",
-        data: seedData.navigation,
-      });
-    } catch {
-      console.log(
-        "  Could not update navigation (edit in admin under Singles / Navigation)."
-      );
-    }
-  }
-
-  // Homepage single: hero copy + section visibility toggles. Same
-  // try/catch rationale as navigation above.
-  if (seedData.homepage) {
-    console.log("  Updating homepage...");
-    try {
-      await nextly.updateSingle({
-        slug: "homepage",
-        data: seedData.homepage,
-      });
-    } catch {
-      console.log(
-        "  Could not update homepage (edit in admin under Singles / Homepage)."
-      );
-    }
-  }
+  await seedSingles(nextly, seedData);
 
   // Newsletter form: seed via the form-builder plugin. The frontend
   // NewsletterCta component submits to `form-submissions` referencing

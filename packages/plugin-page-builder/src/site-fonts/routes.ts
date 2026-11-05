@@ -28,6 +28,7 @@ import {
   respondMutation,
 } from "@nextlyhq/plugin-sdk";
 
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import type { SiteSettingsRouteContext } from "../site-settings";
 import { checkStoredFonts, unreadableStoredFonts } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -518,7 +519,12 @@ async function bodyOf(req: Request): Promise<unknown> {
 async function storedFonts(
   api: SiteFontsDirectApi,
   slug: string
-): Promise<{ raw: readonly unknown[]; faces: readonly FontFaceDef[] }> {
+): Promise<{
+  raw: readonly unknown[];
+  faces: readonly FontFaceDef[];
+  /** The Single's version as read, for a write made from this read. */
+  rev: string | undefined;
+}> {
   const doc = await api.findSingle({ slug, overrideAccess: true });
   const unreadable = unreadableStoredFonts(doc);
   if (unreadable.length > 0) {
@@ -539,7 +545,11 @@ async function storedFonts(
     Array.isArray(doc.fonts)
       ? (doc.fonts as readonly unknown[])
       : [];
-  return { raw, faces: checkStoredFonts(raw).value ?? [] };
+  return {
+    raw,
+    faces: checkStoredFonts(raw).value ?? [],
+    rev: documentVersionOf(doc),
+  };
 }
 
 /**
@@ -646,10 +656,12 @@ async function storeAll(
     // so a face another surface stored meanwhile is kept; in turn with the
     // other adds, so neither writes over the other's.
     await inTurn(async () => {
-      const { raw } = await storedFonts(api, slug);
+      const { raw, rev } = await storedFonts(api, slug);
+      // With the version of that read, so a save between it and this write
+      // refuses the write rather than dropping what the save stored.
       await api.updateSingle({
         slug,
-        data: { fonts: [...raw, ...added] },
+        data: withVersionFrom({ fonts: [...raw, ...added] }, rev),
         overrideAccess: true,
         ...asUser,
       });

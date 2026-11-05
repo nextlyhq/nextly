@@ -67,6 +67,7 @@ import { z } from "nextly/zod";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { documentVersionOf } from "./document-version";
 import {
   NO_MATCH,
   searchOn,
@@ -1107,6 +1108,7 @@ export function pageItemOf(
   const entry = entryOf(row, source.title?.name);
   if (entry === undefined) return undefined;
   const status = source.lifecycle ? statusOf(row) : undefined;
+  const rev = documentVersionOf(row);
   return {
     id: entry.id,
     collection: source.slug,
@@ -1117,6 +1119,7 @@ export function pageItemOf(
     field: source.field,
     title: entry.title,
     ...(status === undefined ? {} : { status }),
+    ...(rev === undefined ? {} : { rev }),
     ...pathOf(row, source),
   };
 }

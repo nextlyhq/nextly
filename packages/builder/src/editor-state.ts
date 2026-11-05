@@ -66,7 +66,7 @@ import {
   type LockRefusalFacts,
 } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
-import { applyOps, type BuilderOp } from "./ops";
+import { applyOps, type BuilderOp } from "./op-vocabulary";
 import {
   EMPTY_SELECTION,
   applySelection,

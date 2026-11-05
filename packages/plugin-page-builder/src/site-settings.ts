@@ -30,6 +30,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { asOverwrite } from "./document-version";
 import {
   SITE_BREAKPOINTS_ROUTE_PATH,
   SITE_SETTINGS_ROUTE_PATH,
@@ -217,9 +218,11 @@ export async function writeSiteBreakpoints(
     }
     return dryRunBreakpoints(breakpoints, ctx, removal);
   }
+  // The Settings screen saves the whole set it shows, and this route reads
+  // nothing before writing it: it sets the breakpoints whatever is stored.
   await nextly.updateSingle({
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    data: { breakpoints },
+    data: asOverwrite({ breakpoints }),
     overrideAccess: true,
     context: { ...SITE_SETTINGS_WRITE_CONTEXT },
     ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),

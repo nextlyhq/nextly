@@ -1622,12 +1622,13 @@ export interface PluginRawDatabase extends DatabaseInstance {
    * Run `work` in one transaction: it commits when `work` resolves and rolls
    * back when it throws. The handle `work` receives is the restricted builder,
    * without a nested `transaction`; with `rawSql` it is the live handle, whose
-   * `transaction` nests as a savepoint. Write through it: another service or
-   * `ctx.settings` called inside runs on its own connection on PostgreSQL and
-   * MySQL, outside this transaction.
+   * `transaction` nests as a savepoint. Write through it: another service
+   * called inside runs on its own connection on PostgreSQL and MySQL, outside
+   * this transaction. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction.
    *
    * On SQLite the transaction holds the database's only connection until it
-   * ends. A service or `ctx.settings` called inside joins it as a savepoint,
+   * ends. A service called inside joins it as a savepoint,
    * and its rows roll back with it; what it does after its write (after
    * hooks, events, cache revalidation, webhook delivery) waits until this
    * transaction commits, runs before `transaction` resolves, and never runs if

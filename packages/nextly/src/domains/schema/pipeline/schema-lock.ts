@@ -1117,32 +1117,73 @@ class SchemaLockHold {
 
   /**
    * Release every lock on SIGINT or SIGTERM, then let the signal stop the process. Returns how to
-   * take the handlers off again.
+   * take this hold off the interrupt again.
+   *
+   * Every such hold in the process is served by one pair of listeners (`releasingOnInterrupt`),
+   * which stops the process only once each hold's release has settled.
    */
   installSignals(): () => void {
     if (this.options.releaseOnInterrupt !== true) return () => {};
-    const onSignal = (signal: NodeJS.Signals): void => {
-      this.interrupted = true;
-      remove();
-      void Promise.race([
-        Promise.allSettled([this.pending]).then(() => this.releaseAll()),
-        new Promise(resolve => setTimeout(resolve, SHUTDOWN_WAIT_MS).unref?.()),
-      ])
-        .catch(() => undefined)
-        .finally(() => {
-          process.kill(process.pid, signal);
-        });
+    if (releasingOnInterrupt.size === 0) {
+      process.on("SIGINT", onProcessInterrupt);
+      process.on("SIGTERM", onProcessTerminate);
+    }
+    releasingOnInterrupt.add(this);
+    return () => {
+      // A hold the interrupt already took has nothing to take off: the listeners present now
+      // belong to holds that started after it.
+      if (!releasingOnInterrupt.delete(this)) return;
+      if (releasingOnInterrupt.size === 0) detachInterruptListeners();
     };
-    const onInterrupt = (): void => onSignal("SIGINT");
-    const onTerminate = (): void => onSignal("SIGTERM");
-    const remove = (): void => {
-      process.off("SIGINT", onInterrupt);
-      process.off("SIGTERM", onTerminate);
-    };
-    process.once("SIGINT", onInterrupt);
-    process.once("SIGTERM", onTerminate);
-    return remove;
   }
+}
+
+/**
+ * The holds in this process that release their locks on an interrupt.
+ *
+ * One pair of listeners serves them all, and stops the process once every one has released or
+ * the wait for them has run out. A pair per hold would stop it as soon as the quickest finished,
+ * and a hold re-entered inside another's claim holds nothing and finishes at once: the process
+ * would end while the hold that owns the claim was still giving it back, and the claim would
+ * stand until its lease lapsed. Listeners are attached exactly while this set is not empty.
+ */
+const releasingOnInterrupt = new Set<SchemaLockHold>();
+
+function onProcessInterrupt(): void {
+  releaseThenStop("SIGINT");
+}
+
+function onProcessTerminate(): void {
+  releaseThenStop("SIGTERM");
+}
+
+function detachInterruptListeners(): void {
+  process.off("SIGINT", onProcessInterrupt);
+  process.off("SIGTERM", onProcessTerminate);
+}
+
+/**
+ * Release every hold the interrupt finds, each once its acquisition in flight has landed, and
+ * re-send `signal` once all of them have settled. A second interrupt meanwhile finds no listener
+ * and stops the process at once, as an operator pressing it twice expects.
+ */
+function releaseThenStop(signal: NodeJS.Signals): void {
+  const holds = [...releasingOnInterrupt];
+  releasingOnInterrupt.clear();
+  detachInterruptListeners();
+  for (const hold of holds) hold.interrupted = true;
+  void Promise.race([
+    Promise.allSettled(
+      holds.map(hold =>
+        Promise.allSettled([hold.pending]).then(() => hold.releaseAll())
+      )
+    ),
+    new Promise(resolve => setTimeout(resolve, SHUTDOWN_WAIT_MS).unref?.()),
+  ])
+    .catch(() => undefined)
+    .finally(() => {
+      process.kill(process.pid, signal);
+    });
 }
 
 /**

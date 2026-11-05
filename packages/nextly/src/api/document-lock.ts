@@ -42,9 +42,15 @@ import {
   type DocumentRef,
   type DocumentScopeKind,
 } from "../domains/document-lock";
+import {
+  changeSinceHeldVersion,
+  heldVersionOf,
+} from "../domains/document-lock/held-version";
 import { peopleById } from "../domains/versions/author-hydration";
+import type { DecodedVersion } from "../domains/versions/stale-version";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, respondMutation } from "./response-shapes";
@@ -177,12 +183,15 @@ function readRef(source: {
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
  * `canReadEntity` documents at length.
+ *
+ * Answers the caller as the gates read it, so what a claim is told about the
+ * document afterwards is judged for the same caller.
  */
 async function authorize(
   auth: AuthContext,
   ref: DocumentRef,
   intent: "read" | "claim" | "release"
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof readCaller>>> {
   const authenticated = await readCaller(auth);
   const caller = readAccessCaller(authenticated);
   if (intent === "claim") {
@@ -221,6 +230,45 @@ async function authorize(
       authenticated.user,
       authenticated.authenticatedScope
     );
+  }
+  return authenticated;
+}
+
+/**
+ * What a claim or renewal that named the version its copy started from is told
+ * changed since: added to an answer that holds the document, and only then. A
+ * refused or lost claim holds nothing to save from, and a caller that named no
+ * version is answered as before, with no read of the document.
+ *
+ * Who and when are told only to a caller who may read the document, asked of
+ * this caller by the read gate a refused save asks.
+ */
+async function withChange<T extends { status: string }>(
+  outcome: T,
+  holds: T["status"],
+  ref: DocumentRef,
+  held: DecodedVersion | undefined,
+  authenticated: Awaited<ReturnType<typeof readCaller>>
+): Promise<T> {
+  if (held === undefined || outcome.status !== holds) return outcome;
+  try {
+    const changed = await changeSinceHeldVersion(ref, held, {
+      user: authenticated.user,
+      trusted: false,
+      authenticatedScope: authenticated.authenticatedScope,
+    });
+    return changed === undefined ? outcome : { ...outcome, changed };
+  } catch (error) {
+    // 🔴 The claim or renewal has already committed: answered without the
+    // change rather than as an error, so its token still reaches the editor,
+    // which can renew and release it. An answer it never saw would leave a
+    // lease it cannot see renewing, held against its colleagues.
+    getNextlyLogger().warn({
+      op: "document-lock-change-read-failed",
+      message: "Could not tell a holder what changed; answered without it.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return outcome;
   }
 }
 
@@ -299,6 +347,25 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+/**
+ * What a claim and a renewal both read before they act: the caller, the body,
+ * the document, the version the caller's copy started from, and the caller as
+ * the gates judged them.
+ *
+ * The version is read before anything is claimed or renewed, so a malformed
+ * one is refused without displacing anybody.
+ */
+async function claimRequest(req: Request) {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  const body = await readBody(req);
+  const ref = readRef(body);
+  const held = heldVersionOf(body);
+  const authenticated = await authorize(auth, ref, "claim");
+  return { auth, body, ref, held, authenticated };
+}
+
 /** Who holds this document, if anyone still does. */
 export const readLock = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -334,14 +401,9 @@ export const readLock = withErrorHandler(async (req: Request) => {
  * recorded in the document's history, and refused if it cannot be.
  */
 export const acquireLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  const { auth, body, ref, held, authenticated } = await claimRequest(req);
 
-  const body = await readBody(req);
-  const ref = readRef(body);
-  await authorize(auth, ref, "claim");
-
-  const outcome = await (
+  const acquired = await (
     await getDocumentLockService()
   ).acquire(
     ref,
@@ -360,6 +422,13 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
       requestAccess: body.requestAccess === true,
     }
   );
+  const outcome = await withChange(
+    acquired,
+    "acquired",
+    ref,
+    held,
+    authenticated
+  );
 
   // The canonical mutation envelope, so a client reads this with the same
   // handling as every other write. The outcome IS the item: "held" is an
@@ -374,16 +443,15 @@ export const acquireLock = withErrorHandler(async (req: Request) => {
 
 /** Extend a claim this caller still believes it holds. */
 export const renewLock = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+  const { body, ref, held, authenticated } = await claimRequest(req);
 
-  const body = await readBody(req);
-  const ref = readRef(body);
-  await authorize(auth, ref, "claim");
-
-  const outcome = await (
-    await getDocumentLockService()
-  ).renew(ref, readClaimToken(body));
+  const outcome = await withChange(
+    await (await getDocumentLockService()).renew(ref, readClaimToken(body)),
+    "renewed",
+    ref,
+    held,
+    authenticated
+  );
 
   return respondMutation(
     outcome.status === "renewed" ? "Claim extended." : "Claim lost.",
