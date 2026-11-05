@@ -572,6 +572,7 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
   type PluginWebhookEventType,
   type PermissionSlug,
