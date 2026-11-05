@@ -15,6 +15,7 @@ import { defineCollection, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
 import {
   createTestNextly,
+  type CreateTestNextlyOptions,
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
@@ -44,10 +45,18 @@ export const AT = new Date("2026-11-02T10:00:00.000Z");
 
 const drafts = { status: true, versions: { drafts: true } } as const;
 
-/** Boots the install every case uses. */
-export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * Boots the install every case uses, with `plugins` beside it: a case that reads what the install
+ * emails boots it with a provider's plugin.
+ */
+export function bootSteps(
+  dialect: TestDialect,
+  plugins?: CreateTestNextlyOptions["plugins"]
+): Promise<TestNextly> {
   return createTestNextly({
     dialect,
+    // Only when given, so every other case boots exactly as before.
+    ...(plugins === undefined ? {} : { plugins }),
     localization: { locales: ["en", "es", "ar"], defaultLocale: "en" },
     collections: [
       defineCollection({

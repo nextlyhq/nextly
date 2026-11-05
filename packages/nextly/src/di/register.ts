@@ -315,6 +315,7 @@ import {
   registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
+  registerWorkflowNoticeKinds,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -715,6 +716,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // release that stops or runs late) can register its kinds against it.
   registerNoticeServices(ctx);
   registerReleaseServices(ctx);
+  // The notices a workflow's steps and assignments give the people they name, registered with
+  // the notices service as the releases' are, so no move can name a person it cannot tell.
+  registerWorkflowNoticeKinds();
 }
 
 export async function registerServices(

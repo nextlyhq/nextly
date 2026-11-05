@@ -111,6 +111,12 @@ import {
 } from "./review-state-repository";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
 import {
+  prepareNoticeTelling,
+  tellNamedPeople,
+  type NamedNotice,
+  type NoticeTelling,
+} from "./workflow-notice-recording";
+import {
   approvedSlot,
   enteredReviewSlot,
   pinPart,
@@ -674,6 +680,8 @@ interface StepContext {
    * and for a caller that is no person (refused as such inside).
    */
   approver: StepApprover | null;
+  /** What telling the people the step names needs from the pool; null where no one can be told. */
+  telling: NoticeTelling | null;
 }
 
 /** A person approving, as the hidden-field check reads them. */
@@ -783,6 +791,11 @@ async function prepareStep(
     liveOn: await livePartsOf(adapter, input.document, parts),
     approves: allowsPublish(workflow, step.to),
     approver: await approverOf(input, caller, allowsPublish(workflow, step.to)),
+    telling: await prepareNoticeTelling(
+      adapter,
+      [{ workflow: workflow.slug, slug }],
+      caller
+    ),
   };
 }
 
@@ -1321,6 +1334,81 @@ async function recordStepEvents(
   }
 }
 
+/** What an approval or a request for changes tells the person accountable for the stage left. */
+const ACCOUNTABLE_TRIGGER: Partial<
+  Record<WorkflowStepKind, "approved" | "changesRequested">
+> = { approve: "approved", "request-changes": "changesRequested" };
+
+/** One moved part as a notice names it: its document, part, new revision and content. */
+function movedNotice(
+  c: StepContext,
+  entry: MovedPart,
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): Omit<NamedNotice, "trigger" | "userId" | "step"> {
+  return {
+    document: c.input.document,
+    workflow: c.workflow.slug,
+    part: entry.part,
+    revision: entry.revision,
+    snapshot: recorded.get(entry.part)?.snapshot,
+  };
+}
+
+/**
+ * The person accountable for the stage a part left, told it was approved or sent back: whoever
+ * brought it into that stage, by a step or an edit, as its state named them before the move. None
+ * for any other step, or a part no one was accountable for.
+ */
+function accountableNotices(
+  c: StepContext,
+  movable: readonly ReadPart[],
+  moved: readonly MovedPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): NamedNotice[] {
+  const trigger = ACCOUNTABLE_TRIGGER[c.step.kind];
+  if (trigger === undefined) return [];
+  const before = new Map(movable.map(entry => [entry.part, entry.state]));
+  return moved.flatMap(entry => {
+    const userId = before.get(entry.part)?.enteredBy;
+    if (!userId) return [];
+    const notice = movedNotice(c, entry, recorded);
+    return [{ ...notice, trigger, userId, step: c.step.label }];
+  });
+}
+
+/**
+ * The entered stage's default reviewer, where a person, told each moved part was assigned to
+ * them, for the work of that stage's primary step. A role is told nothing.
+ */
+function reviewerNotices(
+  c: StepContext,
+  moved: readonly MovedPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): NamedNotice[] {
+  const reviewer = c.reviewer.reviewer;
+  if (reviewer?.kind !== "user") return [];
+  const step = primaryStep(c.workflow, c.step.to)?.label ?? null;
+  return moved.map(entry => ({
+    ...movedNotice(c, entry, recorded),
+    trigger: "assigned" as const,
+    userId: reviewer.id,
+    step,
+  }));
+}
+
+/** Everyone a step names by name, for each part it moved. */
+function stepNotices(
+  c: StepContext,
+  movable: readonly ReadPart[],
+  moved: readonly MovedPart[],
+  recorded: ReadonlyMap<string | null, VersionRow | undefined>
+): NamedNotice[] {
+  return [
+    ...accountableNotices(c, movable, moved, recorded),
+    ...reviewerNotices(c, moved, recorded),
+  ];
+}
+
 /** A step inside its transaction: the lock first, then every precondition in order, then the move. */
 async function runStep(
   tx: TransactionContext,
@@ -1338,6 +1426,11 @@ async function runStep(
   if (hidden !== null) return { hidden };
   const moved = await moveParts(tx, c, movable, recorded);
   await recordStepEvents(tx, c, moved, recorded);
+  await tellNamedPeople(
+    tx,
+    c.telling,
+    stepNotices(c, movable, moved, recorded)
+  );
   return { taken: { step: c.step.name, moved, left, ...c.reviewer } };
 }
 
@@ -1427,6 +1520,8 @@ interface AssignContext {
   /** Whether each assignment's part is live, by its index, read before the transaction. */
   live: readonly boolean[];
   dialect: SupportedDialect;
+  /** What telling each assignee needs from the pool; null where no one can be told. */
+  telling: NoticeTelling | null;
 }
 
 const eligibilityKey = (
@@ -1688,6 +1783,34 @@ async function recordAssignment(
   });
 }
 
+/**
+ * Each person an assignment names, told the part was assigned to them for the work of its stage's
+ * primary step. A role, and a cleared assignment, tell no one. `assigned` answers `parts` in order,
+ * each with the part's new revision.
+ */
+function assignmentNotices(
+  parts: readonly AssignedPart[],
+  assigned: AssignResult["assigned"]
+): NamedNotice[] {
+  return parts.flatMap((part, index) => {
+    const { assignee, document } = part.assignment;
+    const revision = assigned[index]?.revision;
+    if (assignee?.kind !== "user" || revision === undefined) return [];
+    const workflow = part.registered.workflow;
+    return [
+      {
+        trigger: "assigned" as const,
+        userId: assignee.id,
+        document,
+        workflow: workflow.slug,
+        part: part.assignment.part,
+        revision,
+        step: primaryStep(workflow, part.stage)?.label ?? null,
+      },
+    ];
+  });
+}
+
 /** An assignment inside its transaction: who may assign, who may be assigned, then the writes. */
 async function runAssignment(
   tx: TransactionContext,
@@ -1698,6 +1821,7 @@ async function runAssignment(
   checkAssignees(c, parts);
   const assigned = await writeAssignments(tx, c, parts);
   for (const entry of c.entries) await recordAssignment(tx, c, entry);
+  await tellNamedPeople(tx, c.telling, assignmentNotices(parts, assigned));
   return { assigned };
 }
 
@@ -1732,6 +1856,14 @@ export async function assignWorkflowParts(
     gated: await assignerGates(entries, input.caller),
     live: await assignedLiveness(adapter, entries),
     dialect: adapter.getCapabilities().dialect,
+    telling: await prepareNoticeTelling(
+      adapter,
+      entries.map(({ assignment, registered }) => ({
+        workflow: registered.workflow.slug,
+        slug: assignment.document.scopeSlug,
+      })),
+      caller
+    ),
   };
   ensureWorkflowContentEventKinds();
   return adapter.transaction(tx => runAssignment(tx, context));
