@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineSingle, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -341,6 +342,76 @@ describe.each(
       expect(await companionColumns()).not.toContain("_status");
       expect(await headingIn("de")).toBe("Hallo");
       expect(await headingIn("en")).toBe("Hello");
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a field group's Schema Builder dialog under per-language storage (%s)",
+  (dialect: TestDialect) => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    async function columnsOf(table: string): Promise<string[]> {
+      const snapshot = await introspectLiveSnapshot(
+        current!.adapter.getDrizzle(),
+        current!.adapter.dialect,
+        [table]
+      );
+      return (
+        snapshot.tables[0]?.columns.map(column => column.name.toLowerCase()) ??
+        []
+      );
+    }
+
+    async function apply(
+      fields: { name: string; type: string }[],
+      localized?: boolean
+    ): Promise<unknown> {
+      const [row] = await current!.adapter.executeQuery<{
+        version: number | string | null;
+      }>(
+        `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_components")} WHERE ${q("slug")} = 'badge'`
+      );
+      return dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "badge" },
+        {
+          fields,
+          confirmed: true,
+          ...(localized === undefined ? {} : { localized }),
+          schemaVersion: Number(row?.version ?? 1),
+        }
+      );
+    }
+
+    // A field group that is not translated keeps its translatable values per language under the
+    // setting, so a field its dialog adds, or a translation toggle, leaves them there.
+    it("keeps an untranslated field group's translatable fields per language through its dialog", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "badge", label: "Badge", fields: FIELDS }
+      );
+
+      const withSummary = [...FIELDS, { name: "summary", type: "text" }];
+      await apply(withSummary);
+      expect(await columnsOf("comp_badge_locales")).toEqual(
+        expect.arrayContaining(["heading", "summary"])
+      );
+      expect(await columnsOf("comp_badge")).not.toContain("summary");
+
+      await apply(withSummary, true);
+      await apply(withSummary, false);
+      expect(await columnsOf("comp_badge")).not.toContain("heading");
+      expect(await columnsOf("comp_badge_locales")).toEqual(
+        expect.arrayContaining(["heading", "summary"])
+      );
     });
   }
 );
