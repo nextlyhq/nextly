@@ -574,6 +574,7 @@ export {
   type FieldSurface,
   type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
   type PermissionSlug,
   type PluginHookRegistry,
   type PluginFilterRegistry,

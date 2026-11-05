@@ -67,7 +67,7 @@ function stateOf(value: string): HostState {
 }
 
 /** The table operations a record is written through: `ctx.db`, or a transaction. */
-type ProgressHandle = Pick<
+export type ProgressHandle = Pick<
   PluginTransaction,
   "select" | "table" | "update" | "insert"
 >;
@@ -98,6 +98,60 @@ async function writeRow(
     hostKey: documentKey,
     ...set,
   });
+}
+
+/**
+ * Mark one document pending in a run's progress, through `handle`: a caller
+ * sending the run back to its converting walk in the same transaction, so the
+ * pending row and the run's phase land together or not at all.
+ */
+export async function markPending(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, {
+    state: "pending",
+    reason: null,
+  });
+}
+
+/**
+ * Record one document as left in a run's progress, through `handle`, with
+ * why: a document the run's walk did not strip and still owes.
+ */
+export async function markLeft(
+  handle: ProgressHandle,
+  runId: string,
+  documentKey: string,
+  reason: string
+): Promise<void> {
+  await writeRow(handle, runId, documentKey, { state: "left", reason });
+}
+
+/**
+ * Mark every document a run left as pending again, through `handle` (a
+ * transaction that also moves the run back to its converting walk). Answers
+ * false, changing nothing, when the run left none.
+ */
+export async function leftToPending(
+  handle: ProgressHandle,
+  runId: string
+): Promise<boolean> {
+  const h = handle.table(componentDeletionHosts);
+  const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
+  if (left === undefined) return false;
+  if (
+    (await handle.select(componentDeletionHosts).where(left).first()) === null
+  ) {
+    return false;
+  }
+  // Moves a value (left to pending), so no dialect reads it as matching
+  // nothing.
+  await handle
+    .update(componentDeletionHosts, { state: "pending", reason: null })
+    .where(left);
+  return true;
 }
 
 /** The progress store over the plugin's own `ctx.db`. */
@@ -154,10 +208,7 @@ export function progressStore(
         // or done, would never be visited again, so the two land together or
         // neither does.
         await db.transaction(async tx => {
-          await writeRow(tx, run.id, documentKey, {
-            state: "pending",
-            reason: null,
-          });
+          await markPending(tx, run.id, documentKey);
           const t = tx.table(componentDeletions);
           await tx
             .update(componentDeletions, { phase: "converting", cursor: null })
@@ -167,19 +218,9 @@ export function progressStore(
     },
     reopenLeft: runId =>
       db.transaction(async tx => {
-        const h = tx.table(componentDeletionHosts);
-        const left = and(eq(h.deletionId, runId), eq(h.state, "left"));
-        if (left === undefined) return false;
-        if (
-          (await tx.select(componentDeletionHosts).where(left).first()) === null
-        ) {
-          return false;
-        }
-        // Each statement moves a value (left to pending, done to
-        // converting), so no dialect reads it as matching nothing.
-        await tx
-          .update(componentDeletionHosts, { state: "pending", reason: null })
-          .where(left);
+        if (!(await leftToPending(tx, runId))) return false;
+        // Moves a value (done to converting), so no dialect reads it as
+        // matching nothing.
         const t = tx.table(componentDeletions);
         const done = and(eq(t.id, runId), eq(t.phase, "done"));
         if (done !== undefined) {

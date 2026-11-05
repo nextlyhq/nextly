@@ -66,6 +66,15 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // The browser suite's own server turns Next.js's development indicator off.
+  // In development the indicator's button is injected into every document the
+  // app serves, the canvas's frame included, so a keyboard walk through the
+  // editor meets a tab stop inside the canvas that no deployed site has.
+  // Unset everywhere else, which keeps the indicator for a contributor.
+  ...(process.env.NEXTLY_E2E_DEV_INDICATORS === "0"
+    ? { devIndicators: false as const }
+    : {}),
+
   // Type-checking responsibility lives in each workspace package's own
   // `pnpm check-types` (run by CI and during dev). The playground's prod
   // build should only gate on actual bundling/compilation, not re-run

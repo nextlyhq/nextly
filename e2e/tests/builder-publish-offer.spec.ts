@@ -290,6 +290,58 @@ test("asks the same question when the page is published from its form", async ({
   expect(await statusOf(api, "components", card)).toBe("published");
 });
 
+test("asks about a Layout chosen on the form while the question was out", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  const api = page.request;
+  const s = stamp();
+  const header = await component(api, `Late header ${s}`, "published");
+  await layout(api, `Late ${s}`, header, "draft");
+  const pageId = await draftPage(api, `Edited while asked ${s}`, []);
+
+  await gotoAdmin(page, `/collections/pages/${pageId}`);
+  const picker = page.getByRole("combobox", { name: "Layout" });
+  await expect(picker).toBeVisible({ timeout: 30_000 });
+
+  // The first question is held until the Layout has changed, so its answer is
+  // about the draft from before the change.
+  let arrived!: () => void;
+  const asked = new Promise<void>(resolve => {
+    arrived = resolve;
+  });
+  let release!: () => void;
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let questions = 0;
+  await page.route("**/publish-readiness", async route => {
+    try {
+      questions += 1;
+      if (questions === 1) {
+        arrived();
+        await released;
+      }
+      await route.continue();
+    } catch {
+      // The page went away with the request held: nothing is left to answer.
+    }
+  });
+
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await asked;
+  await picker.click();
+  await page.getByRole("option", { name: new RegExp(`^Late ${s}`) }).click();
+  release();
+
+  await expect(offer(page)).toContainText("This page's Layout isn't published");
+  await expect(offer(page)).toContainText(`Late ${s}`);
+  expect(questions).toBe(2);
+  await offer(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(offer(page)).toBeHidden();
+  expect(await statusOf(api, "pages", pageId)).toBe("draft");
+});
+
 test("warns before a Layout with an unpublished header becomes the default", async ({
   page,
 }) => {

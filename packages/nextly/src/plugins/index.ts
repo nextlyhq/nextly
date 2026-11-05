@@ -104,6 +104,7 @@ export type {
   FieldSurface,
   PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
   PermissionSlug,
 } from "./contributions";
 

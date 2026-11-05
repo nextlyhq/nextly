@@ -56,7 +56,6 @@ import { z } from "nextly/zod";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { componentStoreShape } from "./component-facts-route";
-import { asOverwrite } from "./document-version";
 import {
   AS_THE_SYSTEM,
   asDocument,
@@ -70,6 +69,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { asOverwrite } from "./document-version";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import { readingAsUser, type ComponentStore } from "./library-route";

@@ -137,14 +137,21 @@ const WRITES = [
   "generate:manifest",
   "generate:types",
   "generate:widget",
+  "i18n:restore",
   "init",
   "migrate",
   "migrate:baseline",
   "migrate:create",
+  "migrate:fresh",
   "migrate:down",
+  "migrate:resolve",
+  "permissions:cleanup",
+  "prune",
+  "setup-token",
   "telemetry disable",
   "telemetry enable",
   "telemetry reset",
+  "users:create-admin",
   "webhooks:prune",
 ];
 /**
@@ -153,17 +160,10 @@ const WRITES = [
  */
 const WRITES_WITHOUT_DRY_RUN_YET = [
   "db:sync",
-  "i18n:restore",
   "media reindex-usage",
-  "migrate:fresh",
-  "migrate:resolve",
-  "permissions:cleanup",
   "plugins install",
   "plugins uninstall",
-  "prune",
-  "setup-token",
   "upgrade",
-  "users:create-admin",
 ];
 const PREVIEWS = [
   "media orphans",

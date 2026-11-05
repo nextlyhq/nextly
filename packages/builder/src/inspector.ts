@@ -44,7 +44,7 @@ import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, NodePatch } from "./ops";
+import type { BuilderOp, NodePatch } from "./op-vocabulary";
 
 /**
  * The prop types this inspector can draw a control for.

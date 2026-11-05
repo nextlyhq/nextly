@@ -4,6 +4,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { missingSchemaObject } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
+import {
   clearFieldFunctions,
   registerFieldFunctions,
 } from "../../../shared/lib/field-level-registry";
@@ -92,6 +96,20 @@ describe("FieldGroupDataService", () => {
       await expect(
         ctx.service.getComponentTableName("ghost")
       ).resolves.toBeNull();
+    });
+  });
+
+  describe("isComponentLocalized", () => {
+    afterEach(() => _resetPerLanguageStorage());
+
+    it("answers whether the component's translatable values are stored per language", async () => {
+      // Not marked translatable, so its values are shared, unless the site keeps every
+      // translatable value per language.
+      await expect(ctx.service.isComponentLocalized("seo")).resolves.toBe(
+        false
+      );
+      setPerLanguageStorage(true);
+      await expect(ctx.service.isComponentLocalized("seo")).resolves.toBe(true);
     });
   });
 
