@@ -411,7 +411,7 @@ export async function readStoredSiteStyle(args: {
  * The stored site style, and the Single's version as the same read gave it,
  * for a write made from that read to send back.
  */
-export async function readStoredSiteStyleVersioned(
+async function readStoredSiteStyleVersioned(
   args: Parameters<typeof readStoredSiteStyle>[0]
 ): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
   const doc = await args.nextly.findSingle({

@@ -11,10 +11,10 @@
  */
 
 /** The key a read gives a document's version under, and an update sends it under. */
-export const DOCUMENT_VERSION_KEY = "_rev";
+const DOCUMENT_VERSION_KEY = "_rev";
 
 /** The key an update sets to `true` to apply whatever the stored version. */
-export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
+const DOCUMENT_OVERWRITE_KEY = "_overwrite";
 
 /** A row's version, as a read gave it, or `undefined` when it gave none. */
 export function documentVersionOf(row: unknown): string | undefined {
