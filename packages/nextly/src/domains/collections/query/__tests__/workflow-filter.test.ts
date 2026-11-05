@@ -252,7 +252,11 @@ describe("unknownFieldProblem", () => {
     // problem, so it must be word for word what an unknown field gets.
     const table = pgTable("posts", { id: uuid("id"), title: text("title") });
     const built = refusal(() =>
-      buildDrizzleCondition(buildWhereClause({ titel: { equals: "a" } }), table)
+      buildDrizzleCondition(
+        buildWhereClause({ titel: { equals: "a" } }),
+        table,
+        "postgresql"
+      )
     );
     expect(built).toEqual([unknownFieldProblem("where.titel", "titel")]);
   });

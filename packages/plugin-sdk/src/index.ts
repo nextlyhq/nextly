@@ -672,7 +672,9 @@ export type {
  *   that person, refused with a `CONFLICT` error when the field no longer
  *   hashes, under the write's own row lock, to what was read. Either may be
  *   made as the system (`{ overrideAccess: true }`), judged as the Direct
- *   API's own `overrideAccess: true` call is, by no access rule.
+ *   API's own `overrideAccess: true` call is, by no access rule or field
+ *   read rule; the system may read any field stored as JSON, and its read
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`).
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
@@ -682,6 +684,7 @@ export type {
   PluginStoredFields,
   PluginStoredFieldsRequest,
   PluginStoredIdentity,
+  PluginStoredLifecycle,
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
@@ -706,6 +709,21 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * Admin places: the named places on admin pages a plugin adds to, and the
+ * places a plugin declares on its own pages (`contributes.admin.places`).
+ * A plugin types its own places by augmenting `AdminPlaces` from this module.
+ * @experimental No first-party plugin declares or adds to a place yet (see
+ *   STABILITY.md).
+ */
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+  type PluginAdminPlaceDeclaration,
 } from "nextly";
 
 /**

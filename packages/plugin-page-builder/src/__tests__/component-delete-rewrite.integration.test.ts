@@ -50,6 +50,8 @@ const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
 const HARNESS = "@t/rewrite-harness";
 const NOTES = "notes";
+/** A collection whose blocks values sit in a repeater: no fixed path reaches them. */
+const BOARDS = "boards";
 
 type Node = Record<string, unknown>;
 
@@ -88,6 +90,10 @@ interface Switches {
   };
   /** Hide every component copy from what a read of a note returns. */
   hideCopiesOnRead?: boolean;
+  /** Hide every component copy inside a board's rows from what reads return. */
+  hideBoardCopiesOnRead?: boolean;
+  /** Leave the lifecycle state out of what a read of a page returns. */
+  hidePageStatusOnRead?: boolean;
   /** Fail the next update of this note as if the process stopped. */
   crashOn?: string;
   /** Run once, on the `atRead`-th read of this page by id. */
@@ -126,6 +132,47 @@ function harness(
               ),
             },
           };
+        };
+        return Array.isArray(data) ? data.map(hide) : hide(data);
+      });
+      // The same presentation hook on a board, whose blocks values sit in the
+      // rows of a repeater.
+      ctx.hooks.on("afterRead", BOARDS, context => {
+        if (switches.hideBoardCopiesOnRead !== true) return;
+        const data = (context as { data?: unknown }).data;
+        const hide = (row: unknown) => {
+          const rows = (row as { rows?: unknown } | null)?.rows;
+          if (!Array.isArray(rows)) return row;
+          return {
+            ...(row as Record<string, unknown>),
+            rows: rows.map((entry: Record<string, unknown>) => {
+              const body = asDocument(entry.body);
+              return body === null
+                ? entry
+                : {
+                    ...entry,
+                    body: {
+                      ...body,
+                      nodes: body.nodes.filter(
+                        node => node.type !== COMPONENT_INSTANCE_TYPE
+                      ),
+                    },
+                  };
+            }),
+          };
+        };
+        return Array.isArray(data) ? data.map(hide) : hide(data);
+      });
+      // A presentation hook that leaves a page's state out of what reads
+      // return, as a site shaping its public output might.
+      ctx.hooks.on("afterRead", "pages", context => {
+        if (switches.hidePageStatusOnRead !== true) return;
+        const data = (context as { data?: unknown }).data;
+        const hide = (row: unknown) => {
+          if (typeof row !== "object" || row === null) return row;
+          const rest: Record<string, unknown> = { ...row };
+          delete rest.status;
+          return rest;
         };
         return Array.isArray(data) ? data.map(hide) : hide(data);
       });
@@ -228,6 +275,8 @@ describe.each(getConfiguredTestDialects())(
       site: {
         singles?: unknown[];
         localization?: { locales: string[]; defaultLocale: string };
+        /** Whether the site also has boards. */
+        boards?: boolean;
       } = {}
     ) {
       const plugin = pageBuilder();
@@ -247,6 +296,21 @@ describe.each(getConfiguredTestDialects())(
               { name: "content", type: BLOCKS_TYPE },
             ],
           } as never,
+          ...(site.boards === true
+            ? [
+                {
+                  slug: BOARDS,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "rows",
+                      type: "repeater",
+                      fields: [{ name: "body", type: BLOCKS_TYPE }],
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
         ],
         ...(site.singles === undefined
           ? {}
@@ -971,6 +1035,69 @@ describe.each(getConfiguredTestDialects())(
       const nodes = await nodesOf(t, NOTES, id);
       expect(copies(nodes, cardId)).toBe(0);
       expect(texts(nodes)).toEqual(["Own", "Card title"]);
+    });
+
+    it("reports a board whose repeater holds a copy a site's read hook hides, by reading what is stored", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches, { boards: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: BOARDS,
+        data: {
+          title: "Board",
+          rows: [
+            { body: pageDoc([heading("own", "Own"), copyOf("i1", cardId)]) },
+          ],
+        },
+        overrideAccess: true,
+      });
+      const boardId = String(created.item.id);
+      await open(cookie, cardId);
+      switches.hideBoardCopiesOnRead = true;
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      // No path a write can name reaches a repeater's rows, so the copy is
+      // reported rather than converted; the hook hid it from reads alone.
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ slug: BOARDS, id: boardId }),
+        })
+      );
+    });
+
+    it("converts a published page's live row while a site's read hook hides its state", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: `live-${String(Math.random()).slice(2, 10)}`,
+          status: "published",
+          content: pageDoc([heading("own", "Own"), copyOf("i1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const pageId = String(created.item.id);
+      await open(cookie, cardId);
+      switches.hidePageStatusOnRead = true;
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      switches.hidePageStatusOnRead = false;
+      // Published again in its state, not saved as a draft beside it: the
+      // live row is converted and no draft is left pending.
+      expect(reports.at(-1)?.left ?? []).not.toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ slug: "pages", id: pageId }),
+        })
+      );
+      const live = await nodesOf(t, "pages", pageId);
+      expect(copies(live, cardId)).toBe(0);
+      expect(texts(live)).toEqual(["Own", "Card title"]);
+      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
     });
   }
 );

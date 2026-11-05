@@ -94,12 +94,16 @@ export interface PluginVersionWrites {
   ): Promise<VersionRow>;
   /**
    * @experimental Discard a document's working draft in one locale. Made as a
-   * person, the person needs to read and update the document.
+   * person, the person needs to read and update the document. `version` is
+   * the version the draft was read at (`_rev`) and the overwrite choice
+   * (`_overwrite`): a discard is judged as a save of the change is, so one
+   * made from an out-of-date read is refused with `STALE_VERSION`.
    */
   deleteWorkingDraft(
     ref: VersionRef,
     locale: string | null,
-    opts?: ServiceOpts
+    opts?: ServiceOpts,
+    version?: Readonly<Record<string, unknown>>
   ): Promise<number>;
   /**
    * @experimental Record an author's recovery point. Made as a person, the
@@ -368,7 +372,8 @@ function refuseOtherAuthor(
 async function discardTrusted(
   ref: VersionRef,
   locale: string | null,
-  service: () => VersionsService
+  service: () => VersionsService,
+  version: Readonly<Record<string, unknown>> | undefined
 ): Promise<number> {
   if (ref.scopeKind === "collection") {
     return getService("collectionsHandler")
@@ -378,6 +383,7 @@ async function discardTrusted(
         entryId: ref.entryId,
         locale,
         actor: SYSTEM_ACTOR,
+        version,
       });
   }
   if (ref.scopeKind === "single") {
@@ -386,6 +392,7 @@ async function discardTrusted(
       entryId: ref.entryId,
       locale,
       actor: SYSTEM_ACTOR,
+      version,
     });
   }
   return service().deleteWorkingDraft(ref, locale);
@@ -394,7 +401,8 @@ async function discardTrusted(
 async function discardAsWriter(
   ref: VersionRef,
   locale: string | null,
-  writer: HistoryWriter
+  writer: HistoryWriter,
+  version: Readonly<Record<string, unknown>> | undefined
 ): Promise<number> {
   refuseUnnamedKey(ref, writer, "discard");
   // Only collections and Singles have a working draft; page history was
@@ -409,6 +417,7 @@ async function discardAsWriter(
     authenticatedScope: writer.authenticatedScope,
     actor: writer.actor,
     ...writer.hookInputs,
+    version,
   });
   return removed;
 }
@@ -479,7 +488,7 @@ export function pluginVersionWrites(
       });
     },
 
-    deleteWorkingDraft(ref, locale, opts) {
+    deleteWorkingDraft(ref, locale, opts, version) {
       return asCalled(opts, async resolved => {
         // A collection's or Single's discard takes the document's row lock in
         // a transaction of its own. Inside the plugin's open transaction,
@@ -495,8 +504,9 @@ export function pluginVersionWrites(
         const writer = await checkedWriter(ref, resolved, "discard", {
           locale,
         });
-        if (!writer) return discardTrusted(ref, locale, service);
-        return discardAsWriter(ref, locale, writer);
+        // Judged on the version the draft was read at, as a save of it is.
+        if (!writer) return discardTrusted(ref, locale, service, version);
+        return discardAsWriter(ref, locale, writer, version);
       });
     },
 

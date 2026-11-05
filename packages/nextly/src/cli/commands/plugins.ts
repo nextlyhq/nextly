@@ -215,7 +215,7 @@ export async function pluginsListAction(
 /** The action of `nextly plugins install`, loaded when it runs. */
 export async function pluginsInstallAction(
   name: string | undefined,
-  cmdOptions: { all?: boolean },
+  cmdOptions: { all?: boolean; acceptDataLoss?: AcceptDataLossOption },
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
@@ -227,7 +227,12 @@ export async function pluginsInstallAction(
     exitWithError(context.logger, installTargetUnclear(name));
   }
   try {
-    const options = { config: globalOpts.config, cwd: globalOpts.cwd };
+    // The consent to the data the install's modules delete, as `nextly migrate` reads it.
+    const consent = readDataLossConsent({
+      flag: cmdOptions.acceptDataLoss,
+      warn: message => context.logger.warn(message),
+    });
+    const options = { config: globalOpts.config, cwd: globalOpts.cwd, consent };
     const { runPluginInstall, runPluginInstallAll } = await import(
       "./plugin-lifecycle-runner"
     );

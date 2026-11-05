@@ -288,6 +288,19 @@ describe.each(getConfiguredTestDialects())(
             fields: [{ name: "body", type: "doc", localized: true }],
           } as unknown as CollectionConfig,
           {
+            // A field every reader is refused by its own read rule, and a
+            // built-in field stored as JSON.
+            slug: "guarded",
+            fields: [
+              { name: "body", type: "doc", access: { read: () => false } },
+              {
+                name: "rows",
+                type: "repeater",
+                fields: [{ name: "body", type: "doc" }],
+              },
+            ],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -347,6 +360,7 @@ describe.each(getConfiguredTestDialects())(
         "worded",
         "germanless",
         "grouped",
+        "guarded",
         "staged",
         "stagedwords",
       ];
@@ -1434,9 +1448,12 @@ describe.each(getConfiguredTestDialects())(
           id,
           fields: ["body"],
         } as const;
+        // A draft never published: no public state, and no working draft,
+        // which this lifecycle keeps none of.
         const found = {
           kind: "found",
           values: { body: { kind: "value", value: { v: "unreleased" } } },
+          live: { publicState: null, workingDraft: false },
         };
 
         expect(
@@ -1455,6 +1472,114 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await readStoredFields(SYSTEM, { ...asked, form: "draft" })
         ).toEqual(found);
+      });
+
+      it("reads and writes as the system a field a read rule governs and a built-in JSON field, which a person is refused", async () => {
+        const id = await created("guarded", {
+          body: { v: 0 },
+          rows: [{ body: { v: "row" } }],
+        });
+        const entry = { collection: "guarded", id };
+        for (const field of ["body", "rows"]) {
+          const refusal = await rejectionOf(
+            readStoredFields(editor, {
+              ...entry,
+              fields: [field],
+              form: "published",
+            })
+          );
+          expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+        }
+
+        const read = await readStoredFields(SYSTEM, {
+          ...entry,
+          fields: ["body", "rows"],
+          form: "published",
+        });
+        expect(read).toMatchObject({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: 0 } },
+            rows: { kind: "value", value: [{ body: { v: "row" } }] },
+          },
+        });
+
+        await updateIfUnchanged(SYSTEM, {
+          ...entry,
+          data: { body: { v: 1 } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash({ kind: "value", value: { v: 0 } }),
+          },
+        });
+        expect(
+          await readStoredFields(SYSTEM, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toMatchObject({
+          values: { body: { kind: "value", value: { v: 1 } } },
+        });
+        const personWrite = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            data: { body: { v: 2 } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({ kind: "value", value: { v: 1 } }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(personWrite, "INVALID_INPUT")).toBe(true);
+      });
+
+      it("tells the system the live row's public state and whether a working draft is pending, and a person neither", async () => {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        const asked = {
+          collection: "drafted",
+          id,
+          fields: ["body"],
+          form: "published",
+        } as const;
+        expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
+          kind: "found",
+          live: { publicState: "published", workingDraft: false },
+        });
+        // A save that does not publish: a working draft over the live row.
+        await t.nextly.update({
+          collection: "drafted",
+          id,
+          data: { body: { v: "draft" } },
+          overrideAccess: true,
+        } as never);
+        expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "live" } } },
+          live: { publicState: "published", workingDraft: true },
+        });
+        const staged = await created("staged", {
+          body: { v: 1 },
+          status: "draft",
+        });
+        expect(
+          await readStoredFields(SYSTEM, {
+            collection: "staged",
+            id: staged,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toMatchObject({ live: { publicState: null, workingDraft: false } });
+
+        const asPerson = await readStoredFields(editor, asked);
+        expect(asPerson.kind).toBe("found");
+        expect("live" in asPerson).toBe(false);
       });
 
       it("lands a system conditional write whose field is unchanged", async () => {

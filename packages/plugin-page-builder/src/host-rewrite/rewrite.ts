@@ -96,6 +96,11 @@ export interface HostRead {
    * not public. Writing a public row means publishing it again in that state.
    */
   readonly liveState: string | null;
+  /**
+   * The row's version as this read gave it, which the write made from the
+   * read sends back; absent from a server that issues none.
+   */
+  readonly rev?: string;
 }
 
 /** Reads one host's stored forms, as the system. Throws when it cannot. */
@@ -111,6 +116,11 @@ export interface HostWrite {
   readonly publishAs?: string;
   /** The form the value was computed from, and its hash. */
   readonly expected: { readonly form: HostForm; readonly hash: string };
+  /**
+   * The row's version as it was read: sent with the write, so a save of the
+   * row since the read refuses the write, which the run reports as changed.
+   */
+  readonly rev?: string;
 }
 
 /** What a write came to. Anything unexpected is thrown. */
@@ -491,6 +501,7 @@ async function decideLive(
       // The stored value exactly as read, which the conditional write hashes
       // again under its row lock.
       expected: { form, hash: await storedValueHash(read.published) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }
@@ -546,6 +557,7 @@ async function decideWithDraft(
       value: outcome.value,
       mode: "save",
       expected: { form: "draft", hash: await storedValueHash(draft) },
+      ...(read.rev === undefined ? {} : { rev: read.rev }),
     },
   };
 }

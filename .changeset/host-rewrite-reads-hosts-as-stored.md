@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A plugin's stored read and conditional write may now be made as the system, `{ overrideAccess: true }`, judged as the Direct API's own `overrideAccess: true` call is. The page builder's rewrite of every host of a component reads hosts as stored and writes them through the conditional write, for a person's run and for the system's retired-field cleanup alike.
+A plugin's stored read and conditional write may now be made as the system, `{ overrideAccess: true }`, judged as the Direct API's own `overrideAccess: true` call is: no access rule or field read rule is asked, any field stored as JSON may be read, and the read also gives the live row's public state and whether a working draft is pending (`PluginStoredLifecycle`). The page builder's rewrite of every host of a component reads hosts as stored, their lifecycle and the rows it can only scan included, and writes them through the conditional write, for a person's run and for the system's retired-field cleanup alike.

@@ -1,0 +1,24 @@
+---
+title: PLAN_CHANGED_AFTER_CONSENT
+description: "What the command was agreed to do changed before it could act on it, so it changed nothing."
+---
+
+## Cause
+
+What the command was agreed to do changed before it could act on it, so it changed nothing.
+
+A command that deletes or moves data lists what it will do and asks you to agree first: `nextly prune` lists the tables it would drop, and `nextly db:sync --promote` and `--demote` list what they would change. Once you agree, the command takes the schema lock and reads the database again. If what it would do now differs from what you agreed to (another process changed the database in between), it stops without changing anything, because your agreement was for the earlier list and no other.
+
+## Fix
+
+Run the command again to see what it would do now, and agree to that list if it is what you want.
+
+## Example
+
+```text
+✗ What you agreed to changed before `nextly prune` could act on it, so nothing was changed.
+  Why:  You agreed to: dc_tags.
+        It would act on now: dc_tags; dc_tags_locales.
+  Next: Run `nextly prune` again to see what it would do now.
+  Docs: https://nextlyhq.com/docs/cli/errors/plan-changed-after-consent  (PLAN_CHANGED_AFTER_CONSENT)
+```

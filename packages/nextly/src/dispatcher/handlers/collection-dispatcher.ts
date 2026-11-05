@@ -101,6 +101,7 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
+import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -193,7 +194,7 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
@@ -205,6 +206,8 @@ function allLocalesLifecycle(
         ...callerUser(),
         routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
+        // The version the move was made from, judged on every language.
+        data: versionInputOf(body),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
@@ -309,7 +312,7 @@ export const COLLECTION_VERSION_METHODS: Record<
     },
   },
   restoreEntryVersion: {
-    execute: async (_svc, p, _body, request) => {
+    execute: async (_svc, p, body, request) => {
       const result = await restoreVersionForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -321,6 +324,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // A restore replays a snapshot through the ordinary update, so its
         // hooks are told about the caller the same way an edit's are.
         request,
+        // The version the restore was made from, judged as its update is.
+        version: versionInputOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -337,12 +342,15 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, from the query: a DELETE
+        // carries no body to read it from.
+        version: versionInputOfQuery(p),
       });
       return respondMutation("Working draft discarded.", item);
     },
   },
   takeLiveSharedValues: {
-    execute: async (_svc, p) => {
+    execute: async (_svc, p, body) => {
       const item = await takeLiveSharedValuesForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
@@ -351,6 +359,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // `?locale=` names the language whose pending change takes the live
         // values. An empty value is the same as none: the default language.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // The version the change was read at, judged as a save of it.
+        version: versionInputOf(body),
       });
       return respondMutation("Live values taken.", item);
     },
@@ -1403,7 +1413,7 @@ const COLLECTIONS_METHODS: Record<
   bulkUpdateEntries: {
     execute: async (svc, p, body, request) => {
       const b = body as
-        | { ids?: string[]; data?: Record<string, unknown> }
+        | { ids?: string[]; data?: Record<string, unknown>; revs?: unknown }
         | undefined;
       if (!p.collectionName) {
         throw new Error("collectionName parameter is required");
@@ -1420,6 +1430,8 @@ const COLLECTIONS_METHODS: Record<
         collectionName: p.collectionName,
         ids: b.ids,
         data: b.data,
+        // Each id's own version, where given: judged per document.
+        revs: b.revs,
         actor: readAuthenticatedActor(),
         ...callerUser(),
         // Where the route admitted the caller on update, attest it so the
@@ -1452,6 +1464,7 @@ const COLLECTIONS_METHODS: Record<
             where?: Record<string, unknown>;
             data?: Record<string, unknown>;
             limit?: number;
+            revs?: unknown;
           }
         | undefined;
       if (!p.collectionName) {
@@ -1478,6 +1491,8 @@ const COLLECTIONS_METHODS: Record<
           // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
+          // Passed so it is refused, not ignored: a query names no ids.
+          revs: b.revs,
           actor: readAuthenticatedActor(),
           ...callerUser(),
           // Where the route admitted the caller on update, attest it so the

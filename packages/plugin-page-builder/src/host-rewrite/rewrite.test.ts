@@ -570,3 +570,37 @@ describe("rewriting every host of a component", () => {
     expect(s.writes).toEqual([]);
   });
 });
+
+describe("the version each host write carries", () => {
+  // Each write is made from a read of its host, and carries that read's
+  // version, so a save of the host in between refuses it.
+  function withVersions(s: ReturnType<typeof site>) {
+    const read = s.deps.read;
+    Object.assign(s.deps, {
+      read: async (host: Parameters<typeof read>[0]) => ({
+        ...(await read(host)),
+        rev: `v-${host.id ?? ""}`,
+      }),
+    });
+  }
+
+  it("writes a live row with the version its read gave", async () => {
+    const s = site({ a: { published: { copies: 1 } } });
+    withVersions(s);
+    await rewriteHosts(s.deps, args);
+    expect(s.writes.map(write => [write.host.id, write.rev])).toEqual([
+      ["a", "v-a"],
+    ]);
+  });
+
+  it("writes a pending draft with the version its read gave", async () => {
+    const s = site({
+      a: { published: { copies: 1 }, draft: { copies: 1 }, live: true },
+    });
+    withVersions(s);
+    await rewriteHosts(s.deps, args);
+    expect(s.writes.map(write => [write.expected.form, write.rev])).toEqual([
+      ["draft", "v-a"],
+    ]);
+  });
+});

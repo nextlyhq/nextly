@@ -22,6 +22,7 @@ import type {
   PluginStoredFields,
   PluginStoredFieldsRequest,
   PluginStoredIdentity,
+  PluginStoredLifecycle,
   PluginStoredValue,
   PluginSystemIdentity,
   PluginWriteExpectation,
@@ -61,6 +62,16 @@ expectTypeOf(
   readStoredFields
 ).returns.resolves.toEqualTypeOf<PluginStoredFields>();
 expectTypeOf(updateIfUnchanged).returns.resolves.toEqualTypeOf<void>();
+
+// The system's read is also told the live row's lifecycle, read with the
+// values: its public state, if any, and whether a working draft is pending.
+expectTypeOf<
+  Extract<PluginStoredFields, { kind: "found" }>["live"]
+>().toEqualTypeOf<PluginStoredLifecycle | undefined>();
+expectTypeOf<PluginStoredLifecycle>().toEqualTypeOf<{
+  readonly publicState: string | null;
+  readonly workingDraft: boolean;
+}>();
 
 // The hash is made from what the read returned, and is what the write expects.
 expectTypeOf(storedValueHash).parameter(0).toEqualTypeOf<PluginStoredValue>();
