@@ -10,7 +10,7 @@
  *
  * @module retired-cleanup-job
  */
-import { defineJob, type JobDefinition } from "nextly";
+import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 
 import type { RetiredCleanupService } from "./retired-cleanup";
 
