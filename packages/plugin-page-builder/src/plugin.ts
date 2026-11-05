@@ -29,6 +29,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { countRemovalOnSite } from "./breakpoint-removal/site-counter";
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
@@ -1953,7 +1954,39 @@ export const pageBuilder = (
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
-        siteBreakpointsRoute(),
+        siteBreakpointsRoute({
+          defaults: configStyle,
+          // The site's style as the compiler applies it now: the stored
+          // record of the Single as renamed, over the configured defaults.
+          current: async routeCtx => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            return loadSiteStyle({
+              nextly: { findSingle: args => nextly.findSingle(args) },
+              defaults: configStyle,
+              slug: routeCtx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+            });
+          },
+          // Walked with the rewrite's own view of the site, so a removal
+          // counts exactly the documents its cascade would reach.
+          count: (removed, classes, routeCtx) =>
+            countRemovalOnSite(
+              {
+                site: () => rewriteInstall?.site ?? null,
+                naming: async () => {
+                  const { getCachedNextly } = await import(
+                    "@nextlyhq/plugin-sdk"
+                  );
+                  return getCachedNextly();
+                },
+                componentCollection: rewriteInstall?.store.collection,
+                limits: () => opts.limits ?? DEFAULT_LIMITS,
+              },
+              routeCtx,
+              removed,
+              classes
+            ),
+        }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.
