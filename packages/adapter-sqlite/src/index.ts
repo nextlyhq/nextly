@@ -73,6 +73,8 @@ import {
 } from "drizzle-orm/better-sqlite3";
 import { getTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
 
+import { registerSqliteFunctions } from "./sql-functions";
+
 // Re-export types for convenience
 export type {
   SqliteAdapterConfig,
@@ -183,7 +185,8 @@ function sanitizeSqliteValue(v: unknown): unknown {
  * - No connection pooling (single file/connection)
  * - RETURNING clause supported (SQLite 3.35+)
  * - Savepoints supported via nested transactions
- * - No native ILIKE (uses LOWER() LIKE workaround)
+ * - No native ILIKE (both sides case-folded, then LIKE; the fold is Nextly's own
+ *   `nextly_fold_case`, registered on connect, since SQLite's `lower()` folds ASCII only)
  * - JSON support (not JSONB)
  * - No array types
  *
@@ -309,6 +312,10 @@ export class SqliteAdapter extends DrizzleAdapter {
         readonly: this.config.readonly ?? false,
         timeout: this.config.busyTimeout ?? DEFAULT_CONFIG.busyTimeout,
       });
+
+      // Before anything runs on the connection: the case fold the text matches that ignore
+      // case call here, whose absence would refuse every such statement.
+      registerSqliteFunctions(this.db);
 
       // Configure WAL mode for better concurrency (unless in-memory or readonly)
       if (
@@ -677,7 +684,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       supportsArrays: false, // SQLite doesn't support array types
       supportsGeneratedColumns: true, // SQLite 3.31+
       supportsFts: true, // SQLite FTS5
-      supportsIlike: false, // No native ILIKE, use LOWER() LIKE
+      supportsIlike: false, // No native ILIKE: both sides case-folded, then LIKE
       supportsReturning: true, // SQLite 3.35+
       supportsSavepoints: true, // SQLite supports savepoints
       supportsOnConflict: true, // ON CONFLICT clause

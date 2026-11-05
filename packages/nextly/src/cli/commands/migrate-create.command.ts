@@ -4,14 +4,18 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 export function registerMigrateCreateCommand(program: Command): void {
-  program
-    .command("migrate:create")
-    .description(
-      "Create a new migration file from schema changes or for custom SQL"
-    )
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  withDryRun(
+    program
+      .command("migrate:create")
+      .description(
+        "Create a new migration file from schema changes or for custom SQL"
+      )
+  )
     .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
     .option("--name <name>", "Migration name (alternate to positional arg)")
     .option("--blank", "Create an empty migration file for custom SQL", false)
