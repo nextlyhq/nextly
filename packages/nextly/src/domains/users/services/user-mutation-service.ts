@@ -1639,6 +1639,27 @@ export class UserMutationService extends BaseService {
       // WITHOUT the custom-field data (which would report a created user while
       // dropping its custom fields).
       let userExtInsertFailed = false;
+      // The account as stored, read inside its own transaction, on that
+      // transaction's connection. Called inside an enclosing transaction (a
+      // plugin's `ctx.db.transaction`, another service's), this one joins it
+      // and the insert is not committed yet, so a read on another pooled
+      // connection would not find the row.
+      const pooled = this.db;
+      const readCreatedUser = (txDb: typeof pooled) =>
+        txDb.query.users.findFirst({
+          where: { email: requireFilterValue(email, "email") },
+          columns: {
+            id: true,
+            email: true,
+            emailVerified: true,
+            name: true,
+            image: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+      let user: Awaited<ReturnType<typeof readCreatedUser>>;
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
@@ -1666,6 +1687,7 @@ export class UserMutationService extends BaseService {
 
           await insertInviteToken(txDb);
           await recordCreatedEvent(txDb);
+          user = await readCreatedUser(tx as typeof pooled);
         });
       } catch (txErr) {
         // A unique custom field's value already held by another user: refuse
@@ -1689,6 +1711,7 @@ export class UserMutationService extends BaseService {
             await insertAccount(txDb);
             await insertInviteToken(txDb);
             await recordCreatedEvent(txDb);
+            user = await readCreatedUser(tx as typeof pooled);
           });
         } else {
           throw txErr;
@@ -1705,20 +1728,6 @@ export class UserMutationService extends BaseService {
       // happened.
       await this.afterUserCreated(userCreatedRecorded, newUserId);
 
-      // Fetch created user
-      const user = await this.db.query.users.findFirst({
-        where: { email: requireFilterValue(email, "email") },
-        columns: {
-          id: true,
-          email: true,
-          emailVerified: true,
-          name: true,
-          image: true,
-          isActive: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
       if (!user) {
         // We just inserted; if we cannot read the row back, something is
         // genuinely wrong with the connection or the schema. Surface as an
