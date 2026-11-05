@@ -91,6 +91,8 @@ import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { COLUMNS_ROW } from "./columns-layout";
+import { ColumnsLayoutControl } from "./columns-layout-field";
 import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
@@ -716,6 +718,7 @@ function StyleInspectorBody({
     provenanceOf,
     editing,
     onChooseForm: chooseForm,
+    breakpoints,
   };
 
   return (
@@ -888,6 +891,8 @@ interface StyleFieldSurroundings {
   provenanceOf: ProvenanceOf;
   editing: EditedAddress;
   onChooseForm: ChooseForm;
+  /** The site's devices, for a control that writes at another one. */
+  breakpoints: BreakpointSet | undefined;
 }
 
 /**
@@ -995,6 +1000,7 @@ function StyleSectionItem({
   provenanceOf,
   editing,
   onChooseForm,
+  breakpoints,
 }: {
   section: StyleSection;
   /** Why every control is read-only, which also withholds "+ More". */
@@ -1031,6 +1037,7 @@ function StyleSectionItem({
     provenanceOf,
     editing,
     onChooseForm,
+    breakpoints,
   };
   return (
     <AccordionItem value={section.key} data-section={section.key}>
@@ -1104,6 +1111,9 @@ function SectionFields({
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
+        {sectionKey === "layout" ? (
+          <ColumnsLayoutFields surroundings={surroundings} />
+        ) : null}
         {rings === undefined ? null : (
           <SpacingBox
             margin={rings.margin}
@@ -1126,6 +1136,34 @@ function SectionFields({
         ) : null}
       </SectionHeld.Provider>
     </fieldset>
+  );
+}
+
+/**
+ * A Columns row's layout tiles and stacking, at the top of its Layout
+ * section. Only for the row itself: a shared style's values reach many rows,
+ * and its tiles would add or remove columns in none of them.
+ */
+function ColumnsLayoutFields({
+  surroundings,
+}: {
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  if (
+    target.kind !== "block" ||
+    surroundings.editing.blockType !== COLUMNS_ROW
+  ) {
+    return null;
+  }
+  return (
+    <ColumnsLayoutControl
+      editor={surroundings.editor}
+      nodeId={surroundings.nodeId}
+      state={surroundings.state}
+      breakpoint={surroundings.breakpoint}
+      breakpoints={surroundings.breakpoints}
+    />
   );
 }
 
