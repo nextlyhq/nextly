@@ -67,6 +67,33 @@ describe("a block that moves without resizing", () => {
   });
 });
 
+describe("a block an authored state rule moves", () => {
+  it("re-measures on the frame after the pointer or focus enters or leaves a block", () => {
+    // An authored :hover or :focus-visible rule can move a block (a
+    // transform, a margin) with no transition: nothing resizes or mutates,
+    // so the change of state itself is the only signal. Measured on the next
+    // frame, once the browser has applied the state's styles.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
+    const { layer, block } = canvas();
+    const moved = vi.fn();
+    const stop = watchCanvasFor(() => layer, moved);
+    for (const type of ["pointerover", "pointerout", "focusin", "focusout"]) {
+      block.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+    // Nothing yet: the state's styles apply before the next frame.
+    expect(moved).not.toHaveBeenCalled();
+    // One measurement for the frame, however many changes arrived in it.
+    for (const run of frames.splice(0)) run(0);
+    expect(moved).toHaveBeenCalledTimes(1);
+    stop?.();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("a batch that changed nothing", () => {
   it("does not re-measure for a probe that put the attribute back", async () => {
     const { layer, block } = canvas();

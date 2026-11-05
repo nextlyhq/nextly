@@ -194,6 +194,28 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   root.addEventListener("transitioncancel", settled);
   root.addEventListener("animationend", settled);
   root.addEventListener("animationcancel", settled);
+  /*
+   * An authored `:hover` or `:focus-visible` rule can move a block — a
+   * transform, a margin — with no transition, so the change of state is the
+   * only signal there is. Pointer and focus entering or leaving a block
+   * bubble, so the root hears every block's. Measured on the next frame,
+   * once the state's styles apply, and once per frame however many changes
+   * arrive in it: a pointer crossing the page enters and leaves many blocks.
+   */
+  let frame: number | undefined;
+  const restated = (): void => {
+    if (frame !== undefined) return;
+    if (view === null || typeof view.requestAnimationFrame !== "function") {
+      moved();
+      return;
+    }
+    frame = view.requestAnimationFrame(() => {
+      frame = undefined;
+      moved();
+    });
+  };
+  const STATE_EVENTS = ["pointerover", "pointerout", "focusin", "focusout"];
+  for (const type of STATE_EVENTS) root.addEventListener(type, restated);
   root.addEventListener("scroll", settled, true);
   /*
    * And the root's DOCUMENT, in the bubble phase, for the viewport itself
@@ -213,6 +235,8 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
     root.removeEventListener("transitioncancel", settled);
     root.removeEventListener("animationend", settled);
     root.removeEventListener("animationcancel", settled);
+    for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    if (frame !== undefined) view?.cancelAnimationFrame(frame);
     root.removeEventListener("scroll", settled, true);
     doc.removeEventListener("scroll", settled);
   };
