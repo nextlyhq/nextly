@@ -189,6 +189,52 @@ describe.each(getConfiguredTestDialects())(
       expect(await jobsOf(t)).toHaveLength(1);
     });
 
+    it("the runner that loses a window to another is told nothing went wrong", async () => {
+      // The losing insert is ignored, not raised: a raised conflict would
+      // also leave one job, through the error path, and say so here.
+      const t = await boot(dialect, "0 * * * *");
+      const errors: unknown[] = [];
+      const runner = () =>
+        scheduleWindows(t.adapter, [hourly()], {
+          onError: error => errors.push(error),
+        });
+      await runner().sweep(new Date("2026-11-05T10:30:00.000Z"));
+      await Promise.all([
+        runner().sweep(new Date("2026-11-05T11:05:00.000Z")),
+        runner().sweep(new Date("2026-11-05T11:05:00.000Z")),
+      ]);
+      expect(errors).toEqual([]);
+      expect(await jobsOf(t)).toHaveLength(1);
+    });
+
+    it("a schedule whose cron changes waits for the new cron's next window", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      await scheduleWindows(t.adapter, [hourly()]).sweep(
+        new Date("2026-11-05T10:30:00.000Z")
+      );
+      // Moved to half past: 10:30 is later than the 10:00 recorded, but it
+      // was read with another cron, so it is a first sight, not a window.
+      const halfPast = scheduleWindows(t.adapter, [
+        { ...hourly(), cron: parseCron("30 * * * *") },
+      ]);
+      await halfPast.sweep(new Date("2026-11-05T10:45:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(0);
+      await halfPast.sweep(new Date("2026-11-05T11:35:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(1);
+    });
+
+    it("a runner whose clock is behind claims no window older than one recorded", async () => {
+      const t = await boot(dialect, "0 * * * *");
+      const windows = scheduleWindows(t.adapter, [hourly()]);
+      await windows.sweep(new Date("2026-11-05T10:30:00.000Z"));
+      await windows.sweep(new Date("2026-11-05T12:05:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(1);
+      // 11:00 was skipped while nothing ran; a clock an hour behind must not
+      // run it now that 12:00 has been.
+      await windows.sweep(new Date("2026-11-05T11:05:00.000Z"));
+      expect(await jobsOf(t)).toHaveLength(1);
+    });
+
     it("a failed enqueue after the claim leaves the window to the next sweep, which enqueues it", async () => {
       const t = await boot(dialect, "0 * * * *");
       await pass(t, "2026-11-05T10:30:00.000Z");
@@ -253,6 +299,11 @@ describe.each(getConfiguredTestDialects())(
       ]) {
         await windows.sweep(new Date(at));
       }
+      // One row per pass at most: the bound holds.
+      expect(await windows.prune(new Date("2026-10-05T00:00:00.000Z"), 1)).toBe(
+        1
+      );
+      expect(await windowsOf(t)).toHaveLength(2);
       await windows.prune(new Date("2026-10-05T00:00:00.000Z"), 100);
       expect((await windowsOf(t)).map(row => iso(row.windowAt)).sort()).toEqual(
         ["2026-11-04T12:00:00.000Z"]
@@ -282,6 +333,25 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(kept.map(row => iso(row.windowAt))).toEqual([
         "2026-09-01T00:00:00.000Z",
+      ]);
+      // Pruning one schedule leaves another's windows alone, older ones too.
+      const other = scheduleWindows(t.adapter, [
+        { ...monthly, key: `${PLUGIN}:other`, slug: "other" },
+      ]);
+      await other.sweep(new Date("2026-07-10T00:00:00.000Z"));
+      await other.sweep(new Date("2026-08-10T00:00:00.000Z"));
+      await monthlyWindows.prune(new Date("2026-10-15T00:00:00.000Z"), 100);
+      const others = await t.adapter.select<WindowRow>(
+        "nextly_schedule_windows",
+        {
+          where: {
+            and: [{ column: "scheduleKey", op: "=", value: `${PLUGIN}:other` }],
+          },
+        }
+      );
+      expect(others.map(row => iso(row.windowAt)).sort()).toEqual([
+        "2026-07-01T00:00:00.000Z",
+        "2026-08-01T00:00:00.000Z",
       ]);
       const before = (await jobsOf(t)).length;
       await monthlyWindows.sweep(new Date("2026-09-30T00:00:00.000Z"));

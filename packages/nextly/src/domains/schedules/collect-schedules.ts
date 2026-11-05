@@ -48,9 +48,20 @@ const scheduleShape = z.object({
     .optional(),
 });
 
-/** Whether `entry` is in the current shape, rather than the earlier one. */
-function isCurrentShape(entry: unknown): boolean {
-  return typeof entry === "object" && entry !== null && "cron" in entry;
+/**
+ * Whether `entry` is in the earlier shape: a `name` and a `schedule`, and
+ * neither of the current shape's `slug` and `cron`. Anything else is checked
+ * as the current shape, so a misspelled one is refused rather than skipped.
+ */
+function isEarlierShape(entry: unknown): boolean {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    "name" in entry &&
+    "schedule" in entry &&
+    !("slug" in entry) &&
+    !("cron" in entry)
+  );
 }
 
 /** The refusal of `plugin`'s schedule `slug`, saying why it cannot run. */
@@ -88,10 +99,16 @@ function namedSlug(entry: unknown): string {
 function readShape(plugin: string, entry: unknown) {
   const parsed = scheduleShape.safeParse(entry);
   if (parsed.success) return parsed.data;
+  const [issue] = parsed.error.issues;
+  const field = issue?.path.join(".");
   throw refuse(
     plugin,
     namedSlug(entry),
-    parsed.error.issues[0]?.message ?? "its shape is wrong"
+    issue === undefined
+      ? "its shape is wrong"
+      : field
+        ? `${field}: ${issue.message}`
+        : issue.message
   );
 }
 
@@ -176,7 +193,7 @@ export function collectSchedules(
     const seen = new Set<string>();
     for (const entry of plugin.contributes?.schedules ?? []) {
       // The earlier shape was never executed, and is left so.
-      if (!isCurrentShape(entry)) continue;
+      if (isEarlierShape(entry)) continue;
       const schedule = collectOne(plugin.name, entry, ownJobs);
       if (seen.has(schedule.slug)) {
         throw refuse(

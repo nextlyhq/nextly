@@ -22,6 +22,9 @@ export const nextlyScheduleWindowsPg = pgTable(
     // first seen in, which is recorded without a job so a schedule deployed
     // after its window opened waits for the next one.
     jobId: text("job_id"),
+    // The cron and time zone the window was read with: a schedule whose
+    // definition changed starts again from its next window.
+    definition: text("definition").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .$defaultFn(() => new Date())
       .notNull(),

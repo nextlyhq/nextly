@@ -17,8 +17,11 @@
  * A schedule's first window is the one that opens after a pass first sees
  * it: on first sight its latest window is recorded with no job, so a yearly
  * schedule deployed in November waits for January rather than running at
- * once for a January already gone. Windows missed while no pass ran are not
- * run later; only the latest is.
+ * once for a January already gone. A schedule whose cron or time zone
+ * changed is seen for the first time again, for the same reason. Windows
+ * missed while no pass ran are not run later; only the latest is, and never
+ * one older than a window already recorded, which a runner whose clock is
+ * behind would otherwise claim.
  *
  * @module domains/schedules/schedule-windows
  * @experimental
@@ -30,6 +33,7 @@ import type {
 import { and, asc, desc, eq, lt, lte } from "drizzle-orm";
 
 import { scheduleWindowsTables } from "../../schemas/schedule-windows";
+import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import type { JobSchedules } from "../jobs/job-registry";
 import { enqueueInTransaction } from "../jobs/jobs-repository";
 
@@ -51,7 +55,9 @@ interface WindowReadDb {
     from(table: unknown): {
       where(condition: unknown): {
         orderBy(order: unknown): {
-          limit(count: number): PromiseLike<{ windowAt: Date }[]>;
+          limit(
+            count: number
+          ): PromiseLike<{ windowAt: Date; definition: string }[]>;
         };
       };
     };
@@ -86,17 +92,6 @@ interface IgnoreInsertDb {
   };
 }
 
-/** How many rows a MySQL write changed, from the driver's result. */
-function affectedRows(result: unknown): number {
-  const header = Array.isArray(result) ? result[0] : result;
-  return typeof header === "object" &&
-    header !== null &&
-    "affectedRows" in header &&
-    typeof header.affectedRows === "number"
-    ? header.affectedRows
-    : 0;
-}
-
 /** The window row's columns, as each dialect's table declares them. */
 function tableOf(dialect: SupportedDialect) {
   return scheduleWindowsTables(dialect).nextlyScheduleWindows;
@@ -118,7 +113,7 @@ async function insertIfAbsent(
       .insert(table)
       .ignore()
       .values(row);
-    return affectedRows(result) > 0;
+    return affectedRowCount(result, dialect) > 0;
   }
   const written = await tx
     .getDrizzle<ConflictInsertDb>()
@@ -129,20 +124,25 @@ async function insertIfAbsent(
   return written.length > 0;
 }
 
-/** The latest window recorded for `scheduleKey`, if any. */
+/** The latest window recorded for `scheduleKey`, and what it was read with. */
 async function latestWindowOf(
   drizzle: WindowReadDb,
   dialect: SupportedDialect,
   scheduleKey: string
-): Promise<Date | undefined> {
+): Promise<{ windowAt: Date; definition: string } | undefined> {
   const table = tableOf(dialect);
   const [latest] = await drizzle
-    .select({ windowAt: table.windowAt })
+    .select({ windowAt: table.windowAt, definition: table.definition })
     .from(table)
     .where(eq(table.scheduleKey, scheduleKey))
     .orderBy(desc(table.windowAt))
     .limit(1);
-  return latest?.windowAt;
+  return latest;
+}
+
+/** What a window is read with: the schedule's cron and its time zone. */
+function definitionOf(schedule: CollectedSchedule): string {
+  return JSON.stringify([schedule.cron.source.trim(), schedule.timeZone]);
 }
 
 /** Claim `schedule`'s latest window at `now`, and enqueue its job if this claim is the one. */
@@ -158,15 +158,22 @@ async function sweepOne(
   await db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
     const known = await latestWindowOf(drizzle, db.dialect, schedule.key);
+    // Never a window at or before one already recorded: a clock behind
+    // another runner's, or a cron moved earlier, would reach back for one.
+    if (known !== undefined && windowAt <= known.windowAt) return;
+    const definition = definitionOf(schedule);
     const claimed = await insertIfAbsent(tx, db.dialect, {
       scheduleKey: schedule.key,
       windowAt,
       jobId: null,
+      definition,
       createdAt: now,
     });
-    // First sight: the window is recorded with no job, so the schedule's
-    // first job is for the next window to open.
-    if (!claimed || known === undefined) return;
+    // First sight, of the schedule or of its current definition: the window
+    // is recorded with no job, so its first job is for the next window.
+    if (!claimed || known === undefined || known.definition !== definition) {
+      return;
+    }
     const { id } = await enqueue(tx, db.dialect, {
       slug: schedule.job,
       // The window last, so the schedule's own input cannot replace it.
@@ -201,7 +208,8 @@ async function pruneOne(
   const table = tableOf(db.dialect);
   return db.transaction(async tx => {
     const drizzle = tx.getDrizzle<WindowWriteDb>();
-    const latest = await latestWindowOf(drizzle, db.dialect, schedule.key);
+    const latest = (await latestWindowOf(drizzle, db.dialect, schedule.key))
+      ?.windowAt;
     if (latest === undefined) return 0;
     const cutoff = latest < before ? latest : before;
     const old = await drizzle
@@ -253,10 +261,13 @@ export function scheduleWindows(
       }
     },
     async prune(before, limit) {
+      // One bound for the whole pass, shared out in turn, so many schedules
+      // cannot make the pass a long delete.
       let pruned = 0;
       for (const schedule of schedules) {
+        if (pruned >= limit) break;
         try {
-          pruned += await pruneOne(db, schedule, before, limit);
+          pruned += await pruneOne(db, schedule, before, limit - pruned);
         } catch (error) {
           options.onError?.(error, schedule.key);
         }

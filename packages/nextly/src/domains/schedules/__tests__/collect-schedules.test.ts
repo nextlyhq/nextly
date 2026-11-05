@@ -138,6 +138,14 @@ describe("collecting plugin schedules", () => {
     expect((thrown as NextlyError).message).toContain("@acme/plugin");
   });
 
+  it("refuses an entry in neither shape, such as a misspelled cron, naming the plugin", () => {
+    const error = refusal(
+      plugin([{ slug: "tick", crons: "@daily", job: "acme:tick" }])
+    );
+    expect(error.message).toContain("@acme/plugin");
+    expect(error.message).toContain("cron");
+  });
+
   it("leaves a schedule in the earlier shape unexecuted, as before", () => {
     const p = plugin([{ name: "acme.old", schedule: "0 * * * *" }]);
     expect(collectSchedules([p], jobsOf(p))).toEqual([]);

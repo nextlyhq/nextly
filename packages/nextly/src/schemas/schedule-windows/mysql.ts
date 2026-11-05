@@ -7,6 +7,7 @@ import {
   datetime,
   mysqlTable,
   primaryKey,
+  text,
   varchar,
 } from "drizzle-orm/mysql-core";
 
@@ -17,6 +18,7 @@ export const nextlyScheduleWindowsMysql = mysqlTable(
     scheduleKey: varchar("schedule_key", { length: 191 }).notNull(),
     windowAt: datetime("window_at", { fsp: 3 }).notNull(),
     jobId: varchar("job_id", { length: 36 }),
+    definition: text("definition").notNull(),
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())
       .notNull(),
