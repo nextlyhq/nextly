@@ -5,7 +5,14 @@
  *
  * @module held-by-lock
  */
-import type * as React from "react";
+import * as React from "react";
+
+/**
+ * Whether a lock holds the controls drawn here. A disabled fieldset holds
+ * every form control inside it but not a `contenteditable`, which reads this.
+ */
+export const HeldHere: React.Context<boolean> =
+  React.createContext<boolean>(false);
 
 /**
  * Controls a lock holds where the block sits, drawn as they are and disabled
@@ -32,7 +39,7 @@ export function HeldByLock({
       aria-describedby={reasonId}
       className="nx-inspector__held"
     >
-      {children}
+      <HeldHere.Provider value={true}>{children}</HeldHere.Provider>
     </fieldset>
   );
 }

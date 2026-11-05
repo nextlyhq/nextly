@@ -119,7 +119,9 @@ describe("a publish refused over out-of-date shared fields", () => {
     expect(order).toEqual(["editor's Save", "take"]);
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
-      "es"
+      "es",
+      // This form double carries no version.
+      undefined
     );
     // The refused publish is the only write it made itself.
     expect(update).toHaveBeenCalledTimes(1);

@@ -58,6 +58,11 @@ export const NEXTLY_ERROR_STATUS = {
   // allocation already answer and which a retry keys on: this one must never
   // be retried, since the same version stays out of date.
   STALE_VERSION: 409,
+  // An update that must say which version of a document it was made from, or
+  // that it overwrites whatever is stored, and said neither: 428, Precondition
+  // Required. Its own code beside STALE_VERSION: nothing is out of date, the
+  // request is missing the condition it is judged by.
+  VERSION_REQUIRED: 428,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,
@@ -237,6 +242,16 @@ export const NEXTLY_ERROR_STATUS = {
   // refusals: no request caused it, and the fix is a change to the server's
   // own configuration.
   NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // A reloaded config turns `experimental.perLanguageStorage` on or off while the site runs. 500
+  // like the refusals beside it: no request caused it, and the remedy is restarting the site.
+  NEXTLY_PER_LANGUAGE_STORAGE_CHANGED: 500,
+  // `experimental.perLanguageStorage` is on over a database whose main tables still hold
+  // translatable values. 500 for the same reason: the remedy is the server's configuration or data.
+  NEXTLY_PER_LANGUAGE_STORAGE_MIXED: 500,
+  // `experimental.perLanguageStorage` is on, the site declares no languages, so it would serve the
+  // implicit English alone, and its translations in other languages would read as gone. 500 for the
+  // same reason: the remedy is the server's configuration.
+  NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
   // `db.postgres.schema` names a schema other than `public`, which the schema
   // push cannot yet create tables in. 500 for the same reason as the mismatch
   // above: a boot-time refusal of the server's own configuration.
@@ -272,6 +287,7 @@ const CANONICAL_CODE_FOR_STATUS = [
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "VERSION_REQUIRED",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
   "RATE_LIMITED",

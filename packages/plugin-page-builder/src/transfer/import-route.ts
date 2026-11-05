@@ -67,11 +67,14 @@ import {
   type CompositionRouteContext,
   type CompositionRouteSetup,
 } from "../composition-route-kit";
+import { documentVersionOf, withVersionFrom } from "../document-version";
+import { JudgedAndRolledBack, verdictOf } from "../judged-writes";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import type { SiteStyleData } from "../site-style";
 import { checkStoredClasses, checkStoredTokens } from "../site-style-record";
 import {
   loadSiteStyle,
+  loadSiteStyleVersioned,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "../site-style-storage";
@@ -142,9 +145,6 @@ const ImportBody = z.strictObject({
 /** How many media files one search page reads, and the most pages read. */
 const MEDIA_SEARCH_PAGE_SIZE = 50;
 const MEDIA_SEARCH_PAGES = 20;
-
-/** Thrown inside the judging transaction to roll it back once it has answered. */
-class JudgedAndRolledBack extends Error {}
 
 /** Read, judge and preview or apply a file, as the docblock describes. */
 async function importFile(
@@ -553,41 +553,13 @@ async function judgeWrites(
   try {
     await writeDocuments(ctx, file, judged, slugs, media);
   } catch (error) {
-    // A database adapter can wrap what the transaction threw; the cause is
-    // what answered.
-    if (inCauses(error, JudgedAndRolledBack) !== undefined) return [];
-    const refused = inCauses(error, NextlyError);
-    if (refused !== undefined) return [refusedBySite(refused)];
-    throw error;
+    const verdict = verdictOf(error);
+    if (verdict.refusal === null) return [];
+    return [
+      { code: "REFUSED_BY_SITE", message: verdict.refusal.messages.join(" ") },
+    ];
   }
   return [];
-}
-
-/** The first error in `error`'s cause chain of the class given. */
-function inCauses<T extends Error>(
-  error: unknown,
-  kind: abstract new (...args: never[]) => T
-): T | undefined {
-  let current: unknown = error;
-  for (let depth = 0; depth < 10 && current instanceof Error; depth += 1) {
-    if (current instanceof kind) return current;
-    current = current.cause;
-  }
-  return undefined;
-}
-
-/** A write's refusal in the words the site gave it. */
-function refusedBySite(error: NextlyError): ImportProblem {
-  const listed = (error.publicData as { errors?: unknown } | undefined)?.errors;
-  const messages = Array.isArray(listed)
-    ? listed
-        .map(entry => (entry as { message?: unknown }).message)
-        .filter((message): message is string => typeof message === "string")
-    : [];
-  return {
-    code: "REFUSED_BY_SITE",
-    message: messages.length > 0 ? messages.join(" ") : error.publicMessage,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +864,8 @@ interface PlannedStyle {
   /** The new classes and variables, those another request already added left out. */
   readonly classes: NamedClass[];
   readonly tokens: SiteToken[];
+  /** The site style's version as read, which the append sends back. */
+  readonly rev: string | undefined;
 }
 
 async function plannedStyle(
@@ -930,6 +904,7 @@ async function plannedStyle(
     tokens: plan.tokens.create.filter(
       token => !heldNames.has(tokenIdentity(token))
     ),
+    rev: documentVersionOf(stored),
   };
 }
 
@@ -982,9 +957,11 @@ async function appendStylesAndVariables(
 ): Promise<void> {
   const planned = await plannedStyle(plan, undo.slug);
   if (planned.classes.length === 0 && planned.tokens.length === 0) return;
+  // With the version the sections were read at, so a save of the site's
+  // style in between refuses the append rather than being replaced by it.
   await requireNextly().updateSingle({
     slug: undo.slug,
-    data: styleSections(planned),
+    data: withVersionFrom(styleSections(planned), planned.rev),
     ...(await readingAsUser(ctx)),
   });
   for (const entry of planned.classes) undo.classIds.add(entry.id);
@@ -998,7 +975,7 @@ async function appendBreakpoints(
 ): Promise<void> {
   // The set the site draws with, the configured one included, so writing it
   // back with the additions drops none of the configured breakpoints.
-  const style = await loadSiteStyle({
+  const { style, rev } = await loadSiteStyleVersioned({
     nextly: requireNextly(),
     slug: undo.slug,
     ...(undo.defaults === undefined ? {} : { defaults: undo.defaults }),
@@ -1017,15 +994,16 @@ async function appendBreakpoints(
       maxWidth: entry.maxWidth,
     });
   }
-  await writeBreakpoints(ctx, undo.slug, set);
+  await writeBreakpoints(ctx, undo.slug, set, rev);
   for (const entry of added) undo.breakpointIds.add(entry.id);
 }
 
 /**
  * Refuse, so everything is taken back, when a shared style, variable or
  * breakpoint the documents will name is not in the site style just before
- * they are written. The Single has no compare-and-swap, so a save landing
- * between this import's read and its write can replace the sections whole;
+ * they are written. The import's style writes send the version they were
+ * made from, so a save landing between a read and its write refuses the
+ * write; a save landing after it can still replace the sections whole, and
  * checked here, the documents never commit naming what that save dropped.
  */
 async function requireStyleHeld(
@@ -1066,15 +1044,19 @@ async function requireStyleHeld(
   });
 }
 
-/** The checked breakpoint write, as Settings' route makes it. */
+/**
+ * The checked breakpoint write, as Settings' route makes it, with `rev`, the
+ * version the set was read at, so a save of the site's style since refuses it.
+ */
 async function writeBreakpoints(
   ctx: ImportContext,
   slug: string,
-  breakpoints: BreakpointSet
+  breakpoints: BreakpointSet,
+  rev: string | undefined
 ): Promise<void> {
   await requireNextly().updateSingle({
     slug,
-    data: { breakpoints },
+    data: withVersionFrom({ breakpoints }, rev),
     overrideAccess: true,
     context: { ...SITE_SETTINGS_WRITE_CONTEXT },
     ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
@@ -1117,14 +1099,19 @@ async function takeBack(
       token => !style.tokenNames.has(storedIdentity(token))
     );
     if (style.classIds.size > 0 || style.tokenNames.size > 0) {
+      // With the version just read: a save since refuses the take-back,
+      // which is logged, rather than being undone by it.
       await nextly.updateSingle({
         slug: style.slug,
-        data: { classes, tokens: { ...tokens, tokens: keptTokens } },
+        data: withVersionFrom(
+          { classes, tokens: { ...tokens, tokens: keptTokens } },
+          documentVersionOf(stored)
+        ),
         overrideAccess: true,
       });
     }
     if (style.breakpointIds.size > 0) {
-      const now = await loadSiteStyle({
+      const { style: now, rev } = await loadSiteStyleVersioned({
         nextly,
         slug: style.slug,
         ...(style.defaults === undefined ? {} : { defaults: style.defaults }),
@@ -1133,10 +1120,15 @@ async function takeBack(
         (now.breakpoints?.[axis] ?? []).filter(
           def => !style.breakpointIds.has(def.id)
         );
-      await writeBreakpoints(ctx, style.slug, {
-        viewport: without("viewport"),
-        container: without("container"),
-      });
+      await writeBreakpoints(
+        ctx,
+        style.slug,
+        {
+          viewport: without("viewport"),
+          container: without("container"),
+        },
+        rev
+      );
     }
   } catch (error) {
     ctx.logger?.warn(

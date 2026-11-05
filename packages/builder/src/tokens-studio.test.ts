@@ -57,7 +57,7 @@ const TOKENS: SiteTokenSet = {
 
 /** Every `--custom-property` a compiled site sheet DECLARES. */
 function declared(set: SiteTokenSet): string[] {
-  const sheet = compileSiteSheet({ tokens: set, breakpoints: BREAKPOINTS });
+  const sheet = compileSiteSheet({ tokens: set, breakpoints: BREAKPOINTS }, {});
   return [...sheet.css.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map(
     m => m[1] ?? ""
   );

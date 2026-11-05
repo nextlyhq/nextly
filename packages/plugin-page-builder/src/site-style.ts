@@ -158,6 +158,9 @@ function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
     a.label === b.label &&
     a.locked === b.locked &&
     a.orderIndex === b.orderIndex &&
+    // The block type a look is bound to: the same styles on another type is
+    // another look.
+    a.blockType === b.blockType &&
     sameJsonValue(a.styles, b.styles)
   );
 }

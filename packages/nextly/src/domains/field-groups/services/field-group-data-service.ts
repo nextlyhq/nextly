@@ -6,6 +6,7 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { LocalizationSource } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 
 import {
   FieldGroupMutationService,
@@ -103,9 +104,9 @@ export class FieldGroupDataService {
     slug: string,
     executor?: unknown
   ): Promise<boolean> {
-    return (
-      (await this.getComponentDefinition(slug, executor))?.localized === true
-    );
+    // Where its values are stored, as the mutation service writes them: per language when the
+    // component is translatable or the site keeps every translatable value so.
+    return storesPerLanguage(await this.getComponentDefinition(slug, executor));
   }
 
   /**

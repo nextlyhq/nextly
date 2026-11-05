@@ -11,7 +11,11 @@ import type { Page } from "@playwright/test";
  * server decodes uploads for dimensions, so the content has to parse, and
  * generating it keeps the suite free of binary files.
  */
-export function pngBuffer(shade: number, padToBytes = 0): Buffer {
+export function pngBuffer(
+  shade: number,
+  padToBytes = 0,
+  size: { width: number; height: number } = { width: 8, height: 8 }
+): Buffer {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
@@ -31,14 +35,14 @@ export function pngBuffer(shade: number, padToBytes = 0): Buffer {
     return Buffer.concat([len, td, crc]);
   };
 
-  const size = 8;
+  const { width, height } = size;
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(size, 0);
-  ihdr.writeUInt32BE(size, 4);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = 0; // grayscale
-  const raw = Buffer.alloc((size + 1) * size, shade);
-  for (let y = 0; y < size; y++) raw[y * (size + 1)] = 0; // filter byte per row
+  const raw = Buffer.alloc((width + 1) * height, shade);
+  for (let y = 0; y < height; y++) raw[y * (width + 1)] = 0; // filter byte per row
 
   const png = Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

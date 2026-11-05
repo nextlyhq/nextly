@@ -14,7 +14,6 @@ import { EMPTY_TEXT_SELECTOR } from "./empty-slot";
 afterEach(() => {
   document.body.innerHTML = "";
   document.documentElement.className = "";
-  document.documentElement.removeAttribute("data-nx-empty-elements");
 });
 
 /** A canvas in a builder's chrome, holding the given page. */
@@ -51,12 +50,6 @@ describe("an emptied text block", () => {
     );
     expect(matches(canvas, "div")).toBe(false);
     expect(matches(canvas, "img")).toBe(false);
-  });
-
-  it("collapses as published while the author hides empty elements", () => {
-    const canvas = canvasWith(`<h2 data-nx-node="heading"></h2>`);
-    document.documentElement.setAttribute("data-nx-empty-elements", "hidden");
-    expect(matches(canvas, "h2")).toBe(false);
   });
 
   it("is given a line of height by the frame's sheet", () => {

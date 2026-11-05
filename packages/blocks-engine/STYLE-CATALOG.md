@@ -122,17 +122,18 @@ the wider declaration, which is a migration rather than a check.
 
 ### dimensions
 
-| Property      | Flag | Value     | Tokens    | Emits          |
-| ------------- | ---- | --------- | --------- | -------------- |
-| `width`       |      | dimension | dimension | `width`        |
-| `height`      |      | dimension | dimension | `height`       |
-| `minWidth`    |      | dimension | dimension | `min-width`    |
-| `minHeight`   |      | dimension | dimension | `min-height`   |
-| `maxWidth`    |      | dimension | dimension | `max-width`    |
-| `maxHeight`   |      | dimension | dimension | `max-height`   |
-| `aspectRatio` |      | css value |           | `aspect-ratio` |
-| `objectFit`   |      | keyword   |           | `object-fit`   |
-| `overflow`    |      | keyword   |           | `overflow`     |
+| Property         | Flag | Value     | Tokens    | Emits             |
+| ---------------- | ---- | --------- | --------- | ----------------- |
+| `width`          |      | dimension | dimension | `width`           |
+| `height`         |      | dimension | dimension | `height`          |
+| `minWidth`       |      | dimension | dimension | `min-width`       |
+| `minHeight`      |      | dimension | dimension | `min-height`      |
+| `maxWidth`       |      | dimension | dimension | `max-width`       |
+| `maxHeight`      |      | dimension | dimension | `max-height`      |
+| `aspectRatio`    |      | css value |           | `aspect-ratio`    |
+| `objectFit`      |      | keyword   |           | `object-fit`      |
+| `objectPosition` |      | css value |           | `object-position` |
+| `overflow`       |      | keyword   |           | `overflow`        |
 
 ### typography
 

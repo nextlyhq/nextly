@@ -132,6 +132,26 @@ describe("rewriteDocument", () => {
 });
 
 describe("rewriteClass", () => {
+  it("keeps a look bound to its block type", () => {
+    // Rewritten as a plain style, an imported look would change its place in
+    // the cascade and show where looks are kept out.
+    expect(
+      rewriteClass(
+        {
+          id: "look:core/button:outline",
+          slug: "button-outline",
+          orderIndex: 0,
+          blockType: "core/button",
+          styles: {},
+        },
+        "look:core/button:outline-2",
+        "button-outline-2",
+        4,
+        maps
+      ).blockType
+    ).toBe("core/button");
+  });
+
   it("names the class as the site will hold it, its styles mapped", () => {
     expect(
       rewriteClass(

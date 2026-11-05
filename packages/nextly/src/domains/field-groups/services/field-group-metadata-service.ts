@@ -47,6 +47,7 @@ import {
   findSameSnakeCaseAddress,
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
@@ -229,7 +230,7 @@ export class FieldGroupMetadataService {
         oldFields: [],
         newFields: input.fields as unknown as FieldDefinition[],
         wasLocalized: false,
-        isLocalized: input.localized === true,
+        isLocalized: storesPerLanguage(input),
       });
     }
 
@@ -1000,7 +1001,7 @@ export class FieldGroupMetadataService {
       // own, which write this column. A table the storage migration had moved would carry the
       // migrated prefix and could not be addressed by this name at all.
       STORAGE_FORMAT.columns.type,
-      input.localized === true
+      storesPerLanguage(input)
     );
   }
 
@@ -1034,7 +1035,7 @@ export class FieldGroupMetadataService {
     // companion's DDL is generated later and separately, so its name is the one identifier the scan
     // cannot see.
     const names = schema.identifiersIn(migrationSQL);
-    if (input.localized === true) {
+    if (storesPerLanguage(input)) {
       names.push(`${input.tableName}${STORAGE_FORMAT.companionSuffix}`);
     }
 
@@ -1120,7 +1121,7 @@ export class FieldGroupMetadataService {
       input.fields,
       // i18n: translatable columns are omitted from the main comp_ table when localized; they live
       // in the companion `comp_<slug>_locales`, provisioned below.
-      { localized: input.localized === true }
+      { localized: storesPerLanguage(input) }
     );
   }
 
@@ -1142,7 +1143,7 @@ export class FieldGroupMetadataService {
       return "pending";
     }
 
-    const isLocalized = input.localized === true;
+    const isLocalized = storesPerLanguage(input);
     const fields = input.fields as unknown as FieldDefinition[];
 
     // The verification shares the statements' catch rather than following it. `tableExists`
