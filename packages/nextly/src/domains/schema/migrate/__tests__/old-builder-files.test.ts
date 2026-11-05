@@ -446,13 +446,44 @@ describe.each<Dialect>(["postgresql", "mysql"])(
       });
     });
 
+    // An update touching a custom junction nothing declares stays partial: no
+    // name in it ties the table to the collection.
+    const alter = `ALTER TABLE ${q("post_tag_links", dialect)} ADD COLUMN ${q("x", dialect)} text;`;
     it.each([
       ["no names are declared", undefined],
       ["the name is not among them", new Set(["other_links"])],
-    ])("keeps the file partial when %s", (_n, junctions) => {
-      expect(classify("1730000000012_drop_posts.sql", drop, junctions)).toEqual(
-        { kind: "partial", lacks: ["scope"] }
-      );
+    ])("keeps an update file partial when %s", (_n, junctions) => {
+      expect(
+        classify("1730000000014_update_posts.sql", alter, junctions)
+      ).toEqual({ kind: "partial", lacks: ["scope"] });
+    });
+
+    // A delete removes the collection from the manifest, so its custom
+    // junction is declared by nothing once the drop file exists. In a drop
+    // file, a table dropped alongside the entity's own main table is the
+    // entity's when its name can be no other entity's and no core table's.
+    const dropping = (...tables: string[]) =>
+      tables.map(t => `DROP TABLE IF EXISTS ${q(t, dialect)};`).join("\n");
+
+    it("ignores a delete that drops an undeclared junction with its table", () => {
+      expect(
+        classify(
+          "1730000000012_drop_posts.sql",
+          dropping("dc_posts", "post_tag_links")
+        )
+      ).toEqual({ kind: "old-builder", entity: "posts" });
+    });
+
+    it.each([
+      ["the entity's own table is not dropped with it", ["post_tag_links"]],
+      ["the other table is another collection's", ["dc_posts", "dc_comments"]],
+      ["the other table is a field group's", ["dc_posts", "comp_hero"]],
+      ["the other table is a core table", ["dc_posts", "users"]],
+      ["the other table is the user-field table", ["dc_posts", "user_ext"]],
+    ])("keeps a delete partial when %s", (_n, tables) => {
+      expect(
+        classify("1730000000012_drop_posts.sql", dropping(...tables))
+      ).toEqual({ kind: "partial", lacks: ["scope"] });
     });
   }
 );

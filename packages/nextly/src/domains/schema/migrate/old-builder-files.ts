@@ -22,6 +22,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { getTableName } from "../../collections/services/collection-utils";
 import { parseEntityHeaders } from "../migrate-create/format-file";
@@ -87,6 +88,8 @@ interface NamedEntity {
   slug: string;
   owns: (table: string) => boolean;
   registry?: string;
+  /** Its own main table, for a reading that names one (not a bulk delete). */
+  main?: string;
 }
 
 /**
@@ -106,7 +109,11 @@ function entitiesOf(verb: string, rest: string): NamedEntity[] {
   }
   if (rest === USER_EXT_TABLE) {
     return [
-      { slug: rest, owns: table => table === USER_EXT_TABLE },
+      {
+        slug: rest,
+        owns: table => table === USER_EXT_TABLE,
+        main: USER_EXT_TABLE,
+      },
       collection,
     ];
   }
@@ -116,6 +123,7 @@ function entitiesOf(verb: string, rest: string): NamedEntity[] {
       {
         slug: rest.slice(STORAGE_FORMAT.tablePrefix.length),
         owns: table => isOwnTable(own, table),
+        main: own,
       },
       collection,
     ];
@@ -133,6 +141,7 @@ function collectionEntity(slug: string): NamedEntity {
     slug,
     owns: table => isOwnTable(own, table),
     registry: COLLECTION_REGISTRY,
+    main: own,
   };
 }
 
@@ -252,23 +261,60 @@ function staysInEntity(
     statement => hasExecutableText(statement, file.dialect)
   );
   if (statements.length === 0) return false;
-  const read = dropOnly ? tablesDroppedBy : tablesChangedIn;
   const owns = (table: string) =>
     entity.owns(table) || file.declaredJunctions?.has(table) === true;
+  if (dropOnly)
+    return dropsKeepToEntity(entity, statements, file.dialect, owns);
   return statements.every(statement => {
-    if (!dropOnly && writesOwnRegistryRow(entity, statement, file.dialect)) {
-      return true;
-    }
-    const indexes = dropOnly
-      ? undefined
-      : (indexesDroppedBy(statement, file.dialect) ??
-        indexesRenamedBy(statement, file.dialect));
+    if (writesOwnRegistryRow(entity, statement, file.dialect)) return true;
+    const indexes =
+      indexesDroppedBy(statement, file.dialect) ??
+      indexesRenamedBy(statement, file.dialect);
     if (indexes !== undefined) {
       return indexes.every(index => isOwnIndex(entity, index));
     }
-    const tables = read(statement, file.dialect);
+    const tables = tablesChangedIn(statement, file.dialect);
     return tables !== undefined && tables.length > 0 && tables.every(owns);
   });
+}
+
+/**
+ * Whether every statement of a drop file is a DROP TABLE of the entity's own
+ * tables. A delete removes the collection from the manifest, so a custom
+ * junction it drops is declared by nothing once the file exists: a table
+ * dropped alongside the entity's own main table is the entity's too, when its
+ * name can be no other entity's (`mayBeEntityCompanion`).
+ */
+function dropsKeepToEntity(
+  entity: NamedEntity,
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  owns: (table: string) => boolean
+): boolean {
+  const dropped = statements.map(statement =>
+    tablesDroppedBy(statement, dialect)
+  );
+  if (dropped.some(tables => tables === undefined || tables.length === 0)) {
+    return false;
+  }
+  const tables = dropped.flatMap(list => list ?? []);
+  const dropsMain = entity.main !== undefined && tables.includes(entity.main);
+  return tables.every(
+    table => owns(table) || (dropsMain && mayBeEntityCompanion(table))
+  );
+}
+
+/**
+ * Whether a table's name can belong to no entity but the one a drop file
+ * deletes: no prefix only entities' tables carry, not the user-field table,
+ * and not one of Nextly's core tables.
+ */
+function mayBeEntityCompanion(table: string): boolean {
+  return (
+    !isEntityTableName(table) &&
+    table !== USER_EXT_TABLE &&
+    !CORE_TABLE_NAMES.includes(table)
+  );
 }
 
 /**
