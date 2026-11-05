@@ -292,9 +292,10 @@ async function pruneRemoved(
 ): Promise<number> {
   const table = tableOf(db.dialect);
   return db.transaction(async tx => {
-    const drizzle = tx.getDrizzle<WindowWriteDb & KeyedReadDb>();
+    const drizzle = tx.getDrizzle<WindowWriteDb>();
     const old = lt(table.windowAt, before);
-    const stale = await drizzle
+    const stale = await tx
+      .getDrizzle<KeyedReadDb>()
       .select({ scheduleKey: table.scheduleKey, windowAt: table.windowAt })
       .from(table)
       .where(
