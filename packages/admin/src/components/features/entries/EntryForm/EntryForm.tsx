@@ -20,7 +20,7 @@
  */
 
 import type { JSX, ReactNode } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   autosaveEnabledFor,
@@ -134,6 +134,7 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useLockWithHeldChange } from "./useHeldDocumentChange";
 import {
   heldLocaleChange,
   heldWhileRecovering,
@@ -414,6 +415,8 @@ export function EntryForm({
     loadCurrentVersion,
     versionStartedFrom,
     adoptRecoveredVersion,
+    holdForVersionChange,
+    releaseVersionHold,
   } = useEntryForm({
     collection,
     entry,
@@ -444,10 +447,16 @@ export function EntryForm({
   // holds for it too. Only the fields' own `disabled` follows the save alone;
   // the recovery holds them read-only through the lock, so a field keeps focus.
   const isSubmitting = savePending || recovering;
+  // Whether a change told over unsaved edits waits for the editor's answer,
+  // as the lock below last said: the edits it is about are this language's.
+  const [changeAwaiting, setChangeAwaiting] = useState(false);
   // Every switch to another language goes through here, held while a
   // refused publish's recovery runs, so its Save and take stay on the
-  // language they are for.
-  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
+  // language they are for, and while a told change waits for an answer.
+  const switchLocale = heldLocaleChange(
+    onLocaleChange,
+    recovering || changeAwaiting
+  );
 
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
@@ -757,14 +766,29 @@ export function EntryForm({
     readOnlyForReader,
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     latest,
+    // Every claim and beat names the copy's version, so the holder is told
+    // when someone else changes the entry. Only where the editor can load the
+    // latest copy: one that cannot would say it shows what it does not.
+    version: latest ? versionStartedFrom : undefined,
   });
-  // A gained entry's latest version starts the whole form again, whatever its
-  // `updatedAt` says, and the lock holds until it has; the document views key
-  // on the count it carries.
-  const lock = heldWhileRecovering(
-    useResetOnReload(form, lockSurface, defaultValues),
-    recovering
+  // A gained entry's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries. Someone else's change is said over it.
+  const lock = useLockWithHeldChange(
+    heldWhileRecovering(
+      useResetOnReload(form, lockSurface, defaultValues),
+      recovering
+    ),
+    {
+      surface: lockSurface,
+      hold: holdForVersionChange,
+      latest,
+      release: releaseVersionHold,
+    }
   );
+  useEffect(() => {
+    setChangeAwaiting(lock.changeAwaitingAnswer);
+  }, [lock.changeAwaitingAnswer]);
 
   /*
    * Delegated whole, including the decision to answer NULL when there is
@@ -908,6 +932,9 @@ export function EntryForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+  // The page builder's own store included, which the form's values do not
+  // hold: what someone else's change is judged against.
+  lock.now.hasUnsavedWork = hasUnsavedWork;
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
@@ -1100,6 +1127,15 @@ export function EntryForm({
   const staleHistory = versionConflict?.stale.historyVersion;
   const keepsRecoveryPoints =
     autosaveScope !== null && autosaveEnabledFor(collection);
+  lock.now.keepsEdits = keepsRecoveryPoints;
+  // Load the current version, keeping the edits as a recovery point where the
+  // document keeps them and offering it then; elsewhere the edits are
+  // discarded, as the conflict said they would be. One way, for a refused
+  // save's dialog and for someone else's change alike.
+  lock.now.keepEditsAndLoad = async () => {
+    await loadCurrentVersion(keepsRecoveryPoints);
+    if (keepsRecoveryPoints) recovery.recheck();
+  };
   const conflictDialog = (
     <VersionConflictDialog
       conflict={versionConflict}
@@ -1113,11 +1149,7 @@ export function EntryForm({
             )
           : null
       }
-      onLoadCurrent={async () => {
-        await loadCurrentVersion(keepsRecoveryPoints);
-        // The edits were just kept as a recovery point: offer it now.
-        if (keepsRecoveryPoints) recovery.recheck();
-      }}
+      onLoadCurrent={() => lock.now.keepEditsAndLoad()}
       onSaveAnyway={saveAnyway}
     />
   );
@@ -1160,6 +1192,7 @@ export function EntryForm({
               onTakeOver={lock.takeOver}
               onRequestAccess={lock.requestAccess}
               onRetry={lock.retryLoad}
+              onChoose={lock.answerChange}
             />
             {/* No page around a modal to carry the removed-from-code notice in
                 a document banner, so the modal says it itself. */}

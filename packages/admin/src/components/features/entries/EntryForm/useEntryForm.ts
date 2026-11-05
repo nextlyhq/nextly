@@ -394,6 +394,14 @@ export interface UseEntryFormReturn {
   versionStartedFrom: () => string | undefined;
   /** Edits restored from a recovery point began from this version. */
   adoptRecoveredVersion: (startedFrom: string | undefined) => void;
+  /**
+   * Hold the form on someone else's change the lock told of, so no read
+   * replaces the edits before the author chooses; `loadCurrentVersion` then
+   * keeps them as it does after a refused save.
+   */
+  holdForVersionChange: VersionConflictState["holdForChange"];
+  /** Let go of a hold on the version, as a save that went through does. */
+  releaseVersionHold: VersionConflictState["release"];
 }
 
 // ============================================================================
@@ -752,7 +760,7 @@ function useConflictChoices(choices: {
       const result = await updateMutation.mutateAsync(payload as never);
       ownSave.current.storedVersion = storedVersionOf(result.item);
       write.answered(result.item);
-      version.release();
+      write.released();
       if (sent !== undefined) {
         form.reset(storedAfterSave(fields, sent, result.item));
       }
@@ -1114,6 +1122,9 @@ export function useEntryForm({
                 ? result.item.updatedAt
                 : undefined;
             write.answered(result.item);
+            // Saved, so the copy is the current version: nothing a change
+            // told before still holds it.
+            write.released();
             savedRow = result.item;
             return {
               item: result.item,
@@ -1175,6 +1186,7 @@ export function useEntryForm({
           version.withVersion({ status })
         );
         write.answered(result.item);
+        write.released();
         onSuccess?.(result.item);
         return { ok: true, item: result.item };
       } catch (error) {
@@ -1303,5 +1315,7 @@ export function useEntryForm({
     loadCurrentVersion,
     versionStartedFrom: version.startedFrom,
     adoptRecoveredVersion: version.adoptRecovered,
+    holdForVersionChange: version.holdForChange,
+    releaseVersionHold: version.release,
   };
 }

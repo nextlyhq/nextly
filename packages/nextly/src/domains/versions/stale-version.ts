@@ -110,6 +110,19 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
 }
 
 /**
+ * The version `body` names, decoded; undefined when it names none. Only the
+ * decode: whether a write must name one is `versionCheckFor`'s to decide.
+ *
+ * @throws NextlyError.validation for a `_rev` that is not a version.
+ */
+export function givenVersionOf(
+  body: Readonly<Record<string, unknown>>
+): DecodedVersion | undefined {
+  const raw = body[DOCUMENT_VERSION_KEY];
+  return raw === undefined ? undefined : decodeDocumentVersion(raw);
+}
+
+/**
  * What an update is judged against: the version it gave, or nothing.
  *
  * One decision, taken once at each write path's boundary, before the body's
@@ -162,6 +175,7 @@ function overwriteOf(body: Readonly<Record<string, unknown>>): boolean {
  *   `_overwrite` that is not true or false.
  * @throws NextlyError.versionRequired for a write that gives neither: it
  *   would replace whatever was saved since its caller last read, unasked.
+ *   The decode alone (`givenVersionOf`) never refuses a missing version.
  */
 export function versionCheckFor(
   body: Readonly<Record<string, unknown>>,
@@ -170,12 +184,13 @@ export function versionCheckFor(
   // Both read even when exempt, so a malformed value is refused the same way
   // on every path.
   const overwrite = overwriteOf(body);
-  const raw = body[DOCUMENT_VERSION_KEY];
-  const given = raw === undefined ? undefined : decodeDocumentVersion(raw);
+  const given = givenVersionOf(body);
   if (options.exempt) return { kind: "unjudged" };
   if (overwrite)
     return given ? { kind: "overwrite", given } : { kind: "overwrite" };
-  if (given) return { kind: "judge", given, raw: raw as string };
+  if (given) {
+    return { kind: "judge", given, raw: body[DOCUMENT_VERSION_KEY] as string };
+  }
   throw NextlyError.versionRequired({
     keys: {
       version: DOCUMENT_VERSION_KEY,
