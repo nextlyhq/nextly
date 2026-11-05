@@ -1,4 +1,6 @@
 import {
+  allBlocks,
+  breakpointContexts,
   DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
@@ -29,6 +31,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { countRemovalOnSite } from "./breakpoint-removal/site-counter";
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
@@ -86,6 +89,7 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
+import { withBlockLooks, withCoreLooks } from "./core-looks";
 import { declaredSingleSlugs, isOrphanedSingle } from "./declared-singles";
 import {
   defaultLayoutJob,
@@ -152,10 +156,17 @@ import {
   publishReadinessRoute,
   type PublishReadinessSetup,
 } from "./publish-readiness";
+import {
+  registerRetiredCleanupCheck,
+  RETIRED_CLEANUP_SERVICE,
+  retiredCleanupService,
+  type RetiredCleanupService,
+} from "./retired-cleanup";
+import { retiredCleanupJob } from "./retired-cleanup-job";
 import { registerRetiredExposures } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
-import { retiredStore } from "./retired-store";
+import { allRetired, retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
   pageBuilderSchema,
@@ -275,7 +286,8 @@ function pagePreviewBreakpoints(
         const nextly = await getCachedNextly();
         return { findSingle: args => nextly.findSingle(args) };
       },
-      ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+      // The code tier, which always holds the core blocks' looks.
+      defaults: configStyle,
     }),
   };
 }
@@ -603,6 +615,24 @@ export interface PageBuilderOptions {
 }
 
 /**
+ * The code tier refreshed with every registered block's looks, other
+ * plugins' among them, once they have all registered at init. Updated in
+ * place: every reader holds this one object and this one set, and none has
+ * read them yet.
+ */
+function refreshCodeTier(
+  configStyle: SiteStyleData,
+  configClassIds: Set<string>,
+  siteStyle: SiteStyleData | undefined
+): void {
+  configStyle.classes = resolveSiteStyle(
+    withBlockLooks(siteStyle, allBlocks())
+  ).classes;
+  configClassIds.clear();
+  for (const entry of configStyle.classes ?? []) configClassIds.add(entry.id);
+}
+
+/**
  * What the plugin publishes to the editor in the browser, as the admin's
  * `clientConfig`, or nothing when the host stated none of it.
  *
@@ -646,7 +676,9 @@ function adminClientConfig(
     // the validator read one answer. Plain data: tokens, fonts, classes and
     // breakpoints all serialize, and none of it is secret — a published page
     // emits it as CSS.
-    ...(opts.siteStyle === undefined ? {} : { siteStyle: configStyle }),
+    // Always stated: the code tier holds the core blocks' looks even when the
+    // host states no site style of its own.
+    siteStyle: configStyle,
     /*
      * The bounds the renderer draws under, so the admin asks the same question
      * the page answers. The classes manager walks the open document to say
@@ -1213,7 +1245,14 @@ export const pageBuilder = (
   // read, so what the factory can wire into the validator and the canvas is
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
-  const configStyle = resolveSiteStyle(opts.siteStyle);
+  // The core blocks' looks join the code tier, so the site receives them as
+  // shared styles its code supplies.
+  const configStyle = resolveSiteStyle(withCoreLooks(opts.siteStyle));
+  // The code tier's class ids, for the routes that refuse to rename or remove
+  // what code supplies. One set, refreshed in place with the code tier.
+  const configClassIds = new Set(
+    (configStyle.classes ?? []).map(entry => entry.id)
+  );
   // The font catalogue's hosts and caps, refused at boot when unusable, and
   // what it adds to the plugin.
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
@@ -1233,6 +1272,18 @@ export const pageBuilder = (
   // it. Set by `init`, which holds the context pins are made through; read by
   // the facts route's repair, which releases them.
   let heldRemovals: RetiredPins | undefined;
+  // The cleanup of retired values still stored, published by `init` for the
+  // reason `rewriteInstall` is: its service and sweep are contributed before
+  // `init` runs and called long after it.
+  let retiredCleanup: RetiredCleanupService | null = null;
+  const requireRetiredCleanup = (): RetiredCleanupService => {
+    if (retiredCleanup === null) {
+      throw new Error(
+        "[page-builder] the cleanup of removed component fields ran before the plugin was installed"
+      );
+    }
+    return retiredCleanup;
+  };
   // The ids a published removal retired: those the write hooks recorded, and
   // those the component's published history implies, recorded here when the
   // table lacks them. Where the hooks are not registered (the host renders
@@ -1326,6 +1377,9 @@ export const pageBuilder = (
       installed = installContext(ctx, opts);
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // Every registered block is known now, other plugins' among them, so
+      // the code tier takes all their looks.
+      refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
       // Class-usage maintenance. Registered here rather than beside the
       // collection, because it is a property of the plugin being INSTALLED: the
       // index table exists whether or not anything maintains it, and a host
@@ -1389,6 +1443,19 @@ export const pageBuilder = (
             reason: found.reason,
           }
         );
+      // The site's style as a write is judged against: the code's defaults
+      // and the stored record of the Single as renamed, read when asked.
+      const siteStyleNow = async () => {
+        // Imported at call time, for the reason the readers above give: this
+        // entry reaches a browser bundle, where the Direct API has no place.
+        const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+        const nextly = await getCachedNextly();
+        return loadSiteStyle({
+          nextly: { findSingle: args => nextly.findSingle(args) },
+          defaults: configStyle,
+          slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+        });
+      };
       composition = {
         store: {
           // The collection components actually live in, resolved the way the
@@ -1411,22 +1478,23 @@ export const pageBuilder = (
         // a document composed against this store would be judged by
         // definitions it is not drawn with.
         composesDocuments: opts.componentReadiness !== false,
-        // The classes a page may add a reference to: the ones the compiler
-        // applies, from the code's defaults and the stored record of the
-        // Single as renamed, read per write so a style removed a moment ago
-        // is gone for the next save.
-        siteClassIds: async () => {
-          // Imported at call time, for the reason the readers above give.
-          const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-          const nextly = await getCachedNextly();
-          const style = await loadSiteStyle({
-            nextly: { findSingle: args => nextly.findSingle(args) },
-            defaults: configStyle,
-            slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-          });
-          // Capped and resolved as the compiler reads the library, so a page
-          // may reference exactly the classes it applies.
-          return referableClassIds(style.classes ?? []);
+        // What a page may refer to, from one read of the site style: the
+        // code's defaults and the stored record of the Single as renamed,
+        // read per write so a style or a breakpoint removed a moment ago is
+        // gone for the next save.
+        siteDefinitions: async () => {
+          const style = await siteStyleNow();
+          return {
+            // Capped and resolved as the compiler reads the library, so a
+            // page may reference exactly the classes it applies.
+            classIds: referableClassIds(style.classes ?? []),
+            // The ones its stylesheet is emitted under.
+            breakpointIds: new Set(
+              breakpointContexts(siteBreakpoints(style)).map(
+                context => context.id
+              )
+            ),
+          };
         },
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
@@ -1571,21 +1639,45 @@ export const pageBuilder = (
           componentCollection: composition.store.collection,
           componentField: composition.store.field,
         });
+        // RESOLVED, for the reason every own table is: a host may rename it.
+        const retiredTable = {
+          nextly: () => requireInstalled().nextly(),
+          collection:
+            ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
+            COMPONENT_RETIRED_SLUG,
+        };
+        const retired = retiredStore(retiredTable);
         registerRetiredExposures({
           ctx,
           componentCollection: composition.store.collection,
           componentField: composition.store.field,
-          store: retiredStore({
-            nextly: () => requireInstalled().nextly(),
-            // RESOLVED, for the reason every own table is: a host may rename it.
-            collection:
-              ctx.self.collections[COMPONENT_RETIRED_SLUG] ??
-              COMPONENT_RETIRED_SLUG,
-          }),
+          store: retired,
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           memo: retiredHistory,
           pins: heldRemovals,
         });
+        // The values already stored when a field was retired: walked out of
+        // every document by the sweep below, and walked again when a write
+        // committed after the walk passed its document puts one back.
+        const cleanup = retiredCleanupService({
+          install: requireRewriteInstall,
+          retired: () => allRetired(retiredTable),
+          logger: ctx.logger,
+        });
+        retiredCleanup = cleanup;
+        registerRetiredCleanupCheck({
+          ctx,
+          retired: ids => retired.of(ids),
+          cleanup: () => cleanup,
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
+          store: composition.store,
+        });
+      } else {
+        // Nothing is retired without the readiness hooks, so nothing is owed.
+        retiredCleanup = {
+          advance: () => Promise.resolve({ walked: [], finished: true }),
+          walkAgain: () => Promise.resolve(),
+        };
       }
       // A write that keeps a reference to a component being deleted, committed
       // after the deletion converted that document, sends the document back to
@@ -1651,6 +1743,9 @@ export const pageBuilder = (
         // host as the person who started it, and its progress.
         [COMPONENT_DELETE_REWRITE_SERVICE]: () =>
           componentDeleteRewriteService(requireRewriteInstall),
+        // Taking a component's retired field values out of every document
+        // still holding them; the sweep below drives it.
+        [RETIRED_CLEANUP_SERVICE]: () => requireRetiredCleanup(),
         // The site's spacing model, for a render that holds only the Direct
         // API: `loadSiteStyle` reads it through this service. Resolved per
         // call, so a read before `init` refuses rather than answering a
@@ -1687,6 +1782,10 @@ export const pageBuilder = (
         // The spacing-model step, retried on every pass until a model is
         // recorded; then one indexed read per pass.
         spacingModeJob(spacingModeDeps),
+        // The cleanup of retired field values, owed whenever a component's
+        // retired ids hold more than its last walk was for. A pass with none
+        // owed reads the retired table and each such component's run.
+        retiredCleanupJob(requireRetiredCleanup),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -1744,7 +1843,8 @@ export const pageBuilder = (
           // what consumers actually compile. Without it a stored class whose
           // slug a config class already holds is accepted and then dropped at
           // render, and the node referencing it gets no rule at all.
-          ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+          // The code tier, which always holds the core blocks' looks.
+          defaults: configStyle,
         }),
         // Where the site's default Layout is recorded. Contributed whether or
         // not any Layout exists yet, because the repair writes it on a site
@@ -1953,7 +2053,39 @@ export const pageBuilder = (
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
         siteSettingsRoute(configStyle),
-        siteBreakpointsRoute(),
+        siteBreakpointsRoute({
+          defaults: configStyle,
+          // The site's style as the compiler applies it now: the stored
+          // record of the Single as renamed, over the configured defaults.
+          current: async routeCtx => {
+            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+            const nextly = await getCachedNextly();
+            return loadSiteStyle({
+              nextly: { findSingle: args => nextly.findSingle(args) },
+              defaults: configStyle,
+              slug: routeCtx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
+            });
+          },
+          // Walked with the rewrite's own view of the site, so a removal
+          // counts exactly the documents its cascade would reach.
+          count: (removed, classes, routeCtx) =>
+            countRemovalOnSite(
+              {
+                site: () => rewriteInstall?.site ?? null,
+                naming: async () => {
+                  const { getCachedNextly } = await import(
+                    "@nextlyhq/plugin-sdk"
+                  );
+                  return getCachedNextly();
+                },
+                componentCollection: rewriteInstall?.store.collection,
+                limits: () => opts.limits ?? DEFAULT_LIMITS,
+              },
+              routeCtx,
+              removed,
+              classes
+            ),
+        }),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.
@@ -1984,9 +2116,7 @@ export const pageBuilder = (
         // each is used and where, and removing the unused. Usage is read from
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
-          configClassIds: new Set(
-            (configStyle.classes ?? []).map(entry => entry.id)
-          ),
+          configClassIds,
           usage: ctx => {
             const index =
               ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??

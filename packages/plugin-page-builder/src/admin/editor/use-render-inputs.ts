@@ -9,6 +9,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-render-inputs
  */
 import {
+  allBlocks,
   BASE_BREAKPOINT,
   registryNestingSource,
   getBlock,
@@ -51,6 +52,7 @@ import {
 } from "react";
 
 import { classUsageOf } from "../../class-usage";
+import { withBlockLooks } from "../../core-looks";
 import {
   hostFetchPolicy,
   readRemotePatterns,
@@ -134,8 +136,12 @@ export function useSiteStyleInputs(
    * preview channel to keep in step because there are not two sources to keep
    * in step.
    */
+  // With every registered block's looks, other plugins' among them: the
+  // published config is a copy taken before those blocks registered, so the
+  // editor reads them from its own registry, by the same rule the server does.
   const configSiteStyle = useMemo(
-    () => readSiteStyleRecord(clientConfig?.siteStyle),
+    () =>
+      withBlockLooks(readSiteStyleRecord(clientConfig?.siteStyle), allBlocks()),
     [clientConfig]
   );
   const {
