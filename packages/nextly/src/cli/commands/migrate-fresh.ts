@@ -30,6 +30,8 @@
  * ```
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
@@ -47,11 +49,13 @@ import {
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
+import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import {
   createCliAdapter,
+  openCommandAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -66,6 +70,10 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import { commandRun } from "./command-run";
@@ -96,6 +104,13 @@ export interface MigrateFreshCommandOptions {
    * @default false
    */
   seed?: boolean;
+
+  /**
+   * `--dry-run`: name every table a real run drops and each migration it runs
+   * again, from the database opened read-only, and change nothing. It drops
+   * nothing, so it asks for no consent.
+   */
+  dryRun?: boolean;
 
   /**
    * Refused whenever it is given: it never consents to deleting data.
@@ -176,6 +191,11 @@ export async function runMigrateFresh(
   }
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
+
+  if (options.dryRun === true) {
+    await previewMigrateFresh(options, dbValidation, configResult, context);
+    return;
+  }
 
   // Step 3: Show warning and get confirmation
   logger.newline();
@@ -289,6 +309,68 @@ export async function runMigrateFresh(
     logger.success(
       `Fresh migration completed in ${formatDuration(totalDuration)}`
     );
+  } finally {
+    await adapter.disconnect();
+  }
+}
+
+/**
+ * What `migrate:fresh` would do, named and not done: each table it drops, as
+ * `discoverTables` finds them for the real run, then each migration file it
+ * runs again, in the order `nextly migrate` runs them.
+ */
+async function previewMigrateFresh(
+  options: ResolvedMigrateFreshOptions,
+  dbValidation: ReturnType<typeof requireDatabaseEnv>,
+  configResult: Awaited<ReturnType<typeof loadConfigOrExit>>,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const adapter = await openCommandAdapter(
+    {
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+      dryRun: true,
+    },
+    logger
+  );
+  // Its database is not there, which the open has already said.
+  if (adapter === undefined) return;
+  try {
+    const tables = await discoverTables(
+      adapter as unknown as DrizzleAdapter,
+      dbValidation.dialect
+    );
+    const migrationsDir = resolve(
+      options.cwd ?? process.cwd(),
+      configResult.config.db.migrationsDir
+    );
+    const migrations = getSortedBaseNames(
+      await discoverMigrationGroups(migrationsDir)
+    );
+    reportDryRun(logger, {
+      changes: [
+        ...tables.map(table => ({
+          action: "remove" as const,
+          target: `table ${table}`,
+        })),
+        {
+          action: "run" as const,
+          target: "the core tables' setup, as nextly migrate does",
+        },
+        ...migrations.map(name => ({
+          action: "run" as const,
+          target: `migration ${name}`,
+        })),
+        ...(options.seed
+          ? [{ action: "run" as const, target: "the seeders" }]
+          : []),
+      ],
+      notes: [
+        "A real run also applies the configured plugins' migration modules, which a dry run does not list.",
+      ],
+    });
   } finally {
     await adapter.disconnect();
   }
