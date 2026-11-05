@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A captioned image with a link keeps its fit and focal point. The focal point previews a point the canvas resolves, such as `inherit` or a variable, where the canvas places it. A block that only holds an inline picture, such as a rich-text passage, no longer offers Fit and Focal point.
+A captioned image with a link keeps its fit and focal point. The focal point previews a point the canvas resolves, such as `inherit` or a variable, where the canvas places it. A block that holds a picture among its own words, such as a rich-text passage, no longer offers Fit and Focal point; a custom block that draws one picture inside a wrapper of its own still does.

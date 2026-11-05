@@ -108,6 +108,40 @@ describe("which pictures are a block's own to style", () => {
     // And where the canvas places it, resolved there.
     expect(screen.getByTestId("position").textContent).toBe("100% 0%");
   });
+
+  it("counts a custom block's own wrapper when the picture is all it draws", () => {
+    // A third-party block may draw its picture inside a div or a span of its
+    // own and hand the root's media styles on to it: its Fit and Focal point
+    // work, so the picture is the block's own.
+    const wrapped = document.createElement("div");
+    wrapped.innerHTML =
+      '<div data-nx-node="n1"><span><img src="/custom.png" alt="" style="object-position: 0% 100%"></span></div>';
+    const view = render(<Reader root={wrapped} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/custom.png");
+    expect(screen.getByTestId("position").textContent).toBe("0% 100%");
+
+    // Text of its own beside the picture makes it a passage again.
+    const passage = document.createElement("div");
+    passage.innerHTML =
+      '<span data-nx-node="n1">Words <img src="/inline.png" alt=""></span>';
+    view.rerender(<Reader root={passage} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+    expect(screen.getByTestId("position").textContent).toBe("none");
+
+    // So do two pictures: which one would a single focal point be aimed at?
+    const pair = document.createElement("div");
+    pair.innerHTML =
+      '<div data-nx-node="n1"><img src="/a.png" alt=""><img src="/b.png" alt=""></div>';
+    view.rerender(<Reader root={pair} />);
+    expect(screen.getByTestId("picture").textContent).toBe("none");
+
+    // A child block's words are its own, not text beside this block's picture.
+    const card = document.createElement("div");
+    card.innerHTML =
+      '<div data-nx-node="n1"><img src="/own.png" alt=""><p data-nx-node="n2">Child words</p></div>';
+    view.rerender(<Reader root={card} />);
+    expect(screen.getByTestId("picture").textContent).toBe("/own.png");
+  });
 });
 
 describe("reading the tag from a canvas", () => {

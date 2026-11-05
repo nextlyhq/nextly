@@ -176,9 +176,15 @@ describe("core/image as content", () => {
 });
 
 describe("core/image's link inside a figure", () => {
-  it("passes the fit and focal point on to the picture it holds", () => {
+  it("passes the fit and focal point on to the picture it holds", async () => {
     // figure > a > img: neither property is inherited, so the link between
-    // the figure and the picture has to take them for the picture to.
+    // the figure and the picture has to take them for the picture to. Drawn,
+    // so the link part is on the very element that stands between the two.
+    const container = await drawWith({ href: "/about", caption: "Our team" });
+    const between = container.querySelector("figure > a");
+    expect(between?.classList.contains("part-link")).toBe(true);
+    expect(between?.querySelector(":scope > img")).not.toBeNull();
+    // And that part asks for both from the figure above it.
     const link = (
       image.parts as Record<string, { baseStyles?: unknown }> | undefined
     )?.link?.baseStyles as { base?: { base?: Record<string, unknown> } };
