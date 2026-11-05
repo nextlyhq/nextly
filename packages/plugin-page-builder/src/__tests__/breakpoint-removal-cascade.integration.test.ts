@@ -1294,6 +1294,36 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("leaves a run its save has not stored the set for yet to that save, in the removal job", async () => {
+      const { t, svc, jobPass } = await boot();
+      const id = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      // A save has opened its run and is still counting: Mobile is defined.
+      const run = await svc.begin(["mobile"], null, "user:someone");
+
+      await jobPass();
+
+      // Not closed with nothing done: still open, on its converting walk.
+      expect(await svc.runById(run.id)).toMatchObject({
+        open: true,
+        phase: "converting",
+      });
+      // The save stores its set and walks: the page is stripped.
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        overrideAccess: true,
+        context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+      });
+      await walkToTheEnd(svc, run.id);
+      expect((await nodesOf(t, "pages", id))[0]).toEqual(
+        heading("a", styledAfter)
+      );
+    });
+
     it("refuses a save of the site style from a version another save replaced", async () => {
       const { t } = await boot();
       const read = (await t.nextly.findSingle({

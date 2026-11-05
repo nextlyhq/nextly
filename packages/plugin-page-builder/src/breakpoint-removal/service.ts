@@ -162,6 +162,38 @@ async function removalNow(
   );
 }
 
+/**
+ * How long a save may take between opening its run and storing its set (the
+ * count, then the write and its retries) before the run is taken to be one
+ * whose save failed: seconds in practice, so minutes to spare.
+ */
+const PREPARING_MS = 5 * 60 * 1000;
+
+/**
+ * When a run was opened, read from its id: a UUIDv7 carries its creation
+ * time in milliseconds in its first 48 bits. `undefined` for an id that is
+ * not one, which is then taken as old.
+ */
+function openedAt(runId: string): number | undefined {
+  const hex = runId.replace(/-/g, "");
+  if (!/^[0-9a-f]{12}7[0-9a-f]{19}$/i.test(hex)) return undefined;
+  return Number.parseInt(hex.slice(0, 12), 16);
+}
+
+/**
+ * Whether an open run is still being prepared by its save: the site still
+ * defines every id it removes, and it was opened moments ago. One older than
+ * that is a save that failed after opening it, which the walk then closes.
+ */
+async function preparing(
+  run: BreakpointRun,
+  installed: RemovalInstall
+): Promise<boolean> {
+  const at = openedAt(run.id);
+  if (at === undefined || Date.now() - at >= PREPARING_MS) return false;
+  return (await removalNow(run, installed)).ids.size === 0;
+}
+
 /** How many pages left for a pending draft one pass checks. */
 const DRAFT_CHECKS_PER_PASS = 20;
 
@@ -270,10 +302,15 @@ export function breakpointRemovalService(
     walk,
     carryOn: async budget => {
       const store = runs();
+      const open = await store.openRun();
+      // A run whose save has not stored its set yet is that save's to walk:
+      // walked now, it would find its ids still defined and close with
+      // nothing done, and the save's own walk would then report it finished.
+      if (open !== null && (await preparing(open, install()))) return;
       // The open run first: it holds the one open slot, and a done run
       // cannot be opened again while it does.
       const owed =
-        (await store.openRun()) ??
+        open ??
         (await store.holding()).find(held =>
           held.leftReasons.includes(WRITTEN_BACK)
         )?.run ??
