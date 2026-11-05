@@ -773,6 +773,29 @@ describe("the shared style target", () => {
       ).toBeDefined();
     });
 
+    it("marks the chosen tile with a check, not by its ring alone", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      const chosen = within(looks()).getByRole("radio", { checked: true });
+      expect(chosen.textContent).toContain("Outline");
+      expect(chosen.querySelector(".nx-look-tile__check")).not.toBeNull();
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .filter(radio => radio.querySelector(".nx-look-tile__check") !== null)
+      ).toHaveLength(1);
+    });
+
+    it("says an edit changes this block only, and switches to the look everywhere", () => {
+      mountTarget({ classes: [outline.id], library: [card, outline] });
+      expect(bar().textContent).toContain("Changes this box only");
+      fireEvent.click(
+        within(bar()).getByRole("button", {
+          name: "Edit Outline everywhere · 1 box on this page",
+        })
+      );
+      expect(bar().textContent).toMatch(/Editing shared style Outline/);
+    });
+
     it("draws no row for a type with no looks", () => {
       mountTarget({ library: [card] });
       expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();

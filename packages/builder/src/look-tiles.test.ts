@@ -5,7 +5,14 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { lookTiles, lookTileStyle, withLook, wornLook } from "./look-tiles";
+import {
+  blocksWearing,
+  lookLineWords,
+  lookTiles,
+  lookTileStyle,
+  withLook,
+  wornLook,
+} from "./look-tiles";
 
 const values = (set: Record<string, unknown>): NodeStyles =>
   ({ base: { base: set } }) as unknown as NodeStyles;
@@ -125,5 +132,48 @@ describe("a token-built look's tile", () => {
       borderBlockStartWidth: "1px",
       borderColor: "#2563eb",
     });
+  });
+});
+
+describe("the bar's line about a worn look", () => {
+  it("says an edit here is this block's, and offers the look everywhere", () => {
+    expect(lookLineWords("Outline", "Button", 9)).toEqual({
+      here: "Changes this button only",
+      everywhere: "Edit Outline everywhere · 9 buttons on this page",
+    });
+    expect(lookLineWords("Rounded", "Image", 1).everywhere).toBe(
+      "Edit Rounded everywhere · 1 image on this page"
+    );
+    expect(lookLineWords("Hero", "Box", 2).everywhere).toContain("2 boxes");
+  });
+
+  it("counts the blocks wearing a look, nested ones included", () => {
+    const nodes = [
+      {
+        id: "a",
+        type: "core/button",
+        version: 1,
+        props: {},
+        classes: [outline.id],
+      },
+      {
+        id: "b",
+        type: "core/box",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            {
+              id: "c",
+              type: "core/button",
+              version: 1,
+              props: {},
+              classes: [outline.id],
+            },
+          ],
+        },
+      },
+    ] as never;
+    expect(blocksWearing(nodes, outline.id)).toBe(2);
   });
 });

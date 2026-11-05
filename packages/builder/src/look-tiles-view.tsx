@@ -12,6 +12,7 @@ import {
   type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
+import { Check } from "lucide-react";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
@@ -142,6 +143,13 @@ export function LookTiles({
               title={held}
               onClick={() => choose(tile)}
             >
+              {/* The choice said without colour as well as with the ring:
+                  aria-checked for a reader, a mark for the eye. */}
+              {checked ? (
+                <span className="nx-look-tile__check" aria-hidden="true">
+                  <Check size={10} strokeWidth={3} />
+                </span>
+              ) : null}
               <span className="nx-look-tile__stage" aria-hidden="true">
                 <span
                   className="nx-look-tile__specimen"

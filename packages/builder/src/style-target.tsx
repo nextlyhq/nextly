@@ -25,7 +25,7 @@ import type {
   SiteTokenSet,
   StyleState,
 } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
+import { findNode, getBlock } from "@nextlyhq/blocks-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -35,6 +35,7 @@ import { ClassSelector } from "./class-selector";
 import { EditingBar, type EditTarget } from "./editing-bar";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
+import { blocksWearing, lookLineWords } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
 import type { BuilderOp } from "./ops";
 import {
@@ -431,6 +432,7 @@ export function StyleTargetBar({
         }))}
         onTargetChange={host === undefined ? undefined : onChoose}
         {...chipActions(editor, nodeId, worn, report, breakpoints)}
+        {...wornLookLine(editor, nodeId, worn)}
         chipActionsHeld={held}
         // The shared chips too: choosing one would edit the held design.
         targetHeld={held}
@@ -450,6 +452,32 @@ export function StyleTargetBar({
       />
     </>
   );
+}
+
+/**
+ * The bar's line about the look the block wears, if it wears one: that an
+ * edit here changes this block only, and how to change the look everywhere.
+ */
+function wornLookLine(
+  editor: EditorState,
+  nodeId: string | null,
+  worn: readonly SharedStyleRow[]
+): { wornLook?: { id: string; here: string; everywhere: string } } {
+  const look = worn.find(row => row.look === true);
+  const node =
+    nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
+  if (look === undefined || node === undefined) return {};
+  const label = getBlock(node.type)?.editor?.label ?? "block";
+  return {
+    wornLook: {
+      id: look.id,
+      ...lookLineWords(
+        look.name,
+        label,
+        blocksWearing(editor.document.nodes, look.id)
+      ),
+    },
+  };
 }
 
 /**

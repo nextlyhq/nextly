@@ -15,6 +15,8 @@ import {
   isPlainRecord,
   isTokenRef,
   resolveSiteTokens,
+  walkNodes,
+  type BlockNode,
   type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
@@ -109,7 +111,7 @@ function resolved(
   mode: TokenMode
 ): unknown {
   if (isTokenRef(value)) {
-    return tokenValue(value as { $token: string }, tokens, mode);
+    return tokenValue(value, tokens, mode);
   }
   if (!isPlainRecord(value)) return value;
   return Object.fromEntries(
@@ -173,4 +175,42 @@ export function lookTileStyle(
     }
   }
   return style;
+}
+
+/** A block's name in a sentence, one or many: "button", "buttons". */
+function blockWord(label: string, count: number): string {
+  const one = label.toLowerCase();
+  if (count === 1) return one;
+  return /(?:s|x|z|ch|sh)$/.test(one) ? `${one}es` : `${one}s`;
+}
+
+/**
+ * What the bar says about a look the block wears while the block is the
+ * target: that an edit here changes this block only, and how to change the
+ * look itself, everywhere, with how many blocks on this page wear it.
+ */
+export function lookLineWords(
+  lookName: string,
+  blockLabel: string,
+  onThisPage: number
+): { here: string; everywhere: string } {
+  return {
+    here: `Changes this ${blockWord(blockLabel, 1)} only`,
+    everywhere: `Edit ${lookName} everywhere · ${onThisPage} ${blockWord(
+      blockLabel,
+      onThisPage
+    )} on this page`,
+  };
+}
+
+/** How many blocks in a document wear one class. */
+export function blocksWearing(
+  nodes: readonly BlockNode[],
+  classId: string
+): number {
+  let count = 0;
+  walkNodes(nodes as BlockNode[], node => {
+    if ((node.classes ?? []).includes(classId)) count += 1;
+  });
+  return count;
 }

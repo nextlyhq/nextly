@@ -74,6 +74,18 @@ export interface EditingBarProps {
   /** Keep the style's look on this block only. Absent withholds the item. */
   readonly onDetach?: (id: string) => void;
   /**
+   * The look the block wears, and what the line about it says: that an edit
+   * here changes this block only, and how to edit the look for every block
+   * wearing it. Absent when the block wears no look.
+   */
+  readonly wornLook?: {
+    readonly id: string;
+    /** "Changes this button only". */
+    readonly here: string;
+    /** "Edit Outline for all 9 buttons". */
+    readonly everywhere: string;
+  };
+  /**
    * Why one style can't be detached, when its look can't be kept exactly:
    * asked as its menu opens, so the item is held with the reason beside it.
    */
@@ -115,6 +127,7 @@ export function EditingBar({
   onRemove,
   onDetach,
   detachHeld,
+  wornLook,
   chipActionsHeld,
   targetHeld,
   actions,
@@ -205,6 +218,12 @@ export function EditingBar({
             }
           />
         ) : null}
+        <LookLine
+          target={target}
+          look={wornLook}
+          onTargetChange={onTargetChange}
+          held={targetHeld}
+        />
         <BarContext device={device} state={state} stateControl={stateControl} />
         <p className="nx-sr-only" role="status">
           {announced}
@@ -496,6 +515,48 @@ function DetachItem({
         )}
       </span>
     </DropdownMenuItem>
+  );
+}
+
+/**
+ * The line a worn look adds while the block is the target: an edit here
+ * changes this block only, and the look is shared, so the way to change it
+ * for every block wearing it is one press away.
+ */
+function LookLine({
+  target,
+  look,
+  onTargetChange,
+  held,
+}: {
+  target: EditTarget;
+  look: EditingBarProps["wornLook"];
+  onTargetChange: ((id: string | null) => void) | undefined;
+  held: string | undefined;
+}): React.JSX.Element | null {
+  // Only while the block is the target: a look that is the target says
+  // where it reaches in its own banner.
+  if (target.kind !== "block" || look === undefined) return null;
+  const onEdit =
+    onTargetChange === undefined || held !== undefined
+      ? undefined
+      : () => onTargetChange(look.id);
+  return (
+    <p className="nx-editing-bar__look-line">
+      <span>{look.here}</span>
+      {onEdit === undefined ? null : (
+        <>
+          <span aria-hidden="true"> · </span>
+          <button
+            type="button"
+            className="nx-editing-bar__leave"
+            onClick={onEdit}
+          >
+            {look.everywhere}
+          </button>
+        </>
+      )}
+    </p>
   );
 }
 
