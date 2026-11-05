@@ -62,11 +62,12 @@ export interface MigrationFileFacts {
   dialect: SupportedDialect;
   /**
    * The junction tables the configuration and the Builder's manifest name
-   * with `options.junctionTable`, which nothing in their name ties to a
-   * collection: a statement on one stays inside the entity. Omitted, none is
-   * declared, and a file touching such a table is partial.
+   * with `options.junctionTable`, by the collection whose own fields declare
+   * them: nothing in such a name ties it to a collection, so a statement on
+   * one stays inside the entity only when the entity itself declares it.
+   * Omitted, none is declared, and a file touching such a table is partial.
    */
-  declaredJunctions?: ReadonlySet<string>;
+  declaredJunctions?: ReadonlyMap<string, ReadonlySet<string>>;
   /**
    * The entity tables the configuration and the Builder's manifest declare.
    * An index named alone is traced to the entity's own table unless a longer
@@ -298,7 +299,8 @@ function staysInEntity(
   );
   if (statements.length === 0) return false;
   const owns = (table: string) =>
-    entity.owns(table) || file.declaredJunctions?.has(table) === true;
+    entity.owns(table) ||
+    file.declaredJunctions?.get(entity.slug)?.has(table) === true;
   if (verb === "drop") {
     return dropsKeepToEntity(entity, statements, file.dialect, owns);
   }

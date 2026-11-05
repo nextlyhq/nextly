@@ -420,8 +420,13 @@ describe.each(["postgresql", "sqlite"] as const)(
 describe.each<Dialect>(["postgresql", "mysql"])(
   "a declared junction table on %s",
   dialect => {
-    const declared = new Set(["post_tag_links"]);
-    const classify = (name: string, content: string, junctions?: Set<string>) =>
+    // Each collection's custom junction names, as its own fields declare them.
+    const declared = new Map([["posts", new Set(["post_tag_links"])]]);
+    const classify = (
+      name: string,
+      content: string,
+      junctions?: ReadonlyMap<string, ReadonlySet<string>>
+    ) =>
       classifyMigrationFile(
         facts({
           name,
@@ -451,11 +456,25 @@ describe.each<Dialect>(["postgresql", "mysql"])(
     const alter = `ALTER TABLE ${q("post_tag_links", dialect)} ADD COLUMN ${q("x", dialect)} text;`;
     it.each([
       ["no names are declared", undefined],
-      ["the name is not among them", new Set(["other_links"])],
+      [
+        "the name is not among them",
+        new Map([["posts", new Set(["other_links"])]]),
+      ],
+      // Declared, but by another collection's field: not this entity's own.
+      [
+        "another collection declares it",
+        new Map([["authors", new Set(["post_tag_links"])]]),
+      ],
     ])("keeps an update file partial when %s", (_n, junctions) => {
       expect(
         classify("1730000000014_update_posts.sql", alter, junctions)
       ).toEqual({ kind: "partial", lacks: ["scope"] });
+    });
+
+    it("ignores an update to the entity's own declared junction", () => {
+      expect(
+        classify("1730000000014_update_posts.sql", alter, declared)
+      ).toEqual({ kind: "old-builder", entity: "posts" });
     });
 
     // A delete removes the collection from the manifest, so its custom

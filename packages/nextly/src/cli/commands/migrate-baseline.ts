@@ -743,7 +743,7 @@ export async function runMigrateBaseline(
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
       declared: {
-        junctions: resolved.knownJunctions,
+        junctions: resolved.junctionsByEntity,
         tables: resolved.declaredTables,
       },
       adoptUnknown: options.adoptUnknown,

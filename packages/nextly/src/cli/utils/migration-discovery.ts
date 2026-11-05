@@ -49,7 +49,8 @@ export interface MigrationGroup {
  * (`declaredNamesOf`).
  */
 export interface DeclaredNames {
-  junctions?: ReadonlySet<string>;
+  /** Each collection's custom junction names, by its slug. */
+  junctions?: ReadonlyMap<string, ReadonlySet<string>>;
   tables?: ReadonlySet<string>;
 }
 
@@ -212,14 +213,28 @@ async function exists(path: string): Promise<boolean> {
  * Are treated as ONE logical migration named "0001_000000_blog_schema".
  *
  * @param migrationsDir - Path to the migrations directory
- * @param dialect - The dialect the files run on, which classifying reads
  * @returns Map of base migration names to their variants
  */
 export async function discoverMigrationGroups(
   migrationsDir: string,
-  dialect: SupportedDialect,
+  /**
+   * The dialect the files run on, which classifying reads. Every reader in
+   * this package passes it. Omitted, as the published `nextly/cli/utils`
+   * contract allows, every `.sql` file is listed as it always was, old
+   * Schema Builder files included.
+   */
+  dialect?: SupportedDialect,
   declared?: DeclaredNames
 ): Promise<Map<string, MigrationGroup>> {
+  if (dialect === undefined) {
+    let files: string[];
+    try {
+      files = await readdir(migrationsDir);
+    } catch {
+      return new Map();
+    }
+    return groupMigrationFiles(files.filter(f => f.endsWith(".sql")));
+  }
   return (await readMigrationFolder(migrationsDir, dialect, declared)).groups;
 }
 

@@ -60,7 +60,7 @@ interface MigrateCoreLike {
     refuseUnrecognisedBuilderFiles?: boolean;
     /** See `MigrateCoreDeps.declared`. */
     declared?: {
-      junctions?: ReadonlySet<string>;
+      junctions?: ReadonlyMap<string, ReadonlySet<string>>;
       tables?: ReadonlySet<string>;
     };
     pluginMigrationSets?: readonly PluginMigrationSet[];
@@ -259,7 +259,7 @@ async function applyBootMigrations(
     // What the declared schema names, which old Builder files are judged
     // against as `nextly migrate` judges them.
     declared: {
-      junctions: resolvedSchema.knownJunctions,
+      junctions: resolvedSchema.junctionsByEntity,
       tables: resolvedSchema.declaredTables,
     },
     // The same sets the CLI applies, from the same config: a boot that

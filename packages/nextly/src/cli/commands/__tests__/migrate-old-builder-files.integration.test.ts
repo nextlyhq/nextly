@@ -339,6 +339,37 @@ describe.each(getConfiguredTestDialects())(
       expect(await state(t, dialect)).toEqual(before);
     });
 
+    // A junction counts as an entity's own only when its own fields declare
+    // it: a posts file dropping a junction the authors collection declares
+    // is not recognised, so it is refused.
+    it("refuses a file that drops another collection's declared junction", async () => {
+      loaded.config = defineConfig({
+        collections: [
+          {
+            slug: "authors",
+            fields: [
+              {
+                name: "topics",
+                type: "relationship",
+                relationTo: "topics",
+                hasMany: true,
+                options: { junctionTable: "author_topic_links" },
+              },
+            ],
+          },
+        ] as never,
+        db: { migrationsDir: "./migrations" },
+      });
+      const file = "1761732000001_update_posts.sql";
+      writeFileSync(
+        join(dir, "migrations", file),
+        `DROP TABLE IF EXISTS ${q}author_topic_links${q};\n`
+      );
+      const { code, said } = await migrate();
+      expect(code, said.join("\n")).toBe(1);
+      expect(said.join("\n")).toContain(file);
+    });
+
     it("a hand-written file with no snapshot still applies as written", async () => {
       const t = instance!;
       const file = "20261028_120000_000_hand_written.sql";

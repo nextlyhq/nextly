@@ -369,7 +369,7 @@ export async function runMigrate(
         dialect,
         migrationsDir: appMigrationsDir,
         declared: {
-          junctions: resolvedSchema.knownJunctions,
+          junctions: resolvedSchema.junctionsByEntity,
           tables: resolvedSchema.declaredTables,
         },
         plugins: configResult.config.plugins ?? [],
@@ -443,7 +443,7 @@ export async function runMigrate(
         refuseUnrecognisedBuilderFiles: true,
         knownJunctions: resolvedSchema.knownJunctions,
         declared: {
-          junctions: resolvedSchema.knownJunctions,
+          junctions: resolvedSchema.junctionsByEntity,
           tables: resolvedSchema.declaredTables,
         },
         allowDestructive: allowCoreDestructive,
@@ -463,7 +463,7 @@ export async function runMigrate(
             appMigrationsDir,
             logger,
             {
-              junctions: resolvedSchema.knownJunctions,
+              junctions: resolvedSchema.junctionsByEntity,
               tables: resolvedSchema.declaredTables,
             }
           );
@@ -529,7 +529,7 @@ export async function runMigrate(
         appMigrationsDir,
         logger,
         {
-          junctions: resolvedSchema.knownJunctions,
+          junctions: resolvedSchema.junctionsByEntity,
           tables: resolvedSchema.declaredTables,
         }
       );
@@ -786,6 +786,8 @@ export interface MigrateCoreDeps {
    * the change.
    */
   refuseUnrecognisedBuilderFiles?: boolean;
+  /** The unrecognised-file refusal; injected for tests (`refuseUnrecognisedBuilderFiles`). */
+  refuseUnrecognisedBuilderFilesFn?: typeof refuseUnrecognisedBuilderFiles;
 }
 
 export interface MigrateCoreResult {
@@ -1667,8 +1669,10 @@ export async function migrateCore(
   await nameOldBuilderFiles(deps);
   // Before the lock: taking it creates the lock's own table on a database
   // that has none, and a refused run leaves the schema as it was.
+  const refuseUnrecognised =
+    deps.refuseUnrecognisedBuilderFilesFn ?? refuseUnrecognisedBuilderFiles;
   if (deps.refuseUnrecognisedBuilderFiles === true) {
-    await refuseUnrecognisedBuilderFiles(deps);
+    await refuseUnrecognised(deps);
   }
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
@@ -1711,6 +1715,11 @@ export async function migrateCore(
           command: deps.lockCommand ?? "nextly migrate",
         }
       );
+      // And again under the lock, before the first write: a file changed
+      // while this run waited for the lock is judged as it now reads.
+      if (deps.refuseUnrecognisedBuilderFiles === true) {
+        await refuseUnrecognised(deps);
+      }
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does

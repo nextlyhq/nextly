@@ -581,6 +581,32 @@ describe("an applied file edited since it ran", () => {
   });
 });
 
+describe("a Builder-named file the signature does not recognise", () => {
+  it("is refused again inside the lock, before the core reconcile", async () => {
+    // Checked before the lock too; a file changed while waiting for the lock
+    // must not reach the first write unrefused.
+    const order: string[] = [];
+    const d = deps({
+      refuseUnrecognisedBuilderFiles: true,
+      refuseUnrecognisedBuilderFilesFn: vi.fn(async () => {
+        order.push("refuse");
+      }),
+      withLock: vi.fn(
+        async (_a: unknown, _d: unknown, fn: () => Promise<unknown>) => {
+          order.push("lock");
+          return { ran: true as const, value: await fn() };
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order).toEqual(["refuse", "lock", "refuse", "core"]);
+  });
+});
+
 describe("the marks of old Schema Builder files", () => {
   it("are written after the core reconcile, the run's first write", async () => {
     const order: string[] = [];

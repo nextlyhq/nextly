@@ -285,11 +285,22 @@ describe("migration-discovery", () => {
         'ALTER TABLE "dc_tags" ADD COLUMN "x" text;\nALTER TABLE "tag_links" ADD COLUMN "y" text;'
       );
       const declared = await readMigrationFolder(testDir, "postgresql", {
-        junctions: new Set(["tag_links"]),
+        junctions: new Map([["tags", new Set(["tag_links"])]]),
       });
       expect(declared.oldBuilderFiles.map(f => f.file)).toContain(file);
       const none = await readMigrationFolder(testDir, "postgresql");
       expect(none.partialBuilderFiles.map(f => f.file)).toContain(file);
+    });
+
+    // `nextly/cli/utils` publishes this with a one-argument contract: called
+    // without a dialect it lists every file as it always did, unclassified.
+    it("discoverMigrationGroups keeps its one-argument contract", async () => {
+      const groups = await discoverMigrationGroups(testDir);
+      expect([...groups.keys()].sort()).toEqual([
+        "1730000000000_create_posts",
+        "1730000000001_create_notes",
+        "20260101_000000_000_init",
+      ]);
     });
 
     it("discoverMigrationGroups reads the same migrations", async () => {
