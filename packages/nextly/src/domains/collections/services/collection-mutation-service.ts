@@ -307,6 +307,7 @@ import {
   withVerdictState,
 } from "../../versions/publish-all-plan";
 import { hasLifecycle } from "../../versions/recorded-status";
+import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -5607,20 +5608,15 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         };
-        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-          discardedRef,
-          draftLocale
+        const { removed, judged: before } = await removePendingChangeJudged(
+          tx,
+          { ref: discardedRef, locale: draftLocale },
+          judging.check,
+          () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
+          { main: undefined, language: undefined }
         );
-        await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
-          // Judged only when there was a change to lose, and under the lock:
-          // out of date, the throw rolls the delete back.
-          const before = await this.refuseIfPendingChangeMoved(
-            tx,
-            judging,
-            staleWrite
-          );
           // A reader of the pending change now sees the live entry, so the
           // version they hold no longer describes what they would read.
           await bumpDocumentRevision(
