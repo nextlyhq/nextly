@@ -634,6 +634,17 @@ function SelectionInspector({
    * resetting would silently discard what it restored.
    */
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
+  // A list's sort asked for from its canvas note is on the Content tab, so
+  // the author is taken there, once per ask, from wherever they were.
+  // Each ask moves the tab once: a new style-state setter is no new ask.
+  const asked = editor.sortFieldAsked?.seq;
+  const onStyleStateChange = styleState?.onChange;
+  const answeredAsk = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (asked === undefined || asked === answeredAsk.current) return;
+    answeredAsk.current = asked;
+    tabChangeHandler(setTab, onStyleStateChange)("content");
+  }, [asked, onStyleStateChange]);
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -1288,6 +1299,8 @@ class CustomInspectorBoundary extends React.Component<
 interface ListView {
   readonly showsEmpty: boolean;
   readonly onShowEmpty: (empty: boolean) => void;
+  /** The count of the latest ask to fix this list's sort, when it has one. */
+  readonly sortFieldAsked: number | undefined;
 }
 
 /** A block's list view, where the editor keeps one. */
@@ -1297,6 +1310,10 @@ function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
   return {
     showsEmpty: editor.listsShowingEmpty?.has(nodeId) === true,
     onShowEmpty: empty => show(nodeId, empty),
+    sortFieldAsked:
+      editor.sortFieldAsked?.id === nodeId
+        ? editor.sortFieldAsked.seq
+        : undefined,
   };
 }
 
@@ -1398,6 +1415,7 @@ function ContentFields({
                 nodeId: inspection.nodeId,
                 showsEmpty: listView?.showsEmpty === true,
                 onShowEmpty: listView?.onShowEmpty,
+                sortFieldAsked: listView?.sortFieldAsked,
               })}
             </React.Fragment>
           );

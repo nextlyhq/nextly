@@ -466,6 +466,16 @@ export interface PageContext {
    * @experimental
    */
   listsShowingEmpty?: ReadonlySet<string>;
+  /**
+   * The editor's canvas, which can act on a list note's action: a list whose
+   * sort fell back offers "Choose a field" there, which the canvas answers by
+   * taking the author to the list's sort. Honoured only where
+   * {@link diagnostics} says an author is looking; absent in a preview, which
+   * has nothing to act with, so its notes are words alone.
+   *
+   * @experimental
+   */
+  listNoteActions?: boolean;
 }
 
 /**

@@ -20,6 +20,7 @@ import type {
   BlocksQuery,
   PageContext,
 } from "../context";
+import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
 import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 
@@ -301,6 +302,52 @@ describe("a collection list's query, rendered", () => {
     );
     expect(note(editing)?.textContent).toContain('"internalScore"');
     expect(note(editing)?.textContent).toContain("ID order");
+  });
+
+  it("offers one action, on a fallen-back sort's note, only where the editor can act on it", async () => {
+    const refusing: BlocksDataProvider = {
+      find: query =>
+        query.sort !== undefined && query.sort.length > 0
+          ? Promise.reject(
+              Object.assign(new Error("Validation failed."), {
+                code: "VALIDATION_ERROR",
+                publicData: {
+                  errors: [{ path: "sort.rating", code: "FIELD_NOT_SORTABLE" }],
+                },
+              })
+            )
+          : Promise.resolve({ items: POSTS }),
+    };
+    const stored = page(list({ collection: "posts", sort: "-rating" }));
+    const action = (host: HTMLElement) =>
+      note(host)?.querySelectorAll(`[${LIST_ACTION_ATTRIBUTE}]`) ?? [];
+    // On the editor's canvas: one button, naming what it does.
+    const canvas = await drawn(
+      stored,
+      context({ data: refusing, diagnostics: true, listNoteActions: true })
+    );
+    expect([...action(canvas)].map(each => each.outerHTML)).toEqual([
+      `<button type="button" ${LIST_ACTION_ATTRIBUTE}="choose-sort-field">Choose a field</button>`,
+    ]);
+    // In a preview, where nothing could act on it, the note is words alone.
+    const preview = await drawn(
+      stored,
+      context({ data: refusing, diagnostics: true })
+    );
+    expect(note(preview)).not.toBeNull();
+    expect(action(preview)).toHaveLength(0);
+    // A failed read's note stays words alone, even on the canvas.
+    const failing: BlocksDataProvider = {
+      find: () => Promise.reject(new Error("The database is away.")),
+    };
+    const failed = await drawn(
+      page(list({ collection: "posts" })),
+      context({ data: failing, diagnostics: true, listNoteActions: true })
+    );
+    expect(note(failed)?.getAttribute("data-nx-list-diagnostic")).toBe(
+      "query-failed"
+    );
+    expect(action(failed)).toHaveLength(0);
   });
 
   describe("a date filter compares whole days", () => {

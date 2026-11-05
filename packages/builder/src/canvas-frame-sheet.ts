@@ -216,6 +216,10 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
      reads as a note about the list rather than one of its entries. */
   grid-column: 1 / -1;
   flex-basis: 100%;
+  /* Its words, and the one action a fallen-back sort offers, on one row. */
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
   color-scheme: var(--nx-builder-scheme, light);
   margin-block-end: 0.5rem;
   padding: 0.5rem 0.75rem;
@@ -234,6 +238,27 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
     var(--nx-builder-warning, Mark) 12%,
     var(--nx-builder-surface-raised, Canvas)
   );
+}
+
+/* The note's one action: an outlined button in the note's own ink, at the
+   row's end. Pressing it is the editor's (see the canvas's click). */
+[data-nx-list-diagnostic] > [data-nx-list-action] {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+[data-nx-list-diagnostic] > [data-nx-list-action]:focus-visible {
+  outline: 2px solid var(--nx-builder-select, Highlight);
+  outline-offset: 2px;
 }
 
 [data-nx-list-diagnostic="query-failed"] {

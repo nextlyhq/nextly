@@ -454,6 +454,51 @@ describe("a list's sort", () => {
   });
 });
 
+describe("a fallen-back sort's Choose a field", () => {
+  it("takes the author to the list's first sort row, on the Content tab", async () => {
+    register();
+    const editor = editorFor({ collection: "posts", sort: "-rating,title" });
+    const services = { listLoopCollections: vi.fn(async () => COLLECTIONS) };
+    const { rerender } = render(
+      <InspectorPanel editor={editor} contentServices={services} />
+    );
+    await screen.findByRole("button", { name: /^Sort 1 of 2, by/ });
+    // The author is styling the list when its note's action is pressed.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Style" }));
+    rerender(
+      <InspectorPanel
+        editor={{ ...editor, sortFieldAsked: { id: "list", seq: 1 } }}
+        contentServices={services}
+      />
+    );
+    const first = screen.getByRole("button", { name: /^Sort 1 of 2, by/ });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    expect(
+      screen.getByRole("tab", { name: "Content" }).getAttribute("aria-selected")
+    ).toBe("true");
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing of a list it was not pressed for", async () => {
+    register();
+    const editor = editorFor({ collection: "posts", sort: "-rating" });
+    render(
+      <InspectorPanel
+        editor={{ ...editor, sortFieldAsked: { id: "another", seq: 1 } }}
+        contentServices={{
+          listLoopCollections: vi.fn(async () => COLLECTIONS),
+        }}
+      />
+    );
+    const first = await screen.findByRole("button", {
+      name: /^Sort 1 of 1, by/,
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(document.activeElement).not.toBe(first);
+  });
+});
+
 describe("how many entries a list shows", () => {
   it("refuses a number of items outside 1 to 100 inline, writing nothing", async () => {
     const editor = mount({ collection: "posts", limit: 6 });

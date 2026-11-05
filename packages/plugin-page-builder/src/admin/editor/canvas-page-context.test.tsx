@@ -57,6 +57,8 @@ describe("the canvas's page context", () => {
   it("draws a list as an author looks at it, with entries read for the canvas", () => {
     const { result } = renderHook(() => useCanvasPageContext());
     expect(result.current.diagnostics).toBe(true);
+    // The canvas can act on a note's action, which a preview cannot.
+    expect(result.current.listNoteActions).toBe(true);
     // The canvas's own reader, not the stand-in that answers no rows.
     expect(typeof result.current.data?.find).toBe("function");
     expect(result.current.listsShowingEmpty).toBeUndefined();

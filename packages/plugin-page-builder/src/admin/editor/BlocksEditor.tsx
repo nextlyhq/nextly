@@ -752,6 +752,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
               onSelect={editor.select}
+              // A list note's "Choose a field": the list selected and the
+              // author taken to its first sort row.
+              onListSortField={editor.askSortField}
               // The style context and the host policy, derived above so both
               // are one object with one identity rather than rebuilt per
               // render.

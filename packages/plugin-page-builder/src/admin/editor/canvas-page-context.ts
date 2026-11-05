@@ -75,6 +75,8 @@ export function useCanvasPageContext(
         resolveMedia: async id => drawnMedia(await readMedia(id)),
         data: canvasListData(),
         diagnostics: true,
+        // The canvas acts on a note's action: see `onListSortField`.
+        listNoteActions: true,
         ...(entryCollection === undefined || entryId === undefined
           ? {}
           : { entry: { id: entryId }, entryCollection }),

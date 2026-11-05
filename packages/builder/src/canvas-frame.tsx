@@ -1083,6 +1083,8 @@ const PAGE_CHROME_TOKENS: readonly {
     // so it may take the admin's face as well as its colours.
     selector: "[data-nx-list-diagnostic]",
     tokens: [
+      // The focus ring of the note's one action.
+      "--nx-builder-select",
       "--nx-builder-warning",
       "--nx-builder-danger",
       "--nx-builder-surface-raised",

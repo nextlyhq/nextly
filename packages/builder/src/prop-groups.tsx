@@ -46,6 +46,11 @@ export interface PropGroupContext {
   readonly showsEmpty: boolean;
   /** Draw a list's empty state on the canvas, or its entries again. */
   readonly onShowEmpty?: ((empty: boolean) => void) | undefined;
+  /**
+   * The count of the latest ask, from a list's canvas note, to fix this
+   * list's sort: each new count takes the author to its first sort row.
+   */
+  readonly sortFieldAsked?: number | undefined;
 }
 
 /** One group of a block's props. */

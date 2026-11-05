@@ -36,6 +36,7 @@ import {
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
@@ -104,9 +105,22 @@ function diagnosticNote(
   ctx: PageContext
 ): ReactElement | null {
   if (ctx.diagnostics !== true || outcome.diagnostic === undefined) return null;
+  // One action, on the editor's canvas only: a sort that fell back is fixed
+  // by choosing another field, which the canvas takes the author to. A failed
+  // read has no one fix, so its note stays words alone.
+  const offersChoice =
+    ctx.listNoteActions === true && outcome.diagnostic.kind === "sort-fallback";
   return (
     <div role="status" data-nx-list-diagnostic={outcome.diagnostic.kind}>
-      {outcome.diagnostic.message} Only you see this message.
+      <span>{outcome.diagnostic.message} Only you see this message.</span>
+      {offersChoice ? (
+        <button
+          type="button"
+          {...{ [LIST_ACTION_ATTRIBUTE]: "choose-sort-field" }}
+        >
+          Choose a field
+        </button>
+      ) : null}
     </div>
   );
 }

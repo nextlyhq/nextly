@@ -128,6 +128,8 @@ export {
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
 } from "./block-boundary";
+// The same, for the action a collection list's note offers on the canvas.
+export { LIST_ACTION_ATTRIBUTE } from "./editor-markers";
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.
 export { isAllowedAttribute } from "./block-boundary";

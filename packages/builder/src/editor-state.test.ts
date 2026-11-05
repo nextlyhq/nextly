@@ -2277,3 +2277,19 @@ describe("the lists the canvas shows empty", () => {
     expect(result.current.listsShowingEmpty?.size).toBe(0);
   });
 });
+
+describe("a list's sort, asked for from its canvas note", () => {
+  it("selects the list and counts each ask, outside the history", () => {
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a"), node("list")]) })
+    );
+    expect(result.current.sortFieldAsked).toBeUndefined();
+    act(() => result.current.askSortField?.("list"));
+    expect(result.current.selectedId).toBe("list");
+    expect(result.current.sortFieldAsked).toEqual({ id: "list", seq: 1 });
+    // A second press asks again, though the list is already selected.
+    act(() => result.current.askSortField?.("list"));
+    expect(result.current.sortFieldAsked).toEqual({ id: "list", seq: 2 });
+    expect(result.current.canUndo).toBe(false);
+  });
+});

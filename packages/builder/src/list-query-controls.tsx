@@ -132,6 +132,11 @@ export interface ListQueryFieldProps {
   readonly nodeId: string;
   /** Whether the canvas draws this list's empty state. */
   readonly showsEmpty: boolean;
+  /**
+   * The count of the latest ask, from the list's canvas note, to fix its
+   * sort: each new count takes the author to its first sort row.
+   */
+  readonly sortFieldAsked?: number | undefined;
   /** Draw its empty state, or its entries; absent where nothing can. */
   readonly onShowEmpty?: ((empty: boolean) => void) | undefined;
 }
@@ -1788,6 +1793,33 @@ function SortRow({
   );
 }
 
+/**
+ * Focus the first sort row's field, or Add sort when there is no row, once
+ * per new ask. After the frame the ask is drawn in, since the ask can move
+ * the inspector to its Content tab in the same draw, which reveals the row.
+ */
+function useFocusOnAsk(
+  group: React.RefObject<HTMLElement | null>,
+  asked: number | undefined,
+  firstFieldId: string
+): void {
+  const answered = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (asked === undefined || asked === answered.current) return;
+    answered.current = asked;
+    const timer = setTimeout(() => {
+      const root = group.current;
+      if (root === null) return;
+      const target =
+        root.ownerDocument.getElementById(firstFieldId) ??
+        root.querySelector<HTMLElement>("[data-list-add-sort]");
+      target?.scrollIntoView({ block: "nearest" });
+      target?.focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [group, asked, firstFieldId]);
+}
+
 /** The menu of fields a new sort key can order by. */
 function AddSortButton({
   fields,
@@ -1812,6 +1844,8 @@ function AddSortButton({
           size="sm"
           variant="ghost"
           className="nx-list-query__add"
+          // Where an ask to fix the sort lands when there is no row.
+          data-list-add-sort=""
           disabled={disabled || fields.length === 0}
         >
           <Plus aria-hidden="true" size={14} />
@@ -1854,6 +1888,7 @@ function SortGroup({
   fieldSource,
   disabled,
   problems,
+  fieldAsked,
   onSort,
 }: {
   id: string;
@@ -1863,9 +1898,13 @@ function SortGroup({
   fieldSource: ListFieldSource | undefined;
   disabled: boolean;
   problems: readonly string[];
+  /** The count of the latest ask to fix this sort, from the canvas. */
+  fieldAsked: number | undefined;
   onSort: (keys: readonly ListSortKey[]) => void;
 }): React.JSX.Element {
   const keys = query.sort;
+  const group = React.useRef<HTMLElement>(null);
+  useFocusOnAsk(group, fieldAsked, `${id}-0-field`);
   const sortable = fields.filter(field => listKindSortable(field.kind));
   const rowKeys = sortRowKeys(keys);
   const list = React.useRef<HTMLOListElement>(null);
@@ -1906,7 +1945,11 @@ function SortGroup({
         ).map(each => each.field);
   const titleId = `${id}-title`;
   return (
-    <section className="nx-list-query__group" aria-labelledby={titleId}>
+    <section
+      ref={group}
+      className="nx-list-query__group"
+      aria-labelledby={titleId}
+    >
       <GroupTitle id={titleId}>Sort</GroupTitle>
       {shown.length === 0 ? (
         <p className="nx-inspector__note nx-list-query__hint">
@@ -2279,6 +2322,7 @@ export function ListQueryField({
   nodeId,
   showsEmpty,
   onShowEmpty,
+  sortFieldAsked,
 }: ListQueryFieldProps): React.JSX.Element | null {
   const id = React.useId();
   const reading = useListQueryReading(props, services, document, nodeId);
@@ -2335,6 +2379,7 @@ export function ListQueryField({
         fieldSource={fieldSource}
         disabled={unsourced}
         problems={codedIssues(issues, "sort", "list-sort-invalid")}
+        fieldAsked={sortFieldAsked}
         onSort={keys => commit({ sort: sortValue(keys) })}
       />
       <HowManyGroup

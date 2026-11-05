@@ -237,6 +237,16 @@ export interface EditorState {
   listsShowingEmpty?: ReadonlySet<string>;
   /** Draw one list's empty state on the canvas, or its entries again. */
   showListEmpty?: (id: string, empty: boolean) => void;
+  /**
+   * The list whose sort the author last asked to fix, from its canvas note's
+   * "Choose a field", with a count that grows on each ask, so the inspector
+   * takes the author to the list's first sort row once per press. Editor
+   * state only, never stored.
+   * @experimental
+   */
+  sortFieldAsked?: { readonly id: string; readonly seq: number };
+  /** Select a list and take the author to its first sort row. */
+  askSortField?: (id: string) => void;
 }
 
 export interface UseEditorStateArgs {
@@ -1128,15 +1138,32 @@ function toggled(
 
 /**
  * The editor's state: the document and its history, with which lists the
- * canvas shows empty beside them, which is editor state and no step of the
- * history.
+ * canvas shows empty and which list's sort the author asked to fix beside
+ * them, which are editor state and no step of the history.
  */
 export function useEditorState(args: UseEditorStateArgs): EditorState {
   const state = useDocumentState(args);
   const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
+  const [sortFieldAsked, setSortFieldAsked] =
+    useState<EditorState["sortFieldAsked"]>(undefined);
+  const { select } = state;
+  // Selecting first, so the inspector the author is taken to is the list's.
+  const askSortField = useCallback(
+    (id: string) => {
+      select(id);
+      setSortFieldAsked(current => ({ id, seq: (current?.seq ?? 0) + 1 }));
+    },
+    [select]
+  );
   return useMemo(
-    () => ({ ...state, listsShowingEmpty, showListEmpty }),
-    [state, listsShowingEmpty, showListEmpty]
+    () => ({
+      ...state,
+      listsShowingEmpty,
+      showListEmpty,
+      ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
+      askSortField,
+    }),
+    [state, listsShowingEmpty, showListEmpty, sortFieldAsked, askSortField]
   );
 }
 
