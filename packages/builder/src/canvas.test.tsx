@@ -66,6 +66,7 @@ import {
   isOutermostForAddress,
   nodeElement,
   nodeIdFromEvent,
+  outermostElementsOf,
 } from "./canvas";
 import type { CanvasDragState } from "./canvas-drag";
 
@@ -1329,6 +1330,24 @@ describe("the drag in flight is drawn on the canvas", () => {
           render: ({ className }: { className: string }) =>
             createElement("div", { className }),
         },
+        {
+          // Draws a part the way a component placement's definition does: a
+          // re-minted node id the page does not hold, carrying the
+          // placement's address as its instance.
+          name: "acme/placement",
+          version: 1,
+          description: "A block drawn from a definition.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                [NODE_ID_ATTRIBUTE]: "minted-part",
+                [INSTANCE_ATTRIBUTE]: "card",
+              })
+            ),
+        },
       ] as never,
       { source: "canvas-drag-marks-test" }
     );
@@ -1567,6 +1586,41 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
   });
 
+  it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {
+    /*
+     * A placement's parts carry a re-minted node id plus the placement's
+     * address. Read by the raw id, the lock finds nothing for them and the
+     * selection ring the marks draw from a part is solid, as for an unlocked
+     * block; read by the address, as the selection is, they are locked.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "card",
+          type: "acme/placement",
+          version: 1,
+          props: {},
+          locked: true,
+        },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const part = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="minted-part"]`
+    );
+    expect(part?.getAttribute(LOCKED_ATTRIBUTE)).toBe("own");
+    // The control: an unlocked block beside it is not marked.
+    expect(
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="leaf"]`)
+        ?.hasAttribute(LOCKED_ATTRIBUTE)
+    ).toBe(false);
+  });
+
   it("marks a block's own lock and a lock it is held by from around it apart", async () => {
     // A block inside a locked one is locked too: it is marked `inherited`,
     // so the canvas can say so without claiming a lock of its own. The marks
@@ -1766,6 +1820,30 @@ describe("the site's dark-mode strategy on the canvas root", () => {
 
   it("states nothing when the host serves no site sheet", () => {
     expect(strategyOf(false)).toBeNull();
+  });
+});
+
+describe("the elements standing for an address", () => {
+  it("leaves out a nested canvas's elements, whose ids are its own document's", () => {
+    // Component edit mode draws a canvas inside a block. Ids are scoped per
+    // document, so the inner one may hold the same address as a block out
+    // here; it is not this canvas's to measure.
+    const root = document.createElement("div");
+    root.className = CANVAS_ROOT_CLASS;
+    root.innerHTML = `
+      <div data-nx-node="a" id="outer"></div>
+      <div data-nx-node="host">
+        <div class="${CANVAS_ROOT_CLASS}">
+          <div data-nx-node="a" id="inner"></div>
+        </div>
+      </div>`;
+    document.body.append(root);
+    try {
+      const found = outermostElementsOf(root, new Set(["a"])).get("a") ?? [];
+      expect(found.map(element => element.id)).toEqual(["outer"]);
+    } finally {
+      root.remove();
+    }
   });
 });
 

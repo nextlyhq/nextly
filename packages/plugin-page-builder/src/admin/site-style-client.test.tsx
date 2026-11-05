@@ -58,6 +58,8 @@ let refetches = 0;
 let readFails = false;
 /** The options the write hook was constructed with, for the scope assertion. */
 let writeOptions: { scopeId?: string } | undefined;
+/** What the form's storing gate was handed to wait for, in order. */
+const tracked: { label: string; settled: Promise<unknown> }[] = [];
 
 // The stored style arrives through the editor's one read of the plugin's
 // route; that read's own request is asserted in `site-style-read.test`.
@@ -86,8 +88,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     return writeBehaviour();
   },
   validationIssues: () => issuesAnswer,
-  // The form's storing gate, absent here: nothing is tracked.
-  useTrackedWrite: () => () => {},
+  // The form's storing gate, recording each write it is handed to wait for.
+  useTrackedWrite: () => (label: string, settled: Promise<unknown>) => {
+    tracked.push({ label, settled });
+  },
   readPluginRoute: async () => undefined,
   useUpdateSingleDocument: (
     _slug: string,
@@ -136,6 +140,7 @@ beforeEach(() => {
   refetches = 0;
   readFails = false;
   writeOptions = undefined;
+  tracked.length = 0;
 });
 
 describe("reading the site style", () => {
@@ -661,6 +666,30 @@ describe("a save inside the editor, as a step of its history", () => {
       await steps[0]?.undo();
     });
     expect(writes.at(-1)).toEqual({ classes: [] });
+  });
+
+  it("hands the storing gate a correction back to the stored value, after a refusal", async () => {
+    // A refused save leaves the form's gate holding a refusal. Typing the
+    // stored value back is a save like any other to the gate: tracked, so
+    // the gate's latest word on the section is that it saved, and Save works.
+    readAnswer = { data: { classes: [] }, isPending: false, error: null };
+    const { wrapper } = editorHistory();
+    const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+    writeBehaviour = async () => {
+      throw new Error("refused");
+    };
+    await act(async () => {
+      await result.current.save("classes", [{ id: "a", slug: "a" }]);
+    });
+    const refused = tracked.length;
+    expect(refused).toBeGreaterThan(0);
+
+    writeBehaviour = async () => ({ id: "1" });
+    await act(async () => {
+      await result.current.save("classes", []);
+    });
+    expect(tracked.length).toBe(refused + 1);
+    await expect(tracked.at(-1)?.settled).resolves.toBeUndefined();
   });
 
   it("records no step for a save that leaves the section as it was", async () => {

@@ -3,13 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
-import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
 
 /**
- * The canvas's stylesheet keys the empty-container affordance off two markers —
+ * The canvas's stylesheet keys the empty-container affordance off markers —
  * `SLOTS_ATTRIBUTE` from `@nextlyhq/blocks-react` and this package's own
- * `EMPTY_ELEMENTS_ATTRIBUTE` — and a stylesheet has no module system, so it
- * cannot import either constant. Its selectors spell them out as literal
+ * chrome and canvas classes — and a stylesheet has no module system, so it
+ * cannot import those constants. Its selectors spell them out as literal
  * strings instead, which makes the CSS and the constants two independent
  * copies of one spelling: correct only for as long as nobody renames either
  * constant, and a rename is silent when it happens. TypeScript still compiles
@@ -105,10 +104,6 @@ describe("the empty-container affordance is keyed off the exported constants", (
      * the appender answering a narrower question than the box it stands in for.
      */
     expect(collapsed(SHEET)).toMatch(ruleFor(EMPTY_CONTAINER_SELECTOR));
-  });
-
-  it("guards the affordance behind the hide-preference's attribute and value, by the constant", () => {
-    expect(SHEET).toContain(`[${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]`);
   });
 
   it("finds nothing for a marker that was never written", () => {

@@ -81,10 +81,17 @@ afterEach(() => {
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
-function Harness({ layout = null }: { layout?: string | null }): JSX.Element {
+function Harness({
+  layout = null,
+  siteDefault,
+}: {
+  layout?: string | null;
+  siteDefault?: boolean;
+}): JSX.Element {
   return usePublishOffer({
     documents: () => [DOCUMENT],
     layout,
+    ...(siteDefault === undefined ? {} : { siteDefault }),
     subject: "page",
   });
 }
@@ -127,6 +134,17 @@ describe("before a publish", () => {
     expect(routes).toHaveBeenCalledWith("/publish-readiness", {
       documents: [DOCUMENT],
       layout: null,
+    });
+  });
+
+  it("asks about the site's default Layout for a page that names none", async () => {
+    server({ dependencies: [], missing: 0 });
+    render(<Harness siteDefault />);
+    await publish();
+    expect(routes).toHaveBeenCalledWith("/publish-readiness", {
+      documents: [DOCUMENT],
+      layout: null,
+      siteDefault: true,
     });
   });
 

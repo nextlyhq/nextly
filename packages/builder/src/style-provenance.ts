@@ -395,6 +395,31 @@ export function styleProvenance(query: StyleProvenanceQuery): StyleProvenance {
 }
 
 /**
+ * What a control would show without the node's own value at the position
+ * being edited: the same ranking, over the trace with that one declaration
+ * taken away.
+ *
+ * The question "does this value cover a shared style's?" asks, at the tier
+ * being edited and not only at its exact address: a value the node sets at
+ * a narrow breakpoint, or in an interaction state, over the style's wider or
+ * base-state value covers it all the same. Answered by `styleProvenance`
+ * rather than by looking the style's own value up, so the tier order, both
+ * breakpoint axes and the state ranking are settled in one place.
+ *
+ * Pass the breakpoints that match AT the edited tier (`liveBreakpointsFor`),
+ * since the answer is about the position the control writes, not the width
+ * the canvas happens to show.
+ */
+export function provenanceBeneath(
+  query: StyleProvenanceQuery
+): StyleProvenance {
+  return styleProvenance({
+    ...query,
+    trace: query.trace.filter(entry => !isAuthoredHere(entry, query)),
+  });
+}
+
+/**
  * The CSS properties an element takes from its parent when nothing sets them
  * on it — those CSS defines as inherited, whether or not the catalog writes
  * each today, so a property added to the catalog is answered the day it lands.

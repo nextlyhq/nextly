@@ -26,6 +26,12 @@ export interface PublishReadinessRequest {
   readonly documents: readonly unknown[];
   /** The Layout the page names, when it names one. */
   readonly layout?: string | null;
+  /**
+   * True for a page that names no Layout and still draws its header and
+   * footer: it is drawn inside the site's default Layout, which the server
+   * reads, so its header and footer components are asked about.
+   */
+  readonly siteDefault?: boolean;
 }
 
 /** The kinds of document a page depends on. */

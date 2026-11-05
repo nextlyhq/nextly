@@ -39,8 +39,7 @@ import * as React from "react";
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
-  isOutermostForAddress,
-  nodeAddressOf,
+  outermostElementsOf,
 } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
@@ -55,7 +54,6 @@ import {
 } from "./geometry-dom";
 import { blockNameOf, type ComponentTitleOf } from "./layers";
 import { startWords } from "./page-start-words";
-import { nodeElements } from "./rendered-nodes";
 import { unionRect } from "./toolbar-actions";
 
 /** @experimental */
@@ -141,17 +139,15 @@ function measureGaps(
    * Outermost only, as the drag measures a node, so an element nested inside
    * the same placement is not counted twice.
    */
-  const top = new Set(document.nodes.map(node => node.id));
   const parts = new Map<string, Rect[]>();
-  for (const element of nodeElements(root)) {
-    const id = nodeAddressOf(element);
-    if (id === null || !top.has(id)) continue;
-    if (!isOutermostForAddress(element, id, root)) continue;
-    const rects = parts.get(id) ?? [];
-    for (const drawn of drawnBoxes(element)) {
-      rects.push(space.place(canvasContentRect(drawn, root)));
-    }
-    parts.set(id, rects);
+  const top = new Set(document.nodes.map(node => node.id));
+  for (const [id, elements] of outermostElementsOf(root, top)) {
+    parts.set(
+      id,
+      elements
+        .flatMap(drawnBoxes)
+        .map(drawn => space.place(canvasContentRect(drawn, root)))
+    );
   }
   const drawn = document.nodes.flatMap(node => {
     const rect = unionRect(parts.get(node.id) ?? []);

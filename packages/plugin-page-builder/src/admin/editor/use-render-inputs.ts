@@ -22,6 +22,7 @@ import {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
+  fallbackBreakpoint,
   registrySlotSource,
   type SlotSource,
 } from "@nextlyhq/builder";
@@ -40,6 +41,7 @@ import {
 } from "@nextlyhq/builder/shell";
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -142,6 +144,7 @@ export function useSiteStyleInputs(
     unreadableFonts: unreadableStoredFonts,
     pending: siteStylePending,
     error: siteStyleError,
+    current: siteStyleCurrent,
   } = useSiteStyle(configSiteStyle);
 
   // The site-style half of the class surface. The node half stays with the
@@ -214,6 +217,7 @@ export function useSiteStyleInputs(
     unreadableStoredFonts,
     siteStylePending,
     siteStyleError,
+    siteStyleCurrent,
     classes,
     remotePatterns,
     stylePolicy,
@@ -229,6 +233,8 @@ export type SiteStyleInputs = {
   unreadableStoredFonts: readonly string[];
   siteStylePending: boolean;
   siteStyleError: Error | null;
+  /** Whether the stored style in hand is the site as it is now. */
+  siteStyleCurrent: boolean;
   classes: ClassSurface;
   remotePatterns: readonly RemotePattern[] | undefined;
   stylePolicy: HostFetchPolicy;
@@ -387,7 +393,9 @@ type CanvasViewport = {
 /** The device being edited, the width it is shown at, and the zoom. */
 function useCanvasViewport({
   canvasRender,
-}: Pick<CanvasRender, "canvasRender">): CanvasViewport {
+  siteStyleCurrent,
+}: Pick<CanvasRender, "canvasRender"> &
+  Pick<SiteStyleInputs, "siteStyleCurrent">): CanvasViewport {
   const breakpoints = canvasRender.styleContext.breakpoints;
   /*
    * The device the SHELL holds, mirrored here to draw the canvas with it.
@@ -415,10 +423,37 @@ function useCanvasViewport({
   }, []);
 
   /*
+   * The device to move to when the site removes the one being edited: the
+   * next wider breakpoint that remains, else the base. Sent to the shell as a
+   * choice, so it stores and shows that device as the author's own.
+   *
+   * Compared against the last set a CURRENT stored answer gave: one read
+   * since the editor opened, or still fresh in the shared cache. Before the
+   * first, the set in hand is the host's config defaults, or a cached answer
+   * older than a removal made while the author was away, so a device restored
+   * on load that the site no longer has goes to the base, through
+   * `editingBreakpointOf` below, whichever read is the one that answers. A
+   * later read that fails keeps the last current set, so a removal a retry
+   * then confirms still moves to the next wider breakpoint.
+   */
+  const previousBreakpoints = useRef<BreakpointSet | undefined>(undefined);
+  useEffect(() => {
+    if (!siteStyleCurrent) return;
+    const before = previousBreakpoints.current;
+    previousBreakpoints.current = breakpoints;
+    if (before === undefined || before === breakpoints) return;
+    // Only a device that WAS being edited and is gone now moves.
+    if (editingBreakpointOf(before, chosenDevice) !== chosenDevice) return;
+    if (editingBreakpointOf(breakpoints, chosenDevice) === chosenDevice) return;
+    chooseDevice(fallbackBreakpoint(before, breakpoints, chosenDevice));
+  }, [breakpoints, siteStyleCurrent, chosenDevice, chooseDevice]);
+
+  /*
    * Which breakpoint an edit lands in: the device the author chose, and
    * nothing else — never the room the editor has, which narrows as panels
    * open. A device the site no longer defines resolves to the base
-   * breakpoint, so an edit is never stored under a breakpoint nothing draws.
+   * breakpoint until the move above arrives, so an edit is never stored under
+   * a breakpoint nothing draws.
    */
   const editedBreakpoint = editingBreakpointOf(breakpoints, chosenDevice);
   /*
@@ -778,7 +813,7 @@ export function useCanvasInputs(
   style: SiteStyleInputs
 ): CanvasInputs {
   const render = useCanvasRender({ ...mount, ...style });
-  const viewport = useCanvasViewport(render);
+  const viewport = useCanvasViewport({ ...render, ...style });
   const styleState = useStyleState(mount.editor);
   const wiring = useCanvasWiring(mount);
   const readings = useStyleReadings({

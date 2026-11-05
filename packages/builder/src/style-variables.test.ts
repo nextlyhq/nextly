@@ -11,6 +11,7 @@ import {
   STYLE_CATALOG,
   type SiteTokenSet,
   type StyleLeaf,
+  type UnionShape,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
@@ -299,10 +300,25 @@ describe("a folded field judges each variable by the form it fits", () => {
   // The two forms of each folded property, as the catalog declares them.
   const arms = (property: string): StyleLeaf[] =>
     shapeOf(property).of as StyleLeaf[];
+  // The catalog's union for a folded property, as the inspector passes it.
+  const unionOf = (property: string): UnionShape => {
+    const shape = STYLE_CATALOG.find(
+      entry => entry.property === property
+    )?.shape;
+    if (shape?.kind !== "union") throw new Error(`${property} is no union`);
+    return shape;
+  };
   const VALUES: SiteTokenSet = {
     tokens: [
       { name: "weight.heavy", kind: "number", values: { light: "700" } },
       { name: "weight.over", kind: "number", values: { light: "1500" } },
+      { name: "weight.bold", kind: "fontWeight", values: { light: "bold" } },
+      {
+        name: "weight.lighter",
+        kind: "fontWeight",
+        values: { light: "lighter" },
+      },
+      { name: "weight.wrong", kind: "fontWeight", values: { light: "heavy" } },
       {
         name: "line-height.loose",
         kind: "dimension",
@@ -323,6 +339,18 @@ describe("a folded field judges each variable by the form it fits", () => {
     const weight = foldedLeaf(arms("fontWeight"));
     expect(offered(weight)).toContain("weight.heavy");
     expect(offered(weight)).not.toContain("weight.over");
+  });
+
+  it("offers a font weight variable holding a keyword, by the form its value takes", () => {
+    // A font weight variable may hold "bold" as well as 700: the form that
+    // judges it is the one the engine picks for its value, not one guessed
+    // from its kind, which held every weight to the number form.
+    const weight = foldedLeaf(arms("fontWeight"), unionOf("fontWeight"));
+    expect(offered(weight)).toContain("weight.bold");
+    expect(offered(weight)).toContain("weight.lighter");
+    expect(offered(weight)).toContain("weight.heavy");
+    // A keyword neither form takes is still refused.
+    expect(offered(weight)).not.toContain("weight.wrong");
   });
 
   it("holds a line height's length variable to the length form", () => {
