@@ -26,6 +26,11 @@ vi.mock("@admin/services/versionApi", () => ({
 
 /** The account signed in to this tab, which a test may change. */
 const signedIn = vi.hoisted(() => ({ id: "author-1" as string | null }));
+// The site's default language, which the editor spells as no language on
+// its canonical address and as "en" under `?locale=en`.
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({ defaultLocale: "en", locales: [], enabled: true }),
+}));
 vi.mock("@admin/hooks/useCurrentUserId", () => ({
   useCurrentUserId: () => signedIn.id,
 }));
@@ -261,6 +266,33 @@ describe("useAutosaveRecovery", () => {
     expect(same.result.current.recovery.offer?.snapshot).toMatchObject({
       title: "French work",
     });
+  });
+
+  // The default language has two spellings, no language on the canonical
+  // address and its code under `?locale=en`, and a point recorded under one
+  // is offered under the other. The plausible broken implementation compares
+  // the spellings and withholds the work.
+  it("offers a point recorded in the default language under either spelling of it", async () => {
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, title: "default work" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: "en",
+    });
+    const canonical = renderRecovery(SCOPE, STORED, null);
+    await waitFor(() =>
+      expect(canonical.result.current.recovery.offer).not.toBeNull()
+    );
+    canonical.unmount();
+
+    getSpy.mockResolvedValue({
+      snapshot: { ...STORED, title: "default work" },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+      locale: null,
+    });
+    const named = renderRecovery(SCOPE, STORED, "en");
+    await waitFor(() =>
+      expect(named.result.current.recovery.offer).not.toBeNull()
+    );
   });
 
   it("offers a point in another language stored in the same second with the same values, after one was put off", async () => {

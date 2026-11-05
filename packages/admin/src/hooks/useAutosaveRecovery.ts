@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   versionApi,
@@ -141,9 +142,12 @@ function usePutOff(
 function holdsStored(
   point: AutosaveDetail,
   stored: unknown,
-  locale: string | null
+  locale: string | null,
+  defaultLocale: string | null
 ): boolean {
-  if ((point.locale ?? null) !== locale) return false;
+  if ((point.locale ?? defaultLocale) !== (locale ?? defaultLocale)) {
+    return false;
+  }
   return canonicalJson(point.snapshot) === canonicalJson(stored);
 }
 
@@ -386,6 +390,9 @@ export function useAutosaveRecovery({
     () => ["autosave-recovery", scope?.kind, scope?.slug, scopeId],
     [scope?.kind, scope?.slug, scopeId]
   );
+  // Which language "no language" is, so the two spellings of the default
+  // language name one language.
+  const { defaultLocale } = useLocalization();
   const [dismissed, setDismissed] = useState(false);
   // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
   // document they were given for: an editor that moves to another document
@@ -444,8 +451,15 @@ export function useAutosaveRecovery({
     if (dismissed || !data) return null;
     // A point belongs to the language it was recorded in: restored into
     // another language's form it would put one language's text in another's
-    // fields, so it is offered only where it was typed.
-    if ((data.locale ?? null) !== locale) return null;
+    // fields, so it is offered only where it was typed. The default language
+    // has two spellings, no language on the editor's canonical address and
+    // its code under `?locale=`, so both sides are read as the default first.
+    if (
+      (data.locale ?? defaultLocale ?? null) !==
+      (locale ?? defaultLocale ?? null)
+    ) {
+      return null;
+    }
     const savedAt = new Date(data.updatedAt);
     if (Number.isNaN(savedAt.getTime())) return null;
     // Put off in this tab already: see `dismiss`.
@@ -453,7 +467,7 @@ export function useAutosaveRecovery({
     // A recovery point holding what the document already stores is no unsaved
     // work: an author who undid back to the saved document left one behind,
     // and offering it back on every load restores nothing.
-    if (holdsStored(data, stored, locale)) return null;
+    if (holdsStored(data, stored, locale, defaultLocale ?? null)) return null;
     return {
       savedAt,
       snapshot: data.snapshot,
@@ -465,7 +479,7 @@ export function useAutosaveRecovery({
       // and it is the only copy of that work.
       olderVersion: data.superseded !== undefined,
     };
-  }, [dismissed, data, stored, locale, isPutOff]);
+  }, [dismissed, data, stored, locale, defaultLocale, isPutOff]);
 
   const { restore, take } = useRestoreOffer({
     offer,

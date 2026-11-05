@@ -162,5 +162,46 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await repo.findAutosave(ref, AUTHOR.id)).toBeUndefined();
     });
+
+    // A discard that found no pending change threw nothing away, so the
+    // author's unsaved work, the only copy of it, stays to be offered back.
+    it("keeps the author's recovery point when the discard removes no pending change", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: NOTES, overrideAccess: true, locale: "en" },
+        { body: "Hello", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const repo = new VersionsRepository(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: NOTES,
+        entryId: id,
+      };
+      await repo.upsertAutosave({
+        ref,
+        status: "draft",
+        snapshot: { body: "typed, never saved" },
+        locale: "en",
+        createdBy: AUTHOR.id,
+      });
+
+      // Answered or refused as having nothing to discard, either way the
+      // recovery point is what matters here.
+      await entries
+        .discardWorkingDraft({
+          collectionName: NOTES,
+          entryId: id,
+          locale: "en",
+          user: AUTHOR,
+        })
+        .catch(() => undefined);
+
+      expect((await repo.findAutosave(ref, AUTHOR.id))?.locale).toBe("en");
+    });
   }
 );

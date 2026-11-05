@@ -1003,13 +1003,17 @@ export class SingleMutationService extends BaseService {
         );
         // The author's unsaved work recorded in the discarded language goes
         // with it; their work recorded in another language stays.
-        await forgetRecoveryPointIn(tx, {
-          ref: discardedRef,
-          author: params.user?.id,
-          slot: draftLocale,
-          documentLocalized: singleMeta.localized === true,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        });
+        // Only where a pending change was removed: a discard that found none
+        // threw nothing away, and the point is then the only copy of the work.
+        if (removed > 0) {
+          await forgetRecoveryPointIn(tx, {
+            ref: discardedRef,
+            author: params.user?.id,
+            slot: draftLocale,
+            documentLocalized: singleMeta.localized === true,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          });
+        }
         // In the Single's history only when there was a draft to discard.
         if (removed > 0) {
           // A reader of the pending change now sees the live document, so the
