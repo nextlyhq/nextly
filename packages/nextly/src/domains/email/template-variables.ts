@@ -12,23 +12,11 @@
  */
 import { z } from "zod";
 
-import type {
-  EmailTemplateVariable,
-  EmailTemplateVariableField,
-  EmailTemplateVariableType,
+import {
+  EMAIL_TEMPLATE_VARIABLE_TYPES,
+  type EmailTemplateVariable,
+  type EmailTemplateVariableField,
 } from "../../schemas/email-templates/types";
-
-/** The kinds of value a declaration may name. */
-const TEMPLATE_VARIABLE_TYPES = [
-  "text",
-  "number",
-  "date",
-  "money",
-  "link",
-  "boolean",
-  "list",
-  "object",
-] as const satisfies readonly EmailTemplateVariableType[];
 
 /** The types whose declaration may carry `fields`. */
 const WITH_FIELDS: ReadonlySet<string> = new Set(["list", "object"]);
@@ -50,9 +38,10 @@ const fieldShape = {
   // Optional, as a plugin may declare it: a stored declaration without one
   // still saves.
   description: z.string().max(1000).optional(),
-  type: z.enum(TEMPLATE_VARIABLE_TYPES).optional(),
+  type: z.enum(EMAIL_TEMPLATE_VARIABLE_TYPES).optional(),
   label: z.string().max(200).optional(),
-  example: z.unknown().optional(),
+  // Stored in a JSON column and sent as JSON, so only a JSON value.
+  example: z.json().optional(),
 };
 
 const fieldSchema: z.ZodType<EmailTemplateVariableField> = z.lazy(() =>
@@ -122,4 +111,34 @@ export function withOwnerPresentation(
     }
     return { ...variable, ...presentation };
   });
+}
+
+/**
+ * A plugin's declarations as core keeps them: as a save would accept them,
+ * or, where they don't parse, each one's name, description and whether it is
+ * required, as before declarations had types. Never refused: a plugin's
+ * template keeps sending, and `problem` says why its presentation was left
+ * out.
+ */
+export function pluginDeclarations(variables: unknown): {
+  variables: EmailTemplateVariable[] | null;
+  problem: string | null;
+} {
+  if (variables === undefined || variables === null) {
+    return { variables: null, problem: null };
+  }
+  const parsed = templateVariablesSchema.safeParse(variables);
+  if (parsed.success) {
+    return {
+      variables: parsed.data as EmailTemplateVariable[] | null,
+      problem: null,
+    };
+  }
+  const issue = parsed.error.issues[0];
+  return {
+    variables: declarationSubstance(variables) as EmailTemplateVariable[],
+    problem: issue
+      ? `${issue.path.join(".") || "variables"}: ${issue.message}`
+      : "the declarations don't parse",
+  };
 }
