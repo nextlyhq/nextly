@@ -13,6 +13,11 @@
  * 4. The saved list stores the shape the engine reads.
  * 5. Published, the page lists exactly those entries to a visitor who is
  *    not signed in: a draft entry never, and the sort and the limit hold.
+ *
+ * Under Number of items the selected list says how many entries match and
+ * how many show, from one count read per query, made only once the list is
+ * selected and never on the published page. A second case presses a
+ * fallen-back sort's "Choose a field" from the keyboard.
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -89,6 +94,22 @@ async function storedList(
   return (list?.props ?? {}) as Record<string, unknown>;
 }
 
+/** The count reads the editor makes: one row of ids, the total the answer. */
+function countReads(page: Page): unknown[] {
+  const reads: unknown[] = [];
+  page.on("request", request => {
+    if (!request.url().includes("/list-entries")) return;
+    const body = request.postDataJSON() as {
+      query?: { select?: unknown; limit?: unknown };
+    } | null;
+    const query = body?.query;
+    if (query?.limit === 1 && JSON.stringify(query.select) === '["id"]') {
+      reads.push(query);
+    }
+  });
+  return reads;
+}
+
 /** The entries' titles the canvas draws, in order. */
 async function canvasTitles(page: Page): Promise<string[]> {
   const list = (await canvasRoot(page)).locator(`[data-nx-node="${LIST}"]`);
@@ -121,16 +142,23 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
     content: pageDocument(),
   });
 
+  const counts = countReads(page);
   await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
+  // Drawn but not selected, the list is counted by no one.
+  await expect
+    .poll(() => canvasTitles(page), { timeout: 30_000 })
+    .not.toEqual([]);
+  expect(counts).toEqual([]);
   await openLayers(page);
   await layerRow(page, LIST).click();
   const inspector = page.locator(".nx-inspector");
   await expect(
-    inspector.getByRole("button", { name: "Source Bound entries" })
+    inspector.getByRole("button", { name: "Source Blog posts" })
   ).toBeVisible();
+  await expect(inspector.getByText(/match(es)?, so \d+ shows?\./)).toBeVisible();
 
   // 1. A filter: only the fields visitors can see are offered.
   await inspector.getByRole("button", { name: "Add filter" }).click();
@@ -172,6 +200,19 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
     .toEqual([`${mark} Birch`, `${mark} Cedar`]);
+  // Three published entries carry the mark; two show.
+  await expect(
+    inspector.getByText("3 entries match, so 2 show.", { exact: true })
+  ).toBeVisible();
+  // One count read per query: the list unfiltered, then filtered. The sort
+  // and the number of items changed no count.
+  expect(counts).toHaveLength(2);
+  expect(counts[1]).toEqual({
+    collection: "bound-entries",
+    filters: [{ field: "title", op: "contains", value: mark }],
+    limit: 1,
+    select: ["id"],
+  });
 
   // 3. The empty state, on request, tagged, and the entries again after.
   await inspector.getByRole("radio", { name: "When empty" }).click();
@@ -222,10 +263,82 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
       `${mark} Birch`,
       `${mark} Cedar`,
     ]);
-    // An author's note never reaches a visitor.
+    // An author's note, and the editor's count, never reach a visitor.
     await expect(shown.locator("[data-nx-list-diagnostic]")).toHaveCount(0);
+    await expect(shown.getByText(/match(es)?, so \d+ shows?/)).toHaveCount(0);
     await expect(shown.locator("[data-nx-list-shows]")).toHaveCount(0);
   } finally {
     await visitor.close();
   }
+});
+
+test("a fallen-back sort's Choose a field takes the author to the sort, from the keyboard", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await gotoAdmin(page, "/");
+  const document = pageDocument();
+  const [first] = document.nodes as { props: Record<string, unknown> }[];
+  if (first !== undefined) first.props = { ...first.props, sort: "-title" };
+  const pageId = await created(page.request, PAGES, {
+    title: `Sort fallback ${Date.now().toString(36)}`,
+    slug: `sort-fallback-${Date.now().toString(36)}`,
+    status: "draft",
+    content: document,
+  });
+  // A sort the reader refuses arises only once a field is removed from the
+  // schema or hidden from visitors after the list was saved, which a test
+  // cannot do to a running site: the reader's refusal is stood in for, and
+  // the read in id order that follows it goes through.
+  await page.route("**/list-entries", async route => {
+    try {
+      const body = route.request().postDataJSON() as {
+        query?: { sort?: unknown };
+      } | null;
+      const sort = body?.query?.sort;
+      if (typeof sort === "string" && sort !== "") {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: {
+              code: "VALIDATION_ERROR",
+              message: "Validation failed.",
+              requestId: "stand-in",
+              data: {
+                errors: [
+                  {
+                    path: "sort.title",
+                    code: "FIELD_NOT_SORTABLE",
+                    message: "Not sortable.",
+                  },
+                ],
+              },
+            },
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    } catch {
+      await route.continue().catch(() => undefined);
+    }
+  });
+  await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 60_000,
+  });
+  const canvas = await canvasRoot(page);
+  const note = canvas.locator('[data-nx-list-diagnostic="sort-fallback"]');
+  await expect(note).toBeVisible({ timeout: 30_000 });
+  // One action, a button in the note, reached and pressed from the keyboard.
+  const choose = note.getByRole("button", { name: "Choose a field" });
+  await expect(note.getByRole("button")).toHaveCount(1);
+  await choose.focus();
+  await choose.press("Enter");
+  const inspector = page.locator(".nx-inspector");
+  await expect(
+    inspector.getByRole("button", { name: /^Sort 1 of 1, by/ })
+  ).toBeFocused();
+  await page.unroute("**/list-entries");
 });
