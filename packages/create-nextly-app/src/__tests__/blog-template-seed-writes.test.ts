@@ -5,8 +5,8 @@
  *
  * A post that already exists is patched from the lookup that found it, so its
  * version goes with the patch. The Singles take the demo copy whatever they
- * hold. A write the server refuses lands in the seed's warnings, with its
- * reason, so a seed that left a Single unwritten never reads as clean.
+ * hold. A Single write the server refuses fails the seed, naming the Single,
+ * so a seed that left one unwritten is recorded as failed, never as done.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -45,8 +45,7 @@ describe("the blog seed's updates", () => {
 
   it("writes each Single's demo copy whatever it holds", async () => {
     const updateSingle = vi.fn(async () => ({}));
-    const warnings: string[] = [];
-    await seedSingles({ updateSingle } as never, seedData, warnings);
+    await seedSingles({ updateSingle } as never, seedData);
 
     expect(
       updateSingle.mock.calls.map(([args]) => (args as { slug: string }).slug)
@@ -56,25 +55,20 @@ describe("the blog seed's updates", () => {
         _overwrite: true,
       });
     }
-    expect(warnings).toEqual([]);
   });
 
-  it("reports a Single it could not write as a warning, with the reason", async () => {
+  it("fails the seed on a Single it could not write, naming it and the reason", async () => {
     const updateSingle = vi.fn(async ({ slug }: { slug: string }) => {
       if (slug === "navigation") {
         throw new Error("This update must say which version it changes.");
       }
       return {};
     });
-    const warnings: string[] = [];
-    await seedSingles({ updateSingle } as never, seedData, warnings);
 
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("navigation");
-    expect(warnings[0]).toContain(
-      "This update must say which version it changes."
+    await expect(
+      seedSingles({ updateSingle } as never, seedData)
+    ).rejects.toThrow(
+      "The seed could not write the navigation Single: This update must say which version it changes."
     );
-    // The others are still written.
-    expect(updateSingle).toHaveBeenCalledTimes(3);
   });
 });

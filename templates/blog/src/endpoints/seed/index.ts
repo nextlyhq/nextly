@@ -555,20 +555,17 @@ export async function patchPostTaxonomy(
 /**
  * Write the demo content of the site's Singles: settings, navigation and the
  * homepage. Seed content is set whatever the Singles hold, so each write
- * says so with `_overwrite`. A write that fails is reported in `warnings`,
- * with its reason, rather than stopping the seed: a Single may not exist on
- * every install path, and the site is still usable without its demo copy.
+ * says so with `_overwrite`.
+ *
+ * A write that fails fails the seed, naming the Single: a site without its
+ * Singles' demo copy is not seeded, and the load is recorded as failed so it
+ * can be run again. Running it again is safe, since each write overwrites.
  */
 export async function seedSingles(
   nextly: Pick<Nextly, "updateSingle">,
-  seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">,
-  warnings: string[]
+  seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">
 ): Promise<void> {
-  const write = async (
-    slug: string,
-    data: Record<string, unknown>,
-    remedy: string
-  ) => {
+  const write = async (slug: string, data: Record<string, unknown>) => {
     console.log(`  Updating ${slug}...`);
     try {
       await nextly.updateSingle({
@@ -577,34 +574,20 @@ export async function seedSingles(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      warnings.push(`${slug}: ${msg} (${remedy})`);
+      throw new Error(`The seed could not write the ${slug} Single: ${msg}`, {
+        cause: err,
+      });
     }
   };
-  await write(
-    "site-settings",
-    {
-      title: seedData.siteSettings.siteName,
-      siteName: seedData.siteSettings.siteName,
-      tagline: seedData.siteSettings.tagline,
-      siteDescription: seedData.siteSettings.siteDescription,
-      social: seedData.siteSettings.social,
-    },
-    "set it up in the admin"
-  );
-  if (seedData.navigation) {
-    await write(
-      "navigation",
-      seedData.navigation,
-      "edit it in the admin under Singles / Navigation"
-    );
-  }
-  if (seedData.homepage) {
-    await write(
-      "homepage",
-      seedData.homepage,
-      "edit it in the admin under Singles / Homepage"
-    );
-  }
+  await write("site-settings", {
+    title: seedData.siteSettings.siteName,
+    siteName: seedData.siteSettings.siteName,
+    tagline: seedData.siteSettings.tagline,
+    siteDescription: seedData.siteSettings.siteDescription,
+    social: seedData.siteSettings.social,
+  });
+  if (seedData.navigation) await write("navigation", seedData.navigation);
+  if (seedData.homepage) await write("homepage", seedData.homepage);
 }
 
 export async function seed({
@@ -884,7 +867,7 @@ export async function seed({
     }
   }
 
-  await seedSingles(nextly, seedData, warnings);
+  await seedSingles(nextly, seedData);
 
   // Newsletter form: seed via the form-builder plugin. The frontend
   // NewsletterCta component submits to `form-submissions` referencing
