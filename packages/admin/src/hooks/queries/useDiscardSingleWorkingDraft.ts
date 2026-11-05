@@ -22,18 +22,11 @@ import {
 
 import { toast } from "@admin/components/ui";
 import {
-  DISCARD_CHANGED_SINCE,
-  staleVersionOf,
-} from "@admin/lib/document-version";
-import {
   versionApi,
   type DiscardWorkingDraftResponse,
 } from "@admin/services/versionApi";
 
-import {
-  refreshRemovedFromCodeSchema,
-  removedFromCodeRefusal,
-} from "./removed-from-code-refusal";
+import { tellDiscardRefused } from "./useDiscardWorkingDraft";
 import { singleDocumentKeys } from "./useSingles";
 
 export interface UseDiscardSingleWorkingDraftOptions {
@@ -124,24 +117,12 @@ export function useDiscardSingleWorkingDraft({
     },
 
     onError: (error: Error) => {
-      refreshRemovedFromCodeSchema(queryClient, error);
-      // Refused because the document changed since: it is read again, so the
-      // editor shows the version a second discard starts from.
-      const stale = staleVersionOf(error) !== undefined;
-      if (stale)
-        void queryClient.invalidateQueries({
-          queryKey: singleDocumentKeys.detail(slug),
-        });
-      if (showToast) {
-        // The refusal for an entity removed from code is a whole sentence of
-        // its own, so nothing goes in front of it.
-        toast.error(
-          removedFromCodeRefusal(error) ??
-            (stale
-              ? DISCARD_CHANGED_SINCE
-              : `Failed to discard working draft: ${error.message}`)
-        );
-      }
+      tellDiscardRefused(
+        queryClient,
+        error,
+        singleDocumentKeys.detail(slug),
+        showToast
+      );
       onError?.(error);
     },
   });
