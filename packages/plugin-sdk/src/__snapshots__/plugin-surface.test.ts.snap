@@ -514,6 +514,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginRoutePermissionScope (type)",
   "PluginRoutePrincipal (type)",
   "PluginRouteRateLimit (type)",
+  "PluginSchedule (type)",
   "PluginSecurityApi (type)",
   "PluginSettingsApi (type)",
   "PluginSingleRecord (type)",
