@@ -238,7 +238,7 @@ async function withoutHiddenAt(
   if (level >= MAX_RELATED_DEPTH) return stripped;
   const fields = await expandedFields(source);
   if (fields !== undefined) {
-    await stripRelated(stripped, fields as readonly WalkedField[], level);
+    await stripRelated(stripped, fields, level);
   }
   return stripped;
 }
