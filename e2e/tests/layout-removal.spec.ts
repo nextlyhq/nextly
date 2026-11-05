@@ -1,6 +1,8 @@
 /**
  * "Remove Layout…" on a Layout's edit screen: the dialog's three states, and
- * that it is the one way a Layout is taken down.
+ * that it is the one way a Layout is taken down. With pages in the way it
+ * offers only to move them to the site default first; the move itself is the
+ * unit and integration suites'.
  *
  * Seeded through the admin API under unique names: a Layout no page uses, one
  * a page names, and the site's default as it stands. Nothing here changes the
@@ -115,7 +117,7 @@ test("refuses the site's default, saying why, with nothing to confirm", async ({
   await expect(dialog).toBeHidden();
 });
 
-test("lists the pages that use a Layout, each opening the page, and offers no removal", async ({
+test("lists the pages that use a Layout, each opening the page, and offers only to move them first", async ({
   page,
 }) => {
   const { used, pageId } = await seed(page);
@@ -124,8 +126,11 @@ test("lists the pages that use a Layout, each opening the page, and offers no re
 
   await expect(
     dialog.getByText(
-      "These pages use this Layout. Choose another Layout for them first."
+      /^1 page uses this Layout\. Move it to the site default, .+, and then delete or unpublish it, or close and choose another Layout for it yourself\.$/
     )
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "Move 1 page, then delete" })
   ).toBeVisible();
   const link = dialog.getByRole("link", { name: PAGE_TITLE });
   await expect(link).toHaveAttribute(
