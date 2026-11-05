@@ -16,7 +16,9 @@
  *   refuses (a field since removed, one visitors may not read) is dropped,
  *   and the list is read once more in id order and reported.
  * - **A related source** reads the ids the page's entry or the outer item
- *   holds, with an `in` row. With no sort, the entries keep the order the
+ *   holds as a visitor reads them, with an `in` row: the entry is read again
+ *   through the list's source, and a relation the public may not read lists
+ *   nothing. With no sort, the entries keep the order the
  *   relation stores them in, which is reordered here because a database
  *   returns an `in` read in its own order; filters, the offset and the limit
  *   still apply, in that order. A sort, when one is set, wins.
@@ -239,17 +241,8 @@ function idOf(value: unknown): string | number | undefined {
   return undefined;
 }
 
-/**
- * The ids a related source holds, in its stored order, each once; `undefined`
- * when there is no entry or outer item to read them from.
- */
-function relatedIds(
-  relation: ListRelation,
-  ctx: PageContext
-): (string | number)[] | undefined {
-  const holder = relation.of === "entry" ? ctx.entry : ctx.item;
-  if (holder === null || holder === undefined) return undefined;
-  const stored = holder[relation.field];
+/** The ids a stored relation value names, in its stored order, each once. */
+function idsIn(stored: unknown): (string | number)[] {
   if (!Array.isArray(stored)) return [];
   const seen = new Set<string>();
   const ids: (string | number)[] = [];
@@ -260,6 +253,95 @@ function relatedIds(
     ids.push(id);
   }
   return ids;
+}
+
+/** A related source's ids as a visitor reads them, or why there are none. */
+type RelatedIds =
+  | { readonly ids: readonly (string | number)[] }
+  | { readonly problem: string };
+
+/**
+ * The ids a related source holds, as the public reads its holder.
+ *
+ * The page's entry is read again, by id and with only the relation field,
+ * through the list's own source: the route's `entry` may hold more than a
+ * visitor may read, and a relation hidden from the public must not decide
+ * which entries show, or in what order. The read is claimed from the page's
+ * allowance like any other. A field missing from the public's row is one
+ * visitors may not read, which lists nothing.
+ *
+ * The outer item is not read again: the outer list read its rows through this
+ * same source with no selection, so each already holds every field the public
+ * may read and nothing else, and a second read would ask the same question.
+ */
+async function relatedIds(
+  relation: ListRelation,
+  ctx: PageContext,
+  reads: ListReads
+): Promise<RelatedIds> {
+  if (relation.of === "item") {
+    return ctx.item === undefined
+      ? {
+          problem:
+            "This list is not inside another list, so it has no item whose related entries to list.",
+        }
+      : { ids: idsIn(ctx.item[relation.field]) };
+  }
+  return await entryRelatedIds(relation.field, ctx, reads);
+}
+
+/**
+ * The ids the page's entry holds in `field`, read again as the public reads
+ * the entry: by id, with only that field, claimed from the page's allowance.
+ */
+async function entryRelatedIds(
+  field: string,
+  ctx: PageContext,
+  reads: ListReads
+): Promise<RelatedIds> {
+  if (ctx.entry === null) {
+    return {
+      problem:
+        "This page shows no entry, so it has no related entries to list.",
+    };
+  }
+  const id = ctx.entry.id;
+  const collection = ctx.entryCollection;
+  if (
+    collection === undefined ||
+    (typeof id !== "string" && typeof id !== "number")
+  ) {
+    return {
+      problem:
+        "This page's entry is not one visitors read from a collection, so it has no related entries to list.",
+    };
+  }
+  if (!reads.claim()) {
+    return {
+      problem:
+        "This page has used up the reads it may make, so this list's related entries were not read.",
+    };
+  }
+  const [row] = await reads.find({
+    collection,
+    filters: [{ field: "id", op: "equals", value: id }],
+    select: [field],
+    limit: 1,
+    ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
+  });
+  if (row === undefined) {
+    return {
+      problem:
+        "Visitors can't read this page's entry, so it has no related entries to list.",
+    };
+  }
+  // The reader leaves out a field the public may not read.
+  if (!(field in row)) {
+    return {
+      problem: `Visitors can't read "${field}" on ${collection}, so this list has no related entries to show them.`,
+    };
+  }
+  return { ids: idsIn(row[field]) };
 }
 
 /** Whether a read failed because the reader refused it, before or as it read. */
@@ -435,20 +517,6 @@ export async function readList(
   if (blocking !== undefined) {
     return { items: [], failed: true, diagnostic: failure(blocking) };
   }
-  if (
-    query.relation !== undefined &&
-    relatedIds(query.relation, ctx) === undefined
-  ) {
-    return {
-      items: [],
-      failed: true,
-      diagnostic: failure(
-        query.relation.of === "entry"
-          ? "This page shows no entry, so it has no related entries to list."
-          : "This list is not inside another list, so it has no item whose related entries to list."
-      ),
-    };
-  }
   const sortProblem = problems.find(problem => problem.prop === "sort");
   const sort = sortProblem === undefined ? sortTexts(query) : [];
   const limit = safeLimit((props as { limit?: unknown } | null)?.limit);
@@ -462,7 +530,16 @@ export async function readList(
     ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
   };
   try {
-    const read = await readSource(query, base, sort, ctx, reads, {
+    // A related source's ids first, as a visitor reads them; with none to
+    // read, the list draws its empty state and an author is told why.
+    const related =
+      query.relation === undefined
+        ? undefined
+        : await relatedIds(query.relation, ctx, reads);
+    if (related !== undefined && "problem" in related) {
+      return { items: [], failed: true, diagnostic: failure(related.problem) };
+    }
+    const read = await readSource(base, sort, related?.ids, reads, {
       offset,
       limit,
     });
@@ -481,22 +558,23 @@ export async function readList(
   }
 }
 
-/** Read from the list's source: its collection, or a relation's ids. */
+/**
+ * Read from the list's source: its collection, or, when `ids` is given, the
+ * related entries those ids name.
+ */
 async function readSource(
-  query: ListQuery,
   base: BlocksQuery,
   sort: readonly string[],
-  ctx: PageContext,
+  ids: readonly (string | number)[] | undefined,
   reads: ListReads,
   window: { readonly offset: number; readonly limit: number }
 ): Promise<{
   items: readonly Record<string, unknown>[];
   diagnostic?: ListDiagnostic;
 }> {
-  if (query.relation === undefined) {
+  if (ids === undefined) {
     return readSorted(reads, base, sort, base.collection);
   }
-  const ids = relatedIds(query.relation, ctx) ?? [];
   if (ids.length === 0) return { items: [] };
   if (sort.length === 0) {
     const { offset: _offset, ...unwindowed } = base;

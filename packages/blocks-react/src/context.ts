@@ -341,6 +341,16 @@ export interface PageContext {
    * where a document is rendered with no surrounding record.
    */
   entry: Record<string, unknown> | null;
+  /**
+   * The collection {@link entry} is an entry of, so a list of the entry's
+   * related entries can read the relation as the public reads the entry,
+   * through {@link data}, rather than take it from `entry`, which a route may
+   * have read with more access than a visitor has. Absent for a Single's page
+   * and in standalone use; such a list then shows its empty state.
+   *
+   * @experimental
+   */
+  entryCollection?: string;
   /** The locale being rendered, when the host is localized. */
   locale?: string;
   /**

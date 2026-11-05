@@ -102,8 +102,21 @@ function source(rows: Record<string, Row[]>): {
           (query.filters ?? []).every(filter => meets(row, filter))
         );
         const start = query.offset ?? 0;
+        // A selection keeps the id and the named fields a row has, as the
+        // reader does: a field the public may not read is not on the row.
+        const select = query.select;
+        const shaped =
+          select === undefined || select.length === 0
+            ? matching
+            : matching.map(row =>
+                Object.fromEntries(
+                  Object.entries(row).filter(
+                    ([name]) => name === "id" || select.includes(name)
+                  )
+                )
+              );
         return Promise.resolve({
-          items: matching.slice(start, start + (query.limit ?? 10)),
+          items: shaped.slice(start, start + (query.limit ?? 10)),
         });
       },
     },
@@ -358,69 +371,171 @@ describe("a collection list's query, rendered", () => {
       { id: "c4", title: "Delta", kind: "topic" },
     ];
 
-    it("lists a post's categories in the order the post stores them", async () => {
-      const { provider, queries } = source({ categories: CATEGORIES });
-      const host = await drawn(
-        page(
-          list({
-            collection: "categories",
-            relation: { of: "entry", field: "categories" },
-          })
-        ),
-        context({
-          data: provider,
-          entry: { id: "p1", categories: ["c4", "c1", { id: "c2" }, "c1"] },
+    /** A post-related list, the categories of the page's entry. */
+    const postCategories = (props: Record<string, unknown> = {}) =>
+      page(
+        list({
+          collection: "categories",
+          relation: { of: "entry", field: "categories" },
+          ...props,
         })
       );
+
+    /**
+     * A page showing post `p1`: the route's own read of it, and the source,
+     * which holds the post as the public reads it. The two agree unless a
+     * test says otherwise.
+     */
+    function postPage(
+      categories: unknown[],
+      overrides: { publicPost?: Row; ctx?: Partial<PageContext> } = {}
+    ) {
+      const read = source({
+        posts: [
+          overrides.publicPost ?? { id: "p1", title: "Post", categories },
+        ],
+        categories: CATEGORIES,
+      });
+      return {
+        ...read,
+        ctx: context({
+          data: read.provider,
+          entry: { id: "p1", title: "Post", categories },
+          entryCollection: "posts",
+          ...overrides.ctx,
+        }),
+      };
+    }
+
+    /** The reads made of the related collection, not of the entry. */
+    const relatedReads = (queries: readonly BlocksQuery[]) =>
+      queries.filter(query => query.collection === "categories");
+
+    it("lists a post's categories in the order the post stores them", async () => {
+      const { ctx, queries } = postPage(["c4", "c1", { id: "c2" }, "c1"]);
+      const host = await drawn(postCategories(), ctx);
       expect(headings(host)).toEqual(["Delta", "Alpha", "Beta"]);
-      expect(queries[0]?.filters).toEqual([
+      // The relation is read as the public reads the post: by id, with only
+      // the relation field, before the related entries are.
+      expect(queries[0]).toEqual({
+        collection: "posts",
+        filters: [{ field: "id", op: "equals", value: "p1" }],
+        select: ["categories"],
+        limit: 1,
+      });
+      expect(relatedReads(queries)[0]?.filters).toEqual([
         { field: "id", op: "in", value: ["c4", "c1", "c2"] },
       ]);
     });
 
-    it("applies filters, then the offset and limit, to the stored order", async () => {
-      const { provider } = source({ categories: CATEGORIES });
+    it("reads the relation as the public sees it, not as the route's entry holds it", async () => {
+      const { ctx, queries } = postPage(["c1", "c2"], {
+        publicPost: { id: "p1", title: "Post", categories: ["c3"] },
+      });
+      const host = await drawn(postCategories(), ctx);
+      expect(headings(host)).toEqual(["Gamma"]);
+      expect(relatedReads(queries)[0]?.filters).toEqual([
+        { field: "id", op: "in", value: ["c3"] },
+      ]);
+    });
+
+    it("draws the empty state when the public may not read the relation, reading none of the route's ids", async () => {
+      // The route's entry carries the relation; the public's read of the
+      // post comes back without it, as a field visitors may not read does.
+      const { ctx, queries } = postPage(["c1", "c2"], {
+        publicPost: { id: "p1", title: "Post" },
+      });
+      const host = await drawn(postCategories(), ctx);
+      expect(headings(host)).toEqual(["Nothing here yet"]);
+      expect(relatedReads(queries)).toEqual([]);
+      expect(note(host)).toBeNull();
+
+      const author = postPage(["c1", "c2"], {
+        publicPost: { id: "p1", title: "Post" },
+        ctx: { diagnostics: true },
+      });
+      const shown = await drawn(postCategories(), author.ctx);
+      expect(headings(shown)).toEqual(["Nothing here yet"]);
+      expect(note(shown)?.getAttribute("data-nx-list-diagnostic")).toBe(
+        "query-failed"
+      );
+      expect(note(shown)?.textContent).toContain('"categories"');
+      expect(relatedReads(author.queries)).toEqual([]);
+    });
+
+    it("draws the empty state when the public may not read the entry at all", async () => {
+      const read = source({ posts: [], categories: CATEGORIES });
       const host = await drawn(
-        page(
-          list({
-            collection: "categories",
-            relation: { of: "entry", field: "categories" },
-            filters: [{ field: "kind", op: "equals", value: "topic" }],
-            offset: 1,
-            limit: 1,
-          })
-        ),
+        postCategories(),
         context({
-          data: provider,
-          entry: { id: "p1", categories: ["c3", "c4", "c2", "c1"] },
+          data: read.provider,
+          entry: { id: "p1", categories: ["c1"] },
+          entryCollection: "posts",
+          diagnostics: true,
         })
+      );
+      expect(headings(host)).toEqual(["Nothing here yet"]);
+      expect(note(host)?.getAttribute("data-nx-list-diagnostic")).toBe(
+        "query-failed"
+      );
+      expect(relatedReads(read.queries)).toEqual([]);
+    });
+
+    it("reads nothing of a relation whose entry's collection it is not told", async () => {
+      const read = source({ categories: CATEGORIES });
+      const host = await drawn(
+        postCategories(),
+        context({
+          data: read.provider,
+          entry: { id: "p1", categories: ["c1"] },
+          diagnostics: true,
+        })
+      );
+      expect(headings(host)).toEqual(["Nothing here yet"]);
+      expect(note(host)?.getAttribute("data-nx-list-diagnostic")).toBe(
+        "query-failed"
+      );
+      expect(read.queries).toEqual([]);
+    });
+
+    it("claims the relation's read from the page's allowance", async () => {
+      // One read left: the list's own, so the relation's is refused and no
+      // related entry is read.
+      let left = 1;
+      const { ctx, queries } = postPage(["c1"], {
+        ctx: { queries: { take: () => left-- > 0 } },
+      });
+      const host = await drawn(postCategories(), ctx);
+      expect(headings(host)).toEqual(["Nothing here yet"]);
+      expect(queries).toEqual([]);
+    });
+
+    it("applies filters, then the offset and limit, to the stored order", async () => {
+      const { ctx } = postPage(["c3", "c4", "c2", "c1"]);
+      const host = await drawn(
+        postCategories({
+          filters: [{ field: "kind", op: "equals", value: "topic" }],
+          offset: 1,
+          limit: 1,
+        }),
+        ctx
       );
       // Topics in stored order are Delta, Beta, Alpha: skip one, show one.
       expect(headings(host)).toEqual(["Beta"]);
     });
 
     it("orders by a sort when one is set, in the reader", async () => {
-      const { provider, queries } = source({ categories: CATEGORIES });
-      await drawn(
-        page(
-          list({
-            collection: "categories",
-            relation: { of: "entry", field: "categories" },
-            sort: "title",
-            offset: 1,
-          })
-        ),
-        context({ data: provider, entry: { id: "p1", categories: ["c2"] } })
-      );
-      expect(queries[0]).toMatchObject({
+      const { ctx, queries } = postPage(["c2"]);
+      await drawn(postCategories({ sort: "title", offset: 1 }), ctx);
+      expect(relatedReads(queries)[0]).toMatchObject({
         sort: "title",
         offset: 1,
         filters: [{ field: "id", op: "in", value: ["c2"] }],
       });
     });
 
-    it("shows each post's categories inside a list of posts", async () => {
-      const { provider } = source({
+    it("shows each post's categories inside a list of posts, from the rows the list read", async () => {
+      const { provider, queries } = source({
         posts: [
           { id: "p1", title: "First post", categories: ["c2", "c1"] },
           { id: "p2", title: "Second post", categories: ["c3"] },
@@ -458,20 +573,17 @@ describe("a collection list's query, rendered", () => {
         "Second post",
         "Gamma",
       ]);
+      // The outer list's rows are already the public's, so no post is read
+      // again for its relation.
+      expect(
+        queries.filter(query => query.collection === "posts")
+      ).toHaveLength(1);
     });
 
-    it("draws the empty state, reading nothing, when the relation holds none", async () => {
-      const { provider, queries } = source({ categories: CATEGORIES });
-      const host = await drawn(
-        page(
-          list({
-            collection: "categories",
-            relation: { of: "entry", field: "categories" },
-          })
-        ),
-        context({ data: provider, entry: { id: "p1", categories: [] } })
-      );
-      expect(queries).toEqual([]);
+    it("draws the empty state, reading no related entry, when the relation holds none", async () => {
+      const { ctx, queries } = postPage([]);
+      const host = await drawn(postCategories(), ctx);
+      expect(relatedReads(queries)).toEqual([]);
       expect(headings(host)).toEqual(["Nothing here yet"]);
     });
 

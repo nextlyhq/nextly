@@ -2595,6 +2595,12 @@ function blocksRouteConfig(
       // has to be told which one it got.
       const pageContext: PageContext = createStandaloneContext({
         entry,
+        // So a list of the entry's related entries reads the relation as the
+        // public reads this entry. A Single's page has no collection entry,
+        // and the provider reads no Single.
+        ...(entrySource === "collection"
+          ? { entryCollection: context.collection }
+          : {}),
         // Reported by the route, not read off the row: the companion overlay
         // copies localized values onto the entry without stamping which locale
         // produced them, so inferring it here finds nothing on exactly the

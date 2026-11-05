@@ -2,7 +2,8 @@
  * A collection list's query, read on a published page the same way on every
  * database: each filter operator, the sort with empty values last and ties
  * in id order, a calendar day compared as a day, a relation's entries in
- * their stored order, and a stored sort the public may not use.
+ * their stored order as the public reads the relation, and a stored sort the
+ * public may not use.
  *
  * Driven through the real block (`core/collection-loop`), the default data
  * provider and the public reader over a real instance, so what is checked
@@ -43,6 +44,7 @@ const POSTS = "lqi_posts";
 const CATS = "lqi_cats";
 const WORDS = "lqi_words";
 const DOCS = "lqi_docs";
+const SHELVES = "lqi_shelves";
 
 type Row = Record<string, unknown>;
 
@@ -105,6 +107,26 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             access: { read: () => true },
             fields: [text({ name: "word" })],
+          }),
+          defineCollection({
+            slug: SHELVES,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              relationship({
+                name: "categories",
+                relationTo: CATS,
+                hasMany: true,
+              }),
+              // The same relation, with a read rule that denies the public.
+              relationship({
+                name: "staffPicks",
+                relationTo: CATS,
+                hasMany: true,
+                access: { read: () => false },
+              }),
+            ],
           }),
           defineCollection({
             slug: DOCS,
@@ -450,22 +472,100 @@ describe.each(getConfiguredTestDialects())(
       expect(onTheFirst).toEqual(["Café crème", "Crème brûlée", "Plain toast"]);
     });
 
-    it("lists a post's categories in the order the post stores them, through the reader", async () => {
-      const shown = await drawn(
-        { collection: CATS, relation: { of: "entry", field: "categories" } },
-        { entry: { id: "x", categories: [ids.Gamma, ids.Alpha, ids.Beta] } }
-      );
-      expect(shown.titles).toEqual(["Gamma", "Alpha", "Beta"]);
-      const sorted = await drawn(
-        {
+    describe("a related source", () => {
+      const related = (field: string, props: Row = {}) => ({
+        collection: CATS,
+        relation: { of: "entry", field },
+        ...props,
+      });
+
+      /**
+       * A shelf holding the categories against their id order in both of its
+       * relations, so the stored order is what a list shows, and the route's
+       * own read of it: trusted, so it holds the relation the public may not
+       * read.
+       */
+      async function shelf(): Promise<{ entry: Row; stored: string[] }> {
+        const byId = (await drawn({ collection: CATS, sort: "id" })).titles;
+        const stored = [...byId].reverse();
+        const picks = stored.map(title => ids[title] ?? "");
+        const created = await t.nextly.create({
+          collection: SHELVES,
+          data: {
+            title: "Shelf",
+            categories: picks,
+            staffPicks: picks,
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        const entry = (await t.nextly.findByID({
+          collection: SHELVES,
+          id: String(created.item.id),
+          depth: 0,
+          overrideAccess: true,
+        })) as Row;
+        return { entry, stored };
+      }
+
+      it("lists an entry's categories in the order it stores them, through the reader", async () => {
+        const { entry, stored } = await shelf();
+        const page = { entry, entryCollection: SHELVES, diagnostics: true };
+        expect(await drawn(related("categories"), page)).toEqual({
+          titles: stored,
+          note: null,
+        });
+        const sorted = await drawn(
+          related("categories", { sort: "title", offset: 1 }),
+          page
+        );
+        expect(sorted.titles).toEqual(["Beta", "Gamma"]);
+      });
+
+      it("lists nothing from a relation the public may not read, though the route's entry holds it", async () => {
+        const { entry } = await shelf();
+        // The route's read holds the relation...
+        expect(Array.isArray(entry.staffPicks)).toBe(true);
+        expect((entry.staffPicks as unknown[]).length).toBe(3);
+        // ...and the page draws the list's empty state from it, telling an
+        // author why, while the public relation beside it still lists.
+        const visitor = await drawn(related("staffPicks"), {
+          entry,
+          entryCollection: SHELVES,
+        });
+        expect(visitor).toEqual({ titles: [], note: null });
+        const author = await drawn(related("staffPicks"), {
+          entry,
+          entryCollection: SHELVES,
+          diagnostics: true,
+        });
+        expect(author.titles).toEqual([]);
+        // Told the relation is not the public's, not that a read failed.
+        expect(author.note).toContain(`Visitors can't read "staffPicks"`);
+      });
+
+      it("lists an outer item's relation from the row the public read, without the one it may not read", async () => {
+        const { entry, stored } = await shelf();
+        // The row an outer list of shelves hands each item.
+        const { items } = await createPublicReader(t.nextly, {
+          locale: "en",
+        }).find({
+          collection: SHELVES,
+          filters: [{ field: "id", op: "equals", value: String(entry.id) }],
+        });
+        const item = items[0];
+        expect(item).toBeDefined();
+        expect(item !== undefined && "staffPicks" in item).toBe(false);
+        const inner = { item: item ?? {}, itemSource: SHELVES };
+        const ofItem = (field: string) => ({
           collection: CATS,
-          relation: { of: "entry", field: "categories" },
-          sort: "title",
-          offset: 1,
-        },
-        { entry: { id: "x", categories: [ids.Gamma, ids.Alpha, ids.Beta] } }
-      );
-      expect(sorted.titles).toEqual(["Beta", "Gamma"]);
+          relation: { of: "item", field },
+        });
+        expect((await drawn(ofItem("categories"), inner)).titles).toEqual(
+          stored
+        );
+        expect((await drawn(ofItem("staffPicks"), inner)).titles).toEqual([]);
+      });
     });
 
     it("lists a stored loop sorted by a field the public may not read in id order, and tells an author", async () => {
