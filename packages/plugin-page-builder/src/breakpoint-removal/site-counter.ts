@@ -13,8 +13,8 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
 import { titleFieldIn } from "../entries-route";
-import { entryOf, readSavedAsCaller } from "../entry-reads";
-import type { HostAddress } from "../host-rewrite/contract";
+import { entryOf, findAsCaller, readSavedAsCaller } from "../entry-reads";
+import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
 import {
   siteDocuments,
   siteHostReader,
@@ -67,29 +67,127 @@ function placeOf(slugs: PlaceSlugs, host: HostAddress): RemovalPlace {
 }
 
 /**
- * What the caller knows an entry by, or `null` when they may not read it: its
- * saved row read as them, drafts included, titled by the rule every entries
- * list names a row by.
+ * What the caller knows each of one collection's entries by, for the ones
+ * they may read: one list read as them, every status included, titled by the
+ * rule every entries list names a row by. An entry the read does not return is
+ * one they may not read.
  */
-async function entryNameAsCaller(
+async function entryNamesAsCaller(
   site: Pick<DocumentSite, "resolveCollection">,
   ctx: Pick<PluginRouteContext, "caller">,
-  host: HostAddress
-): Promise<string | null> {
-  const record = await site.resolveCollection(host.slug);
-  const titleField =
-    typeof record === "object" && record !== null
-      ? titleFieldIn(record)?.name
-      : undefined;
-  const row = await readSavedAsCaller(ctx, {
-    collection: host.slug,
-    id: host.id ?? "",
-    select: {
-      id: true,
-      ...(titleField === undefined ? {} : { [titleField]: true }),
-    },
-  });
-  return row === null ? null : (entryOf(row, titleField)?.title ?? null);
+  slug: string,
+  hosts: readonly HostAddress[]
+): Promise<Map<string, string>> {
+  const titleField = await titleFieldOf(site, slug);
+  const ids = hosts.map(host => host.id ?? "");
+  const names = new Map<string, string>();
+  const select = {
+    id: true,
+    ...(titleField === undefined ? {} : { [titleField]: true }),
+  };
+  let page;
+  try {
+    page = await findAsCaller(ctx, {
+      collection: slug,
+      where: { id: { in: ids } },
+      select,
+      limit: ids.length,
+    });
+  } catch (error) {
+    // A caller refused the whole collection may read none of its entries.
+    if (NextlyError.isForbidden(error)) return names;
+    throw error;
+  }
+  for (const row of page.items) {
+    const entry = entryOf(row, titleField);
+    if (entry === undefined) continue;
+    names.set(
+      documentKeyOf({ kind: "collection", slug, id: entry.id }),
+      entry.title
+    );
+  }
+  return names;
+}
+
+/** A collection's title field, as every entries list names its rows by. */
+async function titleFieldOf(
+  site: Pick<DocumentSite, "resolveCollection">,
+  slug: string
+): Promise<string | undefined> {
+  const record = await site.resolveCollection(slug);
+  return typeof record === "object" && record !== null
+    ? titleFieldIn(record)?.name
+    : undefined;
+}
+
+/**
+ * Each entry of `hosts` by its title as saved, read as the caller: the list
+ * read names a row by its live title, and a pending working draft may have
+ * renamed it, which is what the editor shows. Asked only for the few a list
+ * names, all at once rather than one after another; a Single is named by its
+ * slug and is left out.
+ */
+export async function savedTitlesAsCaller(
+  site: Pick<DocumentSite, "resolveCollection">,
+  ctx: Pick<PluginRouteContext, "caller">,
+  hosts: readonly HostAddress[],
+  deadline: Date | undefined
+): Promise<Map<string, string>> {
+  const entries = hosts.filter(host => host.kind === "collection");
+  const read = await Promise.all(
+    entries.map(async host => {
+      const titleField = await titleFieldOf(site, host.slug);
+      // Looked at again once the collection is known: a read started past the
+      // deadline would run on after the dry run has answered.
+      if (deadline !== undefined && Date.now() >= deadline.getTime()) {
+        return [documentKeyOf(host), undefined] as const;
+      }
+      const row = await readSavedAsCaller(ctx, {
+        collection: host.slug,
+        id: host.id ?? "",
+        select: {
+          id: true,
+          ...(titleField === undefined ? {} : { [titleField]: true }),
+        },
+      });
+      const title = row === null ? undefined : entryOf(row, titleField)?.title;
+      return [documentKeyOf(host), title] as const;
+    })
+  );
+  const titles = new Map<string, string>();
+  for (const [key, title] of read)
+    if (title !== undefined) titles.set(key, title);
+  return titles;
+}
+
+/**
+ * What the caller knows each of `hosts` by, for the ones they may read: each
+ * collection's entries in one read, and each Single on its own.
+ */
+async function namesAsCaller(
+  install: RemovalSite,
+  site: Pick<DocumentSite, "resolveCollection">,
+  ctx: Pick<PluginRouteContext, "caller">,
+  hosts: readonly HostAddress[]
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const bySlug = new Map<string, HostAddress[]>();
+  for (const host of hosts) {
+    if (host.kind === "single") {
+      const name = await singleNameAsCaller(await install.naming(), ctx, host);
+      if (name !== null) names.set(documentKeyOf(host), name);
+      continue;
+    }
+    const list = bySlug.get(host.slug) ?? [];
+    list.push(host);
+    bySlug.set(host.slug, list);
+  }
+  for (const [slug, list] of bySlug) {
+    for (const [key, name] of await entryNamesAsCaller(site, ctx, slug, list)) {
+      names.set(key, name);
+    }
+  }
+  return names;
 }
 
 /**
@@ -152,10 +250,9 @@ export async function countRemovalOnSite(
     documents: () => documents(null),
     read: siteHostReader(site),
     placeOf: host => placeOf(slugs, host),
-    nameFor: async host =>
-      host.kind === "single"
-        ? singleNameAsCaller(await install.naming(), ctx, host)
-        : entryNameAsCaller(site, ctx, host),
+    namesFor: hosts => namesAsCaller(install, site, ctx, hosts),
+    savedTitles: (hosts, deadline) =>
+      savedTitlesAsCaller(site, ctx, hosts, deadline),
     limits: install.limits(),
     classes,
     deadline,

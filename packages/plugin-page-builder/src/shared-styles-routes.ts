@@ -34,6 +34,7 @@ import {
 import type { WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
+import { documentVersionOf, withVersionFrom } from "./document-version";
 import { titleFieldIn } from "./entries-route";
 import { entryOf, findAsCaller } from "./entry-reads";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
@@ -109,14 +110,26 @@ export const LOCK_SHARED_STYLES_DECLARATION: {
 /** The same permission as a route declares it. */
 export const LOCK_SHARED_STYLES_PERMISSION: string = `${LOCK_SHARED_STYLES.action}-${LOCK_SHARED_STYLES.resource}`;
 
+/** The stored entries, as stored, and the version of the read they came from. */
+export interface SharedStyleRead {
+  /** As stored, unknown keys kept. */
+  readonly entries: Record<string, unknown>[];
+  /** The Single's version as read; absent from a server that issues none. */
+  readonly rev: string | undefined;
+}
+
 /** The stored class list, read and written as the routes need it. */
 export interface SharedStyleStore {
-  /** The stored entries, as stored, unknown keys kept. */
-  read(): Promise<Record<string, unknown>[]>;
-  /** Store the whole list, marked as the named route's write. */
+  read(): Promise<SharedStyleRead>;
+  /**
+   * Store the whole list, marked as the named route's write. `from` is the
+   * read the list was made from: its version goes with the write, so a save
+   * of the Single since refuses it rather than being overwritten.
+   */
   write(
     classes: readonly Record<string, unknown>[],
-    context: Readonly<Record<string, unknown>>
+    context: Readonly<Record<string, unknown>>,
+    from: SharedStyleRead
   ): Promise<void>;
 }
 
@@ -187,7 +200,8 @@ export async function lockSharedStyle(
     throw invalidRequest("Name the shared style with classId, and say locked.");
   }
   const { classId, locked } = parsed.data satisfies SharedStyleLockRequest;
-  const classes = await store.read();
+  const read = await store.read();
+  const classes = read.entries;
   const at = classes.findIndex(entry => entry.id === classId);
   const entry = classes[at];
   if (entry === undefined) {
@@ -213,7 +227,8 @@ export async function lockSharedStyle(
   const next = locked ? { ...unlocked, locked: true } : unlocked;
   await store.write(
     classes.map((current, index) => (index === at ? next : current)),
-    SHARED_STYLE_LOCK_WRITE_CONTEXT
+    SHARED_STYLE_LOCK_WRITE_CONTEXT,
+    read
   );
   return respondMutation(message, next);
 }
@@ -577,7 +592,8 @@ export async function removeSharedStyles(
   const ids = [
     ...new Set(parsed.data.ids),
   ] satisfies SharedStyleRemoveRequest["ids"];
-  const classes = await store.read();
+  const read = await store.read();
+  const classes = read.entries;
   const { reasons, removable } = storedRefusals(ids, classes, configClassIds);
   // Read just before the write, never taken from what the panel showed.
   const counted = await usageRefusals(removable, usage);
@@ -598,7 +614,8 @@ export async function removeSharedStyles(
       entry => typeof entry.id !== "string" || !gone.has(entry.id)
     ),
     // Unmarked: only a lock change needs a route's mark.
-    {}
+    {},
+    read
   );
   return respondMutation(
     ids.length === 1
@@ -625,7 +642,7 @@ interface SharedStyleDirectApi {
  * past its own permission: the route's declared permission is what admits
  * the caller. Written as the caller, so the Single's guard judges the write.
  */
-function siteStyleClassStore(
+export function siteStyleClassStore(
   ctx: Pick<PluginRouteContext, "self" | "user">,
   nextly: SharedStyleDirectApi
 ): SharedStyleStore {
@@ -633,20 +650,24 @@ function siteStyleClassStore(
   return {
     read: async () => {
       const doc = await nextly.findSingle({ slug, overrideAccess: true });
+      const rev = documentVersionOf(doc);
       const raw =
         doc !== null && typeof doc === "object"
           ? readStoredJson((doc as Record<string, unknown>).classes)
           : undefined;
-      if (!Array.isArray(raw)) return [];
-      return raw.filter(
-        (entry): entry is Record<string, unknown> =>
-          entry !== null && typeof entry === "object" && !Array.isArray(entry)
-      );
+      if (!Array.isArray(raw)) return { entries: [], rev };
+      return {
+        entries: raw.filter(
+          (entry): entry is Record<string, unknown> =>
+            entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        ),
+        rev,
+      };
     },
-    write: async (classes, context) => {
+    write: async (classes, context, from) => {
       await nextly.updateSingle({
         slug,
-        data: { classes },
+        data: withVersionFrom({ classes }, from.rev),
         overrideAccess: true,
         context: { ...context },
         ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),

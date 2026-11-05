@@ -321,8 +321,12 @@ export async function openEditorWith(
   nodes: readonly unknown[],
   firstId: string
 ): Promise<void> {
+  // A fixture, set over whatever the single holds.
   const stored = await page.request.patch(HOMEPAGE, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true

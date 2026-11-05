@@ -21,8 +21,10 @@
 
 import {
   countDeletions,
+  deletionKey,
   judgeDataLoss,
   NO_CONSENT,
+  resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
@@ -44,6 +46,12 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
+import {
+  deletionSource,
+  judgeRunDeletions,
+  type Agreement,
+  type DeletionSource,
+} from "../utils/data-loss-consent";
 
 /** What both commands need about the configured plugins. */
 export interface LifecyclePlugin {
@@ -89,11 +97,12 @@ export interface PreparedModuleDown {
   /** False when the module is marked `transaction: false`. */
   transaction: boolean;
   /**
-   * Whether it drops a table or column, or truncates a table, judged the way
-   * `migrate:down` judges one (`isDestructiveDown`). A module that drops only
-   * a column it added to another table loses data no table count shows.
+   * What it deletes (a table or column dropped, rows removed, a column
+   * converted, code that may delete), named the way `migrate:down` names a
+   * DOWN's deletions (`rollbackDeletions`). A module that drops only a column
+   * it added to another table loses data no table count shows.
    */
-  destructive: boolean;
+  deletions: Deletion[];
 }
 
 export interface PluginLifecycleDeps {
@@ -160,6 +169,15 @@ export interface PluginLifecycleDeps {
    * pass it, and nothing said so.
    */
   applyMigrations: (plugin: LifecyclePlugin) => Promise<void>;
+  /**
+   * What the modules `applyMigrations` would apply delete, each module with
+   * its ledger name and text, judged as one run as `nextly migrate` judges
+   * them (`pendingPluginDeletions`). Install takes the data-loss consent for
+   * them before it applies any (`judgeInstallDeletions`).
+   */
+  installDeletions: (
+    plugin: LifecyclePlugin
+  ) => Promise<readonly InstallUnit[]>;
   /**
    * Ledger filenames whose newest `file_apply` event is `applied` — the same
    * reading `modules` is built from. Install checks its dependencies against
@@ -248,6 +266,21 @@ export interface PluginLifecycleDeps {
   ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 }
 
+/** One module an install applies, and what it deletes. */
+export interface InstallUnit {
+  /** Its ledger name (`plugin:<name>/<module>`), named above its deletions. */
+  label: string;
+  /** Its statements, which bind an agreement to the module as it stands. */
+  text: string;
+  deletions: readonly Deletion[];
+}
+
+/** How an install was asked for: the consent to the data its modules delete. */
+export interface InstallOptions {
+  /** `--accept-data-loss`, or `NEXTLY_ACCEPT_DATA_LOSS` when absent. */
+  consent?: DataLossConsent;
+}
+
 /** A column, index, foreign key or check a table has now. */
 export interface LiveElement {
   kind: Exclude<NonNullable<OwnerRecord["elementKind"]>, "table">;
@@ -295,16 +328,20 @@ function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
  */
 export async function runPluginInstallCommand(
   name: string,
-  deps: PluginLifecycleDeps
+  deps: PluginLifecycleDeps,
+  options: InstallOptions = {}
 ): Promise<void> {
   const plugin = find(deps.plugins, name);
   deps.logger.info(`Installing ${plugin.name}@${plugin.version}...`);
 
   // Refused before the lock, so an install that cannot proceed makes no
-  // other migration wait, and decided again under it, where it holds.
+  // other migration wait, and decided again under it, where it holds. A
+  // person is asked about the data its modules delete before the lock too.
   await assertInstallable(plugin, deps);
+  const agreed = await judgeInstallDeletions(plugin, deps, options);
   const owned = await deps.underMigrateLock(async () => {
     await assertInstallable(plugin, deps);
+    await judgeInstallDeletions(plugin, deps, options, agreed);
 
     // BEFORE the hook, because `onInstall` is documented as running against
     // the plugin's own tables: a hook that seeds a row cannot do it into a
@@ -378,7 +415,8 @@ export async function runPluginInstallCommand(
  * leave every enabled plugin after it uninstalled.
  */
 export async function runPluginInstallAllCommand(
-  deps: PluginLifecycleDeps
+  deps: PluginLifecycleDeps,
+  options: InstallOptions = {}
 ): Promise<void> {
   if (deps.plugins.length === 0) {
     deps.logger.info("No plugins are configured.");
@@ -391,8 +429,36 @@ export async function runPluginInstallAllCommand(
       );
       continue;
     }
-    await runPluginInstallCommand(plugin.name, deps);
+    await runPluginInstallCommand(plugin.name, deps, options);
   }
+}
+
+/**
+ * Refuses, before anything changes, an install whose modules delete data the
+ * consent does not cover, listing each module above its deletions, with the
+ * same judgement, question and refusal as `nextly migrate`
+ * (`judgeRunDeletions`): asked before the lock (`agreed` absent) and judged
+ * again under it, accepting only what was agreed. Returns what was agreed.
+ */
+async function judgeInstallDeletions(
+  plugin: LifecyclePlugin,
+  deps: PluginLifecycleDeps,
+  options: InstallOptions,
+  agreed?: Agreement
+): Promise<Agreement> {
+  const sources = new Map<Deletion, DeletionSource>();
+  for (const unit of await deps.installDeletions(plugin)) {
+    const source = deletionSource(unit.label, unit.text);
+    for (const deletion of unit.deletions) sources.set(deletion, source);
+  }
+  return judgeRunDeletions({
+    sources,
+    consent: options.consent ?? resolveDataLossConsent({ env: process.env }),
+    agreed,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn: line => deps.logger.warn(line),
+  });
 }
 
 /**
@@ -695,7 +761,8 @@ function uninstallDeletions(
   downs: readonly PreparedModuleDown[]
 ): Deletion[] {
   if (plan.downModules.length === 0) return [];
-  if (!downs.some(down => down.destructive)) return [];
+  const fromDowns = downs.flatMap(down => down.deletions);
+  if (fromDowns.length === 0) return [];
   const dropped = new Set(plan.tablesDropped);
   const named: Deletion[] = [
     ...plan.tablesDropped.map(table => ({ kind: "table" as const, table })),
@@ -712,13 +779,16 @@ function uninstallDeletions(
         column: row.elementName ?? "",
       })),
   ];
-  if (named.length > 0) return named;
-  return downs
-    .filter(down => down.destructive)
-    .map(down => ({
-      kind: "unnamed" as const,
-      description: `${down.filename}'s DOWN, which drops a table or column`,
-    }));
+  // Every deletion the DOWNs make is listed: what the owner records name,
+  // then what the reader names beyond it, so a DOWN deleting another
+  // owner's rows is never covered by consent naming the plugin's tables.
+  const listed = new Set(named.map(deletionKey));
+  for (const deletion of fromDowns) {
+    if (listed.has(deletionKey(deletion))) continue;
+    listed.add(deletionKey(deletion));
+    named.push(deletion);
+  }
+  return named;
 }
 
 /**

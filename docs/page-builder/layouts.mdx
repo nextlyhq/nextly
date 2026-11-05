@@ -164,8 +164,9 @@ default Layout, then removes the Layout:
 - A published page's live version is not changed, since that would publish its unsaved
   edits along with it. It switches to the site default's header and footer as soon as the
   Layout is gone, and the dialog says how many pages this affects before you start. A
-  published page with no unsaved edits keeps naming the removed Layout in its saved
-  version; it draws the site default, and nothing on the page breaks.
+  published page with no unsaved edits keeps naming the removed Layout in its live
+  version until it is next published, which clears the choice so it names the site
+  default. Until then it draws the site default, and nothing on the page breaks.
 
 Pages are moved as you: a page you can't edit is left on the Layout and named, with the
 reason ("You can't edit this page."), and the Layout is not removed while any unpublished
@@ -189,7 +190,8 @@ A Layout unpublished with Remove Layout can't be made the default, or chosen for
 until it is published again. A page's Layout picker shows such a Layout greyed out, with
 the reason beside its name. If a page save lands at the very moment its Layout is removed,
 the page's choice is cleared and it uses the site's default Layout; a published page's live
-version keeps its choice and draws the default until it is next published.
+version keeps its choice and draws the default until it is next published, which clears
+a choice of a deleted Layout.
 
 The same action is a route, for scripts and other tools. It runs as the caller: the route
 admits anyone who may read Layouts, and the delete or unpublish itself is judged by the

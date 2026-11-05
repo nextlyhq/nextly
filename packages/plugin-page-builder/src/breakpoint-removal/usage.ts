@@ -11,6 +11,13 @@
  * state, so a block coloured and padded at a breakpoint holds two; a hide is
  * one block storing its own visibility at the breakpoint.
  *
+ * What is counted is what is STORED, because that is what a removal deletes:
+ * a value the stylesheet does not write (an unknown property, a value it
+ * cannot read, a block whose id another shares, a shared style the library
+ * drops) is deleted all the same. Counting only what the page draws would
+ * leave such deletions out, and a count that says less than a removal deletes
+ * is the one direction a confirmation must never err in.
+ *
  * @module breakpoint-removal/usage
  * @experimental
  */

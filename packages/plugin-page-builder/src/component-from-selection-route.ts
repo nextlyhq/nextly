@@ -80,7 +80,6 @@ import {
 import {
   actingCaller,
   asCaller,
-  blocksDocumentOf,
   createdId,
   derivedSlug,
   planRefusal,
@@ -89,10 +88,13 @@ import {
   reconcileAfterCommit,
   requirePluginStore,
   requireUnchangedPage,
+  storedPageReadOf,
   storeOf,
   type CompositionRouteContext,
   type CompositionRouteSetup,
+  type StoredPageRead,
 } from "./composition-route-kit";
+import { withVersionFrom } from "./document-version";
 import {
   COMPONENT_FROM_SELECTION_ROUTE_PATH,
   DRY_RUN_COMPONENT_ID,
@@ -164,11 +166,14 @@ export type ComponentFromSelectionContext = CompositionRouteContext;
 
 /** What the route reads besides its context: pages and definitions. */
 export interface ComponentFromSelectionReads {
-  /** A stored page's blocks document, read as the caller, or `null`. */
+  /**
+   * A stored page's blocks document, read as the caller, with the version of
+   * the read, or `null`.
+   */
   page(
     address: StoredAddress,
     ctx: ComponentFromSelectionContext
-  ): Promise<BlockDocument | null>;
+  ): Promise<StoredPageRead | null>;
   /** The published definitions placements resolve to, read for judging. */
   definitions: ComponentSource;
 }
@@ -379,7 +384,7 @@ async function convertStored(
     // Throwing rolls the create back with the transaction.
     if (plan.problem !== undefined)
       throw planRefusal(plan, "component-from-selection");
-    await requireUnchangedPage(
+    const rev = await requireUnchangedPage(
       () => args.reads.page(args.page.address, ctx),
       args.page.document
     );
@@ -392,7 +397,7 @@ async function convertStored(
       tx,
       address.collection,
       address.id,
-      { [address.field]: converted },
+      withVersionFrom({ [address.field]: converted }, rev),
       asCaller(ctx, address.locale)
     );
     return { id, plan };
@@ -420,8 +425,8 @@ async function storedPage(
       logContext: { reason: "component-from-selection-needs-page-update" },
     });
   }
-  const document = await reads.page(address, ctx);
-  if (document === null) {
+  const read = await reads.page(address, ctx);
+  if (read === null) {
     throw NextlyError.notFound({
       logContext: {
         reason: "component-from-selection-page-missing",
@@ -429,7 +434,7 @@ async function storedPage(
       },
     });
   }
-  return { address, document: documentOf(document) };
+  return { address, document: documentOf(read.document) };
 }
 
 /**
@@ -531,7 +536,7 @@ function directReads(store: {
 }): ComponentFromSelectionReads {
   return {
     page: async (address, ctx) =>
-      blocksDocumentOf(
+      storedPageReadOf(
         await readOrNull(async () =>
           requireNextly().findByID({
             collection: address.collection,

@@ -198,7 +198,6 @@ import {
   siteBreakpointRemovalRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
-  versionOfDocument,
   type BreakpointsRouteContext,
   type SiteSettingsRouteContext,
 } from "./site-settings";
@@ -209,7 +208,7 @@ import { referableClassIds } from "./site-style-record";
 import { blocksSurvey, siteStyleRoute } from "./site-style-route";
 import {
   loadSiteStyle,
-  readStoredSiteStyle,
+  readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
   siteStyleSingle,
 } from "./site-style-storage";
@@ -1391,19 +1390,12 @@ export const pageBuilder = (
     stored: async (routeCtx: SiteSettingsRouteContext) => {
       const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
       const nextly = await getCachedNextly();
-      let version: unknown;
-      const style = await readStoredSiteStyle({
-        nextly: {
-          findSingle: async args => {
-            const doc: unknown = await nextly.findSingle(args);
-            version = versionOfDocument(doc);
-            return doc;
-          },
-        },
+      const { stored, rev } = await readStoredSiteStyleVersioned({
+        nextly: { findSingle: args => nextly.findSingle(args) },
         slug: routeCtx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
         overrideAccess: true,
       });
-      return typeof version === "string" ? { ...style, version } : style;
+      return rev === undefined ? stored : { ...stored, version: rev };
     },
     // Walked with the rewrite's own view of the site, so a removal counts
     // exactly the documents its cascade reaches.

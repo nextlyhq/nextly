@@ -46,6 +46,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { asOverwrite, withVersionFrom } from "./document-version";
 import { documentKeyOf, type RewriteReport } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import { inCauses } from "./judged-writes";
@@ -235,16 +236,6 @@ export interface VersionedSiteStyle extends StoredSiteStyle {
   readonly version?: string;
 }
 
-/** The key a stored document carries its version under. */
-const VERSION_KEY = "_rev";
-
-/** A stored document's version, when it carries one. */
-export function versionOfDocument(doc: unknown): string | undefined {
-  if (typeof doc !== "object" || doc === null) return undefined;
-  const version: unknown = (doc as Record<string, unknown>)[VERSION_KEY];
-  return typeof version === "string" ? version : undefined;
-}
-
 /**
  * The version a save made from `stored` hands back. A read without one is
  * refused rather than written past: a write that cannot say what it was
@@ -335,7 +326,7 @@ async function writeSiteStyle(
 ): Promise<void> {
   await nextly.updateSingle({
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    data: version === undefined ? data : { ...data, [VERSION_KEY]: version },
+    data: withVersionFrom(data, version),
     overrideAccess: true,
     context: { ...SITE_SETTINGS_WRITE_CONTEXT },
     ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
@@ -808,7 +799,10 @@ export async function writeSiteBreakpoints(
       confirmRemoval
     );
   }
-  await writeSiteStyle(nextly, ctx, { breakpoints });
+  // Without the installed plugin's removal, this route reads nothing before
+  // writing: the Settings screen saves the whole set it shows, and it is set
+  // whatever is stored.
+  await writeSiteStyle(nextly, ctx, asOverwrite({ breakpoints }));
   return respondMutation<SiteBreakpointsSaved>(SAVED.finished, {
     breakpoints,
   });

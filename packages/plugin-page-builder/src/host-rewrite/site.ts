@@ -13,6 +13,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { blocksFieldReach } from "../class-usage-blocks-fields";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import {
   layoutPageReader,
   type LayoutGuardDirectApi,
@@ -513,7 +514,10 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
       pending !== null && pending._isWorkingDraft === true
         ? valueAt(pending, host.path)
         : null;
+    // The version a read gives is the live row's, with or without a draft.
+    const rev = documentVersionOf(live);
     return {
+      ...(rev === undefined ? {} : { rev }),
       published: live === null ? { kind: "absent" } : valueAt(live, host.path),
       draft,
       // A row with no lifecycle has no state to keep: it is saved, not
@@ -675,12 +679,15 @@ export function siteHostWriter(
         detail: "This value has no address a write can name.",
       };
     }
-    const data: Record<string, unknown> = {
-      [field]: write.value,
-      // Published again in the public state it was read in, which is the one
-      // its workflow already chose.
-      ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
-    };
+    const data = withVersionFrom(
+      {
+        [field]: write.value,
+        // Published again in the public state it was read in, which is the
+        // one its workflow already chose.
+        ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
+      },
+      write.rev
+    );
     const nextly = await site.nextly();
     const identity = await site.identity();
     const inLocale =
@@ -733,7 +740,15 @@ function writeFailure(error: unknown): WriteResult {
   if (NextlyError.isForbidden(error)) return { kind: "forbidden" };
   if (NextlyError.isNotFound(error)) return { kind: "changed" };
   if (NextlyError.isCode(error, "CONFLICT")) return { kind: "changed" };
+  // Refused as made from an out-of-date version: the row was saved since the
+  // read the write was made from.
+  if (NextlyError.isCode(error, "STALE_VERSION")) return { kind: "changed" };
   if (!NextlyError.isCode(error, "VALIDATION_ERROR")) throw error;
+  return validationFailure(error);
+}
+
+/** What a validation refusal came to: the host changed, or refused, and why. */
+function validationFailure(error: NextlyError): WriteResult {
   const issues = (error.publicData as { errors?: unknown } | undefined)?.errors;
   const list = Array.isArray(issues)
     ? (issues as { code?: unknown; message?: unknown }[])

@@ -804,7 +804,8 @@ describe.each(getConfiguredTestDialects())(
             entriesOf(t).bulkUpdateByQuery({
               collectionName: NOT_ENGLISH,
               where,
-              data: { title: "renamed" },
+              // Refused for the rule, not for want of a version.
+              data: { title: "renamed", _overwrite: true },
               ...asAuthor,
             } as never)
           )
@@ -832,7 +833,8 @@ describe.each(getConfiguredTestDialects())(
         const result = await entriesOf(t).bulkUpdateByQuery({
           collectionName: NOT_GERMAN,
           where,
-          data: { title: "renamed" },
+          // The language rules are under test, not versions.
+          data: { title: "renamed", _overwrite: true },
           ...asAuthor,
         } as never);
 

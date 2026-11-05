@@ -403,6 +403,19 @@ describe("Remove Layout, with nothing in the way", () => {
     });
   });
 
+  it("sends the unpublish with the version the copy was read at", async () => {
+    // A save of the Layout since the copy refuses the unpublish, so the copy
+    // never misses what it would have to put back.
+    const s = site();
+    const landing = s.layouts.get("landing");
+    if (landing !== undefined) landing._rev = "5";
+    const d = deps(s);
+
+    await remove(d, "unpublish");
+
+    expect(s.writes[0]?.data).toMatchObject({ status: "draft", _rev: "5" });
+  });
+
   it("refuses an unpublish of a Layout that is not published, writing nothing", async () => {
     const s = site();
     const landing = s.layouts.get("landing");
@@ -663,6 +676,33 @@ describe("a Layout that changes while it is removed", () => {
     expect(copies).toHaveLength(2);
     // The second copy holds the edit the first did not.
     expect(copies[1]).toMatchObject({ draft: { title: "Edited" } });
+  });
+
+  it("takes the copy again when the write is refused as made from an out-of-date version, though the content is as it was", async () => {
+    // A save that left the Layout's content unchanged still moves its version,
+    // so the copy is no longer the one the write was made from.
+    const s = site();
+    let refusals = 1;
+    s.onLayoutWrite = () => {
+      if (refusals-- > 0) {
+        throw new NextlyError({
+          code: "STALE_VERSION",
+          publicMessage: "This document changed since the version you gave.",
+        });
+      }
+    };
+    const d = deps(s);
+    const copies: unknown[] = [];
+    const advance = d.store.advance;
+    d.store.advance = async change => {
+      if (change.to === "final") copies.push(change.set?.copy);
+      return advance(change);
+    };
+
+    await remove(d, "unpublish");
+
+    expect(s.layouts.get("landing")?.status).toBe("draft");
+    expect(copies).toHaveLength(2);
   });
 
   it("gives up after three copies, saying to try again, and takes the fence down", async () => {

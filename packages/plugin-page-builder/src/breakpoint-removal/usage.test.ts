@@ -42,7 +42,7 @@ describe("a blocks value's use of the breakpoints asked about", () => {
       page([
         block("a", {
           styles: {
-            base: { mobile: { color: "#111111", padding: "4px" } },
+            base: { mobile: { color: "#111111", backgroundColor: "#eeeeee" } },
             hover: { mobile: { color: "#222222" } },
             // Written at no breakpoint: not dropped by any removal.
             pressed: { mobile: { color: "#333333" } },
@@ -53,6 +53,24 @@ describe("a blocks value's use of the breakpoints asked about", () => {
     );
     expect(uses.get("mobile")).toEqual({ styles: 3, hides: 0, locked: false });
     expect(uses.has("watch")).toBe(false);
+  });
+
+  it("counts every stored value the removal deletes, drawn or not", () => {
+    // A removal deletes what is stored, so the count does too: an unknown
+    // property, a value the stylesheet cannot read, and two blocks sharing an
+    // id are deleted, and counted, however the page draws them.
+    const at = { styles: { base: { mobile: { color: "#111111" } } } };
+    const { uses } = breakpointUsesIn(
+      page([
+        block("a", {
+          styles: { base: { mobile: { color: "#111111", bogus: 1 } } },
+        }),
+        block("twin", at),
+        block("twin", at),
+      ]),
+      ASKED
+    );
+    expect(uses.get("mobile")?.styles).toBe(4);
   });
 
   it("counts a block's own visibility as one hide, shown or hidden", () => {
@@ -77,7 +95,7 @@ describe("a blocks value's use of the breakpoints asked about", () => {
             block("inner", { styles: { base: { mobile: { color: "#111" } } } }),
           ]),
         ],
-        { styles: { base: { mobile: { background: "#fff" } } } }
+        { styles: { base: { mobile: { backgroundColor: "#ffffff" } } } }
       ),
       ASKED
     );
@@ -149,7 +167,7 @@ describe("the shared styles' use of the breakpoints asked about", () => {
     const found = sharedStyleUses(
       [
         named("card", {
-          base: { mobile: { color: "#111", padding: "4px" } },
+          base: { mobile: { color: "#111", backgroundColor: "#eeeeee" } },
         }),
         named(
           "hero",
@@ -167,6 +185,27 @@ describe("the shared styles' use of the breakpoints asked about", () => {
       locked: ["Hero"],
     });
     expect(found.has("watch")).toBe(false);
+  });
+
+  it("counts every stored shared style, the ones the library drops too", () => {
+    // A second entry claiming a slug an earlier one holds is drawn nowhere,
+    // and deleted all the same.
+    const found = sharedStyleUses(
+      [
+        named("card", { base: { mobile: { color: "#111" } } }),
+        named(
+          "card-again",
+          { base: { mobile: { color: "#222" } } },
+          { slug: "card", locked: true, label: "Copy" }
+        ),
+      ],
+      ASKED
+    );
+    expect(found.get("mobile")).toEqual({
+      classes: 2,
+      styles: 2,
+      locked: ["Copy"],
+    });
   });
 
   it("names a locked style without a label by its slug", () => {

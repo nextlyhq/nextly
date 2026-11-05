@@ -27,6 +27,7 @@ import {
   type OpenRemovalReader,
 } from "./breakpoint-removal/lock-acceptance";
 import { stripClass } from "./breakpoint-removal/strip";
+import { documentVersionOf } from "./document-version";
 import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
@@ -500,6 +501,16 @@ export async function readStoredSiteStyle(args: {
    */
   bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<StoredSiteStyle> {
+  return (await readStoredSiteStyleVersioned(args)).stored;
+}
+
+/**
+ * The stored site style, and the Single's version as the same read gave it,
+ * for a write made from that read to send back.
+ */
+export async function readStoredSiteStyleVersioned(
+  args: Parameters<typeof readStoredSiteStyle>[0]
+): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
   // Read beside the Single, so every reader of the stored style, the
   // published render and the editor's route alike, compiles under the model
   // the site recorded.
@@ -511,17 +522,23 @@ export async function readStoredSiteStyle(args: {
   const own = spacingModeReaderOf(args.nextly);
   if (own !== undefined) {
     const [doc, spacingMode] = await Promise.all([readDoc(), own.read()]);
-    return storedSiteStyleOf(doc, spacingMode);
+    return {
+      stored: storedSiteStyleOf(doc, spacingMode),
+      rev: documentVersionOf(doc),
+    };
   }
   // The booted instance only AFTER the document read: a lazy reader boots
   // the instance on its first read, and asked before that there is none, so
   // the page would render with no model.
   const doc = await readDoc();
   const booted = await args.bootedReader?.();
-  return storedSiteStyleOf(
-    doc,
-    booted === undefined ? null : await booted.read()
-  );
+  return {
+    stored: storedSiteStyleOf(
+      doc,
+      booted === undefined ? null : await booted.read()
+    ),
+    rev: documentVersionOf(doc),
+  };
 }
 
 /**
@@ -545,18 +562,27 @@ export async function loadSiteStyle(args: {
   /** As {@link readStoredSiteStyle} takes it. */
   bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<SiteStyleData> {
-  return resolveSiteStyle(
-    args.defaults,
-    readSiteStyleRecord(
-      // The slug alone, never an access override: this is published, and
-      // its read keeps the posture of the reader it was handed.
-      await readStoredSiteStyle({
-        nextly: args.nextly,
-        ...(args.slug === undefined ? {} : { slug: args.slug }),
-        ...(args.bootedReader === undefined
-          ? {}
-          : { bootedReader: args.bootedReader }),
-      })
-    )
-  );
+  return (await loadSiteStyleVersioned(args)).style;
+}
+
+/**
+ * The site style as {@link loadSiteStyle} gives it, and the Single's version
+ * as that read gave it, for a write made from the style to send back.
+ */
+export async function loadSiteStyleVersioned(
+  args: Parameters<typeof loadSiteStyle>[0]
+): Promise<{ style: SiteStyleData; rev: string | undefined }> {
+  // The slug alone, never an access override: this is published, and its
+  // read keeps the posture of the reader it was handed.
+  const { stored, rev } = await readStoredSiteStyleVersioned({
+    nextly: args.nextly,
+    ...(args.slug === undefined ? {} : { slug: args.slug }),
+    ...(args.bootedReader === undefined
+      ? {}
+      : { bootedReader: args.bootedReader }),
+  });
+  return {
+    style: resolveSiteStyle(args.defaults, readSiteStyleRecord(stored)),
+    rev,
+  };
 }
