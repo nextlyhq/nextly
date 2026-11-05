@@ -218,15 +218,24 @@ function refusedSortKey(problem: unknown): string | undefined {
 }
 
 /**
+ * The problems a validation refusal names, when `error` is one that names
+ * at least one; `undefined` for any other failure.
+ */
+function validationProblemsOf(error: unknown): readonly unknown[] | undefined {
+  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return undefined;
+  const problems = (error.publicData as { errors?: unknown } | undefined)
+    ?.errors;
+  return Array.isArray(problems) && problems.length > 0 ? problems : undefined;
+}
+
+/**
  * The fields core refused to sort by, when `error` is that refusal and
  * nothing else: every problem it names is a sort key. `undefined` for any
  * other failure.
  */
 function refusedSortKeys(error: unknown): ReadonlySet<string> | undefined {
-  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return undefined;
-  const problems = (error.publicData as { errors?: unknown } | undefined)
-    ?.errors;
-  if (!Array.isArray(problems) || problems.length === 0) return undefined;
+  const problems = validationProblemsOf(error);
+  if (problems === undefined) return undefined;
   const keys = problems.map(refusedSortKey);
   return keys.every(key => key !== undefined) ? new Set(keys) : undefined;
 }
