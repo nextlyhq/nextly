@@ -5607,20 +5607,21 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         };
-        const removed = await new VersionsRepository(tx).deleteWorkingDraft(
+        const versions = new VersionsRepository(tx);
+        // Judged only when there is a change to lose, under the lock and
+        // before anything is removed: out of date, nothing is deleted.
+        const before =
+          judging.check.kind !== "unjudged" &&
+          (await versions.hasWorkingDraft(discardedRef, draftLocale))
+            ? await this.refuseIfPendingChangeMoved(tx, judging, staleWrite)
+            : undefined;
+        const removed = await versions.deleteWorkingDraft(
           discardedRef,
           draftLocale
         );
         await releaseSharedBase(tx, discardedRef, draftLocale);
         // In the document's history only when there was a draft to discard.
         if (removed > 0) {
-          // Judged only when there was a change to lose, and under the lock:
-          // out of date, the throw rolls the delete back.
-          const before = await this.refuseIfPendingChangeMoved(
-            tx,
-            judging,
-            staleWrite
-          );
           // A reader of the pending change now sees the live entry, so the
           // version they hold no longer describes what they would read.
           await bumpDocumentRevision(
@@ -5630,17 +5631,19 @@ export class CollectionMutationService extends BaseService {
             actorForWrite(params.actor, params.user)
           );
           // Discarded over a change since the read, by choice: recorded.
-          await this.recordOverwriteIfAsked(
-            tx,
-            judging.check,
-            {
-              collection: params.collectionName,
-              id: params.entryId,
-              actor: params.actor,
-              user: params.user,
-            },
-            { ...before, locale: judging.locale }
-          );
+          if (before) {
+            await this.recordOverwriteIfAsked(
+              tx,
+              judging.check,
+              {
+                collection: params.collectionName,
+                id: params.entryId,
+                actor: params.actor,
+                user: params.user,
+              },
+              { ...before, locale: judging.locale }
+            );
+          }
           if (params.onVersion) {
             params.onVersion(
               await documentVersionOn(tx, {

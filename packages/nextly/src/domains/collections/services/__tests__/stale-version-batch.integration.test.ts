@@ -314,7 +314,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("applies an update by ids or by query that gives neither, until a version is required", async () => {
       const t = await boot(dialect);
-      const [a] = await three(t);
+      const [a, b] = await three(t);
       const byIds = await handlerOf(t).bulkUpdateEntries({
         collectionName: NOTES,
         ids: [a.id],
@@ -323,6 +323,15 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(byIds.failures).toEqual([]);
       expect(await titleOf(t, a.id)).toBe("unjudged");
+
+      const byQuery = await handlerOf(t).bulkUpdateByQuery({
+        collectionName: NOTES,
+        where: { id: { in: [b.id] } },
+        data: { title: "unjudged by query" },
+        overrideAccess: true,
+      });
+      expect(byQuery.failures, JSON.stringify(byQuery)).toEqual([]);
+      expect(await titleOf(t, b.id)).toBe("unjudged by query");
     });
   }
 );
