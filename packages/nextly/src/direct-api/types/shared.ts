@@ -567,8 +567,10 @@ export interface DirectAPIConfig {
    * `admin.hidden` is a UI flag, so every read returns such fields unless it
    * passes `false`, trusted or judged as a caller alike; a field's read rule
    * (`access.read`) is what keeps a value from a caller. With `false`, a
-   * `where` or `sort` naming a hidden field is refused. Password fields are
-   * never returned, whatever this says.
+   * `where` or `sort` naming a hidden field is refused. It covers the read
+   * collection's or Single's own fields: a related document populated at a
+   * `depth` above `0` keeps its hidden fields. Password fields are never
+   * returned, whatever this says.
    *
    * @default true
    */

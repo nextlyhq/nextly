@@ -212,6 +212,38 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("every spelling and every Single", () => {
+      it("refuses a snake_case alias of a hidden field, as the query resolver accepts it", async () => {
+        const filtered = await refusal(
+          trusted.find({
+            collection: "hnotes",
+            where: { internal_code: { equals: "code-42" } },
+            showHiddenFields: false,
+          } as never)
+        );
+        const sorted = await refusal(
+          trusted.find({
+            collection: "hnotes",
+            sort: "-internal_code",
+            showHiddenFields: false,
+          } as never)
+        );
+
+        expect(NextlyError.isCode(filtered, "VALIDATION_ERROR")).toBe(true);
+        expect(NextlyError.isCode(sorted, "VALIDATION_ERROR")).toBe(true);
+      });
+
+      it("leaves hidden fields out of findSingles when it passes false", async () => {
+        const listed = (await trusted.findSingles({
+          showHiddenFields: false,
+        } as never)) as { docs: { slug: string; data: Doc }[] };
+        const settingsRow = listed.docs.find(doc => doc.slug === "hsettings");
+
+        expect(settingsRow?.data.siteName).toBe("Site");
+        expect(settingsRow?.data).not.toHaveProperty("seedMarker");
+      });
+    });
+
     describe("a read judged as a caller", () => {
       it("returns a hidden field its field rules allow, by default", async () => {
         const [row] = itemsOf(

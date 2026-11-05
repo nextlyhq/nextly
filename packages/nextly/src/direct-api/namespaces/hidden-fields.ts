@@ -21,7 +21,7 @@
 import { parseSortKeys } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors/nextly-error";
 import type { SourceEntity } from "../../runtime/routing/declared-fields";
-import { filterKeys } from "../../shared/lib/filterable-fields";
+import { filterKeys, spellings } from "../../shared/lib/filterable-fields";
 
 /** The option that decides whether a read leaves hidden fields out. */
 interface HiddenFieldOptions {
@@ -52,13 +52,29 @@ export async function hiddenPathsFor(
 }
 
 /**
+ * A hidden path as a query names it: a dynamic zone's member carries its
+ * component type as a `#type` segment in the declared path, which a filter or
+ * a sort does not spell.
+ */
+function queriedPath(path: string): string {
+  return path.replace(/#[^.]*/g, "");
+}
+
+/**
  * Whether `key` names a hidden field, a field inside a hidden one, or a
- * container holding one: filtering a container probes what it holds.
+ * container holding one: filtering a container probes what it holds. Every
+ * spelling the query resolver accepts for a name is tried (`spellings`), so a
+ * snake_case alias of a camelCase field is refused with it.
  */
 function namesHidden(key: string, hidden: ReadonlySet<string>): boolean {
-  for (const path of hidden) {
-    if (key === path || key.startsWith(`${path}.`)) return true;
-    if (path.startsWith(`${key}.`)) return true;
+  const asked = spellings(key);
+  for (const declared of hidden) {
+    for (const path of spellings(queriedPath(declared))) {
+      for (const name of asked) {
+        if (name === path || name.startsWith(`${path}.`)) return true;
+        if (path.startsWith(`${name}.`)) return true;
+      }
+    }
   }
   return false;
 }

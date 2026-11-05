@@ -181,7 +181,12 @@ export async function findSingles(
       return {
         slug: record.slug,
         label: record.label,
-        data: result.data as Record<string, unknown>,
+        // Each Single's hidden fields are left out where this read says so,
+        // as `findSingle` leaves them out of one.
+        data: await withoutHiddenFields(
+          result.data as Record<string, unknown>,
+          await hiddenPathsFor(config, { kind: "single", slug: record.slug })
+        ),
       };
     })
   );
