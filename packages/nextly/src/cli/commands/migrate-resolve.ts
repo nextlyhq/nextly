@@ -22,7 +22,9 @@ import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { executeTransaction } from "../../domains/schema/migrate/migration-transaction";
 import {
   resolveMigration,
+  type ResolveMigrationArgs,
   type ResolveMode,
+  type ResolveRepo,
 } from "../../domains/schema/migrate/resolve";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
@@ -32,10 +34,11 @@ import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/ty
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import { NextlyError } from "../../errors/index";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import { resolveModeRequired } from "../errors/areas/migrations";
 import type { CommandContext } from "../program";
-import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { openCommandAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
@@ -45,6 +48,7 @@ import {
 
 import { commandRun } from "./command-run";
 import { maybeForceUnlock } from "./migrate";
+import { dryRunRefusalOf } from "./migrate-create";
 
 interface ResolveCommandOptions {
   applied?: string;
@@ -53,6 +57,42 @@ interface ResolveCommandOptions {
   skipVerify?: boolean;
   /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
+  /** `--dry-run`: run the checks, name the ledger writes, make none. */
+  dryRun?: boolean;
+}
+
+/**
+ * The ledger as a dry run writes to it: reads go to the real ledger, so the
+ * resolve's checks see what a real run sees, and each write is named in
+ * `changes` instead of made.
+ */
+function recordingRepo(
+  repo: ResolveRepo,
+  filename: string,
+  changes: DryRunChange[]
+): ResolveRepo {
+  const record = (target: string): Promise<void> => {
+    changes.push({ action: "record", target });
+    return Promise.resolve();
+  };
+  return {
+    findFileApplies: name => repo.findFileApplies(name),
+    findFileRollbacks: name => repo.findFileRollbacks(name),
+    insertEvent: values =>
+      record(`a ${String(values.status)} ledger row for ${filename}`).then(
+        () => "dry-run"
+      ),
+    supersede: ({ supersededEventIds }) =>
+      supersededEventIds.length === 0
+        ? Promise.resolve()
+        : record(
+            `${supersededEventIds.length} earlier ledger row(s) of ${filename} as superseded`
+          ),
+    markRolledBack: id =>
+      record(`ledger row ${id} of ${filename} as rolled_back`),
+    recordChecksum: id =>
+      record(`the file's current checksum on ledger row ${id} of ${filename}`),
+  };
 }
 
 interface ResolvedOptions extends ResolveCommandOptions {
@@ -177,15 +217,104 @@ export async function runMigrateResolve(
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
   const metaDir = resolve(migrationsDir, "meta");
 
-  const adapter: CLIDatabaseAdapter = await createCliAdapter({
-    dialect: dbValidation.dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
+  // A dry run opens the database read-only, and one that is not there has
+  // said so and ends here.
+  const adapter = await openCommandAdapter(
+    {
+      dialect: dbValidation.dialect,
+      databaseUrl: dbValidation.databaseUrl,
+      logger: options.verbose ? logger : undefined,
+      dryRun: options.dryRun,
+    },
+    logger
+  );
+  if (adapter === undefined) return;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
     const repo = new SchemaEventsRepository(db, dialect);
+
+    // The checks and reads a resolve makes, the same for a real run and a
+    // dry run; only where its ledger writes go differs.
+    const resolveArgs = {
+      mode,
+      filename,
+      skipVerify: options.skipVerify,
+      dialect,
+      repo,
+      fileExists: async name =>
+        (await migrationFileIn(migrationsDir, name, dialect)) !== undefined,
+      loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
+      marksNoTransaction: async () =>
+        marksNoTransaction(
+          await migrationTextIn(migrationsDir, filename, dialect)
+        ),
+      fileChecksum: async () =>
+        checksumOf(await migrationTextIn(migrationsDir, filename, dialect)),
+      introspectLive: async () => {
+        // Config and the Builder manifest, merged as generation merges them,
+        // so the verifier excludes the same derived tables the snapshot never
+        // held. Resolved HERE rather than before the lock because this
+        // callback is its only consumer and a malformed `ui-schema.json`
+        // throws: loading it eagerly would take --rolled-back,
+        // --failed-cleanup and --skip-verify down with it, and those are the
+        // modes an operator reaches for when something is already broken.
+        const resolvedSchema = await resolveDeclaredSchema({
+          projectRoot: cwd,
+          config: configResult.config,
+          deferredExtends: configResult.deferredExtends,
+        });
+        const live = await safeListTables(adapter);
+        // Managed main tables only. A localized companion is
+        // migration-owned and never appears in a `migrate:create` snapshot,
+        // so including one here can never match the file this is compared
+        // against and the equivalence check refuses the command.
+        // Junctions are excluded for exactly the reason the comment above
+        // gives for companions: neither is declared by config, so neither
+        // appears in the snapshot this is compared against, and a live
+        // snapshot carrying one can never match it. The target's own tables
+        // are the declaration, so a collection whose name resembles the
+        // generated junction shape is not mistaken for one.
+        // The same snapshot `loadTargetSnapshot` returns, read again rather
+        // than threaded: it is a file read, and the two callbacks are
+        // independent by design so the verifier can be driven without one.
+        // A missing snapshot is the verifier's own error to report; here it
+        // just means no declaration is available, and the name pattern alone
+        // decides.
+        const target = await loadSnapshot(metaDir, filename);
+        const managed = snapshotComparableTables(
+          live,
+          new Set((target?.tables ?? []).map(t => t.name)),
+          // A custom `options.junctionTable` name matches no convention and
+          // is in no snapshot, so without it the verifier compares a live
+          // scope containing the junction against a target that never could
+          // and refuses a recovery the operator has no other way to make.
+          resolvedSchema.knownJunctions
+        );
+        return introspectLiveSnapshot(db, dialect, managed);
+      },
+    } satisfies Omit<ResolveMigrationArgs, "atomically">;
+
+    // A dry run takes no lock and clears none: it runs the same checks, and
+    // its ledger writes are named, not made.
+    if (options.dryRun === true) {
+      const changes: DryRunChange[] = options.forceUnlock
+        ? [{ action: "remove", target: "any migrate lock held" }]
+        : [];
+      try {
+        await resolveMigration({
+          ...resolveArgs,
+          atomically: work => work(recordingRepo(repo, filename, changes)),
+        });
+      } catch (error) {
+        const refusal = dryRunRefusalOf(error);
+        if (refusal === undefined) throw error;
+        reportDryRun(logger, { changes, refusals: [refusal] });
+        return;
+      }
+      reportDryRun(logger, { changes });
+      return;
+    }
 
     // Clear a stale lock first when --force-unlock is passed (e.g. left by a
     // crashed prior run): the lock-busy error tells operators to re-run with
@@ -197,11 +326,7 @@ export async function runMigrateResolve(
       dialect,
       () =>
         resolveMigration({
-          mode,
-          filename,
-          skipVerify: options.skipVerify,
-          dialect,
-          repo,
+          ...resolveArgs,
           // A mode's ledger writes commit together: a stop between a
           // rolled-back row and its retiring the applied one would leave the
           // file pending with an applied row the next apply's guard trips on.
@@ -209,57 +334,6 @@ export async function runMigrateResolve(
             executeTransaction(adapter as unknown as DrizzleAdapter, tx =>
               work(repo.boundTo(tx.db))
             ),
-          fileExists: async name =>
-            (await migrationFileIn(migrationsDir, name, dialect)) !== undefined,
-          loadTargetSnapshot: () => loadSnapshot(metaDir, filename),
-          marksNoTransaction: async () =>
-            marksNoTransaction(
-              await migrationTextIn(migrationsDir, filename, dialect)
-            ),
-          fileChecksum: async () =>
-            checksumOf(await migrationTextIn(migrationsDir, filename, dialect)),
-          introspectLive: async () => {
-            // Config and the Builder manifest, merged as generation merges them,
-            // so the verifier excludes the same derived tables the snapshot never
-            // held. Resolved HERE rather than before the lock because this
-            // callback is its only consumer and a malformed `ui-schema.json`
-            // throws: loading it eagerly would take --rolled-back,
-            // --failed-cleanup and --skip-verify down with it, and those are the
-            // modes an operator reaches for when something is already broken.
-            const resolvedSchema = await resolveDeclaredSchema({
-              projectRoot: cwd,
-              config: configResult.config,
-              deferredExtends: configResult.deferredExtends,
-            });
-            const live = await safeListTables(adapter);
-            // Managed main tables only. A localized companion is
-            // migration-owned and never appears in a `migrate:create` snapshot,
-            // so including one here can never match the file this is compared
-            // against and the equivalence check refuses the command.
-            // Junctions are excluded for exactly the reason the comment above
-            // gives for companions: neither is declared by config, so neither
-            // appears in the snapshot this is compared against, and a live
-            // snapshot carrying one can never match it. The target's own tables
-            // are the declaration, so a collection whose name resembles the
-            // generated junction shape is not mistaken for one.
-            // The same snapshot `loadTargetSnapshot` returns, read again rather
-            // than threaded: it is a file read, and the two callbacks are
-            // independent by design so the verifier can be driven without one.
-            // A missing snapshot is the verifier's own error to report; here it
-            // just means no declaration is available, and the name pattern alone
-            // decides.
-            const target = await loadSnapshot(metaDir, filename);
-            const managed = snapshotComparableTables(
-              live,
-              new Set((target?.tables ?? []).map(t => t.name)),
-              // A custom `options.junctionTable` name matches no convention and
-              // is in no snapshot, so without it the verifier compares a live
-              // scope containing the junction against a target that never could
-              // and refuses a recovery the operator has no other way to make.
-              resolvedSchema.knownJunctions
-            );
-            return introspectLiveSnapshot(db, dialect, managed);
-          },
         }),
       // A held lock is waited for, about a minute, and then the run stops naming its holder.
       { command: "nextly migrate:resolve", mode: "wait" }
