@@ -1,5 +1,5 @@
-import { buildErrorResponse } from "../../api/error-response";
 import { readCaller } from "../../api/authenticated-read";
+import { buildErrorResponse } from "../../api/error-response";
 import { readBoundedJsonBody } from "../../api/read-json-body";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
@@ -349,6 +349,33 @@ async function readRowsAs(
     (read.data as { docs?: Array<Record<string, unknown>> } | undefined)
       ?.docs ?? [];
   return new Map(docs.map(doc => [String(doc.id), doc]));
+}
+
+/**
+ * The last refusals before anything of the plugin's runs, or `null`: the
+ * route's CSRF check, then, for a route bound to a declared action, that
+ * action's check. Both after the route's own gate and rate limit, and before
+ * its context, middleware and handler.
+ */
+async function refusedBeforeHandler(
+  req: Request,
+  matched: RouteMatch,
+  auth: RouteAuth
+): Promise<Response | null> {
+  const csrf = await applyRouteCsrf(req, matched, auth.credential);
+  if (csrf) return markPluginResponse(csrf, matched.route);
+  const refusedAction = await boundActionRefusal(req, matched, auth);
+  if (refusedAction === undefined) return null;
+  return markPluginResponse(
+    withNoStore(
+      buildErrorResponse(refusedAction, {
+        requestId: readOrGenerateRequestId(req),
+        flattened: currentFlattenedErrors(),
+      }),
+      matched.route
+    ),
+    matched.route
+  );
 }
 
 /**
@@ -1037,25 +1064,8 @@ export async function runPluginRoute(
     );
   }
 
-  const csrf = await applyRouteCsrf(req, matched, auth.credential);
-  if (csrf) return markPluginResponse(csrf, matched.route);
-
-  // A route bound to a declared action answers only as one of them, judged
-  // here, after the route's own gate and before anything of the plugin's
-  // runs: its context, its middleware, its handler.
-  const refusedAction = await boundActionRefusal(req, matched, auth);
-  if (refusedAction) {
-    return markPluginResponse(
-      withNoStore(
-        buildErrorResponse(refusedAction, {
-          requestId: readOrGenerateRequestId(req),
-          flattened: currentFlattenedErrors(),
-        }),
-        matched.route
-      ),
-      matched.route
-    );
-  }
+  const refusedBefore = await refusedBeforeHandler(req, matched, auth);
+  if (refusedBefore) return refusedBefore;
 
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,

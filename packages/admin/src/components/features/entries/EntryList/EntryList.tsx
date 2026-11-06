@@ -82,7 +82,6 @@ import {
   type ChosenForCollection,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
-import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import {
   chosenPluginFilters,
   listFiltersFor,
@@ -90,6 +89,7 @@ import {
   pluginFilterWheres,
   writePluginFilterParams,
 } from "./plugin-filters";
+import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
 

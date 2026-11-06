@@ -1,7 +1,6 @@
 import type { PluginContext } from "../plugin-context";
 
 import type { BoundAction } from "./action-route-check";
-
 import { pluginRouteFullPath } from "./route-path";
 import { selectMostSpecific, splitPath } from "./route-pattern";
 import type { PluginRoute, RouteMethod } from "./route-types";

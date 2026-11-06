@@ -207,6 +207,7 @@ import {
   resolveTransformedPlugins,
 } from "../plugins/resolve";
 import { collectRoles } from "../plugins/roles/collect-roles";
+import { boundActionsOf } from "../plugins/routes/action-binding";
 import {
   collectPluginRoutes,
   type CollectedRoute,
@@ -215,7 +216,6 @@ import {
   rateLimitProxyWarning,
   unkeyedAuthRouteWarnings,
 } from "../plugins/routes/route-options";
-import { boundActionsOf } from "../plugins/routes/action-binding";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
