@@ -32,9 +32,7 @@
 import {
   findNode,
   PAGE_ROOT_CLASS,
-  parseColor,
   previewStateClass,
-  relativeLuminance,
   resolveSiteTokens,
   resolveTokenPrefix,
   statePropagatesToAncestors,
@@ -43,7 +41,6 @@ import {
   tokenIdentity,
   walkNodes,
   type BlockDocument,
-  type Rgb,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -95,6 +92,7 @@ import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { alphaOf, computedAlphaOf, isDarkGround } from "./site-ground";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
@@ -205,12 +203,6 @@ const SITE_SURFACE_TOKENS = [
 /** The token the page's ground is drawn from, by identity. */
 const SITE_GROUND_TOKEN = "color.background";
 
-/**
- * The largest relative luminance a ground can have and still be dark: the
- * point where white text and black text contrast with it equally.
- */
-const DARK_GROUND_LUMINANCE = 0.179;
-
 /** What the canvas root needs from the site sheet to draw the page as the site. */
 interface SiteSurface {
   /** The custom properties naming the site's tokens, under its prefix. */
@@ -268,181 +260,6 @@ function siteSurface(
   };
 }
 
-/**
- * Whether a token value is a dark ground. A value this engine cannot read as a
- * colour — a named colour, `oklch()`, a reference to another property — says
- * nothing about how light it is, so it is not called dark: the canvas keeps the
- * page's light default rather than switching every native control to a dark
- * scheme over what may be a light ground.
- */
-function isDarkGround(value: string): boolean {
-  const luminance = groundLuminance(value.trim());
-  return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
-}
-
-/**
- * One numeric colour component, with its percentage sign if it has one: an
- * optional sign, a decimal, an optional exponent, an optional `%`.
- *
- * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
- * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
- * engine does not read, so a component is a number in all of them alike.
- * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
- * stops — `5e-1` would read as 5 and `12abc` as 12.
- */
-const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
-
-/** A component as a number, and whether it was a percentage. */
-function numericOf(
-  part: string | undefined
-): { value: number; percent: boolean } | undefined {
-  if (part === undefined) return undefined;
-  const match = NUMERIC_COMPONENT.exec(part);
-  if (match === null) return undefined;
-  const value = Number.parseFloat(part);
-  return Number.isFinite(value)
-    ? { value, percent: match[1] === "%" }
-    : undefined;
-}
-
-/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
-function fractionOf(
-  part: string | undefined,
-  scale: number
-): number | undefined {
-  const parsed = numericOf(part);
-  if (parsed === undefined) return undefined;
-  const fraction = parsed.value / (parsed.percent ? 100 : scale);
-  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
-  return Math.min(1, Math.max(0, fraction));
-}
-
-/**
- * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
- * its alpha: after a `/` in the modern syntax, the fourth comma-separated
- * component in the legacy one. `undefined` for anything else, or a call whose
- * shape is neither.
- */
-function colourFunction(text: string): ColourCall | undefined {
-  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
-  if (call === null) return undefined;
-  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
-  const body = call[2] ?? "";
-  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
-}
-
-/** A colour function's name, colour components and alpha, as written. */
-interface ColourCall {
-  readonly name: "oklch" | "hsl";
-  readonly components: readonly string[];
-  readonly alpha: string | undefined;
-}
-
-/**
- * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
- * Only `hsl()` has one, and it takes no slash.
- */
-function legacyCall(
-  name: ColourCall["name"],
-  body: string
-): ColourCall | undefined {
-  if (name === "oklch" || body.includes("/")) return undefined;
-  const parts = body.split(",").map(part => part.trim());
-  if (parts.length !== 3 && parts.length !== 4) return undefined;
-  return { name, components: parts.slice(0, 3), alpha: parts[3] };
-}
-
-/** The modern, space-separated form, with an optional `/ alpha` after it. */
-function modernCall(
-  name: ColourCall["name"],
-  body: string
-): ColourCall | undefined {
-  const [channels, alpha, ...rest] = body.split("/");
-  if (rest.length > 0) return undefined;
-  const parts = (channels ?? "")
-    .trim()
-    .split(/\s+/)
-    .filter(part => part !== "");
-  if (parts.length !== 3) return undefined;
-  return { name, components: parts, alpha: alpha?.trim() };
-}
-
-/**
- * A colour's alpha, 0–1, or `undefined` when it cannot be told.
- *
- * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
- * own alpha component, 1 when they state none. A bare colour keyword is opaque
- * — every named colour is — except `transparent`, and a keyword this cannot
- * place, such as `currentColor`, is unknown, as is a reference or a function
- * this does not read.
- */
-function alphaOf(text: string): number | undefined {
-  const rgb = parseColor(text);
-  if (rgb !== undefined) return rgb.a;
-  const call = colourFunction(text);
-  if (call !== undefined) {
-    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
-  }
-  if (!/^[a-z]+$/i.test(text)) return undefined;
-  const keyword = text.toLowerCase();
-  if (keyword === "transparent") return 0;
-  return keyword === "currentcolor" ? undefined : 1;
-}
-
-/**
- * The relative luminance of a ground colour, or `undefined` when it cannot be
- * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
- * Tailwind themes write, carries perceptual lightness directly: its L cubed is
- * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
- * which shadcn-style themes write, converts to rgb by the standard formula.
- *
- * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
- * surface behind it, which the canvas cannot see either. So any alpha below 1,
- * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
- * so is an alpha this cannot read.
- */
-function groundLuminance(text: string): number | undefined {
-  if (alphaOf(text) !== 1) return undefined;
-  const rgb = parseColor(text);
-  if (rgb !== undefined) return relativeLuminance(rgb);
-  const call = colourFunction(text);
-  if (call === undefined) return undefined;
-  const [first, second, third] = call.components;
-  if (call.name === "oklch") {
-    // L is a number in 0–1, or a percentage.
-    const lightness = fractionOf(first, 1);
-    return lightness === undefined ? undefined : lightness ** 3;
-  }
-  // Hue as a number, in degrees if it says so; saturation and lightness as
-  // percentages, or the bare numbers CSS Color 4 also accepts for them.
-  const hue = numericOf(first?.replace(/deg$/i, ""));
-  const saturation = fractionOf(second, 100);
-  const lightness = fractionOf(third, 100);
-  if (
-    hue === undefined ||
-    hue.percent ||
-    saturation === undefined ||
-    lightness === undefined
-  ) {
-    return undefined;
-  }
-  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
-}
-
-/** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
-function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
-  const h = ((hue % 360) + 360) % 360;
-  const a = saturation * Math.min(lightness, 1 - lightness);
-  const channel = (n: number): number => {
-    const k = (n + h / 30) % 12;
-    return Math.round(
-      (lightness - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
-    );
-  };
-  return { r: channel(0), g: channel(8), b: channel(4), a: 1 };
-}
-
-/** Whether an event started inside editor chrome rather than inside the page. */
 /**
  * The block a context gesture is aimed at, or `null` when it is aimed at
  * nothing a block menu could act on.
@@ -1042,19 +859,6 @@ function setMark(
  * ground of its own resolves to (a page the site serves), and a transparent
  * ground repeated on the page paints nothing either way.
  */
-/**
- * The alpha of a computed colour written as a function this module's colour
- * reader does not otherwise read — `color(display-p3 0 0 0 / 0.5)`, which a
- * browser can keep in a computed value — from its `/ alpha` part, 1 without
- * one; `undefined` for anything that is not a colour function.
- */
-function computedAlphaOf(text: string): number | undefined {
-  const call = /^[a-z-]+\(([^()]*)\)$/i.exec(text);
-  if (call === null) return undefined;
-  const alpha = (call[1] ?? "").split("/")[1];
-  return alpha === undefined ? 1 : fractionOf(alpha.trim(), 1);
-}
-
 function useSiteSurfaceMarks(
   rootRef: React.RefObject<HTMLElement | null>,
   opaqueByTokens: boolean
