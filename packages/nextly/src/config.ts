@@ -90,6 +90,7 @@ export {
   type SanitizedNextlyConfig,
   type TypeScriptConfig,
   type DatabaseConfig,
+  type ExperimentalConfig,
   type RateLimitingConfig,
   type SanitizedRateLimitingConfig,
 } from "./collections/config/define-config";
@@ -143,6 +144,7 @@ export {
   email,
   password,
   code,
+  icon,
   number,
   checkbox,
   date,
@@ -175,6 +177,7 @@ export {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -193,6 +196,10 @@ export {
 } from "./collections/fields/guards";
 
 export type * from "./collections/fields/types";
+
+// The shape a stored icon id must have, as a value: the admin's form checks
+// an icon field with the same predicate the server's validators use.
+export { isIconIdShape } from "./collections/fields/types/icon";
 
 // Plugin identity and classification. Both modules are import-free, so the
 // admin can share the exact implementations the server uses without pulling

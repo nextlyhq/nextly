@@ -29,6 +29,11 @@ import type {
   PluginFieldValidationResult,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  openRemovalFor,
+  strippedForms,
+  type OpenRemovalReader,
+} from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
 import { siteBreakpoints } from "../site-style";
 
@@ -171,8 +176,14 @@ function judgedByRules(
     args.path,
     formsChangedBy(typeof status === "string" ? status : undefined),
     (args.field as { localized?: unknown }).localized === true
-  ).then(stored => {
-    const again = stored.forms.length === 0 ? issues : judge(stored.forms);
+  ).then(async stored => {
+    const again = await judgedAgainstStored(
+      judge,
+      issues,
+      stored.forms,
+      args.write,
+      composition?.()?.openBreakpointRemoval
+    );
     // A stored value this cannot read may already hold every placement
     // break or name clash found, so none is refused; the server log says what
     // was kept until the page can be judged against it.
@@ -188,6 +199,29 @@ function judgedByRules(
     }
     return kept.length > 0 ? kept : composed();
   });
+}
+
+/**
+ * The issues judged again against the stored forms, which a `contentOnly`
+ * slot lets a document keep. While a breakpoint removal is open, a
+ * `contentOnly` break that remains is judged once more with the stored forms
+ * stripped of the removed breakpoints' values as well, so the removal's own
+ * strip is kept and nothing beyond it is (`breakpoint-removal/lock-acceptance`).
+ */
+async function judgedAgainstStored<T extends { readonly code?: string }>(
+  judge: (stored?: readonly BlockDocument[]) => T[],
+  issues: T[],
+  stored: readonly BlockDocument[],
+  write: PluginFieldValidateArgs["write"],
+  openRemoval: OpenRemovalReader | undefined
+): Promise<T[]> {
+  if (stored.length === 0) return issues;
+  const again = judge(stored);
+  if (!again.some(issue => issue.code === CONTENT_ONLY_BREAK)) return again;
+  const removal = await openRemovalFor(openRemoval, write);
+  if (removal === null) return again;
+  const stripped = strippedForms(stored, removal);
+  return stripped.length === 0 ? again : judge([...stored, ...stripped]);
 }
 
 /**
@@ -284,7 +318,8 @@ export function blocksFieldType(
           emptied ? null : value,
           args,
           label,
-          composition?.()?.onLayersLockUnjudged
+          composition?.()?.onLayersLockUnjudged,
+          composition?.()?.openBreakpointRemoval
         ).then(locks =>
           classes().then(found =>
             withLockIssues(

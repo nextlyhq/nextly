@@ -20,6 +20,7 @@ import {
   uniqueTranslatedColumns,
   type UniqueFieldLike,
 } from "../migration/companion-unique-indexes";
+import { storesPerLanguage } from "../per-language-storage";
 
 import { companionTableExists } from "./companion-io";
 import {
@@ -67,7 +68,8 @@ export async function storedLocalizableEntities(
     rows: readonly StoredRow[]
   ): StoredLocalizableEntity[] =>
     rows
-      .filter(row => row.localized === true)
+      // Every entity whose translatable values live in a companion (`storesPerLanguage`).
+      .filter(row => storesPerLanguage(row))
       .map(row => ({
         kind,
         slug: row.slug,
@@ -109,7 +111,7 @@ export async function warnAboutUnindexedTranslatedUnique(
     for (const entity of entities) {
       if (!entity.slug) continue;
       configured.add(`${kind}:${entity.slug}`);
-      if (entity.localized !== true) continue;
+      if (!storesPerLanguage(entity)) continue;
       const missing = await unindexedFields(
         adapter,
         entity.fields ?? [],

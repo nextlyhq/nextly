@@ -48,7 +48,7 @@ import {
   refusalAnnouncement,
   unmovedAnnouncement,
 } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   isRefusal,
   selectionDeletion,

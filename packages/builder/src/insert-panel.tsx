@@ -135,7 +135,7 @@ import {
 import { layerLabel } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /**
  * Where one tier of the host's library read stands, as the panel says it.

@@ -89,6 +89,16 @@
  * out minutes ago. The deadline leaves two intervals of lease in hand, so it
  * lands while the editor is still protected.
  *
+ * ## The beat also says whether the document changed
+ *
+ * Given the version the editor's copy started from, every claim and beat
+ * carries it, and the answer says when someone else has changed the document
+ * since. Read from a getter where each request is BUILT, never captured,
+ * because the copy's version moves with each of the editor's own saves; and
+ * judged against the copy as it is when the answer ARRIVES, because a save of
+ * the editor's own can land while a beat is out, and the beat then names that
+ * save's version as the current one. Each version is told once.
+ *
  * @module hooks/queries/useDocumentLock
  */
 
@@ -96,6 +106,7 @@ import {
   DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS,
   DOCUMENT_LOCK_LOSS_AFTER_MS,
   type AcquireDocumentLockOutcome,
+  type DocumentLockChange,
   type DocumentLockHolder,
   type DocumentScopeKind,
   type RenewDocumentLockOutcome,
@@ -105,6 +116,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isApiError } from "@admin/lib/api/parseApiError";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { MutationResponse } from "@admin/lib/api/response-types";
+import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 
 /** Where a claim stands from this editor's point of view. */
 export type DocumentLockState =
@@ -159,6 +171,22 @@ export interface UseDocumentLockOptions {
   entryId?: string | null;
   /** Off for a read-only surface: a past version is not being edited. */
   enabled?: boolean;
+  /**
+   * The version the editor's copy started from now, the one its next save
+   * would send. Given, the claim and every beat name it, so the holder is told
+   * when someone else changes the document.
+   */
+  version?: () => string | undefined;
+}
+
+/** Someone else's change to the document, as the claim was told it. */
+export interface DocumentLockChangeNotice {
+  readonly change: DocumentLockChange;
+  /**
+   * Told by the claim that took the document back, after a takeover or a
+   * lapse: the change was made while this editor could not save.
+   */
+  readonly whileAway: boolean;
 }
 
 /** What is waiting for the acquisition slot. A decision outranks a poll. */
@@ -212,6 +240,7 @@ export function useDocumentLock({
   slug,
   entryId,
   enabled = true,
+  version,
 }: UseDocumentLockOptions): {
   state: DocumentLockState;
   /**
@@ -225,9 +254,24 @@ export function useDocumentLock({
   gains: number;
   takeOver: () => void;
   requestAccess: () => void;
+  /**
+   * Someone else's change since the version the copy started from, not yet
+   * answered by the editor; null when there is none, or the copy holds no
+   * version to compare.
+   */
+  change: DocumentLockChangeNotice | null;
+  /** The editor has been told of `change`: clear it until a newer one. */
+  settleChange: () => void;
 } {
   const [state, setState] = useState<DocumentLockState>({ status: "idle" });
   const [gains, setGains] = useState(0);
+  const [change, setChange] = useState<DocumentLockChangeNotice | null>(null);
+  const settleChange = useCallback(() => setChange(null), []);
+
+  // Read where a request is built and where its answer lands, never captured
+  // by the effect: a getter that moved would otherwise restart the claim.
+  const versionRef = useRef(version);
+  versionRef.current = version;
 
   // Published by the running effect, which is the only thing that may touch a
   // claim. A stable callback delegating through it keeps the consumer's
@@ -324,10 +368,40 @@ export function useDocumentLock({
     let keptOut = false;
     let heldHere = false;
 
+    // The version last told as someone else's change, so a beat that names
+    // it again while the copy is still older says nothing new; and which beat
+    // last spoke for it, so an older answer arriving late is not news.
+    let told: string | null = null;
+    let changeBeat = 0;
+    const versionNow = () => versionRef.current?.();
+    /** `body` naming the version the copy holds now, when it holds one. */
+    const withVersion = <T extends object>(body: T) => {
+      const held = versionNow();
+      return held === undefined
+        ? body
+        : { ...body, [DOCUMENT_VERSION_KEY]: held };
+    };
+    /**
+     * Tell the editor of `changed`: unless it names the copy's own version,
+     * which is a save of theirs that landed while the request was out, or the
+     * one already told.
+     */
+    const tell = (
+      changed: DocumentLockChange | undefined,
+      whileAway: boolean
+    ) => {
+      if (cancelled || changed === undefined) return;
+      if (changed.currentVersion === versionNow()) return;
+      if (changed.currentVersion === told) return;
+      told = changed.currentVersion;
+      setChange({ change: changed, whileAway });
+    };
+
     // 🔴 Reset before asking. The document may have changed under a mounted
     // editor, and leaving the previous one's answer on screen would name an
     // unrelated holder — or say this editor holds a document it has not claimed.
     setState({ status: "acquiring" });
+    setChange(null);
 
     // Best effort. The claim lapses on its own, so a release that never arrives
     // costs the next editor a wait rather than access.
@@ -496,7 +570,16 @@ export function useDocumentLock({
         return;
       }
 
-      if (item.status === "acquired") installAcquired(item.claimToken, sentAt);
+      if (item.status === "acquired") {
+        // Read before installing, which records this claim as held here.
+        // A gain loads the document before the form unlocks, so its change
+        // needs no telling; taking back a document held here before is a
+        // return to it, and its change was made while this editor was away.
+        const gain = keptOut && !heldHere;
+        const away = heldHere;
+        installAcquired(item.claimToken, sentAt);
+        if (!gain) tell(item.changed, away);
+      }
       // 🔴 Both halves. `item.waiting` says somebody is waiting, which is also
       // true when the person in front of this editor has asked for nothing and a
       // THIRD colleague has. Only the conjunction says "we told them, for you".
@@ -526,7 +609,9 @@ export function useDocumentLock({
       // never mentioned it.
       const asked = requesting;
       try {
-        item = await sendClaim({ ...ref, takeover, requestAccess: asked });
+        item = await sendClaim(
+          withVersion({ ...ref, takeover, requestAccess: asked })
+        );
       } catch {
         clearTimeout(slotExpiry);
         failClaim(seq, intent);
@@ -641,10 +726,10 @@ export function useDocumentLock({
       // `renewSeq` above for why these are two different instruments.
       const beat = (renewSeq += 1);
       void protectedApi
-        .patch<MutationResponse<RenewDocumentLockOutcome>>("/document-lock", {
-          ...ref,
-          claimToken: sent,
-        })
+        .patch<MutationResponse<RenewDocumentLockOutcome>>(
+          "/document-lock",
+          withVersion({ ...ref, claimToken: sent })
+        )
         .then(({ item }) => {
           if (cancelled || sent !== token) return;
           if (item.status === "renewed") {
@@ -667,6 +752,12 @@ export function useDocumentLock({
                   someoneWaiting: item.waiting,
                 });
               }
+            }
+            // Fenced on the beat as the courtesy notice is: an older answer
+            // landing after a newer one describes a moment that has passed.
+            if (beat > changeBeat) {
+              changeBeat = beat;
+              tell(item.changed, false);
             }
             return;
           }
@@ -691,5 +782,5 @@ export function useDocumentLock({
     };
   }, [active, ref]);
 
-  return { state, gains, takeOver, requestAccess };
+  return { state, gains, takeOver, requestAccess, change, settleChange };
 }

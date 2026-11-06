@@ -13,10 +13,12 @@
 import {
   NextlyError,
   readStoredFields,
+  storedValueHash,
   updateIfUnchanged,
   type PluginStoredDocument,
   type PluginStoredFields,
   type PluginStoredIdentity,
+  type PluginStoredValue,
 } from "@nextlyhq/plugin-sdk";
 
 import { blocksFieldReach } from "../class-usage-blocks-fields";
@@ -34,6 +36,7 @@ import type {
   HostRead,
   HostReader,
   HostSource,
+  HostWrite,
   HostWriter,
   ReadValue,
   WriteResult,
@@ -94,6 +97,8 @@ export interface RewriteSite {
   readonly singles: () => Promise<readonly SingleToWalk[] | undefined>;
   /** The site's configured languages. */
   readonly locales: () => readonly string[];
+  /** The site's default language. */
+  readonly defaultLocale: () => string | undefined;
   /** The RESOLVED slug Layouts are stored under. */
   readonly layouts: string;
   /** The documents the usage index says place the component; a hint only. */
@@ -214,14 +219,36 @@ export function siteDocuments(
   return cursor => walkDocuments(site, collection, cursorFrom(cursor));
 }
 
+/** The walk over every document, and where it resumes, with one resolver. */
+function walkWith(
+  site: DocumentSite,
+  collection: (slug: string) => Promise<unknown>
+): Pick<HostSource, "documents" | "cursorOf"> {
+  return {
+    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
+    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+  };
+}
+
 /** The walk's hosts on a real site. */
 export function siteHostSource(site: RewriteSite): HostSource {
   const collection = collectionResolver(site);
   return {
-    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
-    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+    ...walkWith(site, collection),
     hinted: () => hintedDocuments(site, collection),
     outside: () => layoutsNaming(site),
+  };
+}
+
+/**
+ * Every document on the site, for a run that has no component to hint at and
+ * nothing outside the walk: a Layout is a document like any other to it.
+ */
+export function siteWalkSource(site: DocumentSite): HostSource {
+  return {
+    ...walkWith(site, collectionResolver(site)),
+    hinted: () => Promise.resolve([]),
+    outside: () => Promise.resolve([]),
   };
 }
 
@@ -488,16 +515,47 @@ export function siteHostReader(
   site: Pick<RewriteSite, "nextly" | "resolveCollection" | "singles">
 ): HostReader {
   return async host => {
+    // A fixed host is read through its top-level field, whose stored value
+    // holds the rest of its path; a group kept per language is stored whole
+    // that way, in the host's language.
     const fields =
       host.path.length === 0
         ? await scannedFields(site, host)
-        : [host.path.join(".")];
+        : host.path.slice(0, 1);
     const forms = await storedForms(host, fields);
     // The row's version, the one thing taken from a Direct API read: the
     // write sends it back, so a save since the read refuses it.
     const rev = documentVersionOf(await readRow(await site.nextly(), host));
     return { ...forms, ...(rev === undefined ? {} : { rev }) };
   };
+}
+
+/**
+ * Whether a document has a pending working draft in any of the site's
+ * languages, read as the system. A document that cannot be read, or that is
+ * not there, answers `true`: the caller then leaves alone what waits on the
+ * draft, rather than acting on a guess.
+ */
+export async function documentHasWorkingDraft(
+  site: Pick<RewriteSite, "nextly" | "locales">,
+  document: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<boolean> {
+  try {
+    const nextly = await site.nextly();
+    const locales = site.locales();
+    for (const locale of locales.length === 0 ? [undefined] : locales) {
+      const host: HostAddress = {
+        ...document,
+        path: [],
+        ...(locale === undefined ? {} : { locale }),
+      };
+      const row = await readRow(nextly, host, "draft");
+      if (row === null || row._isWorkingDraft === true) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -563,15 +621,34 @@ function hostValue(
   if (host.path.length === 0) {
     const row: Record<string, unknown> = {};
     for (const field of fields) {
-      const value = read.values[field];
-      if (value?.kind === "value") row[field] = value.value;
+      const value = within(read.values[field], []);
+      if (value.kind === "value") row[field] = value.value;
     }
     return { kind: "value", value: row };
   }
-  const value = read.values[fields[0] ?? ""];
-  return value === undefined || value.kind === "absent"
+  return within(read.values[host.path[0] ?? ""], host.path.slice(1));
+}
+
+/**
+ * The value at `path` inside a stored top-level value. Nothing stored there,
+ * a `null` included, is absent: a field never filled holds no copy, and
+ * reads as one that does not exist, never as a value to judge.
+ */
+function within(
+  stored: PluginStoredValue | undefined,
+  path: readonly string[]
+): ReadValue {
+  if (stored === undefined || stored.kind === "absent") {
+    return { kind: "absent" };
+  }
+  let value: unknown = stored.value;
+  for (const key of path) {
+    if (!isRecord(value)) return { kind: "absent" };
+    value = value[key];
+  }
+  return value === undefined || value === null
     ? { kind: "absent" }
-    : { kind: "value", value: value.value };
+    : { kind: "value", value };
 }
 
 /**
@@ -634,13 +711,18 @@ function unreachedFieldsOf(
   return names;
 }
 
-/** One read of a host's row in any state, or `null` when there is none. */
+/**
+ * One read of a host's row, or `null` when there is none: `all` reads the
+ * main row in any state, and `draft` overlays a pending working draft where
+ * there is one.
+ */
 async function readRow(
   nextly: RewriteDirectApi,
-  host: HostAddress
+  host: HostAddress,
+  read: "all" | "draft" = "all"
 ): Promise<Record<string, unknown> | null> {
   try {
-    const row = await fetchRow(nextly, host, readOptions(host));
+    const row = await fetchRow(nextly, host, readOptions(host, read));
     return isRecord(row) ? row : null;
   } catch (error) {
     if (NextlyError.isNotFound(error)) return null;
@@ -664,8 +746,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** The options a read of a host's row is made with, as the system. */
-function readOptions(host: HostAddress) {
+/** The options one read of a host's row is made with, as the system. */
+function readOptions(host: HostAddress, read: "all" | "draft") {
   return {
     depth: 0,
     overrideAccess: true,
@@ -673,6 +755,7 @@ function readOptions(host: HostAddress) {
     ...(host.locale === undefined
       ? {}
       : { locale: host.locale, fallbackLocale: false as const }),
+    ...(read === "draft" ? { draft: true } : {}),
   };
 }
 
@@ -688,16 +771,12 @@ export function siteHostWriter(
   site: Pick<RewriteSite, "identity">
 ): HostWriter {
   return async write => {
-    const field = write.host.path[0];
-    if (field === undefined || write.host.path.length !== 1) {
-      return {
-        kind: "refused",
-        detail: "This value has no address a write can name.",
-      };
-    }
+    const target = await writeTarget(write);
+    if ("kind" in target) return target;
+    const { field } = target;
     const data = withVersionFrom(
       {
-        [field]: write.value,
+        [field]: target.value,
         // Published again in the public state it was read in, which is the
         // one its workflow already chose.
         ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
@@ -718,7 +797,7 @@ export function siteHostWriter(
         expect: {
           field,
           form: write.expected.form,
-          hash: write.expected.hash,
+          hash: target.hash,
           ...(write.mode === "publish" ? { noPendingDraft: true } : {}),
         },
       });
@@ -727,6 +806,83 @@ export function siteHostWriter(
       return writeFailure(error);
     }
   };
+}
+
+/**
+ * The top-level field a write replaces, its new value, and the hash the
+ * conditional write expects of it; or why the write is not made.
+ *
+ * A host at the top level is written as it was computed. A host below a group
+ * is written as the group's whole value: the group is read again as stored,
+ * the host's own value in it must still hash to what the rewrite read, and the
+ * new value replaces it there, so a sibling an author changed meanwhile is
+ * kept. The conditional write then expects the group as just read, under its
+ * row lock. A whole-row scan has no address a write can name.
+ */
+async function writeTarget(
+  write: HostWrite
+): Promise<
+  | { readonly field: string; readonly value: unknown; readonly hash: string }
+  | WriteResult
+> {
+  const [field, ...rest] = write.host.path;
+  if (field === undefined) {
+    return {
+      kind: "refused",
+      detail: "This value has no address a write can name.",
+    };
+  }
+  if (rest.length === 0) {
+    return { field, value: write.value, hash: write.expected.hash };
+  }
+  const read = await readStored(write.host, [field], write.expected.form);
+  const group = read.kind === "found" ? read.values[field] : undefined;
+  if (
+    group === undefined ||
+    group.kind === "absent" ||
+    !isRecord(group.value) ||
+    (await storedValueHash(within(group, rest))) !== write.expected.hash
+  ) {
+    return { kind: "changed" };
+  }
+  return {
+    field,
+    value: withValueAt(group.value, rest, write.value),
+    hash: await storedValueHash(group),
+  };
+}
+
+/** A copy of `container` with the value at `path` replaced by `value`. */
+function withValueAt(
+  container: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown
+): Record<string, unknown> {
+  const [key, ...rest] = path;
+  if (key === undefined) return container;
+  const inner = container[key];
+  return {
+    ...container,
+    [key]:
+      rest.length === 0
+        ? value
+        : withValueAt(isRecord(inner) ? inner : {}, rest, value),
+  };
+}
+
+/**
+ * Writes a host as the system, checked against what was read like any other
+ * rewrite's write: for a run that strips what no person may keep, so a host
+ * the person who started it cannot open is stripped too. Every other rule of
+ * the write still applies.
+ */
+export function systemHostWriter(
+  site: Pick<RewriteSite, "nextly" | "defaultLocale">
+): HostWriter {
+  return siteHostWriter({
+    ...site,
+    identity: () => Promise.resolve({ overrideAccess: true as const }),
+  });
 }
 
 /**

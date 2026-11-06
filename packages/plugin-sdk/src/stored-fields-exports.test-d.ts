@@ -41,7 +41,8 @@ expectTypeOf(updateIfUnchanged)
   .parameter(0)
   .toEqualTypeOf<PluginStoredIdentity>();
 expectTypeOf<PluginStoredIdentity>().toEqualTypeOf<
-  PluginRouteIdentity | PluginSystemIdentity
+  | (PluginRouteIdentity & { readonly overrideAccess?: never })
+  | PluginSystemIdentity
 >();
 expectTypeOf<PluginRouteIdentity>().toMatchTypeOf<PluginStoredIdentity>();
 expectTypeOf({
@@ -50,6 +51,13 @@ expectTypeOf({
 expectTypeOf({
   overrideAccess: false as const,
 }).not.toMatchTypeOf<PluginStoredIdentity>();
+
+// A caller with the system's flag spread in is neither: the runtime refuses
+// it, and the type does too.
+declare const caller: PluginRouteIdentity;
+declare const asked: PluginStoredFieldsRequest;
+// @ts-expect-error a caller carrying `overrideAccess` is no stored identity
+void readStoredFields({ ...caller, overrideAccess: true as const }, asked);
 expectTypeOf(readStoredFields)
   .parameter(1)
   .toEqualTypeOf<PluginStoredFieldsRequest>();

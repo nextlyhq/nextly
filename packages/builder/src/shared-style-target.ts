@@ -18,6 +18,7 @@ import {
   isPlainRecord,
   isTokenRef,
   newId,
+  overlaidStyles,
   STYLE_STATES,
   type BlockDocument,
   type BlockNode,
@@ -36,7 +37,7 @@ import {
   withClassRemoved,
 } from "./class-library";
 import { designReadOnlyReason, type LockView } from "./inspector";
-import { sameStyleValue, type BuilderOp } from "./ops";
+import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
 import {
   renameSharedStyle,
   sharedStyleRows,
@@ -326,28 +327,6 @@ function isComposite(
   );
 }
 
-/**
- * One value over another: the block's wins where it sets something, and a
- * composite (the sides of a padding) is merged side by side, since the block
- * may set one side over the style's four.
- */
-function overlayValue(
-  under: StyleValue | undefined,
-  over: StyleValue | undefined
-): StyleValue | undefined {
-  if (over === undefined) return under;
-  if (!isComposite(under) || !isComposite(over)) return over;
-  const merged: Record<string, StyleValue> = { ...under };
-  for (const key of Object.keys(over)) {
-    const value = overlayValue(
-      Object.hasOwn(under, key) ? under[key] : undefined,
-      over[key]
-    );
-    if (value !== undefined) merged[key] = value;
-  }
-  return merged;
-}
-
 /** A record's own entries, with `__proto__` read as a key like any other. */
 function ownEntries<T>(record: unknown): [string, T][] {
   // The envelope guard the style readers use at every level (`isPlainRecord`,
@@ -371,58 +350,6 @@ function withKey<T>(
     configurable: true,
   });
   return copy;
-}
-
-/**
- * The look a block shows with a style under its own values, as one envelope:
- * the style's values, with the block's over them at every state, breakpoint
- * and property. What Detach leaves on the block.
- */
-export function overlaidStyles(
-  under: NodeStyles | undefined,
-  over: NodeStyles | undefined
-): NodeStyles {
-  let merged: Record<string, Record<string, Record<string, StyleValue>>> = {};
-  for (const source of [under, over]) {
-    for (const [state, byBreakpoint] of ownEntries<object>(source)) {
-      // A malformed state holds nothing to lay over, and adds no empty tier.
-      if (!isPlainRecord(byBreakpoint)) continue;
-      const states = Object.hasOwn(merged, state) ? merged[state] : {};
-      const laid = overlaidBreakpoints(states, byBreakpoint);
-      if (Object.keys(laid).length > 0) merged = withKey(merged, state, laid);
-    }
-  }
-  return merged;
-}
-
-/** One state's breakpoints with another's laid over them. */
-function overlaidBreakpoints(
-  under: Record<string, Record<string, StyleValue>>,
-  over: object
-): Record<string, Record<string, StyleValue>> {
-  let merged = under;
-  for (const [breakpoint, values] of ownEntries<object>(over)) {
-    if (!isPlainRecord(values)) continue;
-    const set = Object.hasOwn(merged, breakpoint) ? merged[breakpoint] : {};
-    merged = withKey(merged, breakpoint, overlaidValues(set, values));
-  }
-  return merged;
-}
-
-/** One breakpoint's values with another's laid over them, property by property. */
-function overlaidValues(
-  under: Record<string, StyleValue>,
-  over: object
-): Record<string, StyleValue> {
-  let merged = under;
-  for (const [property, value] of ownEntries<StyleValue>(over)) {
-    const next = overlayValue(
-      Object.hasOwn(merged, property) ? merged[property] : undefined,
-      value
-    );
-    if (next !== undefined) merged = withKey(merged, property, next);
-  }
-  return merged;
 }
 
 /**

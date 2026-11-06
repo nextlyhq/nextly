@@ -394,6 +394,19 @@ export interface UseEntryFormReturn {
   versionStartedFrom: () => string | undefined;
   /** Edits restored from a recovery point began from this version. */
   adoptRecoveredVersion: (startedFrom: string | undefined) => void;
+  /**
+   * Hold the form on someone else's change the lock told of, so no read
+   * replaces the edits before the author chooses; `loadCurrentVersion` then
+   * keeps them as it does after a refused save.
+   */
+  holdForVersionChange: VersionConflictState["holdForChange"];
+  /** Let go of a hold on the version, as a save that went through does. */
+  releaseVersionHold: VersionConflictState["release"];
+  /**
+   * The author keeps editing after a load of the current version that has
+   * not read it yet: that version no longer replaces the edits when it does.
+   */
+  stopAwaitingCurrentVersion: () => void;
 }
 
 // ============================================================================
@@ -609,6 +622,8 @@ function useConflictHold(
   holdsRead: (read: EntryData, next: EntryIdentity) => boolean;
   /** The author chose the current version before the read that brings it. */
   awaitCurrent: () => void;
+  /** The author keeps editing after all: no read is awaited to replace the form. */
+  stopAwaiting: () => void;
   /** The form was reset from `read`, as far as `decision` says. */
   resetBy: (
     read: EntryData,
@@ -651,6 +666,9 @@ function useConflictHold(
   const awaitCurrent = useCallback(() => {
     awaitingCurrent.current = true;
   }, []);
+  const stopAwaiting = useCallback(() => {
+    awaitingCurrent.current = false;
+  }, []);
   // A read replaces the copy: its version is what the copy starts from. An
   // echo of this author's own save keeps the version that save answered.
   const resetBy = useCallback(
@@ -659,7 +677,7 @@ function useConflictHold(
     },
     [adoptRead]
   );
-  return { holdsRead, awaitCurrent, resetBy };
+  return { holdsRead, awaitCurrent, stopAwaiting, resetBy };
 }
 
 /** Whether `next` is another document than the one a conflict holds the form for. */
@@ -752,7 +770,7 @@ function useConflictChoices(choices: {
       const result = await updateMutation.mutateAsync(payload as never);
       ownSave.current.storedVersion = storedVersionOf(result.item);
       write.answered(result.item);
-      version.release();
+      write.released();
       if (sent !== undefined) {
         form.reset(storedAfterSave(fields, sent, result.item));
       }
@@ -1114,6 +1132,9 @@ export function useEntryForm({
                 ? result.item.updatedAt
                 : undefined;
             write.answered(result.item);
+            // Saved, so the copy is the current version: nothing a change
+            // told before still holds it.
+            write.released();
             savedRow = result.item;
             return {
               item: result.item,
@@ -1175,6 +1196,7 @@ export function useEntryForm({
           version.withVersion({ status })
         );
         write.answered(result.item);
+        write.released();
         onSuccess?.(result.item);
         return { ok: true, item: result.item };
       } catch (error) {
@@ -1303,5 +1325,8 @@ export function useEntryForm({
     loadCurrentVersion,
     versionStartedFrom: version.startedFrom,
     adoptRecoveredVersion: version.adoptRecovered,
+    holdForVersionChange: version.holdForChange,
+    releaseVersionHold: version.release,
+    stopAwaitingCurrentVersion: hold.stopAwaiting,
   };
 }

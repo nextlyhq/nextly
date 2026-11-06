@@ -19,7 +19,12 @@ import type { JobRegistry } from "./job-registry";
 import { DEFAULT_RETENTION_MS, resolveRetentionMs } from "./job-retention";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
 import { SWEEP_KEY_PREFIX } from "./portable-key";
-import { runJobs, type JobsStore, type RunJobsResult } from "./run-jobs";
+import {
+  DEFAULT_MAX_DURATION_MS,
+  runJobs,
+  type JobsStore,
+  type RunJobsResult,
+} from "./run-jobs";
 
 /**
  * The users read the identity resolver needs.
@@ -55,6 +60,9 @@ function executorOf(db: UsersReadDb): unknown {
  * exactly what a pass uses — the same reason `WebhookDrainDatabase` exists.
  */
 export type JobsPassDatabase = JobsDatabase & UsersReadDb;
+
+/** How long a schedule's past windows are kept: 30 days. */
+const SCHEDULE_WINDOW_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Rows a single pass may remove, so a sweep cannot become a long delete. */
 export const DEFAULT_PRUNE_LIMIT = 100;
@@ -298,9 +306,28 @@ export async function runJobsPass(
     (options?.now ?? (() => new Date()))(),
     options?.onSweepError
   );
+  // The plugins' schedules, after the sweeps and before the drain for the
+  // same reason: the pass that enqueues a window's job is the pass that runs
+  // it. A schedule that cannot be swept is reported by the schedules
+  // themselves and never fails the pass. The sweep spends the pass's own
+  // time, so the drain is given what is left of it rather than a fresh
+  // budget a serverless limit would cut short.
+  const schedules = registry.schedules();
+  let drainOptions = options;
+  if (schedules !== undefined) {
+    const budgetMs = options?.maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
+    const sweptFrom = Date.now();
+    await schedules
+      .sweep((options?.now ?? (() => new Date()))(), sweptFrom + budgetMs)
+      .catch(() => undefined);
+    drainOptions = {
+      ...options,
+      maxDurationMs: Math.max(0, budgetMs - (Date.now() - sweptFrom)),
+    };
+  }
 
   const result = await runJobs(
-    passDeps(adapter, registry, repository, options)
+    passDeps(adapter, registry, repository, drainOptions)
   );
 
   // Prune AFTER the drain, and never in a way that can fail it. A queue without
@@ -320,6 +347,18 @@ export async function runJobsPass(
       // ran its jobs into a pass that reports failure.
     }
   }
+  // Schedule windows are kept longer than finished jobs, and on their own
+  // clock: a window's record is what stops it being enqueued twice.
+  await registry
+    .schedules()
+    ?.prune(
+      new Date(
+        (options?.now ?? (() => new Date()))().getTime() -
+          SCHEDULE_WINDOW_RETENTION_MS
+      ),
+      options?.pruneLimit ?? DEFAULT_PRUNE_LIMIT
+    )
+    .catch(() => 0);
 
   return result;
 }

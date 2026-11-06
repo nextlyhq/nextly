@@ -52,6 +52,10 @@ const HARNESS = "@t/rewrite-harness";
 const NOTES = "notes";
 /** A collection whose blocks values sit in a repeater: no fixed path reaches them. */
 const BOARDS = "boards";
+/** A collection whose blocks field is laid out in a group with no name. */
+const PANELS = "panels";
+/** A translated collection whose blocks field sits in a group kept per language. */
+const ARTICLES = "articles";
 
 type Node = Record<string, unknown>;
 
@@ -277,6 +281,10 @@ describe.each(getConfiguredTestDialects())(
         localization?: { locales: string[]; defaultLocale: string };
         /** Whether the site also has boards. */
         boards?: boolean;
+        /** Whether the site also has panels. */
+        panels?: boolean;
+        /** Whether the site also has articles (it must then be translated). */
+        articles?: boolean;
       } = {}
     ) {
       const plugin = pageBuilder();
@@ -311,6 +319,37 @@ describe.each(getConfiguredTestDialects())(
                 } as never,
               ]
             : []),
+          ...(site.panels === true
+            ? [
+                {
+                  slug: PANELS,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      type: "group",
+                      fields: [{ name: "content", type: BLOCKS_TYPE }],
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
+          ...(site.articles === true
+            ? [
+                {
+                  slug: ARTICLES,
+                  localized: true,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "hero",
+                      type: "group",
+                      localized: true,
+                      fields: [{ name: "body", type: BLOCKS_TYPE }],
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
         ],
         ...(site.singles === undefined
           ? {}
@@ -325,9 +364,15 @@ describe.each(getConfiguredTestDialects())(
       const singleSlugs = (site.singles ?? []).map(
         single => (single as { slug: string }).slug
       );
+      const extra = [
+        ...(site.panels === true ? [`read-${PANELS}`, `update-${PANELS}`] : []),
+        ...(site.articles === true
+          ? [`read-${ARTICLES}`, `update-${ARTICLES}`]
+          : []),
+      ];
       const anAuthor = async (name: string) => {
         const id = await person(t, name);
-        await grant(t, id, AUTHOR_GRANTS, singleSlugs);
+        await grant(t, id, [...AUTHOR_GRANTS, ...extra], singleSlugs);
         return { id, cookie: await sessionOf(t, id) };
       };
       const author = await anAuthor("author");
@@ -1098,6 +1143,146 @@ describe.each(getConfiguredTestDialects())(
       expect(copies(live, cardId)).toBe(0);
       expect(texts(live)).toEqual(["Own", "Card title"]);
       expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
+    });
+
+    /** Whether the run's last report leaves a host of this document. */
+    const leaves = (reports: RewriteReport[], slug: string, id: string) =>
+      (reports.at(-1)?.left ?? []).some(
+        left => left.host.slug === slug && left.host.id === id
+      );
+
+    it("converts a copy in a blocks field laid out in a group with no name, and leaves nothing", async () => {
+      const { t, cookie } = await boot({}, { panels: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: PANELS,
+        data: {
+          title: "Panel",
+          content: pageDoc([heading("own", "Own"), copyOf("i1", cardId)]),
+        },
+        overrideAccess: true,
+      });
+      const panelId = String(created.item.id);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.finished).toBe(true);
+      expect(leaves(reports, PANELS, panelId)).toBe(false);
+      const nodes = await nodesOf(t, PANELS, panelId);
+      expect(copies(nodes, cardId)).toBe(0);
+      expect(texts(nodes)).toEqual(["Own", "Card title"]);
+    });
+
+    /** An article's hero body in one language, as stored. */
+    async function heroOf(t: TestNextly, id: string, locale: string) {
+      const row = (await t.nextly.findByID({
+        collection: ARTICLES,
+        id,
+        locale,
+        fallbackLocale: false,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+      } as never)) as unknown as { hero?: { body?: unknown } };
+      return (asDocument(row.hero?.body)?.nodes ?? []) as Node[];
+    }
+
+    const TRANSLATED = {
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      articles: true,
+    };
+
+    it("converts a copy in a group kept per language, in each language", async () => {
+      const { t, cookie } = await boot({}, TRANSLATED);
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: {
+          title: "Article",
+          hero: {
+            body: pageDoc([heading("en", "English"), copyOf("i1", cardId)]),
+          },
+        },
+        locale: "en",
+        overrideAccess: true,
+      } as never);
+      const articleId = String((created as { item: { id: unknown } }).item.id);
+      await t.nextly.update({
+        collection: ARTICLES,
+        id: articleId,
+        data: {
+          hero: {
+            body: pageDoc([heading("de", "Deutsch"), copyOf("i2", cardId)]),
+          },
+        },
+        locale: "de",
+        overrideAccess: true,
+      } as never);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.finished).toBe(true);
+      expect(leaves(reports, ARTICLES, articleId)).toBe(false);
+      const en = await heroOf(t, articleId, "en");
+      const de = await heroOf(t, articleId, "de");
+      expect(copies(en, cardId)).toBe(0);
+      expect(texts(en)).toEqual(["English", "Card title"]);
+      expect(copies(de, cardId)).toBe(0);
+      expect(texts(de)).toEqual(["Deutsch", "Card title"]);
+    });
+
+    it("clears a run once an author removed a copy from a group kept per language by hand", async () => {
+      const { t, cookie } = await boot({}, TRANSLATED);
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: ARTICLES,
+        data: {
+          title: "Article",
+          hero: {
+            body: pageDoc([heading("en", "English"), copyOf("i1", cardId)]),
+          },
+        },
+        locale: "en",
+        overrideAccess: true,
+      } as never);
+      const articleId = String((created as { item: { id: unknown } }).item.id);
+      await open(cookie, cardId);
+      // The author takes the copy out by hand before the rewrite comes to it.
+      await t.nextly.update({
+        collection: ARTICLES,
+        id: articleId,
+        data: { hero: { body: pageDoc([heading("en", "English")]) } },
+        locale: "en",
+        overrideAccess: true,
+      } as never);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.finished).toBe(true);
+      expect(leaves(reports, ARTICLES, articleId)).toBe(false);
+      expect(texts(await heroOf(t, articleId, "en"))).toEqual(["English"]);
+    });
+
+    it("does not let a document whose blocks field was never filled hold the run back", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: NOTES,
+        data: { title: "Empty" },
+        overrideAccess: true,
+      });
+      const emptyId = String(created.item.id);
+      const id = await note(t, "Note", [copyOf("i1", cardId)]);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.finished).toBe(true);
+      expect(reports.at(-1)?.left ?? []).toEqual([]);
+      expect(leaves(reports, NOTES, emptyId)).toBe(false);
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(0);
     });
   }
 );

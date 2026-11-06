@@ -110,6 +110,19 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
 }
 
 /**
+ * The version `body` names, decoded; undefined when it names none. Only the
+ * decode: whether a write must name one is `versionCheckFor`'s to decide.
+ *
+ * @throws NextlyError.validation for a `_rev` that is not a version.
+ */
+export function givenVersionOf(
+  body: Readonly<Record<string, unknown>>
+): DecodedVersion | undefined {
+  const raw = body[DOCUMENT_VERSION_KEY];
+  return raw === undefined ? undefined : decodeDocumentVersion(raw);
+}
+
+/**
  * What an update is judged against: the version it gave, or nothing.
  *
  * One decision, taken once at each write path's boundary, before the body's
@@ -167,13 +180,12 @@ export function versionCheckFor(
   // Both read even when exempt, so a malformed value is refused the same way
   // on every path.
   const overwrite = overwriteOf(body);
-  const raw = body[DOCUMENT_VERSION_KEY];
-  const given = raw === undefined ? undefined : decodeDocumentVersion(raw);
+  const given = givenVersionOf(body);
   if (options.exempt) return { kind: "unjudged" };
   if (overwrite)
     return given ? { kind: "overwrite", given } : { kind: "overwrite" };
   return given
-    ? { kind: "judge", given, raw: raw as string }
+    ? { kind: "judge", given, raw: body[DOCUMENT_VERSION_KEY] as string }
     : { kind: "unjudged" };
 }
 

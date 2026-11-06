@@ -2924,21 +2924,20 @@
  * seen and what is announced reading off one value.
  */
 /*
- * The chosen one in the panel's text colour at 600, beside the others' muted
- * 500: the accent fill alone measured about 1.7:1 against the unselected
- * background in dark, under 3:1.
+ * The chosen one filled with the panel's own text colour, its label in the
+ * panel's background, at 600: the most contrast either mode has, for the
+ * label and for the fill against the panel. Not the accent, which is the
+ * site's brand colour, set at run time with a foreground only when the site
+ * names one, so a fill of it can sit under any label at any contrast (an
+ * orange brand measured 1.83:1 under white in dark).
  */
 .nx-style-inspector__toggle > button[aria-pressed="true"],
-.nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: var(--nx-accent);
-  color: var(--nx-foreground);
+.nx-style-inspector__toggle > button[aria-checked="true"],
+.nx-segment__option[aria-checked="true"],
+.nx-icon-choice__option[aria-checked="true"] {
+  background: var(--nx-foreground);
+  color: var(--nx-background);
   font-weight: 600;
-}
-
-/* A step lighter in dark, so its fill is told from the panel's black too. */
-.dark .nx-style-inspector__toggle > button[aria-pressed="true"],
-.dark .nx-style-inspector__toggle > button[aria-checked="true"] {
-  background: color-mix(in oklch, var(--nx-accent) 82%, var(--nx-foreground));
 }
 
 /*
@@ -8823,14 +8822,14 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   background: transparent;
 }
 
-.nx-columns-layout__stack {
+.nx-segment {
   display: inline-flex;
   border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
 
-.nx-columns-layout__stack-option {
+.nx-segment__option {
   block-size: var(--nx-builder-control-height);
   padding: 0 0.625rem;
   border: 0;
@@ -8841,16 +8840,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   cursor: pointer;
 }
 
-.nx-columns-layout__stack-option:last-child {
+.nx-segment__option:last-child {
   border-inline-end: 0;
 }
 
-.nx-columns-layout__stack-option[aria-checked="true"] {
-  background: var(--nx-muted);
-  font-weight: 600;
-}
-
-.nx-columns-layout__stack-option:focus-visible {
+.nx-segment__option:focus-visible {
   outline: 2px solid var(--nx-accent);
   outline-offset: -2px;
 }
@@ -9096,15 +9090,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   display: none;
 }
 
-.nx-icon-choice__option:not(:disabled):hover,
+/* Not over the chosen one, whose fill says which is chosen. */
+.nx-icon-choice__option:not(:disabled):not([aria-checked="true"]):hover,
 .nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
   color: var(--nx-foreground);
   background: var(--nx-muted);
-}
-
-.nx-icon-choice__option[aria-checked="true"] {
-  color: var(--nx-accent-foreground);
-  background: var(--nx-accent);
 }
 
 /*

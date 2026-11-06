@@ -84,14 +84,20 @@ export type PluginStoredDocument =
  */
 export interface PluginSystemIdentity {
   readonly overrideAccess: true;
+  /** The system is no caller: one carrying a user is refused. */
+  readonly user?: never;
+  readonly authenticatedScope?: never;
 }
 
 /**
  * @experimental Who a stored read or a conditional write is made as: a route's
  * caller, as `ctx.caller.identity()` resolved them and judged as their own
- * read or update is, or the system.
+ * read or update is, or the system. The two never mix: a caller carrying
+ * `overrideAccess` is neither, and is refused.
  */
-export type PluginStoredIdentity = PluginRouteIdentity | PluginSystemIdentity;
+export type PluginStoredIdentity =
+  | (PluginRouteIdentity & { readonly overrideAccess?: never })
+  | PluginSystemIdentity;
 
 /** @experimental A read of the stored form of some of a document's fields. */
 export type PluginStoredFieldsRequest = PluginStoredDocument & {

@@ -184,6 +184,29 @@ describe("the version the editor's copy started from", () => {
     );
   });
 
+  it("lets go of a change it was told of once a save of its own succeeds", async () => {
+    // Told of a change while editing, and then its own save goes through:
+    // the copy is now the current version, so a newer read must reach it.
+    // Still held, every read after would be skipped and the next save sent
+    // from a version long gone.
+    const rendered = render();
+    act(() => {
+      rendered.result.current.holdForVersionChange(ANA_CHANGED as never);
+    });
+    update.mockResolvedValueOnce(
+      answered({ ...stored, title: "Mine", _rev: "5" })
+    );
+    await typeAndSave(rendered, "Mine");
+
+    act(() => rendered.rerender({ entry: { ...anas, _rev: "6" } }));
+    update.mockResolvedValueOnce(answered({ ...anas, _rev: "7" }));
+    await typeAndSave(rendered, "Mine again");
+
+    expect(update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _rev: "6" })
+    );
+  });
+
   it("is not moved by a save's answer once the form shows another entry", async () => {
     // Counters are small, so two entries often stand at the same version:
     // taking one's answer for the other would let a save of the second pass
@@ -226,6 +249,86 @@ describe("the version the editor's copy started from", () => {
     expect(update).toHaveBeenLastCalledWith(
       expect.objectContaining({ _rev: "5" })
     );
+  });
+
+  it("keeps another entry's hold when an earlier save answers after the switch", async () => {
+    // 🔴 The first entry's save went through, but the copy it was made from is
+    // gone: releasing whatever is shown would let the colleague's newer read
+    // reset the second entry over the edits typed into it.
+    let answerFirst: (answer: unknown) => void = () => {};
+    update.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          answerFirst = resolve;
+        })
+    );
+    const rendered = render({ ...stored, _rev: "5" });
+    act(() => {
+      rendered.result.current.form.setValue("title", "First's edit", {
+        shouldDirty: true,
+      });
+    });
+    let saving: Promise<unknown> = Promise.resolve();
+    act(() => {
+      saving = rendered.result.current.handleSubmit();
+    });
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+
+    const second = {
+      id: "e2",
+      title: "Second",
+      summary: "theirs",
+      updatedAt: "2026-10-19T03:00:00.000Z",
+      _rev: "5",
+    };
+    act(() => rendered.rerender({ entry: second }));
+    act(() => {
+      rendered.result.current.form.setValue("title", "Second's edit", {
+        shouldDirty: true,
+      });
+      rendered.result.current.holdForVersionChange({
+        ...ANA_CHANGED,
+        currentVersion: "6",
+      } as never);
+    });
+    await act(async () => {
+      answerFirst(answered({ ...stored, _rev: "6" }));
+      await saving;
+    });
+
+    act(() =>
+      rendered.rerender({
+        entry: {
+          ...second,
+          title: "Ana's second",
+          updatedAt: "2026-10-19T03:05:00.000Z",
+          _rev: "6",
+        },
+      })
+    );
+    expect(rendered.result.current.form.getValues("title")).toBe(
+      "Second's edit"
+    );
+  });
+
+  it("keeps the edits when the author keeps editing before the current version a load awaits arrives", async () => {
+    // 🔴 Loading the current version waits for its read; when that read
+    // fails and the author keeps editing, the version arriving later must not
+    // replace the edits they chose to keep.
+    const rendered = render();
+    act(() => {
+      rendered.result.current.holdForVersionChange(ANA_CHANGED as never);
+      rendered.result.current.form.setValue("title", "Mine", {
+        shouldDirty: true,
+      });
+    });
+    await act(async () => {
+      await rendered.result.current.loadCurrentVersion(false);
+    });
+    act(() => rendered.result.current.stopAwaitingCurrentVersion());
+
+    act(() => rendered.rerender({ entry: anas }));
+    expect(rendered.result.current.form.getValues("title")).toBe("Mine");
   });
 
   it("does not pin a refusal that arrives once the form shows another entry", async () => {

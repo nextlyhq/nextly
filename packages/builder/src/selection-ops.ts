@@ -53,7 +53,7 @@ import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel } from "./layers";
 import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import { normalizeSelection } from "./selection";
 
 /** A planned group, with what to say about it. */

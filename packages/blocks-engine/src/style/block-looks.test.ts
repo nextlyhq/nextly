@@ -5,7 +5,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { MAX_NAMED_CLASSES } from "../document";
 
-import { blockLooks, lookClassId } from "./block-looks";
+import { blockLooks, blockOwnLooks, lookClassId } from "./block-looks";
 import { compilePageCss } from "./compile-page";
 import { styleOrigin } from "./style-origin";
 import {
@@ -42,6 +42,56 @@ describe("a block type's looks, as the site receives them", () => {
         styles: colour("red"),
       },
     ]);
+  });
+
+  it("gives each block's own look apart, with no edits and the own-look mark", () => {
+    expect(blockOwnLooks([button])).toEqual([
+      {
+        id: lookClassId("core/button", "primary"),
+        slug: "button-primary",
+        label: "Primary",
+        orderIndex: 0,
+        blockType: "core/button",
+        styles: {},
+        isDefault: true,
+      },
+    ]);
+  });
+
+  it("keeps an own look whatever its name, under a slug made writable", () => {
+    const named = {
+      name: "core/button",
+      editor: {
+        variations: [
+          { name: "Primary Choice!", isDefault: true as const },
+          // A worn look's name must already be writable.
+          { name: "Big Bold!", styles: colour("red") },
+        ],
+      },
+    };
+    expect(
+      blockOwnLooks([named]).map(look => [look.id, look.slug, look.isDefault])
+    ).toEqual([
+      [
+        lookClassId("core/button", "Primary Choice!"),
+        "button-primary-choice",
+        true,
+      ],
+    ]);
+    expect(blockLooks([named])).toEqual([]);
+  });
+
+  it("refuses a block's own look that also states styles: its styles are the base", () => {
+    const both = {
+      name: "core/button",
+      editor: {
+        variations: [
+          { name: "primary", isDefault: true as const, styles: colour("red") },
+        ],
+      },
+    };
+    expect(blockOwnLooks([both])).toEqual([]);
+    expect(blockLooks([both])).toEqual([]);
   });
 
   it("names a look of a type outside core by its whole type", () => {

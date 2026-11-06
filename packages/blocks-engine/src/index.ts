@@ -602,6 +602,10 @@ export { isNodeType, isNodeVersion } from "./validation";
  * gets a different answer for exactly the values that survive JSON badly.
  */
 export { isPlainRecord } from "./plain-record";
+// One style envelope laid over another, property by property: what Detach
+// leaves on a block, and a block type's base with the site's edits over it.
+// `@experimental` with the own-look helpers above.
+export { overlaidStyles } from "./style/overlaid-styles";
 /**
  * Exported because the renderer and every plain-text projection of a document
  * must agree on what counts as authored text. They did not: a stored number was
@@ -943,6 +947,7 @@ export {
 } from "./style/node-class";
 export {
   compileStyleValues,
+  scaledTokenText,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
   // The prefix tokens are actually written under, which is not the one that was
@@ -950,8 +955,16 @@ export {
   // Exported so a reader keyed on the emitted custom-property names asks this
   // rather than the setting, which changes without the output changing.
   safeTokenPrefix,
+  paintsBackgroundImage,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
+/**
+ * A background overlay's two custom properties, for an editor drawing their
+ * controls.
+ *
+ * @experimental
+ */
+export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {
@@ -981,9 +994,15 @@ export type {
 // Named classes: reusable style presets a node applies by id.
 export type { NamedClass } from "./style/named-class";
 export {
+  // A block type's own look, and the edits to its base a site's library holds.
+  // `@experimental` (with `blockOwnLooks` and `overlaidStyles`) until the
+  // editor that changes an own look ships.
+  blockDefaultsOf,
   classNameOf,
+  isDefaultLook,
   isLook,
   isUsableNamedClass,
+  ownLooksRead,
   LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
@@ -1009,7 +1028,7 @@ export {
  * @experimental A block type's looks (its named variants: a button's Outline), as the shared
  * styles a site receives, bound to the block type and written before every other shared style.
  */
-export { blockLooks, lookClassId } from "./style/block-looks";
+export { blockLooks, blockOwnLooks, lookClassId } from "./style/block-looks";
 export type { BreakpointAxis } from "./style/breakpoint-axes";
 
 // Where each emitted declaration came from, for an editor that has to tell an author which of

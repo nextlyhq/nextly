@@ -125,7 +125,7 @@ export {
   type BuilderOp,
   type NodePatch,
   type OpPosition,
-} from "./ops";
+} from "./op-vocabulary";
 
 /**
  * @experimental The editor shell's props.

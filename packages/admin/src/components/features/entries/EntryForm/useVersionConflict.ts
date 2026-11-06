@@ -34,8 +34,11 @@ export interface VersionConflict {
 
 interface Pinned {
   stale: StaleVersion;
-  /** The refused write, without its version. */
-  payload: Record<string, unknown>;
+  /**
+   * The refused write, without its version; null for a hold on a change the
+   * lock told of, where no write was refused and there is nothing to replay.
+   */
+  payload: Record<string, unknown> | null;
   /**
    * The form values the refused write was made from, where the form keeps
    * values the write does not carry as they are, such as a link the editor
@@ -71,6 +74,14 @@ export interface VersionConflictState {
   adoptRecovered: (startedFrom: string | undefined) => void;
   /** The form values the refused write was made from, while pinned. */
   refusedValues: () => Record<string, unknown> | undefined;
+  /**
+   * Hold the form on someone else's change the lock told of, before any save
+   * was refused: no read resets the edits until the author chooses, and the
+   * dialog stays closed. Loading the current version keeps the edits as it
+   * does after a refusal; a save from them is refused and opens the dialog.
+   * A form already held keeps the hold it has.
+   */
+  holdForChange: (stale: StaleVersion) => void;
   /** The refused write again, saving over the newer version on purpose. */
   overwrite: () => Record<string, unknown> | null;
   /**
@@ -105,6 +116,11 @@ function withStartingVersion<T extends Record<string, unknown>>(
 export interface VersionWrite {
   /** The write's answer stored `item`: its version is the copy's now. */
   answered: (item: unknown) => void;
+  /**
+   * The write went through: a hold on the copy it was made from no longer
+   * holds it. A copy shown since keeps its own hold.
+   */
+  released: () => void;
   /**
    * Pin the form when `error` refuses `payload` because the document changed
    * since; answers whether it did. `shown` is the form values the write was
@@ -164,6 +180,9 @@ function writeFor(tracked: Tracked): VersionWrite {
     answered: item => {
       if (shownStill()) adoptAnswered(tracked, item);
     },
+    released: () => {
+      if (shownStill()) release(tracked);
+    },
     refused,
     refusedThen: (payload, shown) => (error: unknown) => {
       refused(error, payload, shown);
@@ -193,7 +212,9 @@ function pinRefusal(
 
 function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
   const held = tracked.pin;
-  if (!held) return null;
+  // Nothing to save over with: a hold on a told change refused no write, and
+  // an empty overwrite would save none of the edits on screen.
+  if (!held?.payload) return null;
   // The version the edits began from, so history names whose changes the
   // overwrite replaced.
   return withStartingVersion(
@@ -204,7 +225,10 @@ function overwriteOf(tracked: Tracked): Record<string, unknown> | null {
 
 function fail(tracked: Tracked, message: string): void {
   const held = tracked.pin;
-  if (held) tracked.setConflict({ stale: held.stale, failure: message });
+  // A hold on a told change has no dialog to say it in, nor a refused write
+  // to save anyway: its notice says it, where the change was told.
+  if (held?.payload)
+    tracked.setConflict({ stale: held.stale, failure: message });
 }
 
 async function keepEdits(
@@ -221,6 +245,12 @@ async function keepEdits(
     withStartingVersion(values, tracked.pin?.startedFrom),
     locale
   );
+}
+
+function holdForChange(tracked: Tracked, stale: StaleVersion): void {
+  if (tracked.pin !== null) return;
+  // No refused write to replay: a save made later sends its own.
+  tracked.pin = { stale, payload: null, startedFrom: tracked.startedFrom };
 }
 
 function release(tracked: Tracked): void {
@@ -240,6 +270,7 @@ function actionsOver(tracked: Tracked): Omit<VersionConflictState, "conflict"> {
     adoptRecovered: (recovered: string | undefined) =>
       adoptRecovered(tracked, recovered),
     refusedValues: () => tracked.pin?.shown,
+    holdForChange: (stale: StaleVersion) => holdForChange(tracked, stale),
     overwrite: () => overwriteOf(tracked),
     keepEdits: (scope, values, locale) =>
       keepEdits(tracked, scope, values, locale),

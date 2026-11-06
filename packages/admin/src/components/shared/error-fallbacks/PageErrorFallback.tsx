@@ -30,7 +30,7 @@ export interface PageErrorFallbackProps {
 
   /**
    * Optional title for the error message
-   * @default The catalog's `errors.page.title`: "Something went wrong" in English
+   * @default The catalog's `nextly.errors.page.title`: "Something went wrong" in English
    */
   title?: string;
 
@@ -108,8 +108,8 @@ export function PageErrorFallback({
   const t = useT();
   const defaultDescription =
     process.env.NODE_ENV === "development"
-      ? t("errors.page.description.development")
-      : t("errors.page.description");
+      ? t("nextly.errors.page.description.development")
+      : t("nextly.errors.page.description");
 
   return (
     <PageContainer>
@@ -127,7 +127,7 @@ export function PageErrorFallback({
           </div>
 
           <h1 className="text-fluid-2xl font-bold tracking-[-0.03em] text-foreground leading-tight mb-4">
-            {title ?? t("errors.page.title")}
+            {title ?? t("nextly.errors.page.title")}
           </h1>
 
           <p className="text-fluid-lg text-muted-foreground leading-relaxed max-w-md mb-10">
@@ -143,7 +143,7 @@ export function PageErrorFallback({
               className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold active:scale-95 transition-all duration-200"
             >
               <RefreshCw className="h-4 w-4" />
-              {t("errors.page.reload")}
+              {t("nextly.errors.page.reload")}
             </Button>
 
             {/* Try Again button (only if reset function provided) */}
@@ -155,7 +155,7 @@ export function PageErrorFallback({
                 className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold border-border hover:bg-accent active:scale-95 transition-all duration-200"
               >
                 <RefreshCw className="h-4 w-4" />
-                {t("errors.page.retry")}
+                {t("nextly.errors.page.retry")}
               </Button>
             )}
 
@@ -168,7 +168,7 @@ export function PageErrorFallback({
                   className="w-full sm:w-auto min-w-[140px] px-8 py-6 rounded-md text-sm font-semibold text-muted-foreground hover:text-foreground active:scale-95 transition-all duration-200"
                 >
                   <LayoutDashboard className="h-4 w-4" />
-                  {t("errors.page.home")}
+                  {t("nextly.errors.page.home")}
                 </Button>
               </Link>
             )}
@@ -179,7 +179,7 @@ export function PageErrorFallback({
             <div className="mt-12 w-full text-left">
               <details className="group">
                 <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-muted-foreground transition-colors flex items-center justify-center gap-2 outline-none">
-                  <span>{t("errors.page.details")}</span>
+                  <span>{t("nextly.errors.page.details")}</span>
                 </summary>
                 <div className="mt-4 p-4 rounded-lg bg-accent/50  border border-border overflow-hidden">
                   <pre className="text-xs font-mono text-muted-foreground overflow-x-auto whitespace-pre-wrap leading-relaxed max-h-[200px] custom-scrollbar">
