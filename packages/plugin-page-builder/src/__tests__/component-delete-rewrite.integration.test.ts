@@ -1263,6 +1263,7 @@ describe.each(getConfiguredTestDialects())(
           hero: {
             body: pageDoc([heading("de", "Deutsch"), copyOf("i2", cardId)]),
           },
+          _overwrite: true,
         },
         locale: "de",
         overrideAccess: true,
@@ -1317,7 +1318,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: ARTICLES,
         id: articleId,
-        data: { hero: { body: pageDoc([heading("en", "English")]) } },
+        data: {
+          hero: { body: pageDoc([heading("en", "English")]) },
+          _overwrite: true,
+        },
         locale: "en",
         overrideAccess: true,
       } as never);

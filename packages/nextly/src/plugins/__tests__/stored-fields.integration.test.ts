@@ -1844,7 +1844,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "drafted",
           id,
-          data: { body: { v: "draft" } },
+          data: { body: { v: "draft" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
@@ -1902,7 +1902,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id,
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
