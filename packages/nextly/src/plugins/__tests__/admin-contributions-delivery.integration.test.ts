@@ -7,11 +7,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
 import { createDynamicHandlers } from "../../routeHandler";
+import { sanitizeConfig } from "../../shared/types/config";
 import type { AdminContribution } from "../admin-contributions";
 import type { PluginDefinition } from "../plugin-context";
 import {
@@ -115,7 +119,7 @@ async function boot(dialect: TestDialect): Promise<void> {
   expect(current.adapter.dialect).toBe(dialect);
   for (const id of [BOSS, AGENT])
     await userWhoMay(current, id, "read", [TICKETS]);
-  await userWhoMay(current, BOSS, "update", [TICKETS]);
+  await grantTo(current, BOSS, "update", [TICKETS]);
 }
 
 async function cookieFor(userId: string): Promise<string> {
@@ -138,7 +142,12 @@ async function meta(
   path: string[],
   userId?: string
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const res = await createDynamicHandlers().GET(
+  // The route reads the plugin list from the config it was given, overlaid
+  // with what boot produced.
+  const handlers = createDynamicHandlers({
+    config: sanitizeConfig({ collections: [], plugins: [SUPPORT] }),
+  });
+  const res = await handlers.GET(
     new Request(`http://localhost/api/${path.join("/")}`, {
       headers: userId ? { cookie: await cookieFor(userId) } : {},
     }),
