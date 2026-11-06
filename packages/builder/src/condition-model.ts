@@ -237,9 +237,11 @@ export function conditionSentence(
   if (draft.op === undefined) {
     return { field: fieldWords, operator: "", value: "" };
   }
+  // A field this collection doesn't offer still has its operator said in
+  // words, as one it does: "has a value", not the stored "exists".
   const operator =
     field === undefined
-      ? draft.op.replaceAll("_", " ")
+      ? LABELS[draft.op]
       : operatorWords(draft.op, field.kind);
   const valueOp = valueOpFor(draft.op);
   if (valueOp === undefined) return { field: fieldWords, operator, value: "" };

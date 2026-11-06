@@ -82,10 +82,12 @@ describe("a condition as one sentence", () => {
     ).toBe("Published has a value");
   });
 
-  it("names a field the controls don't offer, as stored", () => {
+  it("names a field the controls don't offer, as stored, its operator in words", () => {
     expect(
-      conditionSentence({ field: "secret", op: "exists" }, undefined).field
-    ).toBe("secret (not offered here)");
+      conditionLine(
+        conditionSentence({ field: "secret", op: "exists" }, undefined)
+      )
+    ).toBe("secret (not offered here) has a value");
   });
 });
 
