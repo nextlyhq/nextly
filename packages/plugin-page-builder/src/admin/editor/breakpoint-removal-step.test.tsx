@@ -25,6 +25,7 @@ import type { BreakpointRemoval } from "./use-breakpoint-removal";
 import type {
   SiteBreakpointRemovalStatus,
   SiteBreakpointsDryRun,
+  SiteBreakpointRemovalsRead,
   SiteSettingsRead,
 } from "../../library-contract";
 
@@ -45,14 +46,21 @@ const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
 let dryRunAnswer: () => Promise<unknown>;
 let confirmAnswer: () => Promise<unknown>;
 let carryOnAnswers: Array<() => Promise<unknown>> = [];
+let undoAnswer: () => Promise<unknown>;
 /** What the read of a removal's status answers. */
 let statusRead: () => Promise<{
   removal: SiteBreakpointRemovalStatus | null;
 }>;
 /** The paths the status was read at. */
 const statusAsked: string[] = [];
-/** What the settings read answers when the watch asks it alone. */
-let removalsThere: () => Promise<SiteSettingsRead> = async () => siteRead;
+/** What the removals read answers when the watch asks it. */
+let removalsThere: () => Promise<SiteBreakpointRemovalsRead> = async () =>
+  removalsOf(siteRead);
+
+/** The removals read as the tab's read reports them. */
+function removalsOf(read: SiteSettingsRead): SiteBreakpointRemovalsRead {
+  return { removals: read.removals ?? [], undoable: read.undoable ?? null };
+}
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: () => ({
@@ -63,8 +71,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     refetch,
   }),
   readPluginRoute: async ({ path }: { path: string }) => {
-    // The tab's own read, asked alone by the watch for another tab's removal.
-    if (path === "/site/settings") return removalsThere();
+    // The removals alone, asked by the watch for another tab's removal.
+    if (path === "/site/breakpoints/removal") return removalsThere();
     statusAsked.push(path);
     return statusRead();
   },
@@ -73,6 +81,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     body: Record<string, unknown>;
   }) => {
     writes.push({ path: write.path, body: write.body });
+    if (write.path === "/site/breakpoints/removal/undo") return undoAnswer();
     if (write.path === "/site/breakpoints/removal") {
       const next = carryOnAnswers.shift();
       if (next === undefined) throw new Error("no more carry-on answers");
@@ -214,9 +223,12 @@ beforeEach(() => {
   dryRunAnswer = dryRun(STORED);
   confirmAnswer = saved(true);
   carryOnAnswers = [];
+  undoAnswer = async () => {
+    throw new Error("no undo answer");
+  };
   statusRead = reads([]);
   statusAsked.length = 0;
-  removalsThere = async () => siteRead;
+  removalsThere = async () => removalsOf(siteRead);
   refetch.mockClear();
   writer.mockClear();
   refresh.mockClear();
@@ -248,7 +260,9 @@ describe("removing a breakpoint in Settings", () => {
         name: "Remove Mobile and the styles set for it?",
       })
     ).toBeTruthy();
-    expect(screen.getByText("This can't be undone.")).toBeTruthy();
+    expect(
+      screen.getByText("You can undo this from Settings for 30 days.")
+    ).toBeTruthy();
     // Focus followed the step, rather than falling back to the page.
     expect(stepOf("confirm").parentElement).toBe(document.activeElement);
     // The step has the tab to itself.
@@ -550,7 +564,7 @@ describe("removing a breakpoint in Settings", () => {
     expect(statusAsked).toEqual(["/site/breakpoints/removal?runId=run-1"]);
   });
 
-  it("follows on, never saying done, while the run's status can't be read", async () => {
+  it("reads the status again, never saying done or carrying on, while the run's status can't be read", async () => {
     confirmAnswer = saved(true, 0);
     let failing = true;
     statusRead = async () => {
@@ -565,8 +579,6 @@ describe("removing a breakpoint in Settings", () => {
         },
       };
     };
-    let carried: (value: unknown) => void = () => {};
-    carryOnAnswers = [() => new Promise(resolve => (carried = resolve))];
     show();
     await removeMobile();
     await userEvent.click(
@@ -574,8 +586,8 @@ describe("removing a breakpoint in Settings", () => {
         name: "Remove Mobile and its styles",
       })
     );
-    // The save said finished, with nothing left in its call; the status could
-    // not be read, so it is followed on rather than called done.
+    // The save said finished; the status could not be read, so it is not
+    // called done.
     expect(
       await screen.findByRole(
         "heading",
@@ -585,20 +597,19 @@ describe("removing a breakpoint in Settings", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Mobile was removed")).toBeNull();
     failing = false;
-    await waitFor(() => expect(carryOnAnswers).toHaveLength(0), {
-      timeout: 8000,
-    });
-    carried({
-      message: "Done.",
-      item: { runId: "run-1", finished: true, left: 0 },
-    });
-    // The run's own status decides: it left one, which this call did not.
+    // The run's own status decides once it can be read: it left one.
     expect(
       await screen.findByText(
-        "Mobile was removed, except from 1 entry it couldn't change"
+        "Mobile was removed, except from 1 entry it couldn't change",
+        undefined,
+        { timeout: 12_000 }
       )
     ).toBeTruthy();
-  }, 20_000);
+    // Only the status was read again: the route was not called on.
+    expect(
+      writes.filter(write => write.path === "/site/breakpoints/removal")
+    ).toEqual([]);
+  }, 25_000);
 
   it("follows a run its status finds opened again until it is done", async () => {
     // The save did not finish: the tab's own loop carries it on.
@@ -662,7 +673,7 @@ describe("removing a breakpoint in Settings", () => {
       expect(refetch).not.toHaveBeenCalled();
       // Another tab opens a removal.
       removalsThere = async () => ({
-        ...siteRead,
+        undoable: null,
         removals: [
           {
             runId: "run-5",
@@ -783,5 +794,197 @@ describe("removing a breakpoint in Settings", () => {
     const card = screen.getByText("Card").closest("li");
     expect(card?.textContent).toContain("every width");
     expect(card?.className).toContain("line-through");
+  });
+});
+
+describe("undoing a breakpoint removal in Settings", () => {
+  /** The removal the read offers to undo. */
+  const OFFERED = {
+    runId: "run-1",
+    ids: ["mobile"],
+    labels: ["Mobile"],
+    removedAt: "2026-11-06T09:00:00.000Z",
+    until: "2026-12-06T09:00:00.000Z",
+  };
+
+  /** The undo's answer: finished or not, with what it could not put back. */
+  function undone(
+    finished: boolean,
+    skipped: readonly Record<string, unknown>[] = []
+  ): () => Promise<unknown> {
+    return async () => ({
+      message: "Undone.",
+      item: {
+        breakpoints: SET,
+        removal: {
+          runId: "undo-1",
+          finished,
+          left: 0,
+          undo: { undoes: "run-1", ...(finished ? { skipped } : {}) },
+        },
+      },
+    });
+  }
+
+  /** Open the Site tab, press Undo on the offered removal, and confirm. */
+  async function undoMobile(): Promise<void> {
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    expect(
+      await screen.findByRole("heading", { name: "Put Mobile back?" })
+    ).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Mobile back" })
+    );
+  }
+
+  it("offers the removal on reopening, asks first, and puts it back", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = undone(true);
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    // Offered with when it was made and until when it can be undone.
+    expect(
+      screen.getByText(/You can undo this until 6 December\./)
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    // Back leaves it as it was, undoing nothing.
+    await userEvent.click(await screen.findByRole("button", { name: "Back" }));
+    expect(writes).toEqual([]);
+    await undoMobile();
+    expect(
+      await screen.findByText("Mobile is back, with its styles")
+    ).toBeTruthy();
+    expect(writes).toEqual([
+      { path: "/site/breakpoints/removal/undo", body: { runId: "run-1" } },
+    ]);
+    // The list says which breakpoint came back, for this visit.
+    expect(screen.getByText("put back")).toBeTruthy();
+  });
+
+  it("lists each page it could not put everything back into, and why", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = undone(true, [
+      {
+        kind: "collection",
+        slug: "pages",
+        id: "p-pricing",
+        name: "Pricing",
+        values: 2,
+        reason: "changed",
+      },
+      {
+        kind: "collection",
+        slug: "pages",
+        id: "p-careers",
+        name: "Careers",
+        values: 1,
+        reason: "block-deleted",
+      },
+      {
+        kind: "collection",
+        slug: "pages",
+        id: "p-old",
+        values: 2,
+        reason: "gone",
+      },
+    ]);
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByText(
+        "Mobile is back, except 5 values that changed after the removal"
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText("2 values set again for Mobile after the removal")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("1 value was on a block deleted after the removal")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("2 values were on this page, deleted after the removal")
+    ).toBeTruthy();
+    // A page that still exists links to it; a deleted one is plain words.
+    expect(
+      screen.getByRole("link", { name: "Pricing" }).getAttribute("href")
+    ).toBe("/admin/collections/pages/p-pricing");
+    expect(screen.queryByRole("link", { name: "A deleted page" })).toBeNull();
+    expect(screen.getByText("A deleted page")).toBeTruthy();
+  });
+
+  it("follows an undo its request did not finish to the end", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = undone(false);
+    carryOnAnswers = [
+      async () => ({
+        message: "Done.",
+        item: {
+          runId: "undo-1",
+          finished: true,
+          left: 0,
+          undo: { undoes: "run-1", skipped: [] },
+        },
+      }),
+    ];
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByText("Mobile is back, with its styles", undefined, {
+        timeout: 8000,
+      })
+    ).toBeTruthy();
+    expect(carryOnAnswers).toHaveLength(0);
+  });
+
+  it("says a refused undo in the server's words, and that nothing changed", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = async () => {
+      throw new Error("This removal can't be undone: it was undone already.");
+    };
+    show();
+    await undoMobile();
+    expect(
+      await screen.findByRole("heading", { name: "Mobile can't be put back" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This removal can't be undone: it was undone already. Nothing was changed."
+      )
+    ).toBeTruthy();
+  });
+
+  it("says an undo Settings finds going, and holds Edit while it lasts", async () => {
+    siteRead = {
+      ...siteRead,
+      undoable: null,
+      removals: [
+        {
+          runId: "undo-1",
+          undoes: "run-1",
+          labels: ["Mobile"],
+          open: true,
+          left: 0,
+          waitingOnDrafts: false,
+        },
+      ],
+    };
+    carryOnAnswers = [() => new Promise(() => undefined)];
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+    expect(
+      await screen.findByText("Mobile's styles are still being put back")
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Edit breakpoints",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    // Not taken for a removal going.
+    expect(
+      screen.queryByText("Mobile's styles are still being removed")
+    ).toBeNull();
   });
 });

@@ -45,6 +45,7 @@ import {
   currentStyle,
   isStaleVersion,
   MANAGE_SITE_PERMISSION,
+  namedUndo,
   NOT_WALKED,
   refuseReadding,
   removalAnswer,
@@ -363,8 +364,12 @@ async function undoRemoval(
     );
     report = NOT_WALKED;
   }
-  const answered = (await undoReport(service, undo, report.finished, () =>
-    sharedStylesNow(removal, ctx)
+  const answered = (await namedUndo(
+    removal,
+    ctx,
+    await undoReport(service, undo, report.finished, () =>
+      sharedStylesNow(removal, ctx)
+    )
   )) ?? { undoes: runId };
   return removalAnswer(
     undoMessage(answered),

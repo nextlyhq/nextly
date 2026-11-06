@@ -71,6 +71,11 @@ export interface BreakpointManagerProps {
    * Edit breakpoints is disabled, saying why. Absent, `status` decides.
    */
   blocked?: string;
+  /**
+   * A short word shown beside a breakpoint, by its id: what the host has just
+   * done to it ("put back"), said for as long as the host passes it.
+   */
+  tags?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -99,6 +104,7 @@ export function BreakpointManager({
   onEditingChange,
   onSavingChange,
   blocked,
+  tags,
 }: BreakpointManagerProps): React.JSX.Element {
   const ready = status === "ready" && blocked === undefined;
   const [editing, setEditingState] = React.useState(false);
@@ -218,6 +224,11 @@ export function BreakpointManager({
               />
               <span className="font-medium">{device.label}</span>
               <span className="text-muted-foreground">{device.range}</span>
+              {tags?.get(device.id) === undefined ? null : (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                  {tags.get(device.id)}
+                </span>
+              )}
             </li>
           );
         })}

@@ -19,6 +19,7 @@
  *
  * @module admin/editor/settings-dialog
  */
+import type { BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   BASE_DEVICE_LABEL,
   BreakpointManager,
@@ -84,9 +85,15 @@ import {
 } from "../publish-offer";
 
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
+import { undoableHint } from "./breakpoint-undo-flow";
+import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
 import type { SettingsAddress } from "./settings-address";
 import type { SharePreview } from "./share-preview";
-import { useBreakpointRemoval } from "./use-breakpoint-removal";
+import {
+  useBreakpointRemoval,
+  type BreakpointRemoval,
+} from "./use-breakpoint-removal";
+import { useBreakpointUndo, type BreakpointUndo } from "./use-breakpoint-undo";
 
 /** What the shell hands the dialog. */
 type DialogState = Parameters<
@@ -552,14 +559,24 @@ function SiteSettings({
       return typeof answer === "string" ? answer : undefined;
     },
     removals: read.removals,
+    undoable: read.undoable,
     reread,
     refreshStyle: refresh,
   });
+  const undo = useBreakpointUndo({
+    undoable: read.undoable,
+    removals: read.removals,
+    reread,
+    refreshStyle: refresh,
+  });
+  // A step that asks or works has the tab to itself: a removal's first, then
+  // an undo's.
+  const takesOver = removal.takesOver || undo.takesOver;
   // The editor's own save is hidden under a removal's steps while they ask
   // before saving: then leaving waits only on a request a step has out, and
   // a confirmation on screen can be left, asking first as a draft is.
   const [editorSaving, setEditorSaving] = useState(false);
-  const saving = removal.takesOver ? removal.inFlight : editorSaving;
+  const saving = takesOver ? removal.inFlight || undo.inFlight : editorSaving;
   useEffect(() => {
     onSavingBreakpoints(saving);
   }, [saving, onSavingBreakpoints]);
@@ -590,18 +607,14 @@ function SiteSettings({
           Widths your styles can change at. Each applies at that width and
           below.
         </p>
-        {removal.takesOver ? (
-          <RemovalStepPanel
-            removal={steps}
-            current={manager.value}
-            baseLabel={BASE_DEVICE_LABEL}
-            onClose={onClose}
-          />
-        ) : (
-          <RemovalStatusRow removal={steps} />
-        )}
+        <BreakpointSteps
+          removal={steps}
+          undo={undo}
+          current={manager.value}
+          onClose={onClose}
+        />
         {/* Kept mounted under a step, so Back returns to the draft as it was. */}
-        <div hidden={removal.takesOver}>
+        <div hidden={takesOver}>
           <BreakpointManager
             key={removal.generation}
             {...manager}
@@ -609,17 +622,73 @@ function SiteSettings({
             {...(removal.blocked === undefined
               ? {}
               : { blocked: removal.blocked })}
+            tags={undo.putBack}
             onEditingChange={editing => {
               onEditingBreakpoints(editing);
               removal.editing(editing);
+              undo.editing(editing);
             }}
             onSavingChange={setEditorSaving}
           />
         </div>
       </section>
       {/* The step has the tab to itself while it asks or works. */}
-      {removal.takesOver ? null : <DefaultLayout read={read} reread={reread} />}
+      {takesOver ? null : <DefaultLayout read={read} reread={reread} />}
     </div>
+  );
+}
+
+/**
+ * What the Site tab shows of a removal and its undo above the breakpoint
+ * list: the step that takes the list's place while one asks or works (a
+ * removal's first), else their rows. The removal's own finished row offers
+ * its undo where it is the one on offer; otherwise the undo's row does.
+ */
+function BreakpointSteps({
+  removal,
+  undo,
+  current,
+  onClose,
+}: {
+  removal: BreakpointRemoval;
+  undo: BreakpointUndo;
+  current: BreakpointSet;
+  onClose: () => void;
+}): JSX.Element {
+  if (removal.takesOver) {
+    return (
+      <RemovalStepPanel
+        removal={removal}
+        current={current}
+        baseLabel={BASE_DEVICE_LABEL}
+        onClose={onClose}
+      />
+    );
+  }
+  if (undo.takesOver) return <UndoStepPanel undo={undo} onClose={onClose} />;
+  const shownRun =
+    removal.step.kind === "done" || removal.step.kind === "left"
+      ? removal.step.runId
+      : undefined;
+  const offered = undo.offered;
+  return (
+    <>
+      <RemovalStatusRow
+        removal={removal}
+        {...(offered !== undefined && shownRun === offered.runId
+          ? {
+              offer: {
+                hint: undoableHint(offered),
+                undo: () => undo.ask(offered),
+              },
+            }
+          : {})}
+      />
+      <UndoStatusRow
+        undo={undo}
+        offerHere={shownRun === undefined && removal.step.kind !== "resumed"}
+      />
+    </>
   );
 }
 

@@ -312,7 +312,7 @@ export function confirmWords(
       notes: notesOf(removed),
     })),
     notes,
-    undo: "This can't be undone.",
+    undo: "You can undo this from Settings for 30 days.",
     confirm: `Remove ${names} and ${one ? "its" : "their"} styles`,
   };
 }
