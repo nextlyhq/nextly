@@ -16,6 +16,7 @@ import { SchemaEventsRepository } from "../../../domains/schema/events/schema-ev
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   assertAppliedFilesPresent,
+  assertAppliedFilesUnchanged,
   historyRefusalOf,
   migrateExitCode,
 } from "../migrate";
@@ -131,6 +132,49 @@ describe("applied app migrations the folder lacks", () => {
         new NextlyError({ code: "INTERNAL_ERROR", publicMessage: "boom" })
       )
     ).toBeUndefined();
+  });
+
+  it("holds a removal to the applied outcome it was recorded for, not to the filename", async () => {
+    await row(PRESENT, "applied", 1);
+    await row(NEWER, "applied", 2);
+    await repo.recordRemoval({ filename: NEWER, sha256: "a".repeat(64) });
+    await expect(check()).resolves.toBeUndefined();
+
+    // Rolled back and applied again since: the old removal covers nothing.
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "rolled_back",
+      source: "cli-migrate",
+      filename: NEWER,
+      supersededEventIds: ["any"],
+    });
+    await repo.insertEvent({
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename: NEWER,
+      sha256: "a".repeat(64),
+    });
+    await expect(check()).rejects.toMatchObject({
+      code: "MIGRATION_MISSING",
+      what: expect.stringContaining(NEWER),
+    });
+  });
+
+  it("refuses a missing applied file in the checksum check too, from the folder that check reads", async () => {
+    await row(PRESENT, "applied", 1);
+    await row(NEWER, "applied", 2);
+    const quiet = () => {};
+    await expect(
+      assertAppliedFilesUnchanged({
+        adapter: testDb.adapter as never,
+        db: testDb.db,
+        dialect: "sqlite",
+        migrationsDir: dir,
+        logger: { info: quiet, warn: quiet, debug: quiet } as never,
+        command: "nextly migrate",
+      })
+    ).rejects.toMatchObject({ code: "MIGRATION_MISSING" });
   });
 
   it("counts no rolled-back migration, and no plugin's rows, as missing", async () => {

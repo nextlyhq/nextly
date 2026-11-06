@@ -39,6 +39,7 @@ import { isPluginLedgerRow, ledgerFilename } from "../events/ledger-scope";
 import {
   attemptCleared,
   migrationStanding,
+  removedOnPurpose,
   standingOf,
   unresolvedAttempts,
 } from "../events/migration-state";
@@ -365,7 +366,13 @@ async function resolveRolledBack(
   await assertFileAsSaid(args, filename);
 
   const rows = await args.repo.findFileApplies(filename);
-  if (standingOf(filename, rows).state === "rolled_back") {
+  const current = standingOf(filename, rows);
+  // Already rolled back, unless an attempt since is unresolved and the file
+  // is gone: that attempt is what `--file-missing` retires below.
+  if (
+    current.state === "rolled_back" &&
+    (current.unresolvedAttempt === undefined || args.fileMissing !== true)
+  ) {
     return { kind: "noop", reason: `${filename} is already rolled back.` };
   }
   // With the file gone, an attempt a newer build left unfinished is retired
@@ -464,10 +471,11 @@ async function resolveRemoved(
     );
   }
   // Its down section's attempts too, as every history check reads them.
-  const standing = migrationStanding([
+  const rows = [
     ...(await args.repo.findFileApplies(filename)),
     ...(await args.repo.findFileRollbacks(filename)),
-  ]);
+  ];
+  const standing = migrationStanding(rows);
   if (standing.unresolvedAttempt !== undefined) {
     throw refuse(
       `${filename} has an attempt that did not finish, so the database may hold part of it. Record how it ended first: reverse what of it ran and run \`nextly migrate:resolve --failed-cleanup ${filename}\`, or, for a newer build's attempt at the file, \`nextly migrate:resolve --rolled-back ${filename} --file-missing\`.`
@@ -486,8 +494,10 @@ async function resolveRemoved(
       `${filename}'s applied record carries no checksum, so a file that returns could not be checked against it. Put the file back as it was when it ran and run \`nextly migrate\` once, which records its checksum, then remove it and record the removal.`
     );
   }
-  const removals = await args.repo.listFileRemovals();
-  if (removals.some(row => row.filename === filename)) {
+  // Recorded already for the outcome it stands at now.
+  if (
+    removedOnPurpose(rows, await args.repo.listFileRemovals()).has(filename)
+  ) {
     return {
       kind: "noop",
       reason: `${filename}'s removal is already recorded.`,

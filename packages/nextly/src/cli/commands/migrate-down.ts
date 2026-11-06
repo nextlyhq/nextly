@@ -31,7 +31,10 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
-import { standingsByFilename } from "../../domains/schema/events/migration-state";
+import {
+  removedOnPurpose,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
@@ -1364,10 +1367,9 @@ export async function runMigrateDown(
                 recordChecksums,
               }),
             removedFiles: async () =>
-              new Set(
-                (await repo.listFileRemovals()).flatMap(row =>
-                  row.filename === null ? [] : [row.filename]
-                )
+              removedOnPurpose(
+                await repo.listFileApplies(),
+                await repo.listFileRemovals()
               ),
           }
         : {}),

@@ -37,6 +37,7 @@ import {
 } from "../../domains/schema/events/ledger-scope";
 import {
   attemptUnfinished,
+  removedOnPurpose,
   standingsByFilename,
 } from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
@@ -614,7 +615,10 @@ export function ledgerRecords(
   /** The recorded removals (`listFileRemovals`): an applied migration among them is marked `removed`. */
   removals: readonly SchemaEventRow[] = []
 ): MigrationRecord[] {
-  const removed = new Set(removals.map(row => row.filename));
+  // A removal stands for the applied outcome it was recorded after.
+  const removed = removedOnPurpose(scopeLedgerRows(rows, plugin), [
+    ...removals,
+  ]);
   const records: MigrationRecord[] = [];
   for (const standing of standingsByFilename(
     scopeLedgerRows(rows, plugin)

@@ -50,7 +50,10 @@ import {
 } from "../../domains/i18n/migration/step-windows";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
-import { migrationStanding } from "../../domains/schema/events/migration-state";
+import {
+  removedOnPurpose,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import {
   SchemaEventsRepository,
@@ -2416,11 +2419,8 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
     args.dialect,
     "app"
   );
-  const removed = new Set(
-    (await repo.listFileRemovals()).flatMap(row =>
-      row.filename === null ? [] : [row.filename]
-    )
-  );
+  // A removal stands for the applied outcome it was recorded after.
+  const removed = removedOnPurpose(rows, await repo.listFileRemovals());
   return { files, rows, removed, repo };
 }
 
@@ -2460,30 +2460,40 @@ export async function assertAppliedFilesPresent(
   }
 ): Promise<void> {
   const history = await readAppHistory(args);
-  if (history === undefined) return;
+  if (history !== undefined) refuseMissing(history, args.command);
+}
+
+/**
+ * `assertAppliedFilesPresent`'s judgement of one read of the ledger and the
+ * folder, so a check reading them again for its own question (the checksums)
+ * judges presence from the same read.
+ */
+function refuseMissing(
+  history: NonNullable<Awaited<ReturnType<typeof readAppHistory>>>,
+  command: string
+): void {
   const inFolder = new Set(history.files.map(m => `${m.name}.sql`));
-  const byFilename = new Map<string, SchemaEventRow[]>();
-  for (const row of history.rows) {
-    if (row.filename === null || isPluginLedgerRow(row.filename)) continue;
-    if (inFolder.has(row.filename)) continue;
-    byFilename.set(row.filename, [
-      ...(byFilename.get(row.filename) ?? []),
-      row,
-    ]);
-  }
+  // The app's rows the folder has no file for, each migration's standing read
+  // as every rule reads it; a plugin's rows are its own stream's.
+  const absent = standingsByFilename(
+    history.rows.filter(
+      row =>
+        row.filename !== null &&
+        !isPluginLedgerRow(row.filename) &&
+        !inFolder.has(row.filename)
+    )
+  );
   const missing: string[] = [];
   const tried: string[] = [];
-  for (const [filename, rows] of [...byFilename].sort(([a], [b]) =>
-    a.localeCompare(b)
-  )) {
-    const standing = migrationStanding(rows);
-    if (standing.unresolvedAttempt !== undefined) tried.push(filename);
-    else if (standing.state === "applied" && !history.removed.has(filename)) {
+  for (const filename of [...absent.keys()].sort()) {
+    const standing = absent.get(filename);
+    if (standing?.unresolvedAttempt !== undefined) tried.push(filename);
+    else if (standing?.state === "applied" && !history.removed.has(filename)) {
       missing.push(filename);
     }
   }
   if (missing.length > 0 || tried.length > 0) {
-    throw appliedFilesMissing(args.command, missing, tried);
+    throw appliedFilesMissing(command, missing, tried);
   }
 }
 
@@ -2558,6 +2568,9 @@ export async function assertAppliedFilesUnchanged(
 ): Promise<void> {
   const history = await readAppHistory(args);
   if (history === undefined) return;
+  // Presence judged again from the folder this check reads: a file removed
+  // since the earlier check would otherwise drop out of the comparison.
+  refuseMissing(history, args.command);
   const { changed, unrecorded } = appliedChecksums(
     history.files.map(m => ({
       filename: `${m.name}.sql`,

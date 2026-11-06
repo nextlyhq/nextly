@@ -639,6 +639,36 @@ describe("resolveMigration", () => {
       expect(standing.unresolvedAttempt).toBeUndefined();
     });
 
+    it("retires an attempt newer than a rolled-back outcome with --file-missing", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+      });
+      expect(
+        migrationStanding(await repo.findFileApplies(FILE)).unresolvedAttempt
+      ).toBeDefined();
+
+      await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      const standing = migrationStanding(await repo.findFileApplies(FILE));
+      expect(standing.state).toBe("rolled_back");
+      expect(standing.unresolvedAttempt).toBeUndefined();
+    });
+
     it("refuses --file-missing while the file is in the folder", async () => {
       const { repo, base } = makeDeps(testDb);
       await applied(repo);
