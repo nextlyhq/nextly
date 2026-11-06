@@ -32,6 +32,7 @@ import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
 import { ListStories } from "./src/collections/list-stories";
+import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -213,6 +214,11 @@ export default defineConfig({
     // Without it every page-builder share is refused at the click.
     pageBuilder({
       siteStyle: SITE_STYLE_DEFAULTS,
+      // The browser tests' custom sources, registered by the same switch as
+      // the collections and the Single they read.
+      ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+        ? { namedQueries: [...E2E_NAMED_QUERIES] }
+        : {}),
       pagePreviewPath: "/{slug}",
       // The route that draws the editor's canvas inside this site's layout.
       canvasPath: "/page-builder-canvas",
