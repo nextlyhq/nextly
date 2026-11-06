@@ -204,7 +204,9 @@ describe("the user menu's My Account", () => {
     renderMenu();
     await openMenu(user);
 
-    await user.click(await screen.findByRole("menuitem", { name: "My Account" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "My Account" })
+    );
 
     expect(navigateTo).toHaveBeenCalledWith("/admin/account");
   });
