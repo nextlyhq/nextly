@@ -684,7 +684,7 @@ function faceOf(view: View, args: FaceArgs): Face {
         return refusedFace(addSlice(EMPTY_TALLY, view.result), args, true);
       }
       return {
-        title: "Some copies couldn't be turned into plain blocks",
+        title: "Component kept",
         sentence: MESSAGES.partlyDone,
         body: (
           <div className="space-y-3">
