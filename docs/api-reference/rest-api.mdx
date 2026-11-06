@@ -196,8 +196,9 @@ refused, so a save never silently replaces someone else's.
 
 `_rev` is on every read of an entry or a Single (by id, in a list, in any language) and on the
 answer to every create and update. Treat it as opaque: send back exactly what you read, and don't
-parse, compare or store it. Reads never change it, every save does, and two saves in the same
-second get different versions.
+parse or compare it. Keep it with your copy of the document until you write, however long that
+is, and replace it with the one each save answers. Reads never change it, every save does, and
+two saves in the same second get different versions.
 
 It covers the fields every language shares and, for a read in one language, that language: a
 read in Spanish gives something like `7.es:3`, and a read of every language (`locale=all`) names
@@ -710,7 +711,8 @@ other. Saves are kept from replacing each other by the document's version instea
 A document is named by three values: `scopeKind` (`collection` or `single`), `slug` (the
 collection's or Single's slug) and `entryId` (the entry's id, or the `id` a Single's content read
 returns). They go in the query string of a `GET`, and in the JSON body of every other request. A
-missing or unusable value is a `400 VALIDATION_ERROR` with the code `invalid_document_ref`.
+missing or unusable value is a `400 VALIDATION_ERROR` whose `error.data.errors[]` entry has the
+code `invalid_document_ref`.
 
 Who is editing:
 
