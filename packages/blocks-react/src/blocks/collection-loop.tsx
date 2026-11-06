@@ -172,6 +172,22 @@ function emptyMarks(
 }
 
 /**
+ * The context a list's template is drawn with when the list reads nothing:
+ * with NO item, not the item of a list around this one. What this list's
+ * item decides inside it would otherwise be judged, and shown, by an
+ * unrelated entry; with none, it fails closed instead.
+ */
+function withoutItem(ctx: PageContext): PageContext {
+  const {
+    item: _outerItem,
+    itemSource: _outerSource,
+    itemQuery: _outerQuery,
+    ...rest
+  } = ctx;
+  return rest;
+}
+
+/**
  * The entries a list draws, and the context each is drawn with: the list's
  * read for a collection or a relation, or its named query's run.
  */
@@ -315,8 +331,13 @@ export async function renderCollectionLoop({
   const named = await readNamedSource(props, ctx, node.id, paging);
   if (named === "template") {
     // No host runs named queries here, as no data source answers a
-    // collection: the template, once, so an author still sees it.
-    return <div className={className}>{renderSlot("children")}</div>;
+    // collection: the template, once, so an author still sees it, with no
+    // item, as an unconfigured list draws it.
+    return (
+      <div className={className}>
+        {renderSlot("children", withoutItem(ctx))}
+      </div>
+    );
   }
   if (named !== undefined) {
     return drawList(
@@ -337,17 +358,11 @@ export async function renderCollectionLoop({
   if (collection === undefined || data === undefined) {
     // Nothing to query against, so the block renders its template once rather
     // than vanishing: an author placing a loop before choosing a collection
-    // still sees what they are building. Drawn with NO item, not the item of
-    // a list around this one: what this list's item decides inside it would
-    // otherwise be judged by an unrelated entry, and fails closed instead.
-    const {
-      item: _outerItem,
-      itemSource: _outerSource,
-      itemQuery: _outerQuery,
-      ...withoutItem
-    } = ctx;
+    // still sees what they are building.
     return (
-      <div className={className}>{renderSlot("children", withoutItem)}</div>
+      <div className={className}>
+        {renderSlot("children", withoutItem(ctx))}
+      </div>
     );
   }
   // A loop inside a loop runs once per entry of the outer one, so depth in a
