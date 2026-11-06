@@ -94,12 +94,13 @@ test("a refused save puts the server's reason on its field and keeps the edit", 
     expect.objectContaining({ path: "areas", message: REASON })
   );
 
-  // The form says it on the Areas field, as a field's own error (the line a
-  // field draws under itself, by its id), not in a toast that only says the
-  // save failed. The save state's announcement carries the reason too, so
-  // finding the words anywhere on the page would prove nothing.
+  // The form says it on the Areas field, as a field's own error (the alert a
+  // field draws under itself), not in a toast that only says the save
+  // failed. The save state's announcement carries the reason too, but as a
+  // live region rather than an alert, so finding the words anywhere on the
+  // page would prove nothing.
   await expect(
-    main.locator('[role="alert"][id$="-error"]', { hasText: REASON })
+    main.getByRole("alert").filter({ hasText: REASON })
   ).toBeVisible();
   await expect(
     includingHidden(page).getByText("Validation failed.", { exact: true })
