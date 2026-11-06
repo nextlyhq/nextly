@@ -328,13 +328,14 @@ async function undoRemoval(
   const plan = await planUndo(removal, ctx, service, undone);
   const undo = await service.undo(runId, runStarterOf(ctx), plan.breakpoints);
   await writeUndo({ ctx, nextly, removal, service, undo }, plan);
-  // Stored: the removal gives up its claims on the ids the site defines
-  // again, as a re-add does. Only now, so an undo whose write is refused
-  // leaves the removal holding what it still protects; meanwhile its ids are
-  // defined, so it strips nothing under them. A failure here leaves the undo
-  // preparing, for recovery to retire and publish.
-  await service.retire([...plan.ids]);
+  // Stored: published at once, which marks it landed, so nothing after can
+  // take it for an undo whose write never landed. Then the removal gives up
+  // its claims on the ids the site defines again, as a re-add does: only
+  // now, so an undo whose write is refused leaves the removal holding what it
+  // still protects (its ids defined meanwhile, it strips nothing under them).
+  // The undo's walk gives them up too, so a failure here is made good there.
   await service.publish(undo.id);
+  await service.retire([...plan.ids]);
   await ctx.audit?.write({
     kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
     actorUserId: ctx.user?.id ?? null,

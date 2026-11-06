@@ -254,6 +254,11 @@ describe("restoreClasses", () => {
     expect(gone.value).toEqual([]);
     expect(gone.deleted).toBe(1);
     expect(gone.restored).toBe(0);
+    // Read again once the override is out, as the undo's report reads it:
+    // still lost, not counted back.
+    const after = restoreClasses([], [], fragment, ids);
+    expect(after.deleted).toBe(1);
+    expect(after.restored).toBe(0);
   });
 
   it("keeps an override the author changed since, filling only what it lacks", () => {

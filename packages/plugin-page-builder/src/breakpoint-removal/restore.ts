@@ -453,9 +453,9 @@ export function restoreClasses(
   for (const id of Object.keys(fragment.classes)) {
     // Gone since, and not an override taken out: one the strip recorded, or
     // one of a class the code still supplies.
-    const takenOut =
-      overridden.has(id) &&
-      (generatedOf(fragment, id) !== undefined || code.has(id));
+    // Its override taken out while the code supplies the class: back as
+    // the code's. With the code's class gone too, its values are lost.
+    const takenOut = overridden.has(id) && code.has(id);
     if (!seen.has(id) && !takenOut) {
       tally.deleted += valuesInStyles(fragment.classes[id]);
     }
