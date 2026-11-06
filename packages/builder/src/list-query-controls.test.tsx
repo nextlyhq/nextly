@@ -255,6 +255,50 @@ describe("a list's source", () => {
     expect(listed("Sources")).not.toContain("Each post's categories");
   });
 
+  it("says a list in another list's When empty has no entry to relate to, and elsewhere why none is offered", async () => {
+    const WHEN_EMPTY =
+      "Not available in When empty: it only shows when the list has no entries, so there's no entry to relate to.";
+    const GENERIC =
+      "Not available here. On a collection's entry, or inside another list, a list can show the entry's related entries, such as its categories or tags.";
+    const inEmptyOf = (selected: BlockNode): BlockNode[] => [
+      {
+        id: "posts",
+        type: COLLECTION_LIST_TYPE,
+        version: 1,
+        props: { collection: "posts" },
+        // Inside a box in the empty state: the nearest list still holds it
+        // in its empty state.
+        slots: {
+          children: [],
+          empty: [
+            {
+              id: "box",
+              type: "core/group",
+              version: 1,
+              props: {},
+              slots: { children: [selected] },
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ];
+    mount({ collection: "categories" }, {}, inEmptyOf);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(screen.getByText(WHEN_EMPTY)).toBeDefined();
+    expect(screen.queryByText(GENERIC)).toBeNull();
+    cleanup();
+    clearBlocks();
+    // On its own, with no entry around it: the generic note.
+    mount({ collection: "categories" });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Source Categories" })
+    );
+    expect(screen.getByText(GENERIC)).toBeDefined();
+    expect(screen.queryByText(WHEN_EMPTY)).toBeNull();
+  });
+
   it("says, as the save does, that a Single's page has no entry to relate to", async () => {
     mount(
       {

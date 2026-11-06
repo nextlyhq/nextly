@@ -30,11 +30,14 @@
  * @module list-query-controls
  */
 import {
+  COLLECTION_LIST_TYPE,
   findNode,
+  LIST_ENTRY_SLOT,
   LIST_MAX_FILTERS,
   LIST_MAX_SORT_KEYS,
   listKindSortable,
   listQueryIssues,
+  locateNode,
   outerListOf,
   readListQuery,
   type BindingFieldShape,
@@ -285,6 +288,26 @@ interface Related {
   readonly entryHeading: string;
   /** "Related to each category", over the outer item's relations. */
   readonly itemHeading: string;
+  /**
+   * Whether the nearest list around this one holds it in its empty state,
+   * which is drawn only when that list has no entries, so with none to
+   * relate to.
+   */
+  readonly inEmptyState?: boolean;
+}
+
+/** Whether the nearest list around `id` holds it anywhere but per entry. */
+function inListEmptyState(nodes: BlockNode[], id: string): boolean {
+  let at = locateNode(nodes, id);
+  // Bounded by the document's depth: each step moves one parent out.
+  while (at?.parent !== undefined) {
+    const parent = at.parent;
+    if (parent.type === COLLECTION_LIST_TYPE) {
+      return at.slot !== LIST_ENTRY_SLOT;
+    }
+    at = locateNode(nodes, parent.id);
+  }
+  return false;
 }
 
 /** The related sources a list may show where it sits. */
@@ -423,16 +446,33 @@ function sourceGroups(related: Related): { group: string; heading: string }[] {
 }
 
 /** The Source menu's note where no related source can be offered. */
-const NO_RELATED = (
-  <div className="nx-list-query__menu-note">
-    <p className="nx-vars__group-name nx-font-pick__heading">Related entries</p>
-    <p className="nx-list-query__menu-text">
-      Not available here. On a collection&apos;s entry, or inside another list,
-      a list can show the entry&apos;s related entries, such as its categories
-      or tags.
-    </p>
-  </div>
-);
+function NoRelated({
+  inEmptyState,
+}: {
+  inEmptyState: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="nx-list-query__menu-note">
+      <p className="nx-vars__group-name nx-font-pick__heading">
+        Related entries
+      </p>
+      <p className="nx-list-query__menu-text">
+        {inEmptyState ? (
+          <>
+            Not available in When empty: it only shows when the list has no
+            entries, so there&apos;s no entry to relate to.
+          </>
+        ) : (
+          <>
+            Not available here. On a collection&apos;s entry, or inside another
+            list, a list can show the entry&apos;s related entries, such as its
+            categories or tags.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
 
 /** What a related source shows, said under Source. */
 function SourceHint({
@@ -550,7 +590,12 @@ function SourceField({
           noMatch: "No source matches.",
           searchFrom: 1,
         }}
-        around={{ above: all.length > 0 ? undefined : NO_RELATED }}
+        around={{
+          above:
+            all.length > 0 ? undefined : (
+              <NoRelated inEmptyState={related.inEmptyState === true} />
+            ),
+        }}
         onPick={choice => onPick(choice.pick)}
       />
       {refused ? (
@@ -2484,7 +2529,10 @@ function useListQueryReading(
     collections,
     fieldSource,
     issues,
-    related: relatedSources(collections, entryCollection, outer),
+    related: {
+      ...relatedSources(collections, entryCollection, outer),
+      inEmptyState: inListEmptyState(document.nodes, nodeId),
+    },
     fields:
       collections.find(each => each.slug === query.collection)?.fields ?? [],
   };
