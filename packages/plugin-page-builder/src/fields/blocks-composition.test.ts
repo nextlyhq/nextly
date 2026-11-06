@@ -28,6 +28,7 @@ import {
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
+import type { ListFieldsReader } from "./list-query-judgement";
 
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
@@ -206,6 +207,7 @@ function judge(
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
     localized?: boolean;
+    listFields?: ListFieldsReader;
   } = {}
 ) {
   const { status, limits, composesDocuments, localized, ...callbacks } =
@@ -1041,6 +1043,283 @@ describe("a page judged as a reader receives it", () => {
     // A default being judged, or a caller of validateFieldValues: there is no
     // write to read the library through.
     expect(await judge(page([placing("i1", "cols")]), undefined)).toEqual([]);
+  });
+});
+
+describe("a page's placed lists, judged as the page composes them", () => {
+  // A component holding a list of posts whose sort a placement may choose.
+  const sorted = component(
+    [
+      {
+        id: "l1",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", sort: "title" },
+        slots: { children: [] },
+      },
+    ],
+    {
+      exposed: [
+        {
+          id: "order",
+          label: "Order",
+          nodeId: "l1",
+          propPath: "sort",
+          type: "text",
+        },
+      ],
+    }
+  );
+  const placed = (overrides: Record<string, unknown>) =>
+    page([
+      { ...placing("i1", "cards"), props: { componentId: "cards", overrides } },
+    ]);
+  const listFields: ListFieldsReader = async collection =>
+    collection === "posts"
+      ? {
+          declared: new Set(["id", "title", "secret"]),
+          readable: [
+            { name: "id", type: "text" },
+            { name: "title", type: "text" },
+          ],
+        }
+      : undefined;
+
+  it("refuses a placement value sorting a component's list by a field visitors can't see", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+    });
+    // CONTROL: placed with a public field, the list reads as visitors may.
+    expect(
+      await judge(
+        placed({ order: "-title" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+        }
+      )
+    ).toEqual([]);
+    const issues = await judge(
+      placed({ order: "secret" }),
+      write(readStored, "pages", "p1"),
+      { listFields }
+    );
+    expect(codes(issues)).toEqual(["list-field-protected"]);
+    expect(issues[0]!.message).toContain('"cards"');
+    expect(issues[0]!.message).toContain('"secret"');
+  });
+
+  it("keeps a problem the stored page already composed to", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: placed({ order: "secret" }) } },
+    });
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+        }
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses a placement value giving a component's list a sort no list reads, as the canvas does", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+    });
+    // Text a text exposure takes, and a sort no list may store: only the
+    // composed list holds it, so only the composition can refuse it.
+    for (const options of [{ listFields }, {}]) {
+      const issues = await judge(
+        placed({ order: "-a.b" }),
+        write(readStored, "pages", "p1"),
+        options
+      );
+      expect(codes(issues)).toEqual(["list-sort-invalid"]);
+      expect(issues[0]!.message).toContain('"cards"');
+    }
+  });
+
+  it("keeps a sort the stored page already composed to, however it reads", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: placed({ order: "-a.b" }) } },
+    });
+    expect(
+      await judge(placed({ order: "-a.b" }), write(readStored, "pages", "p1"), {
+        listFields,
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("a component save judged inside the lists of the documents that use it", () => {
+  const hostPage: HostRef = {
+    slug: "pages",
+    id: "home",
+    field: FIELD,
+    localized: false,
+  };
+  const finder = (): HostFinder => ({
+    whole: async () => true,
+    placing: async ids => ({
+      hosts: ids.includes("cards") ? [hostPage] : [],
+      complete: true,
+    }),
+  });
+  const listFields: ListFieldsReader = async collection => {
+    if (collection === "posts") {
+      return {
+        declared: new Set(["id", "title", "secret"]),
+        readable: [
+          { name: "id", type: "text" },
+          { name: "title", type: "text" },
+        ],
+      };
+    }
+    if (collection === "articles") {
+      return {
+        declared: new Set(["id", "name"]),
+        readable: [
+          { name: "id", type: "text" },
+          { name: "name", type: "text" },
+        ],
+      };
+    }
+    return undefined;
+  };
+  /** A list of `collection` beside a heading, with "Order" aimed at one. */
+  const cards = (orderAt: "heading" | "list", collection = "posts") =>
+    component(
+      [
+        node("h1", "acme/quote"),
+        {
+          id: "l1",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection },
+          slots: { children: [] },
+        },
+      ],
+      {
+        exposed: [
+          orderAt === "heading"
+            ? {
+                id: "order",
+                label: "Order",
+                nodeId: "h1",
+                propPath: "words",
+                type: "text",
+              }
+            : {
+                id: "order",
+                label: "Order",
+                nodeId: "l1",
+                propPath: "sort",
+                type: "text",
+              },
+        ],
+      }
+    );
+  const home = (order: string) =>
+    page([
+      {
+        ...placing("i1", "cards"),
+        props: { componentId: "cards", overrides: { order } },
+      },
+    ]);
+
+  it("refuses retargeting a page's override onto a list it makes sort by a field visitors can't see", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards("heading") } },
+      pages: { home: { published: home("secret") } },
+    });
+    const logged: BrokenHosts[] = [];
+    const issues = await judge(
+      cards("list"),
+      write(readStored, COMPONENTS, "cards"),
+      {
+        hostsOf: finder(),
+        listFields,
+        status: "published",
+        onHostsBroken: b => logged.push(b),
+      }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toBe(
+      "Saving this component would break 1 document that places it: a collection list would be given a source, filter or sort it can't use. Make the change in a new component, or ask someone who can open those documents to adjust them first."
+    );
+    expect(issues[0]!.message).not.toContain("home");
+    // The operator is told which page, and the placement whose list it is.
+    expect(logged).toEqual([
+      {
+        componentId: "cards",
+        hosts: [
+          {
+            slug: "pages",
+            id: "home",
+            fields: ["content"],
+            messages: [
+              expect.stringMatching(
+                /^Placement "i1": Component "cards".*"secret"/
+              ),
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("takes the same retarget where the page's override is a field visitors may read", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards("heading") } },
+      pages: { home: { published: home("-title") } },
+    });
+    expect(
+      await judge(cards("list"), write(readStored, COMPONENTS, "cards"), {
+        hostsOf: finder(),
+        listFields,
+        status: "published",
+      })
+    ).toEqual([]);
+  });
+
+  it("refuses moving a list to a collection a page's sort does not fit", async () => {
+    // Nothing a placement rule reads moves: only the list's own props.
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards("list") } },
+      pages: { home: { published: home("title") } },
+    });
+    const issues = await judge(
+      cards("list", "articles"),
+      write(readStored, COMPONENTS, "cards"),
+      { hostsOf: finder(), listFields, status: "published" }
+    );
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("does not blame a save for a list problem a page already had", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: cards("list") } },
+      pages: { home: { published: home("secret") } },
+    });
+    const logged: BrokenHosts[] = [];
+    // The list moves (so its hosts are judged), and the page's problem with
+    // it is the same before and after.
+    const moved = cards("list");
+    (moved.nodes[1] as Node).props = { collection: "posts", limit: 5 };
+    expect(
+      await judge(moved, write(readStored, COMPONENTS, "cards"), {
+        hostsOf: finder(),
+        listFields,
+        status: "published",
+        onHostsBroken: b => logged.push(b),
+      })
+    ).toEqual([]);
+    expect(logged).toEqual([]);
   });
 });
 
