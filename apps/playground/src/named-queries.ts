@@ -13,7 +13,7 @@
  *   list lists. Its run copies each post's `internalNote`, which the public
  *   may not read, into its rows: the reader hands it over absent, so it can
  *   never reach the page.
- * - **Blog posts** has rows that are a collection's entries: `bound-entries`
+ * - **Posts by title** has rows that are a collection's entries: `bound-entries`
  *   itself, projected to what visitors may read.
  * - **Priced blog posts** asks for one of each kind of input, for the
  *   editor's test of the Inputs group.
@@ -32,7 +32,7 @@ import {
 
 /** The text every row's title holds, as the list's input names it. */
 const match = param.text({
-  label: "Title has",
+  label: "Title words",
   required: true,
   maxLength: 80,
   placeholder: "Words in the title",
@@ -104,7 +104,7 @@ const postsWithStory = defineNamedQuery({
 
 const blogPosts = defineNamedQuery({
   name: "e2e.blog-posts",
-  label: "Blog posts",
+  label: "Posts by title",
   description: "The blog posts whose title has the words you give.",
   params: { match },
   reads: { collections: ["bound-entries"] },
