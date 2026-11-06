@@ -20,7 +20,7 @@ import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 // The CONTRACT, not the route: the route reads the server's registry.
 import {
-  LOOP_COLLECTIONS_ROUTE_PATH,
+  loopCollectionsPath,
   type LoopCollectionItem,
   type LoopCollectionsResponse,
   type LoopFieldOption,
@@ -38,14 +38,17 @@ const UNEXPLAINED = "Collections could not be listed. Try again.";
  * Resolves with what the route returned, each item kept only when it is the
  * shape the contract promises, and REJECTS when the route refused or failed,
  * so the controls fall back to typing rather than showing an empty menu as
- * though the site had no collections.
+ * though the site had no collections. `locale` is the language being edited,
+ * absent for the default.
  */
-export async function listLoopCollections(): Promise<
-  readonly LoopCollectionItem[]
-> {
+export async function listLoopCollections(
+  locale?: string
+): Promise<readonly LoopCollectionItem[]> {
   const body = await readPluginRoute<LoopCollectionsResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: LOOP_COLLECTIONS_ROUTE_PATH,
+    // In the language being edited, so the fields offered are the ones a
+    // save in that language takes.
+    path: loopCollectionsPath(locale),
   });
   const items =
     typeof body === "object" && body !== null
