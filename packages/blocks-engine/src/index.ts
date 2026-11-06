@@ -638,6 +638,7 @@ export {
   carryDocumentDeviceVisibility,
   deviceVisibility,
   hiddenOnDevice,
+  revealConditioned,
   revealDeviceHidden,
   setDeviceVisibility,
 } from "./device-visibility";

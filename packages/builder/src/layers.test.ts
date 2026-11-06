@@ -303,6 +303,28 @@ describe("layersOf", () => {
     expect(tree[0]?.conditional).toBe(false);
   });
 
+  it("marks exactly the blocks the page's conditions decide, as the engine judges them", () => {
+    register();
+    const condition = { field: "tier", op: "exists" };
+    const tree = layersOf(
+      documentOf([
+        // A group with no conditions lets everyone through.
+        node("open", "core/heading", {
+          visibility: { conditions: [[], [condition]] },
+        }),
+        // Conditions nothing can read still decide: the page leaves it out.
+        node("unreadable", "core/heading", {
+          visibility: { conditions: "tier" as never },
+        }),
+        // CONTROL: an ordinary condition.
+        node("gated", "core/heading", {
+          visibility: { conditions: [[condition]] },
+        }),
+      ])
+    );
+    expect(tree.map(each => each.conditional)).toEqual([false, true, true]);
+  });
+
   it("flattens children across slots in document order", () => {
     // Every container in the catalogue declares exactly one slot today, so this
     // pins the behaviour for the block that will eventually declare two: the
