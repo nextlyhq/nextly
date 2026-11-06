@@ -389,4 +389,51 @@ describe("the edit page's place in the entry editor", () => {
       entryId: "p1",
     });
   });
+
+  it("leaves the editor in place where a replacement's rule does not match the entry", () => {
+    // The entry is a draft, and the replacement is for published entries.
+    meta.contributions = {
+      "collection.edit": {
+        block: [
+          { builtIn: "document-bar" },
+          block("acme-a.editor", EDITOR, {
+            replaces: "editor",
+            visibleWhen: { field: "status", equals: "published" },
+            collections: ["posts"],
+          }),
+        ],
+      },
+    } as AdminContributionsMeta;
+    renderEditor();
+
+    expect(screen.queryByTestId("replacement-editor")).toBeNull();
+    expect(screen.getByLabelText("Body")).toBeInTheDocument();
+    expect(frame().lastElementChild).toBe(row());
+  });
+
+  it("draws no section scoped to another collection, and keeps the built-in one it replaces", () => {
+    meta.contributions = {
+      "collection.edit": {
+        sidebarSection: [
+          {
+            plugin: "@acme/a",
+            id: "acme-a.status",
+            kind: "sidebarSection",
+            label: "Ticket status",
+            component: SECTION,
+            replaces: "status",
+            collections: ["tickets"],
+          },
+          { builtIn: "publishing" },
+          { builtIn: "language" },
+          { builtIn: "details" },
+        ],
+      },
+    } as AdminContributionsMeta;
+    editorWidth(1440);
+    renderEditor();
+
+    expect(screen.queryByTestId("plugin-section")).toBeNull();
+    expect(screen.getByRole("region", { name: "Status" })).toBeInTheDocument();
+  });
 });

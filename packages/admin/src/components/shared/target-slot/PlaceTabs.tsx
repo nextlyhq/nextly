@@ -52,7 +52,7 @@ export function PlaceTabs<P extends AdminPlaceId>({
   className,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const delivered = usePlaceContributions(place, "tab", entry);
+  const delivered = usePlaceContributions(place, "tab", { context, entry });
   const [chosen, setChosen] = useState(CONTENT_TAB);
   const tabs =
     context === null
