@@ -94,6 +94,27 @@ describe("assertDocumentSurfaces", () => {
     expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID");
   });
 
+  // Read as plain JavaScript hands it over: a plugin or a setup transformer
+  // is not held to the type, and a declaration of the wrong shape must be
+  // refused by name rather than crash the boot with a TypeError.
+  it.each([
+    ["panelSections that is not a list", { panelSections: "Used by" }],
+    ["a panel section that is not an object", { panelSections: [null] }],
+    [
+      "a panel section among good ones that is not an object",
+      { panelSections: [{ title: "Used by", component: "x#Y" }, 3] },
+    ],
+    ["documentActions that is not an object", { documentActions: "hidden" }],
+    ["documentActions that is a list", { documentActions: ["delete"] }],
+  ])("refuses %s, naming the plugin", (_name, view) => {
+    const error = refusal([plugin("layouts", { layouts: view })]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID");
+    expect(error.logContext).toMatchObject({
+      plugin: "layouts",
+      collection: "layouts",
+    });
+  });
+
   it("refuses two plugins overriding one action on one collection, naming both", () => {
     const error = refusal([
       plugin("layouts", { pages: { documentActions: { delete: "hidden" } } }),

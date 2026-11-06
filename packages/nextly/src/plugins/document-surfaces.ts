@@ -136,8 +136,50 @@ function sectionReason(section: PublishedPanelSection): string | undefined {
   return undefined;
 }
 
+/** Whether a value is an object that is not a list: a map of named entries. */
+function isMap(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Why one collection's declarations are not of a shape the checks below can
+ * read, or `undefined` when they are. Read as `unknown`: a JavaScript plugin
+ * or a setup transformer is not held to the type, and walking a malformed
+ * declaration would end the boot in a TypeError that names no plugin.
+ */
+function shapeReason(slug: string, view: unknown): string | undefined {
+  if (!isMap(view)) return undefined;
+  const { documentActions, panelSections } = view;
+  if (documentActions !== undefined && !isMap(documentActions)) {
+    return `declares documentActions on "${slug}" that is not a map of actions to overrides`;
+  }
+  if (panelSections === undefined) return undefined;
+  if (!Array.isArray(panelSections)) {
+    return `declares panelSections on "${slug}" that is not a list`;
+  }
+  if (!panelSections.every(isMap)) {
+    return `declares a document panel section on "${slug}" that is not an object`;
+  }
+  return undefined;
+}
+
+/** One plugin's declarations, refused by name when not of a readable shape. */
+function assertSurfaceShapes(plugin: PluginDefinition): void {
+  const views: unknown = plugin.contributes?.admin?.views;
+  if (!isMap(views)) return;
+  for (const [declared, view] of Object.entries(views)) {
+    const slug = renamedSlug(plugin, declared);
+    const reason = shapeReason(slug, view);
+    if (reason !== undefined) {
+      throw surfaceError(plugin.name, reason, { collection: slug });
+    }
+  }
+}
+
 /** One plugin's surfaces checked on their own, before any comparison. */
 function assertOwnSurfaces(plugin: PluginDefinition): DeclaredOverride[] {
+  // Before anything walks them, so a malformed one is refused by name.
+  assertSurfaceShapes(plugin);
   const overrides = overridesOf(plugin);
   for (const declared of overrides) {
     const reason = overrideReason(declared);
