@@ -381,8 +381,9 @@ describe.each(getConfiguredTestDialects())(
         "versions",
         "working-draft",
       ];
+      // The author discards whatever the draft holds now.
       const response = await createDynamicHandlers().DELETE(
-        new Request(`${ORIGIN}/api/${path.join("/")}`, {
+        new Request(`${ORIGIN}/api/${path.join("/")}?_overwrite=true`, {
           method: "DELETE",
           headers: {
             cookie: `${cookie}; nextly_csrf=${CSRF}`,
@@ -547,7 +548,7 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id,
-            data: { content: doc("page", [node]) },
+            data: { content: doc("page", [node]), _overwrite: true },
           },
         ],
         { overrideAccess: true }

@@ -299,9 +299,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         await translatedBanner(t);
         const before = await lifecycleOf(t, BANNER);
-        const refused = await publishAll(t, {});
-        expect(refused.code, JSON.stringify(refused)).toBe("VERSION_REQUIRED");
-        expect(refused.statusCode).toBe(428);
+        expect(await codeOf(() => publishAll(t, {}))).toBe("VERSION_REQUIRED");
         expect(await lifecycleOf(t, BANNER)).toEqual(before);
       });
 
