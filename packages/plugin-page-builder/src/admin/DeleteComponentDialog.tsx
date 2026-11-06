@@ -195,16 +195,18 @@ export function checkedFace(
  */
 function DocumentLink({ document }: { document: NamedDocument }): JSX.Element {
   return (
+    // Inline, so a long title wraps and reads in full, the icon after its
+    // last word.
     <a
-      className="flex min-w-0 items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
+      className="font-medium break-words text-primary underline-offset-4 hover:underline"
       href={documentHref(document)}
       target="_blank"
       rel="noopener noreferrer"
     >
-      <span className="truncate">{documentTitle(document)}</span>
+      {documentTitle(document)}
       <ExternalLink
         aria-hidden="true"
-        className="size-3.5 shrink-0 text-muted-foreground"
+        className="ml-1.5 inline size-3.5 align-[-2px] text-muted-foreground"
       />
       <span className="sr-only">{" (opens in a new tab)"}</span>
     </a>
@@ -938,7 +940,9 @@ export function DeleteComponentDialog({
         ref={contentRef}
         // A phone keeps a gutter on both sides, and a long list scrolls
         // inside the dialog rather than past the screen.
-        className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg"
+        // Its parts may shrink below their content (a grid item's minimum
+        // is otherwise its content), so nothing pushes past the dialog.
+        className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0"
       >
         {/* Left-aligned at every width: the lists below read from the left. */}
         <AlertDialogHeader className="text-left sm:text-left">
