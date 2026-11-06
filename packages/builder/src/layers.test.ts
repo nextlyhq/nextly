@@ -25,9 +25,8 @@ import {
   layerLabel,
   layersOf,
   pathTo,
-  slotRowId,
-  slotRowOf,
-  slotRowsTo,
+  regionsTo,
+  slotRowsIn,
 } from "./layers";
 
 const base = {
@@ -572,13 +571,38 @@ describe("a collection list's regions", () => {
   });
 
   it("opens the region a match sits in, as it opens the list", () => {
-    const found = filterLayers(layersOf(list), "No posts");
-    expect(found.expand).toEqual(["list", slotRowId("list", "empty")]);
-    expect(slotRowsTo(list, "none")).toEqual([slotRowId("list", "empty")]);
-    expect(slotRowOf(slotRowId("list", "empty"))).toEqual({
+    const tree = layersOf(list);
+    const emptyRow = tree[0]?.slotRows?.[1]?.rowId;
+    const found = filterLayers(tree, "No posts");
+    expect(found.expand).toEqual(["list", emptyRow]);
+    expect(regionsTo(list, "none")).toEqual([
+      { parentId: "list", slot: "empty", rowId: emptyRow },
+    ]);
+    expect(slotRowsIn(tree).get(emptyRow ?? "")).toEqual({
       parentId: "list",
       slot: "empty",
     });
-    expect(slotRowOf("list")).toBeUndefined();
+    expect(slotRowsIn(tree).has("list")).toBe(false);
+  });
+
+  it("gives each region row an id no block of the document has", () => {
+    // A stored id may be any string, a row's own spelling too.
+    const taken = {
+      ...list,
+      nodes: [
+        ...list.nodes,
+        {
+          id: "nx-slot:empty:list",
+          type: "core/heading",
+          version: 1,
+          props: {},
+        },
+      ],
+    } as BlockDocument;
+    const tree = layersOf(taken);
+    const rowIds = tree[0]?.slotRows?.map(row => row.rowId) ?? [];
+    expect(rowIds).toHaveLength(2);
+    expect(rowIds).not.toContain("nx-slot:empty:list");
+    expect(slotRowsIn(tree).has("nx-slot:empty:list")).toBe(false);
   });
 });

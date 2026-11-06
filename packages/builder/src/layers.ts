@@ -148,11 +148,20 @@ export interface LayerNode {
    * what it is called: a collection list's "Each entry" and "When empty".
    * Absent for a block whose children read as one run.
    */
-  readonly slotRows?: readonly {
-    readonly slot: string;
-    readonly label: string;
-  }[];
+  readonly slotRows?: readonly SlotRow[];
   readonly children: readonly LayerNode[];
+}
+
+/**
+ * One region of a block, as Layers draws it between the block and its
+ * children. `rowId` is the row's own identity in the tree, chosen so that no
+ * block of the document has it: a stored id may be any non-empty string, so
+ * no spelling alone could be kept apart from them.
+ */
+export interface SlotRow {
+  readonly slot: string;
+  readonly label: string;
+  readonly rowId: string;
 }
 
 /** A collection list's regions, as Layers names them. */
@@ -160,6 +169,36 @@ const LIST_SLOT_ROWS = [
   { slot: "children", label: "Each entry" },
   { slot: "empty", label: "When empty" },
 ] as const;
+
+/** Every block id in a document, so a region row can take an id none has. */
+function documentIds(nodes: readonly BlockNode[]): Set<string> {
+  const ids = new Set<string>();
+  const stack = [...nodes];
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    ids.add(node.id);
+    for (const children of Object.values(node.slots ?? {})) {
+      if (Array.isArray(children)) stack.push(...children);
+    }
+  }
+  return ids;
+}
+
+/**
+ * A list's region rows, each with an id no block and no other row has: the
+ * readable spelling, counted on until it is free. `taken` holds the
+ * document's ids and grows with each row's.
+ */
+function listSlotRows(parentId: string, taken: Set<string>): SlotRow[] {
+  return LIST_SLOT_ROWS.map(row => {
+    const spelled = `nx-slot:${row.slot}:${parentId}`;
+    let rowId = spelled;
+    for (let count = 1; taken.has(rowId); count += 1) {
+      rowId = `${spelled}~${String(count)}`;
+    }
+    taken.add(rowId);
+    return { ...row, rowId };
+  });
+}
 
 /**
  * The device the tree is read for: the site's breakpoints and the one being
@@ -281,39 +320,49 @@ function slotsOfChildren(
   return child => by.get(child);
 }
 
-/** The id of a region's row in the panel, which names no block. */
-export function slotRowId(parentId: string, slot: string): string {
-  return `nx-slot:${slot}:${parentId}`;
-}
-
-/** The block and region a region row stands for, when `id` is one. */
-export function slotRowOf(
-  id: string
-): { readonly parentId: string; readonly slot: string } | undefined {
-  const match = /^nx-slot:([^:]+):(.+)$/.exec(id);
-  return match === null || match[1] === undefined || match[2] === undefined
-    ? undefined
-    : { slot: match[1], parentId: match[2] };
+/**
+ * The region rows a tree holds, by their row id: the block each stands for
+ * and its region. Read from the rows themselves, so a block whose id is
+ * spelled like a row's is never taken for one.
+ */
+export function slotRowsIn(
+  tree: readonly LayerNode[]
+): ReadonlyMap<string, { readonly parentId: string; readonly slot: string }> {
+  const rows = new Map<string, { parentId: string; slot: string }>();
+  const stack = [...tree];
+  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
+    for (const row of node.slotRows ?? []) {
+      rows.set(row.rowId, { parentId: node.id, slot: row.slot });
+    }
+    stack.push(...node.children);
+  }
+  return rows;
 }
 
 /**
- * The region rows on the way to a node, for the panel to open with its
- * ancestors: each list above it, by the region the path goes through.
+ * The regions on the way to a node: each list above it, the region the path
+ * goes through, and that region's row. What the panel opens with the
+ * node's ancestors, and what a list shows on the canvas so the node is drawn.
  */
-export function slotRowsTo(
+export function regionsTo(
   document: BlockDocument,
   id: string | null
-): string[] {
+): {
+  readonly parentId: string;
+  readonly slot: string;
+  readonly rowId: string;
+}[] {
   const path = pathTo(document, id);
-  const rows: string[] = [];
+  const regions: { parentId: string; slot: string; rowId: string }[] = [];
   for (let index = 1; index < path.length; index += 1) {
     const parent = path[index - 1];
-    const child = path[index];
-    if (parent?.slotRows !== undefined && child?.slot !== undefined) {
-      rows.push(slotRowId(parent.id, child.slot));
+    const slot = path[index]?.slot;
+    const row = parent?.slotRows?.find(candidate => candidate.slot === slot);
+    if (parent !== undefined && row !== undefined) {
+      regions.push({ parentId: parent.id, slot: row.slot, rowId: row.rowId });
     }
   }
-  return rows;
+  return regions;
 }
 
 /**
@@ -329,6 +378,8 @@ export function layersOf(
   // `heldBy` is the nearest locked block above and `hiddenBy` the nearest
   // block hidden on the device, carried down the walk so the tree is read once
   // rather than climbed per row.
+  // The ids a region row may not take: every block's, then every row's.
+  const taken = documentIds(document.nodes);
   const walk = (
     nodes: readonly BlockNode[],
     heldBy: string | undefined,
@@ -362,7 +413,7 @@ export function layersOf(
         ...(hiddenBy === undefined ? {} : { hiddenWith: hiddenBy }),
         ...(slot === undefined ? {} : { slot }),
         ...(node.type === COLLECTION_LIST_TYPE
-          ? { slotRows: LIST_SLOT_ROWS }
+          ? { slotRows: listSlotRows(node.id, taken) }
           : {}),
         // Declaration order across every slot the node holds. `Object.values`
         // preserves insertion order for string keys, which is the order the
@@ -477,9 +528,9 @@ export function filterLayers(
       // matched is visible where it stands. So does each region the kept
       // children sit in, where the panel draws one.
       expand.push(node.id);
-      if (node.slotRows !== undefined) {
-        for (const slot of new Set(children.map(child => child.slot))) {
-          if (slot !== undefined) expand.push(slotRowId(node.id, slot));
+      for (const row of node.slotRows ?? []) {
+        if (children.some(child => child.slot === row.slot)) {
+          expand.push(row.rowId);
         }
       }
       return [{ ...node, children }];

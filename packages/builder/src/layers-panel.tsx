@@ -124,9 +124,9 @@ import { LayerRowMenu, type RowMenuItem } from "./layer-row-menu";
 import {
   ancestorIds,
   filterLayers,
-  slotRowId,
-  slotRowOf,
-  slotRowsTo,
+  regionsTo,
+  slotRowsIn,
+  type SlotRow,
   layerLabel,
   layersOf,
   UNNAMED_COMPONENT,
@@ -438,14 +438,10 @@ function RowAction({
  * blocks it holds. It names no block, so it is never dragged or renamed;
  * choosing it selects the list and shows that region on the canvas.
  */
-function slotRow(
-  node: LayerNode,
-  row: { readonly slot: string; readonly label: string },
-  view: RowView
-): TreeNode {
+function slotRow(node: LayerNode, row: SlotRow, view: RowView): TreeNode {
   const held = node.children.filter(child => child.slot === row.slot);
   return {
-    id: slotRowId(node.id, row.slot),
+    id: row.rowId,
     textValue: row.label,
     label: (
       <span className="nx-layer-row" data-nx-layer-slot={row.slot}>
@@ -1113,6 +1109,9 @@ export function LayersPanel({
   // memo would need the document as its key and would therefore never hit.
   const tree = layersOf(editor.document, componentTitle, device);
   const search = filterLayers(tree, query);
+  // The region rows by their own ids, so choosing one is told from choosing
+  // a block by what the row is, never by how an id is spelled.
+  const regionRows = slotRowsIn(tree);
 
   /*
    * The document, read at effect time rather than depended on.
@@ -1137,7 +1136,9 @@ export function LayersPanel({
     const needed = [
       ...ancestorIds(documentRef.current, editor.selectedId),
       // And each list's region the selection sits in, drawn between them.
-      ...slotRowsTo(documentRef.current, editor.selectedId),
+      ...regionsTo(documentRef.current, editor.selectedId).map(
+        region => region.rowId
+      ),
     ];
     if (needed.length === 0) return;
     setOpened(previous => {
@@ -1277,7 +1278,7 @@ export function LayersPanel({
               onSelectedChange={(id, mode) => {
                 // A list's region names no block: choosing it selects the
                 // list, and shows that region on the canvas.
-                const region = slotRowOf(id);
+                const region = regionRows.get(id);
                 if (region !== undefined) {
                   editor.select(region.parentId, "replace");
                   editor.showListEmpty?.(
@@ -1286,6 +1287,15 @@ export function LayersPanel({
                   );
                   revealChosen(region.parentId);
                   return;
+                }
+                // A block inside a list's region is drawn only while the
+                // list shows that region: each list above it is switched to
+                // the region it sits in first, so revealing finds it.
+                for (const around of regionsTo(editor.document, id)) {
+                  editor.showListEmpty?.(
+                    around.parentId,
+                    around.slot === "empty"
+                  );
                 }
                 editor.select(id, mode);
                 revealChosen(id);

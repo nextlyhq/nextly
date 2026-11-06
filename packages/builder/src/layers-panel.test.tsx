@@ -794,4 +794,46 @@ describe("a collection list's regions in Layers", () => {
       await screen.findByRole("treeitem", { name: /Post card/ })
     ).toBeDefined();
   });
+
+  it("shows a child's region on the canvas when the child is chosen in Layers", async () => {
+    registerList();
+    const document = listDocument();
+    const list = document.nodes[0];
+    if (list?.slots !== undefined) {
+      list.slots.empty = [node("none", "core/heading", { name: "No posts" })];
+    }
+    render(<Host document={document} />);
+    // Both regions opened, as a selection made elsewhere opens them.
+    act(() => editorRef?.select("none"));
+    act(() => editorRef?.select("card"));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /No posts/ }));
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("none");
+      expect([...(editorRef?.listsShowingEmpty ?? [])]).toEqual(["list"]);
+    });
+    fireEvent.click(screen.getByRole("treeitem", { name: /Post card/ }));
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("card");
+      expect(editorRef?.listsShowingEmpty?.size).toBe(0);
+    });
+  });
+
+  it("selects a block whose id reads like a region row, not the list", async () => {
+    registerList();
+    // Any non-empty string is a valid id in a stored document, this one too.
+    const tricky = "nx-slot:empty:list";
+    const document = listDocument();
+    const list = document.nodes[0];
+    if (list?.slots !== undefined) {
+      list.slots.empty = [node(tricky, "core/heading", { name: "Tricky" })];
+    }
+    render(<Host document={document} />);
+    act(() => editorRef?.select(tricky));
+    act(() => editorRef?.select("card"));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /Tricky/ }));
+    await waitFor(() => expect(editorRef?.selectedId).toBe(tricky));
+    // The region row is its own row still, and still selects the list.
+    fireEvent.click(screen.getByRole("treeitem", { name: /When empty/ }));
+    await waitFor(() => expect(editorRef?.selectedId).toBe("list"));
+  });
 });
