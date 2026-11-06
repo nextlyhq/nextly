@@ -1184,13 +1184,13 @@ export async function wholeWriteOf(
 ): Promise<WholeWrite> {
   const sent = new Map<string, string>();
   for (const [name, value] of Object.entries(data)) {
-    sent.set(name, await storedValueHash(storedValueOf(data, name, value)));
+    sent.set(name, await storedValueHash(payloadValueOf(data, name, value)));
   }
   return { sent, cut: [], judged: false };
 }
 
 /** A payload's value for `name` as the stored hash compares it. */
-function storedValueOf(
+function payloadValueOf(
   data: Record<string, unknown>,
   name: string,
   value: unknown = data[name]
@@ -1287,7 +1287,7 @@ export async function refuseUnlessWhole(
   const changed: string[] = [];
   for (const [name, hash] of whole.sent) {
     if (!declared.has(name)) continue;
-    if ((await storedValueHash(storedValueOf(data, name))) !== hash) {
+    if ((await storedValueHash(payloadValueOf(data, name))) !== hash) {
       changed.push(name);
     }
   }
