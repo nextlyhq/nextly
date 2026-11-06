@@ -44,6 +44,8 @@ import type {
   PluginStoredValueTarget,
 } from "../../plugins/contributions";
 
+import { addressableFields } from "../addressable-fields";
+
 import { detachedField } from "./detached-field";
 import { applyFieldDefaults } from "./field-defaults";
 import {
@@ -283,21 +285,33 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
  * reordered change no verdict, because no row is matched against a
  * predecessor; the walk judges the content as it stands.
  *
- * Only whole-number fields are judged — every other rule keeps its pre-hook
- * verdict, and fraction-capable fields (decimal, float) keep their
- * fractions — and hasMany elements are judged as values, indexed in the
- * path. Virtual fields store nothing, so a hook writing one is not a write.
+ * Only the fields whose value the gate judged as a number are judged — a
+ * `number`, or a plugin type whose storage primitive is one — and every
+ * other rule keeps its pre-hook verdict: a json field keeps whatever JSON
+ * it holds (a bare `2.5` is legal there), and fraction-capable fields
+ * (decimal, float) keep their fractions. hasMany elements are judged as
+ * values, indexed in the path. Virtual fields store nothing, so a hook
+ * writing one is not a write.
  */
 export function hookChangedWholeNumberIssues(
   data: Record<string, unknown>,
   fields: ValidatableField[],
-  path = ""
+  path = "",
+  componentFields?: (slug: string) => ValidatableField[] | undefined
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const byName = new Map(
-    fields
+    addressableFields(fields, {
+      // An unnamed GROUP is layout: its children are stored at the level the
+      // group sits in, which is the level this map is keyed by — the same
+      // answer the data side and the hook registry give, so a hook write to
+      // such a child is found under the child's own name. An unnamed
+      // REPEATER stores its children per row, so none of them is addressable
+      // here and the container is skipped whole.
+      descendInto: container => container.type === "group",
+    })
       .filter(field => typeof field.name === "string")
-      .map(field => [field.name as string, field])
+      .map(field => [field.name as string, field as ValidatableField])
   );
   for (const key of Object.keys(data)) {
     const field = byName.get(key);
@@ -327,16 +341,63 @@ export function hookChangedWholeNumberIssues(
           ...hookChangedWholeNumberIssues(
             row as Record<string, unknown>,
             field.fields as ValidatableField[],
-            field.type === "repeater" ? `${childPath}[${index}]` : childPath
+            field.type === "repeater" ? `${childPath}[${index}]` : childPath,
+            componentFields
           )
         );
       });
       continue;
     }
 
-    // A fraction-capable field (decimal, float) keeps fractions; a
-    // whole-number field is the one the floor judges.
-    if (fieldJudgesFractions(field)) continue;
+    // A component held in a container stores its value whole, and the gate
+    // judged it against the component's own fields before the hooks ran —
+    // with the resolver this walk is handed, which is absent exactly where
+    // the gate left such a component unjudged. An entry-level hook holds
+    // the whole document, so the walk descends by the same slug the gate
+    // resolved and judges the fraction where the instance stores it.
+    if (componentFields && isFieldGroupFieldType(field.type)) {
+      const { single, many } = extractFieldGroupReferences(field);
+      const value = data[key];
+      const instances: Array<[unknown, string]> = Array.isArray(value)
+        ? value.map((row, index) => [row, `${childPath}[${index}]`])
+        : [[value, childPath]];
+      for (const [instance, at] of instances) {
+        if (
+          instance === null ||
+          typeof instance !== "object" ||
+          Array.isArray(instance)
+        ) {
+          continue;
+        }
+        const slug =
+          single ??
+          (many?.includes(readFieldGroupType(instance) ?? "")
+            ? readFieldGroupType(instance)
+            : undefined);
+        const own = slug ? componentFields(slug) : undefined;
+        if (!own) continue;
+        issues.push(
+          ...hookChangedWholeNumberIssues(
+            instance as Record<string, unknown>,
+            own,
+            at,
+            componentFields
+          )
+        );
+      }
+      continue;
+    }
+
+    // The gate judged a value as a number only when the field's storage
+    // primitive says number — the same dispatch its own switch makes for a
+    // plugin-contributed type. Everything else (json, text, relationship,
+    // a component without a resolver) never met the whole-number rule, so
+    // a numeric-looking value there is none of this floor's business.
+    const pluginType = getFieldType(field.type);
+    const effectiveType = pluginType
+      ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
+      : field.type;
+    if (effectiveType !== "number" || fieldJudgesFractions(field)) continue;
     const label = typeof field.label === "string" ? field.label : field.name;
     const value = data[key];
     const elements = field.hasMany && Array.isArray(value) ? value : [value];

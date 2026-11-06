@@ -2640,7 +2640,19 @@ export class SingleMutationService extends BaseService {
       // behind is a write the gate never saw.
       const hookIssues = hookChangedWholeNumberIssues(
         currentData,
-        fieldConfigs
+        fieldConfigs,
+        "",
+        // The component schemas the gate resolved before the hooks ran: the
+        // walk judges what a hook left in a component a container stores
+        // against those fields, as the gate judged the value before them.
+        // On the pool, as the gate reads.
+        await containedComponentResolver(
+          fieldConfigs,
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug
+            )) ?? null
+        )
       );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });

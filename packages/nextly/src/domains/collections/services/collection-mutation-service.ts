@@ -2893,6 +2893,29 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+  /**
+   * The component schemas the hook walk resolves for a component held in a
+   * group or repeater, by slug, or nothing when the fields hold none: the
+   * gate judged such a component's value against these fields before the
+   * hooks ran, so the walk that judges what the hooks left behind resolves
+   * the same schemas. On the pool, as the gate on these paths reads.
+   */
+  private async hookWalkComponentResolver(
+    fields: FieldDefinition[],
+    executor?: unknown
+  ) {
+    return containedComponentResolver(
+      fields as unknown as FieldConfig[],
+      async componentSlug =>
+        (await this.fieldGroupDataService?.getComponentFields(
+          componentSlug,
+          executor
+        )) ?? null,
+      false
+    );
+  }
+
+  /**
    * What {@link assertEntryValid} refuses a write with, without refusing it:
    * every violation, or none.
    */
@@ -7327,7 +7350,12 @@ export class CollectionMutationService extends BaseService {
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
       // decide, on every verb this gate guards.
-      const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
+      const hookIssues = hookChangedWholeNumberIssues(
+        finalData,
+        fields,
+        "",
+        await this.hookWalkComponentResolver(fields)
+      );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -13509,7 +13537,12 @@ export class CollectionMutationService extends BaseService {
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
       // decide, on every verb this gate guards.
-      const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
+      const hookIssues = hookChangedWholeNumberIssues(
+        finalData,
+        fields,
+        "",
+        await this.hookWalkComponentResolver(fields)
+      );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -18076,7 +18109,12 @@ export class CollectionMutationService extends BaseService {
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards.
-        const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
+        const hookIssues = hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          await this.hookWalkComponentResolver(fields)
+        );
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
@@ -18827,7 +18865,12 @@ export class CollectionMutationService extends BaseService {
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards.
-        const hookIssues = hookChangedWholeNumberIssues(finalData, fields);
+        const hookIssues = hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          await this.hookWalkComponentResolver(fields)
+        );
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
