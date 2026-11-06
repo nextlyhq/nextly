@@ -86,6 +86,17 @@ function PaginationSummary({
 }
 
 /**
+ * The landmark's accessible name: the caller's own as given, or the admin's
+ * in the interface language.
+ */
+function landmarkName(
+  ariaLabel: string | undefined,
+  t: (key: "nextly.pagination.label") => string
+): string {
+  return ariaLabel ?? t("nextly.pagination.label");
+}
+
+/**
  * Pagination Component
  *
  * A reusable pagination component with page controls, page size selector, and smart page numbering.
@@ -391,7 +402,7 @@ export const Pagination: React.ForwardRefExoticComponent<
     return (
       <nav
         ref={ref}
-        aria-label={ariaLabel ?? t("nextly.pagination.label")}
+        aria-label={landmarkName(ariaLabel, t)}
         onKeyDown={handleKeyDown}
         className={cn(
           "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
