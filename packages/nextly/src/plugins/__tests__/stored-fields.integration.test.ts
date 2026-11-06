@@ -2670,6 +2670,54 @@ describe.each(getConfiguredTestDialects())(
           after.kind === "found" ? after.live?.publicState : "absent"
         ).not.toBe("published");
       });
+
+      it("refuses a write sending a key an update never stores, for an entry and a Single, and writes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const pageHash = await systemHash(page, "body");
+        await t.nextly.updateSingle({
+          slug: "site",
+          data: { body: { v: 0 }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const site = { single: "site" };
+        const siteHash = await systemHash(site, "body");
+        const at = new Date(0).toISOString();
+
+        // A system column no client writes, on an entry and on a Single, as
+        // a caller, with the expectation the system's, and as the system.
+        const writes = [
+          { document: page, hash: pageHash, key: "updatedAt", caller: editor },
+          { document: site, hash: siteHash, key: "createdAt", caller: owner },
+        ];
+        for (const { document, hash, key, caller } of writes) {
+          for (const identity of [caller, checked(caller), SYSTEM] as const) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...document,
+                data: { body: { v: "partial" }, [key]: at },
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+          }
+          expect(await systemValue(document, "body")).toEqual({
+            kind: "value",
+            value: { v: 0 },
+          });
+        }
+
+        // CONTROL: the same write without the key lands.
+        await updateIfUnchanged(checked(editor), {
+          ...page,
+          data: { body: { v: "whole" } },
+          expect: { field: "body", form: "published", hash: pageHash },
+        });
+        expect(await systemValue(page, "body")).toEqual({
+          kind: "value",
+          value: { v: "whole" },
+        });
+      });
     });
   }
 );

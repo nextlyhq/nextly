@@ -47,6 +47,7 @@ import type {
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
+import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
   DOCUMENT_OVERWRITE_KEY,
   DOCUMENT_VERSION_KEY,
@@ -1321,6 +1322,41 @@ const WRITE_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
   DOCUMENT_VERSION_KEY,
   DOCUMENT_OVERWRITE_KEY,
 ]);
+
+/**
+ * The keys of `data` the write paths' row strip takes out of every update to
+ * the entity `target` names, asked of `stripImmutableSystemFields` itself:
+ * its immutable system columns, the columns schema hooks contributed, and any
+ * declared field with no column. The {@link WRITE_TRANSPORT_KEYS} are not
+ * among them, being read before the strip and never stored. An update sending
+ * one of these is stored without it, so a write that must be made whole is
+ * refused for it where it arrives.
+ */
+export async function unstoredWriteKeys(
+  target: StoredFieldsTarget,
+  data: Record<string, unknown>
+): Promise<string[]> {
+  const connection: StoredFieldConnection = {
+    db: getService("adapter"),
+    executor: undefined,
+    defaultLocale: null,
+  };
+  const entity = await storedEntity(
+    connection,
+    registryRecords(connection),
+    target,
+    EVERY_FIELD
+  );
+  const kept = stripImmutableSystemFields(
+    data,
+    entity.kind,
+    entity.tableName,
+    entity.fields
+  );
+  return Object.keys(data).filter(
+    key => !(key in kept) && !WRITE_TRANSPORT_KEYS.has(key)
+  );
+}
 
 /** The whole-write record of the write called with `context`, for this document. */
 function wholeWriteFor(
