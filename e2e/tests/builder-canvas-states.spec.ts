@@ -295,39 +295,15 @@ async function groundBehind(
   return { own, page: beneath };
 }
 
-/**
- * The page's colour beneath a mark's ring, as rendered: one pixel just inside
- * the block's edge, where the ring is drawn, captured with the editor's layer
- * hidden and the page's text made transparent, so the pixel is what the block
- * paints behind its content. A colour, an image or a gradient is then the
- * ground its ring is judged against, and a glyph that happens to sit at that
- * point is not.
- */
-async function groundUnder(page: Page, selector: string): Promise<string> {
-  const mark = canvasLayer(page).locator(selector).first();
-  const box = await mark.boundingBox();
-  if (box === null) throw new Error("the mark is not laid out");
-  const layer = canvasLayer(page);
-  await layer.evaluate(element => {
-    (element as HTMLElement).style.visibility = "hidden";
-  });
-  const frameBody = canvasFrame(page).locator("body");
-  await frameBody.evaluate(body => {
-    const style = body.ownerDocument.createElement("style");
-    style.id = "nx-e2e-no-text";
-    style.textContent =
-      "*, *::before, *::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }";
-    body.ownerDocument.head.append(style);
-  });
-  const shot = await page.screenshot({
-    clip: { x: box.x + 3, y: box.y + box.height / 2, width: 1, height: 1 },
-  });
-  await frameBody.evaluate(body => {
-    body.ownerDocument.getElementById("nx-e2e-no-text")?.remove();
-  });
-  await layer.evaluate(element => {
-    (element as HTMLElement).style.visibility = "";
-  });
+/** The ratio between a mark's rendered ring and the rendered ground beneath it. */
+async function ringContrast(page: Page, selector: string): Promise<number> {
+  const { ring, ground } = await ringAndGround(page, selector);
+  return contrast(page, ring, ground);
+}
+
+/** The colour of one rendered pixel of the page, as `rgb()`. */
+async function pixelAt(page: Page, x: number, y: number): Promise<string> {
+  const shot = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
   return page.evaluate(async png => {
     const image = new Image();
     image.src = `data:image/png;base64,${png}`;
@@ -345,19 +321,65 @@ async function groundUnder(page: Page, selector: string): Promise<string> {
   }, shot.toString("base64"));
 }
 
-/** A mark's outline colour, and a pseudo-element tag's colours if asked. */
+/**
+ * A mark's ring and the ground beneath it, both as rendered: one pixel just
+ * inside the mark's edge, where its ring is drawn, read once as the author
+ * sees it and once with the editor's layer hidden and the page's text made
+ * transparent. What is judged is then what is on screen: the ring whatever
+ * property or element draws it, against a colour, an image or a gradient the
+ * block paints, and never a glyph that happens to sit at that point.
+ */
+async function ringAndGround(
+  page: Page,
+  selector: string
+): Promise<{ ring: string; ground: string }> {
+  const mark = canvasLayer(page)
+    .locator(selector)
+    .filter({ visible: true })
+    .first();
+  await expect(mark).toBeVisible();
+  const box = await mark.boundingBox();
+  if (box === null) throw new Error("the mark is not laid out");
+  const x = box.x + 1;
+  const y = box.y + box.height / 2;
+  const ring = await pixelAt(page, x, y);
+  const layer = canvasLayer(page);
+  const frameBody = canvasFrame(page).locator("body");
+  await layer.evaluate(element => {
+    (element as HTMLElement).style.visibility = "hidden";
+  });
+  await frameBody.evaluate(body => {
+    const style = body.ownerDocument.createElement("style");
+    style.id = "nx-e2e-no-text";
+    style.textContent =
+      "*, *::before, *::after { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent !important; }";
+    body.ownerDocument.head.append(style);
+  });
+  const ground = await pixelAt(page, x, y);
+  await frameBody.evaluate(body => {
+    body.ownerDocument.getElementById("nx-e2e-no-text")?.remove();
+  });
+  await layer.evaluate(element => {
+    (element as HTMLElement).style.visibility = "";
+  });
+  return { ring, ground };
+}
+
+/** A mark's tag colours: its text and the ground the tag paints. */
 async function markColours(
   page: Page,
   selector: string,
   pseudo?: "::before"
-): Promise<{ outline: string; text: string; tagGround: string }> {
-  const mark = canvasLayer(page).locator(selector).first();
+): Promise<{ text: string; tagGround: string }> {
+  const mark = canvasLayer(page)
+    .locator(selector)
+    .filter({ visible: true })
+    .first();
   await expect(mark).toBeVisible();
   return mark.evaluate((element, which) => {
     const own = getComputedStyle(element);
     const tag = which === undefined ? own : getComputedStyle(element, which);
     return {
-      outline: own.outlineColor,
       text: tag.color,
       tagGround: tag.backgroundColor,
     };
@@ -384,13 +406,8 @@ for (const theme of ["light", "dark"] as const) {
       await open(page, id, theme);
 
       await canvasBlock(page, HEADING).click();
-      const selected = await markColours(page, `${MARK}[data-mark="selected"]`);
       expect(
-        await contrast(
-          page,
-          selected.outline,
-          await groundUnder(page, `${MARK}[data-mark="selected"]`)
-        ),
+        await ringContrast(page, `${MARK}[data-mark="selected"]`),
         "the selection ring against the page"
       ).toBeGreaterThanOrEqual(3);
 
@@ -419,13 +436,9 @@ for (const theme of ["light", "dark"] as const) {
         "::before"
       );
       expect(
-        await contrast(
+        await ringContrast(
           page,
-          hovered.outline,
-          await groundUnder(
-            page,
-            `${MARK}[data-mark="hovered"][data-hover-label]`
-          )
+          `${MARK}[data-mark="hovered"][data-hover-label]`
         ),
         "the hover outline against the page"
       ).toBeGreaterThanOrEqual(3);
@@ -451,13 +464,9 @@ for (const theme of ["light", "dark"] as const) {
         "::before"
       );
       expect(
-        await contrast(
+        await ringContrast(
           page,
-          placement.outline,
-          await groundUnder(
-            page,
-            `${MARK}[data-mark="selected"][data-placement-label]`
-          )
+          `${MARK}[data-mark="selected"][data-placement-label]`
         ),
         "the component's frame against the page"
       ).toBeGreaterThanOrEqual(3);
