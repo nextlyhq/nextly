@@ -23,15 +23,20 @@ import type { ReactElement } from "react";
 import { AvatarUploader } from "@admin/components/features/user-management/avatar-uploader";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PlaceTabs, TargetSlot } from "@admin/components/shared/target-slot";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 
-import { useAccountProfile } from "./useAccountProfile";
+import { ACCOUNT_NAME_MAX, useAccountProfile } from "./useAccountProfile";
 
 export default function AccountPage(): ReactElement {
   const t = useT();
   const { user, isLoading, error } = useDashboardUser();
   const profile = useAccountProfile(user);
+  // The avatar is picked from the media library, which only a reader of media
+  // can open; anyone else is shown theirs without the control that would fail.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayPickAvatar = hasPermission("read-media");
 
   if (isLoading) {
     return (
@@ -90,7 +95,7 @@ export default function AccountPage(): ReactElement {
                     value={profile.image}
                     onChange={profile.setImage}
                     fullName={profile.name || user.name}
-                    disabled={profile.saving}
+                    disabled={profile.saving || !mayPickAvatar}
                     className="border border-border"
                     // As the user edit page draws it: text-primary on the
                     // primary tint reads in both modes.
@@ -104,7 +109,11 @@ export default function AccountPage(): ReactElement {
                   error={
                     profile.nameMissing
                       ? t("nextly.account.nameRequired")
-                      : undefined
+                      : profile.nameTooLong
+                        ? t("nextly.account.nameTooLong", {
+                            max: ACCOUNT_NAME_MAX,
+                          })
+                        : undefined
                   }
                 >
                   {({ id, describedBy, invalid }) => (
@@ -116,6 +125,7 @@ export default function AccountPage(): ReactElement {
                       onChange={event => profile.setName(event.target.value)}
                       disabled={profile.saving}
                       autoComplete="name"
+                      maxLength={ACCOUNT_NAME_MAX}
                     />
                   )}
                 </FieldShell>
@@ -138,7 +148,10 @@ export default function AccountPage(): ReactElement {
                   <Button
                     type="submit"
                     disabled={
-                      profile.saving || profile.nameMissing || !profile.changed
+                      profile.saving ||
+                      profile.nameMissing ||
+                      profile.nameTooLong ||
+                      !profile.changed
                     }
                   >
                     {profile.saving

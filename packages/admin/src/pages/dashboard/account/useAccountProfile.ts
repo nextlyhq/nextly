@@ -15,6 +15,12 @@ import { useUpdateOwnProfile } from "@admin/hooks/queries/useUpdateOwnProfile";
 import type { DashboardUser } from "@admin/hooks/useDashboardUser";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 
+/**
+ * The longest name the users table holds on every dialect: its `name` column
+ * is 255 characters wide on MySQL, which refuses a longer one.
+ */
+export const ACCOUNT_NAME_MAX = 255;
+
 export interface AccountProfile {
   name: string;
   setName: (name: string) => void;
@@ -23,6 +29,8 @@ export interface AccountProfile {
   setImage: (image: string) => void;
   /** The name as it would be saved is empty. */
   nameMissing: boolean;
+  /** The name as it would be saved is longer than the table holds. */
+  nameTooLong: boolean;
   /** Something differs from what is saved. */
   changed: boolean;
   saving: boolean;
@@ -44,10 +52,11 @@ export function useAccountProfile(user: DashboardUser | null): AccountProfile {
   }, [savedName, savedImage]);
 
   const nameMissing = name.trim() === "";
+  const nameTooLong = name.trim().length > ACCOUNT_NAME_MAX;
   const changed = name !== savedName || image !== savedImage;
 
   function save(): void {
-    if (nameMissing || !changed) return;
+    if (nameMissing || nameTooLong || !changed) return;
     update.mutate(
       { name: name.trim(), image },
       {
@@ -66,6 +75,7 @@ export function useAccountProfile(user: DashboardUser | null): AccountProfile {
     image,
     setImage,
     nameMissing,
+    nameTooLong,
     changed,
     saving: update.isPending,
     save,

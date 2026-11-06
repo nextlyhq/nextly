@@ -19,6 +19,8 @@ const state = vi.hoisted(() => ({
   },
   written: [] as Array<[string, unknown]>,
   contributions: undefined as AdminContributionsMeta | undefined,
+  /** The permissions the signed-in person holds. */
+  held: ["read-media"] as string[],
 }));
 
 vi.mock("@admin/hooks/useApi", () => ({
@@ -41,6 +43,11 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   >()),
   useBranding: () => ({ contributions: state.contributions }),
 }));
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({
+    hasPermission: (slug: string) => state.held.includes(slug),
+  }),
+}));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast: { success: vi.fn(), error: vi.fn() },
@@ -59,6 +66,7 @@ afterEach(() => {
   state.me = { id: "u1", name: "Ada", email: "ada@example.com", image: null };
   state.written = [];
   state.contributions = undefined;
+  state.held = ["read-media"];
 });
 
 /** The page's own card: the form holding the person's profile. */
@@ -157,5 +165,40 @@ describe("the account page", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByText("Enter your name.")).toBeTruthy();
     expect(state.written).toEqual([]);
+  });
+
+  it("offers the avatar picker only to a reader of media, who can open it", async () => {
+    // The picker lists the media library, which a person without
+    // `read-media` is refused: they are shown their avatar, not a control
+    // that would fail.
+    state.held = [];
+    const { unmount } = render(<AccountPage />);
+    await screen.findByLabelText("Name");
+    expect(
+      screen.getByRole("button", { name: "Change avatar" })
+    ).toBeDisabled();
+    unmount();
+
+    state.held = ["read-media"];
+    render(<AccountPage />);
+    await screen.findByLabelText("Name");
+    expect(
+      screen.getByRole("button", { name: "Change avatar" })
+    ).not.toBeDisabled();
+  });
+
+  it("holds the name to what the users table stores", async () => {
+    const user = userEvent.setup();
+    render(<AccountPage />);
+
+    const name = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await user.clear(name);
+    await user.type(name, "a".repeat(300));
+
+    // Typing stops at the column's width, so the save never sends more.
+    expect(name.value).toHaveLength(255);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(state.written).toHaveLength(1));
+    expect((state.written[0]?.[1] as { name: string }).name).toHaveLength(255);
   });
 });

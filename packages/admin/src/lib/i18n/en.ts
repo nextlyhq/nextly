@@ -62,6 +62,7 @@ export const en = {
     "Your name and picture, as others see them in the admin.",
   "nextly.account.name": "Name",
   "nextly.account.nameRequired": "Enter your name.",
+  "nextly.account.nameTooLong": "Keep your name to {max} characters.",
   "nextly.account.email": "Email",
   "nextly.account.emailHint": "Ask an administrator to change your email.",
   "nextly.account.save": "Save changes",
