@@ -213,9 +213,28 @@ function interpolate(
     const field = placeholder.slice(1, -1);
     const text = asUrlSegment(entry[field]);
     if (text === null) return null;
-    result = result.replace(placeholder, encodeURIComponent(text));
+    result = result.replace(placeholder, encodedValue(text));
   }
   return result;
+}
+
+/**
+ * A value as it goes into a URL: each segment encoded with its `/` kept,
+ * where the value is a path of real segments (a page stored at
+ * `docs/install`), so its link names the address it is served at. Anything
+ * else is encoded whole, as before, so `../admin` can never step out of the
+ * template it is placed in.
+ */
+function encodedValue(text: string): string {
+  const segments = text.split("/");
+  const isPath =
+    segments.length > 1 &&
+    segments.every(
+      segment => segment !== "" && segment !== "." && segment !== ".."
+    );
+  return isPath
+    ? segments.map(encodeURIComponent).join("/")
+    : encodeURIComponent(text);
 }
 
 /**

@@ -256,6 +256,21 @@ async function freeSlugs(
 }
 
 /**
+ * The address a stored page sits beneath: its slug up to the last `/`, or
+ * nothing for a page at the top level or one whose slug was not read.
+ */
+function parentOf(
+  row: unknown,
+  slugName: string | undefined
+): string | undefined {
+  if (slugName === undefined) return undefined;
+  const slug = (row as Record<string, unknown> | null)?.[slugName];
+  if (typeof slug !== "string") return undefined;
+  const at = slug.lastIndexOf("/");
+  return at <= 0 ? undefined : slug.slice(0, at);
+}
+
+/**
  * Write a page whose slug is made from `text`: once with the slug where the
  * collection's slugs need not be unique, and otherwise with each free slug in
  * turn, at most {@link WRITE_ATTEMPTS} times, until core does not refuse it as
@@ -265,11 +280,19 @@ async function writeWithSlug(
   source: PageCollection,
   text: string,
   writes: PagesWrites,
-  write: (slug: Record<string, unknown>) => Promise<unknown>
+  write: (slug: Record<string, unknown>) => Promise<unknown>,
+  /**
+   * The address the page sits beneath (`docs` for `docs/install`), so a
+   * copy of a nested page lands beside it rather than at the top level.
+   */
+  parent?: string
 ): Promise<unknown> {
   const field = source.slugField;
   if (field === undefined) return write({});
-  const base = slugBaseOf(text);
+  const base =
+    parent === undefined || parent === ""
+      ? slugBaseOf(text)
+      : `${parent}/${slugBaseOf(text)}`;
   if (!field.unique) return write({ [field.name]: base });
   const free = await freeSlugs(source, field.name, base, writes);
   for (const slug of free.slice(0, WRITE_ATTEMPTS)) {
@@ -358,6 +381,9 @@ export async function duplicatePage(
     select: {
       id: true,
       ...(titleName === undefined ? {} : { [titleName]: true }),
+      ...(source.slugField === undefined
+        ? {}
+        : { [source.slugField.name]: true }),
     },
     limit: 1,
   });
@@ -374,12 +400,17 @@ export async function duplicatePage(
     );
   }
   const copy = `${COPY_PREFIX}${original.title}`.slice(0, PAGE_TITLE_MAX);
-  const row = await writeWithSlug(source, copy, writes, slug =>
-    writes.duplicate(source.slug, page.id, {
-      ...(titleName === undefined ? {} : { [titleName]: copy }),
-      ...slug,
-      ...draftOf(source),
-    })
+  const row = await writeWithSlug(
+    source,
+    copy,
+    writes,
+    slug =>
+      writes.duplicate(source.slug, page.id, {
+        ...(titleName === undefined ? {} : { [titleName]: copy }),
+        ...slug,
+        ...draftOf(source),
+      }),
+    parentOf(read.items[0], source.slugField?.name)
   );
   return writtenItem(row, source);
 }

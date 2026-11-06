@@ -210,6 +210,34 @@ describe("resolvePreviewUrl", () => {
     });
   });
 
+  it("keeps the slashes of a value that is a path of real segments", () => {
+    // A page stored at a nested address links to that address; each segment
+    // is still encoded, so a space or a `?` cannot change the URL's shape.
+    const at = (slug: string) =>
+      resolvePreviewUrl({
+        preview: { urlTemplate: "/{slug}" },
+        entry: { slug },
+        siteUrl: SITE,
+      });
+    expect(at("docs/getting started/install")).toEqual({
+      status: "resolved",
+      url: "https://example.com/docs/getting%20started/install",
+    });
+    expect(at("faq/all?x")).toEqual({
+      status: "resolved",
+      url: "https://example.com/faq/all%3Fx",
+    });
+    // An empty or dot segment is no path: encoded whole, as before.
+    expect(at("a//b")).toEqual({
+      status: "resolved",
+      url: "https://example.com/a%2F%2Fb",
+    });
+    expect(at("./b")).toEqual({
+      status: "resolved",
+      url: "https://example.com/.%2Fb",
+    });
+  });
+
   // The separating property. Every case below produces "no usable URL", and a
   // resolver that answered null for all of them would pass any test asserting
   // only absence. What distinguishes this one is that a host IS guessable here

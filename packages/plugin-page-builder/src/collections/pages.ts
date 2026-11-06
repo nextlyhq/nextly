@@ -127,6 +127,11 @@ export function pagesCollection(
   return defineCollection({
     slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // A page's address may sit beneath another (`docs/getting-started`),
+    // each part normalised as a one-part address is. A rule about the stored
+    // value only, outside the schema, so an existing site migrates nothing
+    // and every one-part address it holds stays as it is.
+    db: { slugPaths: true },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
