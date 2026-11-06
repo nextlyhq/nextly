@@ -16,6 +16,7 @@ import {
   siteCodeFacts,
   type CspCheckInput,
 } from "./csp";
+import { SITE_CODE_BOOTSTRAP } from "./bootstrap";
 import type { SiteCodeEntry } from "./rules";
 
 const ORIGIN = "https://acme.example";
@@ -44,7 +45,18 @@ const pixel = (
   child: { tag, attrs: { src, ...more } },
 });
 
-/** The directives that would block `head` and `body` under `policy`. */
+/** Whether a finding is about the loader that starts gated code. */
+const aboutLoader = (message: string): boolean =>
+  message.startsWith("the loader");
+
+/** The loader's hash, as a policy names it. */
+const loaderHash = async (): Promise<string> =>
+  `'${await cspHash(SITE_CODE_BOOTSTRAP)}'`;
+
+/**
+ * The directives that would block `head` and `body` under `policy`, each
+ * entry's own: the loader's block is asserted on its own below.
+ */
 async function blockedBy(
   policy: string,
   head: readonly SiteCodeEntry[],
@@ -56,7 +68,9 @@ async function blockedBy(
     { head, body }
   );
   if (!check.checked) throw new Error(check.reason);
-  return check.findings.map(finding => finding.directive);
+  return check.findings
+    .filter(finding => !aboutLoader(finding.message))
+    .map(finding => finding.directive);
 }
 
 describe("reading a policy", () => {
@@ -443,6 +457,55 @@ describe("what site code loads", () => {
     ).toEqual(["style-src"]);
   });
 
+  it("reports the loader blocked once, on the first entry it starts", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'", siteOrigin: ORIGIN },
+      {
+        head: [
+          { tag: "meta", attrs: { name: "a", content: "b" } },
+          inline("a()"),
+          inline("b()"),
+        ],
+        body: [],
+      }
+    );
+    if (!check.checked) throw new Error(check.reason);
+    const loader = check.findings.filter(finding =>
+      aboutLoader(finding.message)
+    );
+    expect(loader).toEqual([
+      expect.objectContaining({
+        slot: "head",
+        index: 1,
+        directive: "script-src",
+      }),
+    ]);
+    expect(loader[0]?.message).toContain(await loaderHash());
+  });
+
+  it("lets the loader run under 'unsafe-inline', its hash or the site's nonce", async () => {
+    const runs = async (policy: string, siteNonce = false) => {
+      const check = await checkSiteCodeAgainstCsp(
+        { policy, siteOrigin: ORIGIN, siteNonce },
+        { head: [inline("a()")], body: [] }
+      );
+      if (!check.checked) throw new Error(check.reason);
+      return !check.findings.some(finding => aboutLoader(finding.message));
+    };
+    expect(await runs("script-src 'unsafe-inline'")).toBe(true);
+    expect(await runs(`script-src ${await loaderHash()}`)).toBe(true);
+    expect(await runs("script-src 'nonce-x'", true)).toBe(true);
+    expect(await runs("script-src 'nonce-x'")).toBe(false);
+  });
+
+  it("says nothing of the loader for code it doesn't start", async () => {
+    const check = await checkSiteCodeAgainstCsp(
+      { policy: "script-src 'self'; img-src *", siteOrigin: ORIGIN },
+      { head: [], body: [pixel("img", "https://t.example/p.gif")] }
+    );
+    expect(check).toEqual({ checked: true, findings: [] });
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },
@@ -468,7 +531,11 @@ describe("what site code needs of a policy", () => {
       ],
       ORIGIN
     );
-    expect(facts.hashes.script).toEqual([await cspHash("a()")]);
+    // The inline script's hash, then the loader's, which starts it.
+    expect(facts.hashes.script).toEqual([
+      await cspHash("a()"),
+      await cspHash(SITE_CODE_BOOTSTRAP),
+    ]);
     expect(facts.loads).toEqual([
       { kind: "script", url: GTAG },
       { kind: "script", url: "/js/own.js" },
@@ -487,7 +554,7 @@ describe("adding what site code needs to a policy", () => {
   it("adds the hash and origin to script-src-elem, never to script-src, which workers fall back to", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("script-src 'self' 'sha256-AAAA'", facts)).toBe(
-      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${GTM}`
+      `script-src 'self' 'sha256-AAAA'; script-src-elem 'self' 'sha256-AAAA' ${hash} ${await loaderHash()} ${GTM}`
     );
   });
 
@@ -509,7 +576,7 @@ describe("adding what site code needs to a policy", () => {
     // Without the nonce, the inline setup needs its hash; no host is
     // honoured under 'strict-dynamic', so none is added for the script.
     expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
-      `${policy}; script-src-elem 'nonce-abc' 'strict-dynamic' ${hash}`
+      `${policy}; script-src-elem 'nonce-abc' 'strict-dynamic' ${hash} ${await loaderHash()}`
     );
   });
 
@@ -519,13 +586,18 @@ describe("adding what site code needs to a policy", () => {
       ORIGIN
     );
     const policy = "script-src https://cdn.example/approved/";
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
+    // Only the loader's hash is added: the script's own load already passes.
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
+      `${policy}; script-src-elem https://cdn.example/approved/ ${await loaderHash()}`
+    );
   });
 
   it("adds 'self' for a load from the site itself", async () => {
     const facts = await siteCodeFacts([loaded("/analytics.js")], ORIGIN);
     const merged = mergeSiteCodeIntoCsp("default-src 'none'", facts);
-    expect(merged).toBe("default-src 'none'; script-src-elem 'self'");
+    expect(merged).toBe(
+      `default-src 'none'; script-src-elem ${await loaderHash()} 'self'`
+    );
     expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
   });
 
@@ -537,7 +609,7 @@ describe("adding what site code needs to a policy", () => {
     expect(
       mergeSiteCodeIntoCsp("script-src 'strict-dynamic' 'nonce-x'", facts)
     ).toBe(
-      "script-src 'strict-dynamic' 'nonce-x'; script-src-elem 'strict-dynamic' 'nonce-x' 'sha384-abc'"
+      `script-src 'strict-dynamic' 'nonce-x'; script-src-elem 'strict-dynamic' 'nonce-x' ${await loaderHash()} 'sha384-abc'`
     );
   });
 
@@ -566,10 +638,10 @@ describe("adding what site code needs to a policy", () => {
   it("adds to a directive of the kind's own, never widening default-src", async () => {
     const { facts, hash } = await gtagFacts();
     expect(mergeSiteCodeIntoCsp("default-src 'self'; img-src *", facts)).toBe(
-      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${GTM}`
+      `default-src 'self'; img-src *; script-src-elem 'self' ${hash} ${await loaderHash()} ${GTM}`
     );
     expect(mergeSiteCodeIntoCsp("default-src 'none'", facts)).toBe(
-      `default-src 'none'; script-src-elem ${hash} ${GTM}`
+      `default-src 'none'; script-src-elem ${hash} ${await loaderHash()} ${GTM}`
     );
   });
 
@@ -584,7 +656,7 @@ describe("adding what site code needs to a policy", () => {
         facts
       )
     ).toBe(
-      "script-src https://cdn.example, script-src 'none'; script-src-elem https://cdn.example"
+      `script-src https://cdn.example; script-src-elem https://cdn.example ${await loaderHash()}, script-src 'none'; script-src-elem ${await loaderHash()} https://cdn.example`
     );
   });
 
@@ -593,7 +665,10 @@ describe("adding what site code needs to a policy", () => {
     const digest = (await cspHash("a()")).slice("sha256-".length);
     const variant = `SHA256-${digest.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
     const policy = `script-src '${variant}'`;
-    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
+    // The code's own hash is named already; only the loader's is added.
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(
+      `${policy}; script-src-elem '${variant}' ${await loaderHash()}`
+    );
   });
 
   it("adds a frame's origin to frame-src, not the child-src it fell back to", async () => {

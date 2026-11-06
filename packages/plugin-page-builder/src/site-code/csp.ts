@@ -20,6 +20,7 @@
  * @module site-code/csp
  * @experimental
  */
+import { isGatedSiteCode, SITE_CODE_BOOTSTRAP } from "./bootstrap";
 import { cssFetches, type CssFetch } from "./css-urls";
 import {
   siteCodeLinkRelations,
@@ -506,6 +507,10 @@ export async function siteCodeFacts(
       loads.set(`${load.kind} ${load.url} ${load.integrity ?? ""}`, load);
     }
   }
+  // The loader that starts gated code is an inline script of its own.
+  if (entries.some(isGatedSiteCode)) {
+    hashes.script.add(await cspHash(SITE_CODE_BOOTSTRAP));
+  }
   return {
     siteOrigin,
     hashes: {
@@ -651,16 +656,63 @@ export async function checkSiteCodeAgainstCsp(
   // two policies make alike is said once.
   const findings = new Map<string, CspFinding>();
   for (const policy of parsePolicies(input.policy)) {
-    for (const slot of ["head", "body"] as const) {
-      for (const [index, entry] of slots[slot].entries()) {
-        for (const found of await entryFindings(entry, policy, context)) {
-          const finding: CspFinding = { slot, index, level, ...found };
-          findings.set(JSON.stringify(finding), finding);
-        }
-      }
+    for (const finding of await policyFindings(policy, slots, context, level)) {
+      findings.set(JSON.stringify(finding), finding);
     }
   }
   return { checked: true, findings: [...findings.values()] };
+}
+
+/** Every way one policy blocks the code: each entry's own, and the loader's. */
+async function policyFindings(
+  policy: CspPolicy,
+  slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>,
+  context: LoadContext,
+  level: CspFinding["level"]
+): Promise<CspFinding[]> {
+  const found: CspFinding[] = [];
+  for (const slot of ["head", "body"] as const) {
+    for (const [index, entry] of slots[slot].entries()) {
+      for (const blocked of await entryFindings(entry, policy, context)) {
+        found.push({ slot, index, level, ...blocked });
+      }
+    }
+  }
+  const loader = firstGated(slots);
+  const blocked =
+    loader === undefined ? undefined : await loaderBlocked(policy, context);
+  if (loader !== undefined && blocked !== undefined) {
+    found.push({ ...loader, level, ...blocked });
+  }
+  return found;
+}
+
+/** The first entry the loader starts, which a block of the loader is told on. */
+function firstGated(
+  slots: Readonly<Record<SiteCodeSlot, readonly SiteCodeEntry[]>>
+): { slot: SiteCodeSlot; index: number } | undefined {
+  for (const slot of ["head", "body"] as const) {
+    const index = slots[slot].findIndex(isGatedSiteCode);
+    if (index !== -1) return { slot, index };
+  }
+  return undefined;
+}
+
+/** How a policy blocks the loader that starts gated code, if it does. */
+async function loaderBlocked(
+  policy: CspPolicy,
+  context: LoadContext
+): Promise<Blocked | undefined> {
+  const rule = governing(policy, "script");
+  if (rule === undefined) return undefined;
+  const hash = await cspHash(SITE_CODE_BOOTSTRAP);
+  if (allowsInline(rule.sources, hash, context.siteNonce, "script")) {
+    return undefined;
+  }
+  return {
+    directive: rule.directive,
+    message: `the loader that starts site code is blocked: add its hash ('${hash}'), or pass the site's nonce to <SiteCode>`,
+  };
 }
 
 /** Each kind's own directive, which an addition goes to over a fallback. */

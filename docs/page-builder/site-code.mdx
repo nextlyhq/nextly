@@ -1,0 +1,145 @@
+---
+title: Site code
+description: Add analytics, tag managers and other code to every published page, safely, and check it against your site's Content Security Policy.
+---
+
+Site code is the code every published page carries: an analytics tag, a tag manager,
+a chat widget, a verification `<meta>` tag, structured data. It is kept in one place
+for the whole site, in its head and at the end of its body, and it never runs inside
+the admin.
+
+<Callout type="warn">
+  Site code is experimental: the route, `<SiteCode>` and the CSP helpers may change
+  before it is stable. This release saves code through the site code route; there is
+  no editor for it in Settings yet.
+</Callout>
+
+## Who can add it
+
+Anyone who may change the site's settings (the **Manage page builder site settings**
+permission) may add site code. Code here runs on every page, with the access of
+whoever views it, signed-in staff included. Only add code from sources you trust.
+
+- A save is a signed-in person's alone. An API key can read site code but never save
+  it, so a leaked key can't put a script on every page.
+- Every save writes an audit row with the code's hashes, sizes and counts, and the
+  origins it loads scripts from. The code itself is kept in the site code Single's
+  versions, not in the audit log.
+
+## What it may hold
+
+Code is checked on the server when it is saved, and anything off the list is refused
+with a reason, never quietly removed, so what is stored is what you wrote:
+
+| Where | Elements |
+| --- | --- |
+| Head and end of body | `<script>` (code, a module or JSON-LD), `<style>` |
+| Head only | `<meta>` (no `http-equiv`), `<link>` (hints, stylesheets, icons, the manifest, alternates) |
+| End of body only | `<noscript>` holding one `<img>` or `<iframe>`, the pixel tag managers use |
+
+Event handler attributes (`onload=`), a `nonce`, `<base>`, `<iframe>` outside
+`<noscript>`, and any URL that isn't `https:` or a path on your site are refused,
+including URLs a stylesheet loads. Each place holds up to 50,000 characters and 40
+elements.
+
+## Put it on your pages
+
+Render `<SiteCode>` in your **public site's** layout, once for each place. Never put
+it in a root layout the admin shares: put it in the layout of the route group your
+site's pages live in.
+
+```tsx title="app/(frontend)/layout.tsx"
+import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+import type { ReactNode } from "react";
+
+export default function SiteLayout({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <SiteCode slot="head" />
+      {children}
+      <SiteCode slot="body" />
+    </>
+  );
+}
+```
+
+`<SiteCode>` is a server component. It reads the stored code through Nextly's cache,
+so pages stay static and a save refreshes every page.
+
+### It keeps itself out of the admin
+
+The admin, the editor's canvas and the preview pane are all served from your site's
+origin, so code running in any of them could read and drive the admin. `<SiteCode>`
+guards against this even when it is mounted in the wrong place:
+
+- It renders nothing in draft mode, which the preview pane uses.
+- Scripts, styles and stylesheet links are written to the page as data, not as
+  elements. A small loader builds them only on a page that isn't framed by your own
+  site (the canvas and the preview are), isn't under `/admin`, and isn't the canvas.
+  Pass `skip` to name more paths: `<SiteCode slot="head" skip={["/admin", "/studio"]} />`.
+- Meta tags, link hints, icons, structured data and the no-script pixel run nothing,
+  so they are written as they are, where crawlers and pages without scripting see
+  them.
+
+Because the loader starts scripts as the page finishes parsing, they run in order
+but after the page's own markup. A script that writes into the page as it loads
+(`document.write`) doesn't work as site code.
+
+## Your Content Security Policy
+
+Nextly doesn't set a policy on your site's pages: your proxy or headers do. Declare
+the same policy to the plugin, and site code is checked against it before it is
+saved:
+
+```ts title="nextly.config.ts"
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+
+export const pageBuilderPlugin = pageBuilder({
+  siteCode: {
+    // The policy your proxy sends. A function is read on each check.
+    csp: "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com",
+  },
+});
+```
+
+A check reports each entry the policy would block, and which directive blocks it.
+Code that a policy would block is saved only once you have seen exactly those
+findings and confirmed. With no policy declared, the check says that nothing was
+checked.
+
+How each kind of policy takes site code:
+
+- **No policy:** nothing to do.
+- **`'unsafe-inline'` with host lists:** add the hosts the check names. Inline code
+  and the loader already run.
+- **A nonce:** pass the nonce to `<SiteCode nonce={nonce} />` and set
+  `siteCode: { siteNonce: true }`. The loader carries the nonce and gives it to
+  everything it builds. Reading the nonce makes the page dynamic, as a nonce-based
+  policy already does.
+- **Hashes:** add the hash of each inline script and style, and the loader's own
+  hash, which never changes. The check names every one it is missing.
+
+`mergeSiteCodeIntoCsp` adds what site code needs to a policy and nothing more. It
+adds only what the policy blocks now. It never adds a hash where the policy relies on
+`'unsafe-inline'`, since a hash would cancel it. It puts additions for scripts and
+styles in `script-src-elem` and `style-src-elem`, so workers and style attributes
+gain nothing. Browsers from before those directives (Chrome 75, Firefox 108,
+Safari 15.4) read only `script-src` and `style-src`, and don't see the additions.
+
+```ts
+import {
+  mergeSiteCodeIntoCsp,
+  sanitiseSiteCode,
+  siteCodeFacts,
+} from "@nextlyhq/plugin-page-builder";
+
+const { entries } = sanitiseSiteCode(
+  '<script async src="https://www.googletagmanager.com/gtag/js?id=G-1"></script>',
+  "head"
+);
+const facts = await siteCodeFacts(entries, "https://example.com");
+const policy = mergeSiteCodeIntoCsp("script-src 'self' 'sha256-abc'", facts);
+```
+
+What a running script loads afterwards (its own requests, the images it adds) can't
+be seen before it runs, so the check doesn't cover it.
