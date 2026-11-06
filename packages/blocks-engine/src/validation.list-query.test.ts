@@ -10,7 +10,10 @@ import { DOCUMENT_FORMAT_VERSION, type BlockDocument } from "./document";
 import {
   COLLECTION_LIST_TYPE,
   isListFieldKind,
+  isListFilterOp,
+  LIST_FIELD_KINDS,
   LIST_ISSUE_CODES,
+  LIST_KIND_OPS,
   listFieldKind,
   listKindSortable,
   listQueryIssues,
@@ -361,6 +364,45 @@ describe("a collection list's query at save", () => {
         message: expect.stringContaining('"categories"'),
       }),
     ]);
+  });
+
+  it("refuses a filter comparing a field in a way its kind does not take", () => {
+    // A day-shaped value is a date only on a field holding a date: on text
+    // it is text, and an order on text is not one the list offers.
+    const judged = (filters: unknown[]) =>
+      listIssues(
+        validate(page(list("l", { collection: "posts", filters })), withSchema)
+      ).map(issue => [issue.code, issue.message]);
+    expect(
+      judged([{ field: "title", op: "greater_than", value: "2026-09-01" }])
+    ).toEqual([
+      [
+        "list-filter-unsuited",
+        'Filter 1 compares "title" with "greater_than", which a text field doesn\'t take.',
+      ],
+    ]);
+    expect(
+      judged([{ field: "publishedAt", op: "less_than", value: 5 }])
+    ).toEqual([
+      [
+        "list-filter-unsuited",
+        'Filter 1 compares "publishedAt", which holds a date, with 5. Choose a day, written YYYY-MM-DD.',
+      ],
+    ]);
+    expect(
+      judged([
+        { field: "publishedAt", op: "greater_than", value: "2026-09-01" },
+        { field: "title", op: "contains", value: "2026-09-01" },
+      ])
+    ).toEqual([]);
+  });
+
+  it("offers each kind exactly the operators its judgement takes", () => {
+    for (const kind of LIST_FIELD_KINDS) {
+      expect(LIST_KIND_OPS[kind].every(isListFilterOp)).toBe(true);
+    }
+    expect(LIST_KIND_OPS.text).not.toContain("greater_than");
+    expect(LIST_KIND_OPS.date).not.toContain("contains");
   });
 
   it("refuses a sort on a field holding several values", () => {

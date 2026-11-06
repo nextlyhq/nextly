@@ -137,6 +137,7 @@ export type ListFieldCode =
   | "list-field-protected"
   | "list-field-unsortable"
   | "list-field-unfilterable"
+  | "list-filter-unsuited"
   | "list-relation-unsuitable"
   | "list-too-deep";
 
@@ -161,6 +162,8 @@ export const LIST_ISSUE_CODES: {
     "A list sorts by a field that holds more than one value.",
   "list-field-unfilterable":
     "A list filters by a field that holds more than one value.",
+  "list-filter-unsuited":
+    "A list's filter compares a field with an operator or a value its kind does not take.",
   "list-relation-unsuitable":
     "A list's related source is not a to-many relation to its collection.",
   "list-too-deep":
@@ -743,6 +746,135 @@ export function listFieldKind(
 }
 
 /**
+ * The operators a filter on a field of each kind may use. Contains only on
+ * text, an order only on a number or a date, and a date has no "equals"
+ * until a day can be compared for equality whatever time the field holds.
+ * The one table of it: the save refuses any other, and an editor offers
+ * exactly these.
+ */
+export const LIST_KIND_OPS: Readonly<
+  Record<ListFieldKind, readonly ListFilterOp[]>
+> = {
+  text: ["equals", "not_equals", "contains", "in", "not_in", "exists"],
+  number: [
+    "equals",
+    "not_equals",
+    "greater_than",
+    "greater_than_equal",
+    "less_than",
+    "less_than_equal",
+    "exists",
+  ],
+  date: [
+    "greater_than",
+    "greater_than_equal",
+    "less_than",
+    "less_than_equal",
+    "exists",
+  ],
+  choice: ["equals", "not_equals", "in", "not_in", "exists"],
+  boolean: ["equals"],
+  entry: ["equals", "not_equals", "in", "not_in", "exists"],
+};
+
+/** What a kind is called in a finding's words. */
+const KIND_WORDS: Readonly<Record<ListFieldKind, string>> = {
+  text: "a text field",
+  number: "a number field",
+  date: "a date field",
+  choice: "a choice field",
+  boolean: "a yes-or-no field",
+  entry: "a related-entry field",
+};
+
+/** What a field of one kind holds, and what to choose for it, in words. */
+interface KindNeed {
+  readonly holds: string;
+  readonly choose: string;
+}
+
+/**
+ * What a value must be for an operator on a field of `kind`, beyond what the
+ * operator itself takes: an order on a date compares a day, an order on a
+ * number a number, and a yes-or-no field a yes or no. Nothing for any other
+ * pairing, or when the value already is one.
+ */
+function kindValueNeed(
+  kind: ListFieldKind,
+  op: ListFilterOp,
+  value: unknown
+): KindNeed | undefined {
+  const orders =
+    op === "greater_than" ||
+    op === "greater_than_equal" ||
+    op === "less_than" ||
+    op === "less_than_equal";
+  if (kind === "date" && orders && !isListDay(value)) {
+    return { holds: "a date", choose: "a day, written YYYY-MM-DD" };
+  }
+  if (kind === "number" && orders && typeof value !== "number") {
+    return { holds: "a number", choose: "a number" };
+  }
+  if (kind === "boolean" && typeof value !== "boolean") {
+    return { holds: "yes or no", choose: "yes or no" };
+  }
+  return undefined;
+}
+
+/**
+ * Why a filter row does not suit its field's kind, or nothing when it does:
+ * an operator the kind does not take, or a value of the wrong sort for it.
+ * Without this, a day-shaped value on a text field would be read as a date
+ * and compared as an instant, which is not the comparison stored.
+ */
+function kindProblem(
+  row: ListFilter,
+  index: number,
+  kind: ListFieldKind
+): string | undefined {
+  const where = `Filter ${String(index + 1)} compares "${row.field}"`;
+  if (!LIST_KIND_OPS[kind].includes(row.op)) {
+    return `${where} with "${row.op}", which ${KIND_WORDS[kind]} doesn't take.`;
+  }
+  const need = kindValueNeed(kind, row.op, row.value);
+  return need === undefined
+    ? undefined
+    : `${where}, which holds ${need.holds}, with ${describeValue(row.value)}. Choose ${need.choose}.`;
+}
+
+/**
+ * The judgement of each filter row against its field's kind. A field not
+ * found, not readable or holding several values is judged by
+ * {@link fieldFindings} instead, and one with no kind a list filters by is
+ * left to the reader.
+ */
+function kindFindings(
+  query: ListQuery,
+  fields: ListFields,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  return query.filters.flatMap((row, index) => {
+    const shape = fields.readable.find(
+      candidate => candidate.name === row.field
+    );
+    const kind = shape === undefined ? undefined : listFieldKind(shape);
+    const message =
+      kind === undefined ? undefined : kindProblem(row, index, kind);
+    return message === undefined
+      ? []
+      : [
+          {
+            path: at("filters"),
+            nodeId,
+            code: "list-filter-unsuited" as const,
+            message,
+          },
+        ];
+  });
+}
+
+/**
  * Whether a list may sort by a field of this kind. A relation orders by its
  * stored id, which says nothing an author could mean, so it filters only.
  */
@@ -880,6 +1012,7 @@ function findingsFor(
       : judgement.fields.fieldsOf(query.collection);
   if (fields !== undefined) {
     findings.push(...fieldFindings(query, fields, at, nodeId));
+    findings.push(...kindFindings(query, fields, at, nodeId));
   }
   return { findings, list: { query } };
 }
@@ -991,5 +1124,6 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-protected",
   "list-field-unsortable",
   "list-field-unfilterable",
+  "list-filter-unsuited",
   "list-relation-unsuitable",
 ]);
