@@ -14,9 +14,15 @@ import type {
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
+import {
+  liveFieldGroupReadPass,
+  type LiveFieldGroupReadPass,
+} from "../field-groups/live-read-access";
+import type { FieldGroupDataService } from "../field-groups/services/field-group-data-service";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
@@ -37,6 +43,8 @@ export interface DocumentTable {
   table: string;
   localized: boolean;
   translated: readonly string[] | null;
+  /** The collection's fields, as the registry keeps them: what a read of it is judged over. */
+  fields: readonly FieldConfig[];
 }
 
 /**
@@ -73,12 +81,29 @@ export async function documentTableOf(
   return {
     table: record.tableName,
     localized,
+    // The registry's fields: what a read of the collection is judged over.
+    fields: record.fields ?? [],
     // Named as the collection's own writes name them, so a step reads a language's shared
     // values exactly as a save in place wrote them.
     translated: localized
       ? resolveLocalizedFieldNames([...(record.fields ?? [])], true)
       : null,
   };
+}
+
+/**
+ * The field-group read pass a read of the document's collection makes, the one a reviewer's view
+ * of a version is judged with beside the collection's own pass. Built before a step's transaction
+ * opens, since the field-group schemas are read on the pool. Undefined where no field group
+ * declares a read rule.
+ */
+export function fieldGroupReadPassOf(
+  table: DocumentTable
+): Promise<LiveFieldGroupReadPass | undefined> {
+  const source = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : undefined;
+  return liveFieldGroupReadPass(table.fields, source);
 }
 
 /**

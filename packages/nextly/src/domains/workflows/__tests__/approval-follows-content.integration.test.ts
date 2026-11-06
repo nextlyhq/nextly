@@ -13,7 +13,12 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { clearServices } from "../../../di/register";
 import {
   createTestNextly,
@@ -140,6 +145,20 @@ async function boot(
   t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
     localization: { locales: ["en", "es"], defaultLocale: "en" },
+    // A field group whose own field has a read rule, which only the field-group pass of a read
+    // applies: the collection's pass does not reach inside a field group.
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "aside",
+        fields: [
+          text({ name: "heading" }),
+          text({
+            name: "confidential",
+            access: { read: ({ user }) => user?.id !== "gina" },
+          }),
+        ],
+      }),
+    ],
     collections: [
       defineCollection({
         slug: "posts",
@@ -167,6 +186,14 @@ async function boot(
             name: "secret",
             access: { read: ({ user }) => user?.id !== "bob" },
           }),
+          // Hidden by who the reader is beyond their id: their email, as a document read sees it.
+          text({
+            name: "dossier",
+            access: {
+              read: ({ user }) => user?.email !== "frank@example.test",
+            },
+          }),
+          fieldGroup({ name: "aside", component: "aside" }),
         ],
       }),
       defineCollection({
@@ -721,6 +748,65 @@ describe.each(getConfiguredTestDialects())(
           publicData: { reason: "field-hidden", fields: ["secret"] },
         });
         // A reviewer who reads every field the collection has may approve the removal too.
+        await take("briefs", brief, null, "approve", erin);
+        expect(
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+        ).toMatchObject({ by: "erin" });
+      });
+
+      it("judges a changed field by the reviewer as a document read sees them, a rule on their email included", async () => {
+        await boot(dialect);
+        const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
+        const frank = await person(app(), "frank", [["sign-off", "briefs"]]);
+        const erin = await person(app(), "erin", [["sign-off", "briefs"]]);
+        await person(app(), "dave", [["update", "briefs"]]);
+        const brief = await entry(app(), "briefs");
+        await seedState(app(), partOf("briefs", brief, null), "review", {
+          enteredBy: "alice",
+          definitionHash: workflowDefinitionHash(checked),
+        });
+        await take("briefs", brief, null, "approve", carol);
+        await save("briefs", brief, { dossier: "d2" }, { userId: "dave" });
+
+        // A read of the brief withholds the dossier from frank by his email alone.
+        await expect(
+          take("briefs", brief, null, "approve", frank)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["dossier"] },
+        });
+        await take("briefs", brief, null, "approve", erin);
+        expect(
+          (await stateOf(app(), partOf("briefs", brief, null)))?.approval
+        ).toMatchObject({ by: "erin" });
+      });
+
+      it("refuses a changed field group whose own field a read rule hides from the reviewer", async () => {
+        await boot(dialect);
+        const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
+        const gina = await person(app(), "gina", [["sign-off", "briefs"]]);
+        const erin = await person(app(), "erin", [["sign-off", "briefs"]]);
+        await person(app(), "dave", [["update", "briefs"]]);
+        const brief = await entry(app(), "briefs");
+        await seedState(app(), partOf("briefs", brief, null), "review", {
+          enteredBy: "alice",
+          definitionHash: workflowDefinitionHash(checked),
+        });
+        await take("briefs", brief, null, "approve", carol);
+        await save(
+          "briefs",
+          brief,
+          { aside: { heading: "Note", confidential: "c2" } },
+          { userId: "dave" }
+        );
+
+        // A read of the brief gives gina the aside without its confidential value.
+        await expect(
+          take("briefs", brief, null, "approve", gina)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["aside"] },
+        });
         await take("briefs", brief, null, "approve", erin);
         expect(
           (await stateOf(app(), partOf("briefs", brief, null)))?.approval
