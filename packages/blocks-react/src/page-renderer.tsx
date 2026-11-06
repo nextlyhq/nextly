@@ -42,6 +42,7 @@ import {
   gatedMapCoversPrunedNodes,
   hasDuplicateNodeIds,
   migrationChangedWhatDraws,
+  itemDecidedRules,
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
@@ -910,7 +911,7 @@ export function PageRenderer({
     remotePatterns: hostPolicy?.remotePatterns,
   });
 
-  const { css, classes, scope } = resolvePageStyles(
+  const resolvedStyles = resolvePageStyles(
     styleInput,
     styles,
     compileContext,
@@ -928,6 +929,14 @@ export function PageRenderer({
       storedDocument: doc,
     }
   );
+  const { css, classes, scope } = resolvedStyles;
+  // The rules of each block a list's item decides, served beside the first
+  // instance a list draws, so a block no item shows publishes nothing.
+  const itemRules = itemDecidedRules(resolvedStyles, styleInput);
+  const drawnBindings: BoundaryBindings | undefined =
+    boundaryBindings === undefined || itemRules.size === 0
+      ? boundaryBindings
+      : { ...boundaryBindings, itemRules, itemRulesServed: new Set() };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
@@ -1065,9 +1074,7 @@ export function PageRenderer({
           ? {}
           : { spacingMode: shared.spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-        {...(boundaryBindings === undefined
-          ? {}
-          : { bindings: boundaryBindings })}
+        {...(drawnBindings === undefined ? {} : { bindings: drawnBindings })}
       />
     </div>
   );

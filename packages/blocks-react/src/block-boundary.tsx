@@ -11,6 +11,7 @@ import {
   type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import {
+  Fragment,
   Suspense,
   cloneElement,
   isValidElement,
@@ -37,6 +38,7 @@ import {
   normalizeRenderable,
 } from "./renderable";
 import type { BlockResolver } from "./resolver";
+import { styleTextForInjection } from "./styles";
 import { conditionAllows } from "./visibility";
 // Imported as well as re-exported below: this module both PUBLISHES the names,
 // which consumers outside the package address elements by, and uses them.
@@ -101,6 +103,38 @@ export interface BoundaryBindings {
    * the context rather than on it, as everything a render threads down is.
    */
   readonly held?: ReadonlySet<string>;
+  /**
+   * The rules of each block a list's item decides, with those of every block
+   * inside it, by the decided block's id, held out of the page's sheet: a
+   * list serves them beside the first instance it draws, so a block no item
+   * shows publishes none of them.
+   */
+  readonly itemRules?: ReadonlyMap<string, string>;
+  /** The decided blocks whose rules this render already served, by id. */
+  readonly itemRulesServed?: Set<string>;
+}
+
+/**
+ * The rules of a block a list's item decides, once per render, beside the
+ * first instance drawn. Inline, after the page's own sheet, so the cascade
+ * reads them in the order a stored sheet would have held them.
+ */
+function itemRulesFor(
+  id: string,
+  bindings: BoundaryBindings | undefined
+): ReactNode {
+  const rules = bindings?.itemRules?.get(id);
+  const served = bindings?.itemRulesServed;
+  if (rules === undefined || served === undefined || served.has(id)) {
+    return null;
+  }
+  served.add(id);
+  return (
+    <style
+      data-nx-item-rules={id}
+      dangerouslySetInnerHTML={{ __html: styleTextForInjection(rules) }}
+    />
+  );
 }
 
 /**
@@ -1673,18 +1707,20 @@ export function BlockList({
         })
       )
       .map(node => (
-        <BlockBoundary
-          key={node.id}
-          node={node}
-          context={context}
-          blocks={blocks}
-          classes={classes}
-          fallback={fallback}
-          {...(hostPolicy === undefined ? {} : { hostPolicy })}
-          {...(spacingMode === undefined ? {} : { spacingMode })}
-          {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-          {...(bindings === undefined ? {} : { bindings })}
-        />
+        <Fragment key={node.id}>
+          {itemRulesFor(node.id, bindings)}
+          <BlockBoundary
+            node={node}
+            context={context}
+            blocks={blocks}
+            classes={classes}
+            fallback={fallback}
+            {...(hostPolicy === undefined ? {} : { hostPolicy })}
+            {...(spacingMode === undefined ? {} : { spacingMode })}
+            {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+            {...(bindings === undefined ? {} : { bindings })}
+          />
+        </Fragment>
       ))
   );
 }

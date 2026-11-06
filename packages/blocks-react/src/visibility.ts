@@ -288,3 +288,25 @@ function itemSubject(
     },
   };
 }
+
+/**
+ * The blocks of a gated document whose conditions read the page's entry, by
+ * id: after {@link gateByConditions} has removed every one that did not hold,
+ * exactly the ones that did. Read off the tree that is drawn, so a block a
+ * later pass removed, such as a duplicate address, names nothing.
+ *
+ * @experimental
+ */
+export function entryConditionedIn(document: BlockDocument): Set<string> {
+  const held = new Set<string>();
+  const visit = (nodes: readonly BlockNode[], scope: ConditionScope): void => {
+    for (const node of nodes) {
+      if (scope.source === "entry" && isConditionGated(node)) held.add(node.id);
+      for (const [slot, children] of Object.entries(node.slots ?? {})) {
+        visit(children, conditionScopeIn(node, slot, scope));
+      }
+    }
+  };
+  visit(document.nodes, { source: "entry", collection: undefined });
+  return held;
+}

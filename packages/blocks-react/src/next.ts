@@ -2505,7 +2505,9 @@ function bindingIssueLog(context: RenderContext): BindingIssuesHandler {
   return (issues: readonly PageIssue[]) => {
     const page = `on "${context.collection}" page "${context.slug}"`;
     const bindings = issues.filter(isBindingIssue);
-    const conditions = issues.length - bindings.length;
+    const conditionIssues = issues.filter(issue => !isBindingIssue(issue));
+    // Blocks, not issues: one block can hold several conditions it can't use.
+    const conditions = new Set(conditionIssues.map(issue => issue.nodeId)).size;
     if (bindings.length > 0) {
       console.warn(
         `[blocks] ${String(bindings.length)} binding(s) ${page} ` +
@@ -2515,7 +2517,7 @@ function bindingIssueLog(context: RenderContext): BindingIssuesHandler {
     if (conditions > 0) {
       console.warn(
         `[blocks] ${String(conditions)} block(s) ${page} ` +
-          `have visibility conditions that could not be checked, so they are left out: ${codeSummary(issues.filter(issue => !isBindingIssue(issue)))}.`
+          `have visibility conditions that could not be checked, so they are left out: ${codeSummary(conditionIssues)}.`
       );
     }
   };

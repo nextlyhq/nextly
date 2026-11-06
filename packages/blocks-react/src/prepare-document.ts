@@ -84,6 +84,7 @@ import type { BlockResolver } from "./resolver";
 import { migrationSourceFor } from "./resolver";
 import { dedupeNodeIds, sanitizeDocument } from "./sanitize";
 import {
+  entryConditionedIn,
   gateByConditions,
   pruneHiddenNodes,
   type ConditionGate,
@@ -607,7 +608,11 @@ export function regateDocument(
   const regated: PreparedDocument = Object.freeze({
     presented: pruneKnownPlaceholders(visible, record.resolver),
   });
-  PREPARED.set(regated, { ...record, stages, held: decided.held });
+  // Read off the tree that is drawn, after address repair: a passing block
+  // that repair dropped as a duplicate must not lend its id to the block
+  // that kept it, which may be one a list's item decides.
+  const held = gate === "keep-all" ? NOTHING_HELD : entryConditionedIn(visible);
+  PREPARED.set(regated, { ...record, stages, held });
   return { prepared: regated, issues: decided.issues };
 }
 

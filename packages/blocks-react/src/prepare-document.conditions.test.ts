@@ -102,3 +102,21 @@ describe("a prepared page gated by its entry", () => {
     expect(heldConditionsOf(prepared!).size).toBe(0);
   });
 });
+
+describe("a held block among repeated addresses", () => {
+  it("names held only a block the drawn tree keeps where its entry decides it", () => {
+    // A list's item decides the first "x"; a later "x" outside the list holds
+    // for the entry, and address repair keeps the first.
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [heading("x", "Per item", vip)] },
+    } as BlockNode;
+    const stored = page(list, heading("x", "Repeated", vip));
+    const prepared = prepareDocument(stored, { resolver });
+    const regated = regateDocument(prepared!, { entry: entry("vip") });
+    expect(heldConditionsOf(regated!.prepared).has("x")).toBe(false);
+  });
+});

@@ -1098,3 +1098,42 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(title).toBe("Public area");
   });
 });
+
+describe("the route's log of conditions it can't check", () => {
+  it("counts blocks, not conditions, and names each code", async () => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const content = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "one",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Two bad conditions", level: "h2" },
+            visibility: {
+              conditions: [
+                [
+                  { field: "secret", op: "exists" },
+                  { field: "other", op: "exists" },
+                ],
+              ],
+            },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    await renderedPage(
+      createBlocksPage,
+      { collections: ["pages"], field: "content", blocks },
+      instance(content)
+    );
+    const said = warn.mock.calls
+      .map(([message]) => String(message))
+      .find(message => message.includes("visibility conditions"));
+    expect(said).toContain("1 block(s)");
+    expect(said).toContain("condition-field-unknown x2");
+  });
+});
