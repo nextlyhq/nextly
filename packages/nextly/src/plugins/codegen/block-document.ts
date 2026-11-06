@@ -50,6 +50,8 @@ import {
   DOCUMENT_KINDS,
   MAX_DEPTH,
   MAX_NODES,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   STYLE_STATES,
   isPlainRecord,
   surveyDocument,
@@ -416,6 +418,25 @@ const bindingSchema = z.union([
 ]);
 
 /**
+ * One piece of a document's metadata text: literal text, used as written, or a
+ * binding. The bounds are the ones a save refuses beyond.
+ */
+const seoTextSchema = z
+  .array(z.union([z.string().max(MAX_SEO_TEXT_LENGTH), bindingSchema]))
+  .max(MAX_SEO_SEGMENTS);
+
+/**
+ * A document's own metadata: its title and description, each a list of
+ * literal text and bindings, and its social image, one binding. Strict, as
+ * the validator is: a key it does not know is refused, not carried.
+ */
+const documentSeoSchema = z.strictObject({
+  title: seoTextSchema.optional(),
+  description: seoTextSchema.optional(),
+  image: bindingSchema.optional(),
+});
+
+/**
  * One block instance.
  *
  * `slots` recurses, so this schema is self-referential: zod resolves the getter
@@ -654,6 +675,7 @@ const blockDocumentObject = z.looseObject({
     .looseObject({
       styles: nodeStylesSchema.optional(),
       customCss: z.string().optional(),
+      seo: documentSeoSchema.optional(),
     })
     .optional(),
   /**

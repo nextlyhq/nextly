@@ -421,6 +421,32 @@ describe("a routed page's bindings", () => {
     expect(derived.description).toBe("About Public");
   });
 
+  it("reports a metadata binding the route could not use, naming the page", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const document = JSON.parse(
+      JSON.stringify({
+        ...boundPage({ $bind: "title" }),
+        settings: { seo: { title: ["Hello ", { $bind: "not a path" }] } },
+      })
+    ) as BlockDocument;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: instance(document) as never,
+      metadata: () => ({}),
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(
+      warn.mock.calls.some(
+        ([message]) =>
+          String(message).includes('page "about"') &&
+          String(message).includes("binding-malformed")
+      )
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
   it("a page whose slots nest deeper than the call stack still renders", async () => {
     // Stored content that bypassed validation: a chain far past the caps the
     // read pipeline repairs to, holding a binding at the top.

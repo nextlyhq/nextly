@@ -272,9 +272,18 @@ function candidateOf(
   binding?: CheckedBinding
 ): SeoImageCandidate | undefined {
   if (isPlainRecord(value)) {
+    // A populated media record by its address; one read without a usable
+    // address by its id, which the caller's media reader can still resolve.
     const url = ownEntry(value, "url");
-    return typeof url === "string" && url.trim() !== ""
-      ? { kind: "url", value: url.trim() }
+    if (typeof url === "string" && url.trim() !== "") {
+      return { kind: "url", value: url.trim() };
+    }
+    const id = ownEntry(value, "id");
+    if (typeof id === "string" && id.trim() !== "") {
+      return { kind: "media", value: id.trim() };
+    }
+    return typeof id === "number" && Number.isFinite(id)
+      ? { kind: "media", value: String(id) }
       : undefined;
   }
   if (typeof value === "number" && Number.isFinite(value)) {

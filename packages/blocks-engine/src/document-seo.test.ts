@@ -146,6 +146,13 @@ describe("a document's social image", () => {
         runFor({ cover: { id: "m-1", url: "/media/cover.jpg" } })
       ).image
     ).toEqual({ kind: "url", value: "/media/cover.jpg" });
+    // A populated record without a usable address still names its media.
+    expect(
+      resolveDocumentSeo(document, runFor({ cover: { id: "m-1" } })).image
+    ).toEqual({ kind: "media", value: "m-1" });
+    expect(
+      resolveDocumentSeo(document, runFor({ cover: { id: 7, url: " " } })).image
+    ).toEqual({ kind: "media", value: "7" });
   });
 
   it("is the address a URL field holds", () => {
