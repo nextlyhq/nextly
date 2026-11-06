@@ -191,10 +191,44 @@ describe("restoreDocument", () => {
       ...document,
       nodes: document.nodes.filter(node => node.id !== "a"),
     } as BlockDocument;
+    // An older strip of the same places, holding other values there: still
+    // the same two places, so two values, not four.
+    const older: DocumentFragment = {
+      nodes: {
+        a: {
+          styles: {
+            base: { mobile: { color: "#older" } },
+            hover: { mobile: { color: "#older-hover" } },
+          },
+        },
+      },
+    };
     const once = restoreDocument(without, [fragment]);
-    const twice = restoreDocument(without, [fragment, fragment]);
+    const twice = restoreDocument(without, [fragment, older]);
     expect(once.deleted).toBe(2);
     expect(twice.deleted).toBe(2);
+  });
+
+  it("puts back a device an older strip hid that the newer one did not hold", () => {
+    const shown = page([heading("v", { visibility: {} })]);
+    const newest: DocumentFragment = {
+      nodes: {
+        v: {
+          visibility: { before: { devices: { mobile: false } }, after: {} },
+        },
+      },
+    };
+    const older: DocumentFragment = {
+      nodes: {
+        v: {
+          visibility: { before: { devices: { small: false } }, after: {} },
+        },
+      },
+    };
+    const restored = restoreDocument(shown, [newest, older]);
+    expect(restored.value.nodes[0]?.visibility).toEqual({
+      devices: { mobile: false, small: false },
+    });
   });
 });
 

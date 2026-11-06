@@ -177,27 +177,33 @@ function restoreVisibility(
   tally: Tally,
   scope: string
 ): unknown {
-  if (!decide(tally, keyOf(scope, VISIBILITY))) return now;
-  // Still exactly what the strip left: the whole visibility goes back.
-  if (sameStoredValue(now, stripped.after)) {
+  const removed = removedDevices(stripped);
+  // Still exactly what the strip left, and no newer fragment decided it: the
+  // whole visibility goes back, deciding each device it took out.
+  if (
+    !tally.decided.has(keyOf(scope, VISIBILITY)) &&
+    sameStoredValue(now, stripped.after)
+  ) {
+    tally.decided.add(keyOf(scope, VISIBILITY));
+    for (const id of Object.keys(removed)) {
+      tally.decided.add(keyOf(scope, VISIBILITY, id));
+    }
     if (sameStoredValue(now, stripped.before)) return now;
     tally.restored += 1;
     return stripped.before;
   }
-  // Changed since: only the removed breakpoints' own entries, where absent.
+  // Changed since, or put back by a newer fragment: each removed device's
+  // entry, where absent, decided device by device, so an older fragment's
+  // device a newer one did not hold still goes back.
+  tally.decided.add(keyOf(scope, VISIBILITY));
   const record: Record<string, unknown> = isPlainRecord(now) ? { ...now } : {};
   const devices: Record<string, unknown> = isPlainRecord(record.devices)
     ? { ...record.devices }
     : {};
   let changed = false;
-  for (const [id, value] of Object.entries(removedDevices(stripped))) {
-    if (!Object.hasOwn(devices, id)) {
-      devices[id] = value;
-      tally.restored += 1;
-      changed = true;
-    } else if (!sameStoredValue(devices[id], value)) {
-      tally.skipped += 1;
-    }
+  for (const [id, value] of Object.entries(removed)) {
+    if (!decide(tally, keyOf(scope, VISIBILITY, id))) continue;
+    if (putBack(devices, id, value, tally)) changed = true;
   }
   return changed ? { ...record, devices } : now;
 }
