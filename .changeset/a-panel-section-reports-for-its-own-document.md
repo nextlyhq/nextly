@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A plugin's panel section that finishes its work after the editor has moved to another document no longer acts on the new one. Its report of a change or a deletion now applies only to the document it was drawn for: no refresh, no redirect, and the author's unsaved edits on the new document are kept as a newer version arrives. The plugin SDK's stability notes now say advisory notices show on collection writes only, not yet on a Single's save.
+A plugin's panel section that finishes its work after the editor has moved to another document, switched language, or closed no longer acts on the document now shown. Its report of a change or a deletion refreshes only the document it was drawn for, and does not redirect away from the new one or treat the new document's next version as the author's own change: a newer version of the new document replaces its unsaved text as any other version would. The plugin SDK's stability notes now say advisory notices show on collection writes only, not yet on a Single's save.
