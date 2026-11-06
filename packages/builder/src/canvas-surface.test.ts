@@ -38,8 +38,16 @@ const CHROME = readFileSync(
 const STANDALONE_CANVAS =
   ":where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
 
-/** The token scopes' selector list: the shell's two, and a lone canvas. */
-const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS}`;
+/**
+ * The layer the editor draws over the canvas, mounted without the shell: it
+ * sits in the host's document beside the frame, so it needs the tokens of its
+ * own, on the same terms as the lone canvas.
+ */
+const STANDALONE_LAYER =
+  ":where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *))";
+
+/** The token scopes' selector list: the shell's two, a lone canvas and a lone layer. */
+const TOKENS = `.nx-builder-tokens,\n.nx-builder-chrome,\n${STANDALONE_CANVAS},\n${STANDALONE_LAYER}`;
 
 /**
  * Every place a rule is written under exactly `selector` in `css`: at the
@@ -476,6 +484,7 @@ describe("a canvas mounted outside the editor shell", () => {
       "--nx-builder-region-opacity"
     );
     expect(scope).toContain(STANDALONE_CANVAS);
+    expect(scope).toContain(STANDALONE_LAYER);
   });
 
   it("takes the dark picks under the admin's dark theme, as the shell does", () => {

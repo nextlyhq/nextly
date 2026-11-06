@@ -85,6 +85,43 @@ describe("pageSchemeOf", () => {
     ).toBe("light");
   });
 
+  it("composites a heavy tint over the ground beneath, which can cross into dark", () => {
+    // 80% black over white is rgb(51, 51, 51): a dark ground, which skipping
+    // the tint would read as the white beneath it.
+    expect(
+      pageSchemeOf(
+        page({ root: "rgba(0, 0, 0, 0.8)", body: "rgb(255, 255, 255)" })
+      )
+    ).toBe("dark");
+    // And the other way: 80% white over a dark ground is light.
+    expect(
+      pageSchemeOf(
+        page({ root: "rgba(255, 255, 255, 0.8)", body: "rgb(17, 20, 24)" })
+      )
+    ).toBe("light");
+  });
+
+  it("composites tints in paint order, the ancestor's first", () => {
+    // The body's 90% black over the white html gives rgb(26, 26, 26), and the
+    // root's 60% white over that gives rgb(163, 163, 163): light. Composited
+    // the other way round, the black would land last and read dark.
+    expect(
+      pageSchemeOf(
+        page({
+          root: "rgba(255, 255, 255, 0.6)",
+          body: "rgba(0, 0, 0, 0.9)",
+          html: "rgb(255, 255, 255)",
+        })
+      )
+    ).toBe("light");
+  });
+
+  it("composites a tint over the document's own canvas when nothing beneath paints", () => {
+    expect(
+      pageSchemeOf(page({ root: "rgba(0, 0, 0, 0.8)", scheme: "light" }))
+    ).toBe("dark");
+  });
+
   it("falls back to the scheme the document's canvas uses when nothing paints", () => {
     expect(pageSchemeOf(page({ scheme: "dark" }))).toBe("dark");
     expect(pageSchemeOf(page({ scheme: "light" }))).toBe("light");

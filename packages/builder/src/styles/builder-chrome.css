@@ -125,11 +125,18 @@
  * above it, and the chrome it draws (a Layout's region badge and tag) reads
  * these tokens too. It takes them only when nothing above it declares them,
  * and at zero specificity, so inside the shell it inherits the shell's values
- * untouched and its own rules below still win where they apply.
+ * untouched and its own rules below still win where they apply. The layer the
+ * editor draws over the canvas is the fourth, for the same reason: it is in
+ * the host's document, beside the frame rather than inside it, and the empty
+ * section prompt's plate on it reads these tokens. It takes no part in the
+ * dark picks below: its editing hues follow the page's own scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and the surface, border and text
+ * tokens here follow the admin's `.dark` through the `--nx-*` they name.
  */
 .nx-builder-tokens,
 .nx-builder-chrome,
-:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+:where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      raised surfaces use that, and the frame must read as a layer behind them. */
   --nx-builder-surface: var(--nx-muted);
@@ -267,7 +274,8 @@
    */
   .nx-builder-tokens,
   .nx-builder-chrome,
-  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);
   }
