@@ -23,7 +23,10 @@ import {
   type PluginStoredValue,
 } from "@nextlyhq/plugin-sdk";
 
-import { blocksFieldReach } from "../class-usage-blocks-fields";
+import {
+  blocksFieldReach,
+  type FieldGroupDefinitions,
+} from "../class-usage-blocks-fields";
 import { documentVersionOf, withVersionFrom } from "../document-version";
 import {
   layoutPageReader,
@@ -102,6 +105,12 @@ export interface RewriteSite {
   readonly defaultLocale: () => string | undefined;
   /** The RESOLVED slug Layouts are stored under. */
   readonly layouts: string;
+  /**
+   * The field groups the site declares in code, by slug: a document whose
+   * only reference is to a group holding no blocks field holds no copy, and
+   * is no host. Absent, every field group reference may hold one.
+   */
+  readonly fieldGroup?: FieldGroupDefinitions;
   /** The documents the usage index says place the component; a hint only. */
   readonly hints: () => Promise<
     readonly { readonly slug: string; readonly id: string }[]
@@ -189,7 +198,12 @@ function cursorFrom(text: string | null): Cursor | null {
 /** What walking every document holding blocks needs of the site. */
 export type DocumentSite = Pick<
   RewriteSite,
-  "nextly" | "collectionSlugs" | "resolveCollection" | "singles" | "locales"
+  | "nextly"
+  | "collectionSlugs"
+  | "resolveCollection"
+  | "singles"
+  | "locales"
+  | "fieldGroup"
 >;
 
 /** A collection's registry record, resolved once per walk. */
@@ -279,7 +293,7 @@ async function hintedDocuments(
       continue;
     }
     const at = { kind: "collection" as const, slug: hint.slug, id: hint.id };
-    const hosts = hostsOf(at, declaration, site.locales());
+    const hosts = hostsOf(at, declaration, site.locales(), site.fieldGroup);
     if (hosts.length > 0) found.push({ key: documentKeyOf(at), hosts });
   }
   return found;
@@ -332,7 +346,7 @@ async function* singleDocuments(
   for (const single of sorted) {
     if (after !== undefined && single.slug <= after) continue;
     const at = { kind: "single" as const, slug: single.slug };
-    const hosts = hostsOf(at, single, site.locales());
+    const hosts = hostsOf(at, single, site.locales(), site.fieldGroup);
     if (hosts.length > 0) yield { key: documentKeyOf(at), hosts };
   }
 }
@@ -352,7 +366,12 @@ async function* entriesOf(
   after: string | undefined
 ): AsyncGenerator<HostDocument> {
   if (
-    hostsOf({ kind: "collection", slug, id: "" }, declaration, []).length === 0
+    hostsOf(
+      { kind: "collection", slug, id: "" },
+      declaration,
+      [],
+      site.fieldGroup
+    ).length === 0
   ) {
     return;
   }
@@ -376,7 +395,7 @@ async function* entriesOf(
       const at = { kind: "collection" as const, slug, id: last };
       yield {
         key: documentKeyOf(at),
-        hosts: hostsOf(at, declaration, site.locales()),
+        hosts: hostsOf(at, declaration, site.locales(), site.fieldGroup),
       };
     }
     if (!listed.meta.hasNext) return;
@@ -398,10 +417,13 @@ async function* entriesOf(
 function hostsOf(
   at: Pick<HostAddress, "kind" | "slug" | "id">,
   declaration: unknown,
-  locales: readonly string[]
+  locales: readonly string[],
+  fieldGroup: FieldGroupDefinitions | undefined
 ): HostCandidate[] {
   const reach = blocksFieldReach(
-    declaration as { fields?: unknown; localized?: unknown }
+    declaration as { fields?: unknown; localized?: unknown },
+    undefined,
+    fieldGroup
   );
   // Every field in every language when which ones are translated is unknown.
   const everyField =
@@ -513,7 +535,10 @@ async function layoutsNaming(site: RewriteSite): Promise<LeftHost[]> {
  * hook can neither hide a copy nor change how the host is written back.
  */
 export function siteHostReader(
-  site: Pick<RewriteSite, "nextly" | "resolveCollection" | "singles">
+  site: Pick<
+    RewriteSite,
+    "nextly" | "resolveCollection" | "singles" | "fieldGroup"
+  >
 ): HostReader {
   return async host => {
     // A fixed host is read through its top-level field, whose stored value
@@ -727,7 +752,7 @@ function within(
  * read refuse, and the host is reported as unreadable, never unchanged.
  */
 async function scannedFields(
-  site: Pick<RewriteSite, "resolveCollection" | "singles">,
+  site: Pick<RewriteSite, "resolveCollection" | "singles" | "fieldGroup">,
   host: HostAddress
 ): Promise<string[]> {
   const declaration =
@@ -735,7 +760,8 @@ async function scannedFields(
       ? (await site.singles())?.find(single => single.slug === host.slug)
       : await site.resolveCollection(host.slug);
   const fields = unreachedFieldsOf(
-    declaration as { fields?: unknown; localized?: unknown } | undefined
+    declaration as { fields?: unknown; localized?: unknown } | undefined,
+    site.fieldGroup
   );
   if (fields === undefined || fields.length === 0) {
     throw new NextlyError({
@@ -754,7 +780,8 @@ async function scannedFields(
  * `undefined` where such a declaration has no name to read it by.
  */
 function unreachedFieldsOf(
-  declaration: { fields?: unknown; localized?: unknown } | undefined
+  declaration: { fields?: unknown; localized?: unknown } | undefined,
+  fieldGroup: FieldGroupDefinitions | undefined
 ): string[] | undefined {
   const listed = declaration?.fields;
   if (!Array.isArray(listed)) return undefined;
@@ -766,7 +793,12 @@ function unreachedFieldsOf(
     const field = stack.pop();
     if (seen.has(field)) continue;
     seen.add(field);
-    if (!blocksFieldReach({ fields: [field], localized }).unreachable) continue;
+    if (
+      !blocksFieldReach({ fields: [field], localized }, undefined, fieldGroup)
+        .unreachable
+    ) {
+      continue;
+    }
     const name = (field as { name?: unknown } | null)?.name;
     if (typeof name === "string" && name !== "") {
       names.push(name);

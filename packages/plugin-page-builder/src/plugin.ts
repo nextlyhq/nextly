@@ -1075,6 +1075,9 @@ function rewriteInstallFor(
         ctx.config.localization?.locales.map(locale => locale.code) ?? [],
       defaultLocale: () => ctx.config.localization?.defaultLocale,
       layouts: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
+      // A document whose field groups hold no blocks field is no host: its
+      // field groups' values are stored apart, where no copy can be.
+      fieldGroup: declaredFieldGroups(ctx),
     },
     hints: async componentId => {
       const found = await composition.hostsOf?.placing([componentId]);
@@ -1214,6 +1217,27 @@ function configuredSingles(ctx: {
     }
   }
   return bySlug;
+}
+
+/**
+ * The field groups the site declares in code, by slug, as its config states
+ * them. A group made in the admin is in no list a plugin can read, so it is
+ * not here, and a reference to it stays one that may hold blocks.
+ */
+function declaredFieldGroups(ctx: {
+  config?: { fieldGroups?: unknown };
+}): (slug: string) => { readonly fields?: unknown } | undefined {
+  const groups = ctx.config?.fieldGroups;
+  const bySlug = new Map<string, { readonly fields?: unknown }>();
+  if (Array.isArray(groups)) {
+    for (const group of groups) {
+      const slug = (group as { slug?: unknown } | null)?.slug;
+      if (typeof slug === "string") {
+        bySlug.set(slug, group as { readonly fields?: unknown });
+      }
+    }
+  }
+  return slug => bySlug.get(slug);
 }
 
 /**
@@ -2580,7 +2604,7 @@ export const pageBuilder = (
                   async slug => (await ctx.caller?.can("read", slug)) ?? false
                 ),
               pathOf: id => id,
-                }),
+            }),
         }),
       ],
       // The grant that lets a role change the site's settings in the editor's

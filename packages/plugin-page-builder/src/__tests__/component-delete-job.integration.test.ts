@@ -35,6 +35,13 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  text,
+  textarea,
+} from "nextly/config";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
@@ -168,6 +175,73 @@ function oneDeletableComponent(): PluginDefinition {
   });
 }
 
+/**
+ * The field groups, Singles and languages a site of each shape declares: a
+ * settings Single as a seeded site has it (translated, with drafts, a shared
+ * name, a translated tagline and an SEO field group of plain fields), and a
+ * Single embedding a field group whose definition holds a blocks field.
+ */
+function siteShapes(site: { settings?: boolean; blocksInGroup?: boolean }) {
+  const groups = [
+    ...(site.settings === true
+      ? [
+          defineFieldGroup({
+            slug: "seo",
+            fields: [
+              text({ name: "metaTitle" }),
+              textarea({ name: "metaDescription" }),
+            ],
+          }),
+        ]
+      : []),
+    ...(site.blocksInGroup === true
+      ? [
+          defineFieldGroup({
+            slug: "herobox",
+            fields: [
+              text({ name: "title" }),
+              { name: "content", type: BLOCKS_TYPE } as never,
+            ],
+          }),
+        ]
+      : []),
+  ];
+  const singles = [
+    ...(site.settings === true
+      ? [
+          defineSingle({
+            slug: "site-settings",
+            versions: { drafts: true },
+            localized: true,
+            fields: [
+              text({ name: "siteName", required: true, localized: false }),
+              textarea({ name: "tagline" }),
+              fieldGroup({ name: "seo", component: "seo" }),
+            ],
+          }),
+        ]
+      : []),
+    ...(site.blocksInGroup === true
+      ? [
+          defineSingle({
+            slug: "homeband",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "herobox" }),
+            ],
+          }),
+        ]
+      : []),
+  ];
+  return {
+    ...(groups.length === 0 ? {} : { fieldGroups: groups }),
+    ...(singles.length === 0 ? {} : { singles }),
+    ...(site.settings === true
+      ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
+      : {}),
+  };
+}
+
 /** The plugin's own job of this slug, run once as the runner would. */
 function jobTick(
   plugin: PluginDefinition,
@@ -225,7 +299,14 @@ describe.each(getConfiguredTestDialects())(
 
     async function boot(
       switches: Switches = {},
-      site: { boards?: boolean; rowRule?: boolean } = {}
+      site: {
+        boards?: boolean;
+        rowRule?: boolean;
+        /** A Single shaped like a site's settings: no blocks field at all. */
+        settings?: boolean;
+        /** A Single embedding a field group whose definition holds blocks. */
+        blocksInGroup?: boolean;
+      } = {}
     ) {
       const plugin = pageBuilder();
       current = await createTestNextly({
@@ -260,6 +341,7 @@ describe.each(getConfiguredTestDialects())(
               ]
             : []),
         ],
+        ...siteShapes(site),
       });
       const t = current;
       // The first user is the super admin: the person deleting, here.
@@ -948,6 +1030,72 @@ describe.each(getConfiguredTestDialects())(
       await expect(addsACopy(t, cardId)).rejects.toMatchObject({
         code: "VALIDATION_ERROR",
       });
+    });
+    it("is stopped by no document whose field groups hold no blocks, a settings Single like a seeded site's", async () => {
+      const { t, cookie } = await boot({}, { settings: true });
+      // The settings saved, in both languages, its SEO group filled.
+      await t.nextly.updateSingle({
+        slug: "site-settings",
+        data: {
+          siteName: "Site",
+          tagline: "Hello",
+          seo: { metaTitle: "Site", metaDescription: "A site" },
+        },
+        locale: "en",
+        overrideAccess: true,
+      });
+      await t.nextly.updateSingle({
+        slug: "site-settings",
+        data: { tagline: "Hallo" },
+        locale: "de",
+        overrideAccess: true,
+      });
+      const used = await card(t);
+      const spare = await card(t, "Spare");
+      const id = await note(t, "Holding", [copyOf("i1", used)]);
+
+      // Every slice of a dry run for a component nothing uses, to the last.
+      let answered = await dryRun(cookie, spare);
+      for (let n = 0; n < 10 && answered.item.status === "counting"; n += 1) {
+        answered = await call(cookie, spare, "POST", {
+          dryRun: true,
+          after: answered.item.plan?.next,
+        });
+      }
+      const done = await deleteToTheEnd(cookie, used);
+
+      expect(answered.item.status, JSON.stringify(answered.body)).toBe("none");
+      expect(answered.item.left).toBeUndefined();
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      expect(copies(await nodesOf(t, NOTES, id), used)).toBe(0);
+      expect(await exists(t, used)).toBe(false);
+    });
+
+    it("still refuses for a document whose field group holds a blocks field it can't read", async () => {
+      const { t, cookie } = await boot({}, { blocksInGroup: true });
+      await t.nextly.updateSingle({
+        slug: "homeband",
+        data: { title: "Home" },
+        overrideAccess: true,
+      });
+      const spare = await card(t, "Spare");
+
+      let answered = await dryRun(cookie, spare);
+      for (let n = 0; n < 10 && answered.item.status === "counting"; n += 1) {
+        answered = await call(cookie, spare, "POST", {
+          dryRun: true,
+          after: answered.item.plan?.next,
+        });
+      }
+
+      // Doubt counts as use: a blocks value stored apart from the row, which
+      // no read of the row reaches, is a host that can't be judged.
+      expect(answered.item.status, JSON.stringify(answered.body)).toBe(
+        "refused"
+      );
+      expect(answered.item.left).toEqual([
+        expect.objectContaining({ reason: "unreadable" }),
+      ]);
     });
   }
 );
