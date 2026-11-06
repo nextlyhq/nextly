@@ -29,6 +29,7 @@ export type {
   BlocksQuery,
   BlocksResult,
   DefaultDataProviderOptions,
+  ListPageContext,
   PageBindings,
   PageContext,
   PageIssue,

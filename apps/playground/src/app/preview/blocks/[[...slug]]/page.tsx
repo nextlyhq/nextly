@@ -23,6 +23,9 @@ import { blockPagesRoute } from "../../../../lib/block-pages-route";
  */
 const { ContentPage, generateMetadata } = createBlocksPage({
   ...blockPagesRoute,
+  // Mounted apart from the public route, so a previewed list's links stay
+  // in the preview.
+  mountPath: "/preview/blocks",
   draft: previewDraftGate(),
 });
 
