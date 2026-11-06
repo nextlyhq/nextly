@@ -153,6 +153,10 @@ function replacementNodes(
   return replacers;
 }
 
+/** How strongly an anchor holds two neighbours together: `after` wins. */
+const AFTER_WEIGHT = 2;
+const BEFORE_WEIGHT = 1;
+
 /** The graph's nodes, and the node each id or built-in name is placed by. */
 interface Nodes {
   nodes: Map<string, Node>;
@@ -197,27 +201,35 @@ function graphNodes(
 
 /**
  * The graph's edges, from what comes first to what follows it, and apart from
- * them the ones a contribution asked for, so what a contribution is anchored
- * to is followed by it first. Refuses a reference to nothing there.
+ * them the ones a contribution asked for, weighted: an `after`, a follower
+ * asking to come straight after what it names, outweighs a `before`, which
+ * asks only to come straight before. So what a contribution is anchored to is
+ * followed by it first. Refuses a reference to nothing there.
  */
 function graphEdges(
   items: readonly OrderableContribution[],
   builtIns: readonly string[],
   { nodes, nodeOf }: Nodes,
   scope: Scope
-): { edges: Map<string, Set<string>>; anchored: Map<string, Set<string>> } {
-  const empty = () =>
-    new Map<string, Set<string>>(
-      [...nodes.keys()].map(key => [key, new Set<string>()])
-    );
-  const edges = empty();
-  const anchored = empty();
-  const link = (from: string, to: string, asked: boolean): void => {
+): {
+  edges: Map<string, Set<string>>;
+  anchored: Map<string, Map<string, number>>;
+} {
+  const edges = new Map<string, Set<string>>(
+    [...nodes.keys()].map(key => [key, new Set<string>()])
+  );
+  const anchored = new Map<string, Map<string, number>>(
+    [...nodes.keys()].map(key => [key, new Map<string, number>()])
+  );
+  const link = (from: string, to: string, weight: number): void => {
     edges.get(from)!.add(to);
-    if (asked) anchored.get(from)!.add(to);
+    if (weight > 0) {
+      const asked = anchored.get(from)!;
+      asked.set(to, Math.max(asked.get(to) ?? 0, weight));
+    }
   };
   for (let i = 1; i < builtIns.length; i++) {
-    link(`builtin:${builtIns[i - 1]}`, `builtin:${builtIns[i]}`, false);
+    link(`builtin:${builtIns[i - 1]}`, `builtin:${builtIns[i]}`, 0);
   }
   for (const item of items) {
     const self = nodeOf.get(item.id)!;
@@ -240,8 +252,8 @@ function graphEdges(
           }
         );
       }
-      if (relation === "before") link(self, other, true);
-      else link(other, self, true);
+      if (relation === "before") link(self, other, BEFORE_WEIGHT);
+      else link(other, self, AFTER_WEIGHT);
     }
   }
   return { edges, anchored };
@@ -256,7 +268,7 @@ function graphEdges(
 function placed(
   nodes: ReadonlyMap<string, Node>,
   edges: ReadonlyMap<string, ReadonlySet<string>>,
-  anchored: ReadonlyMap<string, ReadonlySet<string>>
+  anchored: ReadonlyMap<string, ReadonlyMap<string, number>>
 ): { ordered: OrderedEntry[]; done: Set<string> } {
   const incoming = new Map<string, number>(
     [...nodes.keys()].map(key => [key, 0])
@@ -278,7 +290,7 @@ function placed(
     const asked = anchored.get(node.key)!;
     freed.sort(
       (a, b) =>
-        Number(asked.has(b.key)) - Number(asked.has(a.key)) ||
+        (asked.get(b.key) ?? 0) - (asked.get(a.key) ?? 0) ||
         compareRank(a.rank, b.rank)
     );
     for (const next of freed) place(next);

@@ -197,6 +197,63 @@ describe("contributionsForReader", () => {
     expect(await sentTo(["update-tickets"])).toBe(false);
   });
 
+  it("sends an action that runs a route only to a reader the route would let run it", async () => {
+    const escalating: PluginDefinition = {
+      ...SUPPORT,
+      contributes: {
+        routes: [
+          {
+            method: "POST",
+            path: "/escalate",
+            handler: () => new Response(),
+            // Named through the renamed collection, as the dispatcher resolves it.
+            requiredPermission: ({ collection }) =>
+              collection("tickets", "update"),
+          },
+          {
+            method: "POST",
+            path: "/ping",
+            handler: () => new Response(),
+            public: true,
+          },
+        ],
+        admin: {
+          contributions: [
+            {
+              id: "acme-support.escalate",
+              kind: "rowAction",
+              place: "collection.list",
+              label: "Escalate",
+              action: { run: { method: "POST", path: "/escalate" } },
+            },
+            {
+              id: "acme-support.ping",
+              kind: "rowAction",
+              place: "collection.list",
+              label: "Ping",
+              action: { run: { method: "POST", path: "/ping" } },
+            },
+          ],
+        },
+      },
+    };
+    const sent = async (held: string[]) =>
+      JSON.stringify(
+        await contributionsForReader(
+          [escalating],
+          reader(held).audience,
+          "workspace"
+        )
+      );
+    // The action declares no permission of its own; its route's still holds.
+    expect(await sent([])).not.toContain("acme-support.escalate");
+    expect(await sent(["update-helpdesk-tickets"])).toContain(
+      "acme-support.escalate"
+    );
+    // A public route asks nothing of anyone.
+    expect(await sent([])).toContain("acme-support.ping");
+  });
+
   it("sends no reader a contribution whose permission cannot be computed", async () => {
     const broken: PluginDefinition = {
       ...SUPPORT,

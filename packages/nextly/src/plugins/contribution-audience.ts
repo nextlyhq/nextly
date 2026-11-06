@@ -17,7 +17,7 @@ import type { CollectionsHandler } from "../services/collections-handler";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import {
-  contributionPermissions,
+  contributionGates,
   readerFilterVerdict,
   type ContributionAudience,
 } from "./admin-contributions-offer";
@@ -80,7 +80,7 @@ export async function contributionAudienceFor(
   caller: ReadCaller,
   accessCaller: ReadAccessCaller
 ): Promise<ContributionAudience> {
-  const gates = contributionPermissions(plugins);
+  const gates = contributionGates(plugins);
   const verdicts = await permissionVerdicts(gates, accessCaller);
   const listed = await listedCollections();
   const readable = await readableEntities(listed, accessCaller);

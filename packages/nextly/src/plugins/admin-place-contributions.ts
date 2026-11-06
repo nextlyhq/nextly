@@ -10,7 +10,10 @@
  * @module plugins/admin-place-contributions
  * @experimental
  */
-import type { AdminContribution } from "./admin-contributions";
+import type {
+  AdminContribution,
+  AdminContributionAction,
+} from "./admin-contributions";
 import { collectionsScopeProblem } from "./admin-filters";
 import {
   ADMIN_CONTRIBUTION_KINDS,
@@ -27,6 +30,7 @@ import { orderContributions, type OrderedEntry } from "./contribution-order";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
+import type { PluginRoute } from "./routes/route-types";
 import { rowPredicateProblems } from "./row-predicate";
 
 /** @experimental A contribution that passed, and the plugin that declared it. */
@@ -127,16 +131,39 @@ function runProblem(
   ) {
     return "its `action.run` is not a route's `method`, `path` and optional `mount`";
   }
+  const route = runRoute(plugin, run as AdminContributionRun);
+  if (route === undefined) {
+    return `its \`action.run\` names ${run.method} ${run.path} (${run.mount ?? "plugin"} mount), which is not one of this plugin's routes`;
+  }
+  // A route for a plugin's own kind of signed-in person reads no staff
+  // session, so an admin could never run it.
+  return route.principal !== undefined
+    ? `its \`action.run\` names ${run.method} ${run.path}, a route for a signed-in person rather than staff`
+    : undefined;
+}
+
+/** What a `run` names: a route by method, path and mount. */
+type AdminContributionRun = Extract<
+  AdminContributionAction,
+  { run: unknown }
+>["run"];
+
+/**
+ * @experimental The plugin route a `run` names, by method, path and mount (the
+ * plugin's own when it gives none), or `undefined`. One lookup for the start
+ * check and for the permission a reader must hold to be sent the action.
+ */
+export function runRoute(
+  plugin: PluginDefinition,
+  run: AdminContributionRun
+): PluginRoute | undefined {
   const mount = run.mount ?? "plugin";
-  const declared = (plugin.contributes?.routes ?? []).some(
+  return (plugin.contributes?.routes ?? []).find(
     route =>
       route.method === run.method &&
       route.path === run.path &&
       (route.mount ?? "plugin") === mount
   );
-  return declared
-    ? undefined
-    : `its \`action.run\` names ${run.method} ${run.path} (${mount} mount), which is not one of this plugin's routes`;
 }
 
 /** What makes a kind's own fields unusable, or `undefined`. */

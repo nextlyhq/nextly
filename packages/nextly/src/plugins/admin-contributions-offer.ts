@@ -26,6 +26,7 @@ import type {
 import {
   contributedAdminContributions,
   type ContributedAdminContribution,
+  runRoute,
 } from "./admin-place-contributions";
 import type { AdminContributionKind } from "./admin-places";
 import type { OrderedEntry } from "./contribution-order";
@@ -150,11 +151,8 @@ async function deliveredFor(
   contributors: ReadonlyMap<string, PluginDefinition>,
   audience: ContributionAudience
 ): Promise<DeliveredAdminContribution | undefined> {
-  const permission = contributionPermission(contribution, owner);
-  if (
-    permission === UNCOMPUTABLE_PERMISSION ||
-    (permission !== undefined && !audience.holds(permission))
-  ) {
+  const asked = permissionsAsked(contribution, owner);
+  if (asked.some(p => p === UNCOMPUTABLE_PERMISSION || !audience.holds(p))) {
     return undefined;
   }
   const {
@@ -200,19 +198,11 @@ async function deliveredFor(
  */
 const UNCOMPUTABLE_PERMISSION = "\u0000uncomputable";
 
-/**
- * The permission a contribution asks, or `undefined` when it asks none:
- * resolved as a plugin route's is, through the plugin's names after the
- * host's renames, so `({ collection }) => collection("tickets", "update")`
- * asks `update-helpdesk-tickets` once `tickets` is renamed. A resolver that
- * throws, or answers nothing, asks a permission nobody holds rather than
- * none, which would show the contribution to everyone.
- */
-function contributionPermission(
-  contribution: AdminContribution,
+/** One permission, resolved through the plugin's names, or the uncomputable gate. */
+function resolvedPermission(
+  required: Parameters<typeof resolveRoutePermission>[0],
   owner: PluginDefinition | undefined
 ): string | undefined {
-  const required = contribution.requiredPermission;
   if (required === undefined) return undefined;
   if (owner === undefined) return UNCOMPUTABLE_PERMISSION;
   try {
@@ -223,20 +213,46 @@ function contributionPermission(
 }
 
 /**
+ * Every permission a contribution asks, resolved as a plugin route's is,
+ * through the plugin's names after the host's renames, so
+ * `({ collection }) => collection("tickets", "update")` asks
+ * `update-helpdesk-tickets` once `tickets` is renamed: its own, and for an
+ * action that runs a route, the route's own, since an action the route would
+ * refuse is no action for that reader. A resolver that throws, or answers
+ * nothing, asks a permission nobody holds rather than none, which would show
+ * the contribution to everyone.
+ */
+function permissionsAsked(
+  contribution: AdminContribution,
+  owner: PluginDefinition | undefined
+): string[] {
+  const own = resolvedPermission(contribution.requiredPermission, owner);
+  const action = "action" in contribution ? contribution.action : undefined;
+  const route =
+    owner && action && "run" in action
+      ? runRoute(owner, action.run)
+      : undefined;
+  const routes =
+    route && route.public !== true
+      ? resolvedPermission(route.requiredPermission, owner)
+      : undefined;
+  return [own, routes].filter((p): p is string => p !== undefined);
+}
+
+/**
  * @experimental Every permission an enabled plugin's contribution asks, as
- * {@link contributionPermission} resolves it, for the reader's verdicts to be
+ * {@link permissionsAsked} resolves them, for the reader's verdicts to be
  * taken on all of them at once.
  */
-export function contributionPermissions(
+export function contributionGates(
   plugins: readonly PluginDefinition[]
 ): string[] {
   const byName = new Map(plugins.map(p => [p.name, p]));
-  return contributedAdminContributions(plugins).contributions.flatMap(c => {
-    const permission = contributionPermission(c, byName.get(c.plugin));
-    return permission === undefined || permission === UNCOMPUTABLE_PERMISSION
-      ? []
-      : [permission];
-  });
+  return contributedAdminContributions(plugins).contributions.flatMap(c =>
+    permissionsAsked(c, byName.get(c.plugin)).filter(
+      p => p !== UNCOMPUTABLE_PERMISSION
+    )
+  );
 }
 
 /** One ordered list as the reader receives it. */

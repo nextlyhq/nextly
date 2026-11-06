@@ -126,6 +126,21 @@ describe("orderContributions", () => {
     ]);
   });
 
+  it("keeps a contribution straight after the one it follows, ahead of what that one precedes", () => {
+    expect(
+      names(
+        orderContributions(
+          [
+            c("acme-support.a", { before: "status" }),
+            c("acme-support.b", { after: "acme-support.a" }),
+          ],
+          BUILT_INS,
+          SCOPE
+        )
+      )
+    ).toEqual(["+acme-support.a", "+acme-support.b", ...BUILT_INS]);
+  });
+
   it("refuses a reference to nothing there", () => {
     expect(
       refusalOf(() =>

@@ -310,7 +310,9 @@ interface AdminContributionBase {
    */
   requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /**
-   * On a page about one entry, or an action on rows, the entries it shows for.
+   * On a collection entry's edit page, or an action on rows of a collection's
+   * list, the entries it shows for; a Single's edit page and the entry form
+   * take none yet.
    * Judged on each entry as the reader's read returned it: a field the reader
    * may not read is missing, and a rule that needs it does not match. A
    * contribution whose rule names a field the reader may not read is not sent

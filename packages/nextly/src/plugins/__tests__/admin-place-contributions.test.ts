@@ -506,6 +506,38 @@ describe("contributedAdminContributions", () => {
     });
   });
 
+  it("refuses an action that runs a route for a signed-in person rather than staff", () => {
+    const action = {
+      id: "acme-support.a",
+      kind: "rowAction",
+      place: "collection.list",
+      label: "A",
+      action: { run: { method: "POST", path: "/me" } },
+    };
+    expect(
+      refusalOf(() =>
+        contributedAdminContributions([
+          plugin("@acme/support", [action], {
+            contributes: {
+              admin: { contributions: [action] as AdminContribution[] },
+              routes: [
+                {
+                  method: "POST",
+                  path: "/me",
+                  handler: () => new Response(),
+                  principal: { kind: "customer" },
+                } as never,
+              ],
+            },
+          }),
+        ])
+      )
+    ).toMatchObject({
+      reason: "admin-contribution-invalid",
+      logMessage: expect.stringContaining("signed-in person"),
+    });
+  });
+
   it("takes a permission computed from the plugin's names", () => {
     expect(
       contributedAdminContributions([

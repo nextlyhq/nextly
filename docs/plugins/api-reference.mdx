@@ -856,12 +856,13 @@ metadata, the login page's alone in the public one, and each reader receives
 only what they may see:
 
 - A contribution with a `requiredPermission` the reader lacks is not sent at
-  all, so its label and action never reach them. One that replaced a built-in
-  part gives that part back.
+  all, so its label and action never reach them, and nor is an action whose
+  `run` route asks a permission they lack. One that replaced a built-in part
+  gives that part back.
 - `visibleWhen` is a rule over the entry the page or row shows: a field
   compared with `equals`, `notEquals`, `in` or `exists`, combined with `and`,
-  `or` and `not`. It is allowed on an edit page's contributions and on row and
-  bulk actions. A field the reader may not read is missing from what they
+  `or` and `not`. It is allowed on a collection entry's edit page and on row
+  and bulk actions; a Single's edit page and the entry form take none yet. A field the reader may not read is missing from what they
   read, and a rule needing it does not match, `exists` and `not` included. A
   contribution whose rule names such a field is not sent to that reader at
   all.
