@@ -107,6 +107,33 @@ describe("a write's collection lists, judged by the server", () => {
   });
 });
 
+describe("the schema a judgement reads", () => {
+  it("reads the fields of no more lists than the judgement visits", async () => {
+    // Five lists, each of its own collection, and a judgement bounded at two.
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: ["c1", "c2", "c3", "c4", "c5"].map(collection => ({
+        id: collection,
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection, sort: "title" },
+        slots: { children: [] },
+      })),
+    };
+    const fieldsOf = vi.fn(async (): Promise<ListFields> => POSTS);
+    await newListQueryIssues(page, args({}), "Content", {
+      fieldsOf,
+      maxNodes: 2,
+    });
+    expect(fieldsOf.mock.calls.map(call => call[0])).toEqual(["c1", "c2"]);
+    // CONTROL: unbounded, every list's collection is read.
+    fieldsOf.mockClear();
+    await newListQueryIssues(page, args({}), "Content", { fieldsOf });
+    expect(fieldsOf).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe("a collection's fields, as a list is judged by them", () => {
   it("reads what the public may read in the language asked", async () => {
     const readable = vi.fn(

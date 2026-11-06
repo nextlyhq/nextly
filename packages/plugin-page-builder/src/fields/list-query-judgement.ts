@@ -128,10 +128,15 @@ export function listSettingOf(write: PluginFieldWrite): ListSetting {
   };
 }
 
-/** The collections a judgement over `nodes` asks about, and nothing read. */
+/**
+ * The collections a judgement over `nodes` asks about, and nothing read.
+ * Walked as far as the judgement walks (`maxNodes`), so a forest past the
+ * bound reads no schema for lists the judgement never reaches.
+ */
 function collectionsAsked(
   nodes: readonly unknown[],
-  entryCollection: string | null | undefined
+  entryCollection: string | null | undefined,
+  maxNodes: number | undefined
 ): Set<string> {
   const asked = new Set<string>();
   listQueryIssues(nodes, {
@@ -142,6 +147,7 @@ function collectionsAsked(
       },
     },
     ...(entryCollection === undefined ? {} : { entryCollection }),
+    ...(maxNodes === undefined ? {} : { maxNodes }),
   });
   return asked;
 }
@@ -151,10 +157,12 @@ async function sourceFor(
   forests: readonly (readonly unknown[])[],
   setting: ListSetting,
   read: ListFieldsReader,
-  known: Map<string, ListFields | undefined>
+  known: Map<string, ListFields | undefined>,
+  maxNodes: number | undefined
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    for (const collection of collectionsAsked(nodes, setting.entryCollection)) {
+    const asked = collectionsAsked(nodes, setting.entryCollection, maxNodes);
+    for (const collection of asked) {
       if (!known.has(collection)) {
         known.set(collection, await read(collection, setting.locale));
       }
@@ -214,7 +222,8 @@ async function listErrorsIn(
               ],
               setting,
               fieldsOf,
-              known
+              known,
+              site.maxNodes
             ),
           }),
       ...(setting.entryCollection === undefined
