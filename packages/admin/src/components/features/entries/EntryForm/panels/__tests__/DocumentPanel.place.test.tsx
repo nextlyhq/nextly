@@ -206,6 +206,29 @@ describe("plugins' sections in the document panel", () => {
     expect(screen.getByTestId("language-panel")).toBeInTheDocument();
   });
 
+  it("says under a section's heading that its component could not be found", () => {
+    sections(
+      { builtIn: "status" },
+      section("acme-a.missing", "Missing", {
+        after: "status",
+        component: "@acme/a/admin#NotRegistered",
+      }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    panel();
+
+    // The section stays, under its own heading, and says what happened in
+    // place of a body that never arrived.
+    expect(
+      within(screen.getByRole("region", { name: "Missing" })).getByRole(
+        "status"
+      )
+    ).toHaveTextContent("This part of the page couldn't be loaded.");
+  });
+
   it("draws no plugin's section before the viewer is known", () => {
     sections(
       { builtIn: "status" },

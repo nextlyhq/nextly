@@ -5,6 +5,7 @@ import { Fragment, type ReactElement, type ReactNode } from "react";
 import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
+import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
@@ -154,8 +155,12 @@ export function DocumentPanel({
           </Fragment>
         ) : context !== null && item.kind === "sidebarSection" ? (
           <PanelSection key={item.id} title={item.label}>
+            {/* A component that cannot be found says so under the section's
+                heading, as a place's blocks and tabs do, rather than leaving
+                a bare heading. */}
             <PluginSlot<PlaceContributionProps>
               path={item.component}
+              fallback={<PlaceContributionFallback />}
               props={{
                 context,
                 ...(place.entry === undefined ? {} : { entry: place.entry }),
