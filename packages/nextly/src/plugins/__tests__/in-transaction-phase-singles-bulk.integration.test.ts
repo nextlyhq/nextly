@@ -5,9 +5,15 @@
  * - A Single's update runs the handlers registered under `single:<slug>`, as
  *   an `update`: the handler's row commits with the save, a handler that
  *   throws aborts it with its own status and keeps nothing, and a
- *   version-conflict retry runs it again, keeping one row.
+ *   version-conflict retry runs it again, keeping one row. The save takes its
+ *   handlers once: one registered while it is under way waits for the next.
  * - Publishing every language of a Single or of a collection entry runs the
  *   phase too, as an `update`, and a throwing handler aborts the publish.
+ * - Each handler is handed the documented read shape and the true state
+ *   before: a collection's publish hands the whole entry (its component and
+ *   relations), a held Single edit hands drafts without their snapshot type
+ *   tags and, when it builds on a draft, that draft as `originalData`, and a
+ *   Single's publish hands the state before its pending change went live.
  * - A batch sharing one transaction (`createEntries`, `updateEntries`,
  *   `deleteEntries`) runs the phase once per entry, also with `skipHooks`,
  *   and a handler that throws aborts the whole batch whatever `stopOnError`
@@ -15,13 +21,21 @@
  * - A batch that gives each entry a transaction of its own
  *   (`bulkUpdateEntries`) fails only the entry whose handler refused.
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  relationship,
+  text,
+} from "../../config";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { VersionConflictError } from "../../domains/versions/version-conflict";
 import { NextlyError } from "../../errors/nextly-error";
+import { HookRegistry } from "../../hooks/hook-registry";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import type { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import {
@@ -40,6 +54,7 @@ import { describeEachDialect } from "./helpers/dialect-matrix";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -54,6 +69,9 @@ const ledger = defineTable("ledger", {
 
 const BANNER = "banner";
 const BANNER_KEY = `single:${BANNER}`;
+/** A Single with drafts and a component, whose edits of a live one are held. */
+const PROMO = "promo";
+const PROMO_KEY = `single:${PROMO}`;
 
 /** Boot the plugin with a localized Single and two collections. */
 async function boot(dialect: TestDialect): Promise<PluginContext> {
@@ -61,8 +79,22 @@ async function boot(dialect: TestDialect): Promise<PluginContext> {
   current = await createTestNextly({
     dialect,
     localization: { locales: ["en", "de"], defaultLocale: "en" },
+    fieldGroups: [
+      defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
+    ],
     collections: [
       defineCollection({ slug: "items", fields: [text({ name: "title" })] }),
+      defineCollection({ slug: "tags", fields: [text({ name: "name" })] }),
+      defineCollection({
+        slug: "features",
+        localized: true,
+        status: true,
+        fields: [
+          text({ name: "heading" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+          relationship({ name: "tags", relationTo: "tags", hasMany: true }),
+        ],
+      }),
       defineCollection({
         slug: "articles",
         localized: true,
@@ -76,6 +108,16 @@ async function boot(dialect: TestDialect): Promise<PluginContext> {
         localized: true,
         status: true,
         fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: PROMO,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "headline" }),
+          fieldGroup({ name: "hero", component: "hero" }),
+        ],
       }),
     ],
     plugins: [
@@ -107,6 +149,38 @@ function entries(): CollectionEntryService {
 
 function singles(): SingleEntryService {
   return handle().getService("singleEntryService");
+}
+
+/** A Single save as `singles().update` makes it, in English, overriding access. */
+async function savePromo(data: Record<string, unknown>): Promise<void> {
+  await singles().update(
+    PROMO,
+    { ...data, _overwrite: true },
+    { locale: "en", overrideAccess: true }
+  );
+}
+
+/** Whether a component value carries the type tag only snapshots hold. */
+function tagged(value: unknown): boolean {
+  return (
+    typeof value === "object" && value !== null && "_componentType" in value
+  );
+}
+
+/** What the read-shape cases compare: the status, the component, the relations. */
+function summary(document: Record<string, unknown> | undefined): unknown {
+  if (!document) return document;
+  const hero = document.hero as { heading?: unknown } | null | undefined;
+  const tags = document.tags as unknown[] | null | undefined;
+  return {
+    status: document.status,
+    hero: hero?.heading,
+    tags: tags?.map(tag =>
+      typeof tag === "object" && tag !== null
+        ? (tag as { id?: unknown }).id
+        : tag
+    ),
+  };
 }
 
 /** The ledger as committed, read outside any transaction. */
@@ -192,6 +266,40 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
     ]);
   });
 
+  it("runs only the handlers a Single's update took when it began", async () => {
+    const ctx = await boot(dialect);
+    const handed: unknown[] = [];
+    const late: InTransactionHandler = async write => {
+      handed.push(write.data?.headline);
+      await keepLedger(write);
+    };
+    // The seam: right after the save asks the registry for its handlers, a
+    // plugin registers one, as a concurrent request could.
+    const presence = HookRegistry.prototype.hasInTransaction;
+    vi.spyOn(HookRegistry.prototype, "hasInTransaction").mockImplementationOnce(
+      function (this: HookRegistry, target: string) {
+        const answer = presence.call(this, target);
+        ctx.hooks.onInTransaction(BANNER_KEY, late);
+        return answer;
+      }
+    );
+
+    await handle().nextly.updateSingle({
+      slug: BANNER,
+      data: { headline: "first" },
+    });
+    await handle().nextly.updateSingle({
+      slug: BANNER,
+      data: { headline: "second" },
+    });
+
+    // Not handed the first save, assembled for no handler; run on the next.
+    expect(handed).toEqual(["second"]);
+    expect(await ledgerRows(ctx)).toEqual([
+      { target: BANNER_KEY, op: "update" },
+    ]);
+  });
+
   it("aborts the Single's update with the handler's status, keeping neither", async () => {
     const ctx = await boot(dialect);
     await handle().nextly.updateSingle({
@@ -233,6 +341,50 @@ describeEachDialect("the in-transaction phase on a Single", dialect => {
     expect(await ledgerRows(ctx)).toEqual([
       { target: BANNER_KEY, op: "update" },
     ]);
+  });
+
+  it("hands a repeat held edit of a Single the prior draft, in read shape", async () => {
+    const ctx = await boot(dialect);
+    await savePromo({
+      headline: "live",
+      hero: { heading: "live" },
+      status: "published",
+    });
+    const seen: unknown[] = [];
+    ctx.hooks.onInTransaction(PROMO_KEY, ({ data, originalData }) => {
+      seen.push({
+        before: [originalData?.headline, originalData?._isWorkingDraft],
+        after: [data?.headline, data?._isWorkingDraft],
+        tagged: tagged(originalData?.hero) || tagged(data?.hero),
+      });
+    });
+
+    // Two status-less saves of the live Single: both are held as its
+    // draft, the second building on the first.
+    await savePromo({ headline: "one" });
+    await savePromo({ headline: "two" });
+
+    expect(seen).toEqual([
+      { before: ["live", undefined], after: ["one", true], tagged: false },
+      { before: ["one", true], after: ["two", true], tagged: false },
+    ]);
+  });
+
+  it("hands a Single's publish the state before its pending change went live", async () => {
+    const ctx = await boot(dialect);
+    await savePromo({ headline: "live", status: "published" });
+    await savePromo({ headline: "pending" });
+    const seen: unknown[] = [];
+    ctx.hooks.onInTransaction(PROMO_KEY, ({ data, originalData }) => {
+      seen.push([originalData?.headline, data?.headline]);
+    });
+
+    const published = await singles().publishAllLocales(PROMO, {
+      overrideAccess: true,
+    });
+
+    expect(published.success).toBe(true);
+    expect(seen).toEqual([["live", "pending"]]);
   });
 
   it("runs on publishing every language of the Single, and aborts the publish when it throws", async () => {
@@ -292,6 +444,49 @@ describeEachDialect(
       expect(published.success).toBe(true);
       expect(await ledgerRows(ctx)).toEqual([
         { target: "articles", op: "update" },
+      ]);
+    });
+  }
+);
+
+describeEachDialect(
+  "the in-transaction phase on publishing every language of an entry with a component and relations",
+  dialect => {
+    it("hands the handler the whole entry on both sides", async () => {
+      const ctx = await boot(dialect);
+      const tag = await handle().nextly.create({
+        collection: "tags",
+        data: { name: "news" },
+      });
+      const tagId = String(tag.item.id);
+      const created = await handle().nextly.create({
+        collection: "features",
+        data: {
+          heading: "draft",
+          status: "draft",
+          hero: { heading: "big" },
+          tags: [tagId],
+        },
+        locale: "en",
+      });
+      const id = String(created.item.id);
+      const seen: unknown[] = [];
+      ctx.hooks.onInTransaction("features", ({ data, originalData }) => {
+        seen.push([summary(originalData), summary(data)]);
+      });
+
+      const published = await entries().publishAllLocales({
+        collectionName: "features",
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      expect(published.success).toBe(true);
+      expect(seen).toEqual([
+        [
+          { status: "draft", hero: "big", tags: [tagId] },
+          { status: "published", hero: "big", tags: [tagId] },
+        ],
       ]);
     });
   }

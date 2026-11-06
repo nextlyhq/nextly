@@ -39,6 +39,8 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import {
+  inTransactionHandlersFor,
+  replacedByUpdate,
   runInTransactionPhaseFor,
   writtenByUpdate,
 } from "../../../hooks/in-transaction-call";
@@ -2951,6 +2953,13 @@ export class SingleMutationService extends BaseService {
         locale: options.locale,
       });
 
+      // The in-transaction handlers, asked once for this save: the same set
+      // decides whether the documents are assembled and which handlers run,
+      // on every attempt.
+      const inTransactionHandlers = inTransactionHandlersFor(
+        this.hookRegistry,
+        hookCollection
+      );
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -4004,7 +4013,7 @@ export class SingleMutationService extends BaseService {
           const assembleDocuments = this.assemblesSaveDocuments(
             recordingEnabled,
             actorForWrite(options.actor ?? null, options.user),
-            hookCollection
+            inTransactionHandlers.length > 0
           );
 
           const previousDoc =
@@ -4329,9 +4338,11 @@ export class SingleMutationService extends BaseService {
           // rather than re-derived from the stored document: a second
           // status-less save of different fields would otherwise rebuild from
           // live content and silently revert the first pending edit.
-          // The pending draft a held edit stored, for the in-transaction
+          // The pending draft a held edit stored, and the one it replaced when
+          // it accumulated onto a draft already there, for the in-transaction
           // phase below; undefined for a write to the live row.
           let heldDocument: Record<string, unknown> | undefined;
+          let priorHeldDocument: Record<string, unknown> | undefined;
           if (holdEdit) {
             // A held edit leaves the live row's content alone, but it is a
             // change another editor must not overwrite unseen: the counter
@@ -4621,6 +4632,7 @@ export class SingleMutationService extends BaseService {
               }
             );
             heldDocument = pending;
+            priorHeldDocument = existingDraft ? replaces : undefined;
             await this.recordSingleSave(tx, slug, existingDoc.id, options, {
               locale: singleDraftLocale,
               toState: "draft",
@@ -5310,14 +5322,29 @@ export class SingleMutationService extends BaseService {
 
           // Last in the transaction, and so again on each retried attempt:
           // the documents the outbox event carries, or for a held edit the
-          // pending draft, marked. A Single is only ever updated, and its
-          // handlers are registered under its hook namespace (`single:<slug>`).
-          await runInTransactionPhaseFor(this.hookRegistry, tx, {
+          // pending draft, marked, against the draft it replaced when there
+          // was one. A held draft is shown in ordinary read shape, without
+          // the single-component type tags its snapshot records (a dynamic
+          // zone's row types are read shape, and kept). A Single is only ever
+          // updated, and its handlers are registered under its hook
+          // namespace (`single:<slug>`).
+          const asRead = (document: Record<string, unknown> | undefined) =>
+            document &&
+            stripSingleComponentTags(
+              document,
+              fieldConfigs,
+              componentSlug =>
+                singleComponentSchemas?.get(componentSlug)?.fields
+            );
+          await runInTransactionPhaseFor(inTransactionHandlers, tx, {
             collection: hookCollection,
             operation: "update",
             id: String(existingDoc.id),
-            data: writtenByUpdate(dataDoc, heldDocument),
-            originalData: previousDoc,
+            data: writtenByUpdate(dataDoc, asRead(heldDocument)),
+            originalData: replacedByUpdate(
+              previousDoc,
+              asRead(priorHeldDocument)
+            ),
             user: options.user,
             context: sharedContext,
           });
@@ -5601,18 +5628,17 @@ export class SingleMutationService extends BaseService {
    * Whether a save assembles its documents in read shape: for the outbox
    * event, for the activity trail whenever it will record the save (it names
    * the fields a save changed by comparing them), and for an in-transaction
-   * handler, which is handed both. Otherwise the raw row stands in, and the
-   * per-component reads are skipped.
+   * handler, which is handed both (`handsInTransaction`: the save took at
+   * least one). Otherwise the raw row stands in, and the per-component reads
+   * are skipped.
    */
   private assemblesSaveDocuments(
     recordingEnabled: boolean,
     actor: ReturnType<typeof actorForWrite>,
-    hookCollection: string
+    handsInTransaction: boolean
   ): boolean {
     return (
-      recordingEnabled ||
-      willRecordSingleActivity(actor) ||
-      this.hookRegistry.hasInTransaction(hookCollection)
+      recordingEnabled || willRecordSingleActivity(actor) || handsInTransaction
     );
   }
 

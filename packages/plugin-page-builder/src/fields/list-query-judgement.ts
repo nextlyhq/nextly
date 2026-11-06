@@ -252,14 +252,14 @@ async function errorsIn<Issue extends ForestIssue>(
       ...(stored.length === 0 ? {} : { stored }),
       ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
     }).filter(issue => isErrorIssue(issue) && counts(issue));
-  let found = await judge([]);
-  if (found.length > 0 && site.storedForms !== undefined) {
-    const snapshot = await site.storedForms();
-    if (snapshot.readable && snapshot.forms.length > 0) {
-      found = await judge(snapshot.forms);
-    }
-  }
-  return found;
+  const found = await judge([]);
+  if (found.length === 0 || site.storedForms === undefined) return found;
+  const snapshot = await site.storedForms();
+  // A stored page this cannot read (a language whose store is not ready) may
+  // already hold every problem found, so none is refused: nothing can tell a
+  // new one from one the page held.
+  if (!snapshot.readable) return [];
+  return snapshot.forms.length > 0 ? judge(snapshot.forms) : found;
 }
 
 /** The errors about the lists in `nodes` that `counts` keeps. */
@@ -401,10 +401,9 @@ export function composedListQueryIssues(
  * as the page composes them. A definition's condition reads the entry of the
  * page it is placed on, or the item of a list it lands in, which only the
  * composition knows; so a condition the definition's own save judged by its
- * operator alone is judged here against the fields it will read. Only what
- * the schema or the host decides counts: the definition's save already
- * judged its operators. A problem the stored page already composed to is
- * kept, as for the page's own conditions.
+ * operator alone is judged here against the fields it will read. Every issue
+ * counts, as for a placed list. A problem the stored page already composed
+ * to is kept, as for the page's own conditions.
  */
 export function composedConditionIssues(
   composed: unknown,
@@ -415,7 +414,10 @@ export function composedConditionIssues(
   return composedIssues(composed, host, setting, site, {
     judge: conditionIssues,
     placed: () => true,
-    counts: issue => CONDITION_FIELD_CODES.has(issue.code),
+    // Every issue counts, the operator's included: a definition stored before
+    // operators were judged keeps its problem as a warning on its own save,
+    // and a page newly placing it would serve a block that never shows.
+    counts: () => true,
     holds: "a block whose visibility conditions can't be checked there",
   });
 }

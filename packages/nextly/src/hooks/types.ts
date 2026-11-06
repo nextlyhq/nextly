@@ -730,9 +730,13 @@ export interface InTransactionWrite<T = Record<string, unknown>> {
   /** The staff user the write is made as, when there is one. */
   user?: HookContext["user"];
   /**
-   * A frozen copy of the operation's shared hook context, made afresh for each
-   * attempt, so a handler cannot carry state from a discarded attempt into the
-   * one that commits.
+   * A detached, deeply frozen copy of the operation's shared hook context, made
+   * afresh for each attempt, so a handler cannot carry state from a discarded
+   * attempt into the one that commits, nor change what later hooks see. Only
+   * plain data is copied (primitives, arrays and plain objects, at any depth);
+   * any other value, such as a class instance, a function, a `Date` or a
+   * `Map`, is left out: its key is absent, and an array slot holding one
+   * reads `undefined`.
    */
   context: Readonly<Record<string, unknown>>;
 }
