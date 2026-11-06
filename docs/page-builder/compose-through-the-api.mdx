@@ -79,8 +79,9 @@ const dark = card?.variants.find(variant => variant.label === "Dark");
   answers `409`; plan again. An action is also refused with `409` when someone else saves
   the item between the action's read and its write.
 - **`item.by`** says who the action ran as: `{ kind: "user", userId }`, or
-  `{ kind: "api-key", userId, apiKeyId }`. A change made by a signed-in person is
-  recorded against them on the item's content events.
+  `{ kind: "api-key", userId, apiKeyId }`. The item's content events, its history and
+  the webhook and activity trails record the change the same way: against the person,
+  or against the API key itself rather than its owner.
 - **`publish: true`** publishes the item with the change and needs the publish right.
   Without it the change is saved to the item's working draft, as the editor saves it.
 
