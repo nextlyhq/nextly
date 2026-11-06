@@ -586,6 +586,9 @@ export {
   type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type HookPointContext,

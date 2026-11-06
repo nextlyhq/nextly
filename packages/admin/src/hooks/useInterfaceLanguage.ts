@@ -16,8 +16,8 @@ import { toast } from "@admin/components/ui";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 
-import { currentUserKey, fetchDashboardUser } from "./useDashboardUser";
 import { useApi } from "./useApi";
+import { currentUserKey, fetchDashboardUser } from "./useDashboardUser";
 
 /**
  * The stored interface language: a language tag, `null` to follow the

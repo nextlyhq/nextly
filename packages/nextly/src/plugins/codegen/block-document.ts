@@ -50,6 +50,8 @@ import {
   DOCUMENT_KINDS,
   MAX_DEPTH,
   MAX_NODES,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   STYLE_STATES,
   isPlainRecord,
   surveyDocument,
@@ -388,32 +390,68 @@ function bindingFragment(): Record<string, unknown> {
  * render context. Stated as a union so a document naming a single without
  * saying which one fails here rather than resolving to nothing at read time.
  */
-const bindingSchema = z.union([
-  z.looseObject({
-    $bind: z.string(),
-    fallback: z.unknown().optional(),
-    format: bindingFormatSchema.optional(),
-    source: z.enum(bindingSourcesWithoutSingle).optional(),
-    /**
-     * Declared so a misplaced key is REFUSED rather than dropped.
-     *
-     * An object schema strips what it does not declare, so omitting this would
-     * accept `{ source: "entry", sourceKey: "hero" }`, return a document with
-     * the key silently removed, and hand the caller a value the engine rejects.
-     * The two answers would disagree, and the one that sanitizes is the one
-     * that hides the disagreement. `never().optional()` is this schema's
-     * spelling of the stored type's `sourceKey?: never`.
-     */
-    sourceKey: z.never().optional(),
-  }),
-  z.looseObject({
-    $bind: z.string(),
-    fallback: z.unknown().optional(),
-    format: bindingFormatSchema.optional(),
-    source: z.literal("single"),
-    sourceKey: z.string(),
-  }),
-]);
+function bindingSchemaOver(
+  sourcesWithoutSingle: readonly [BindingSource, ...BindingSource[]]
+) {
+  return z.union([
+    z.looseObject({
+      $bind: z.string(),
+      fallback: z.unknown().optional(),
+      format: bindingFormatSchema.optional(),
+      source: z.enum(sourcesWithoutSingle).optional(),
+      /**
+       * Declared so a misplaced key is REFUSED rather than dropped.
+       *
+       * An object schema strips what it does not declare, so omitting this would
+       * accept `{ source: "entry", sourceKey: "hero" }`, return a document with
+       * the key silently removed, and hand the caller a value the engine rejects.
+       * The two answers would disagree, and the one that sanitizes is the one
+       * that hides the disagreement. `never().optional()` is this schema's
+       * spelling of the stored type's `sourceKey?: never`.
+       */
+      sourceKey: z.never().optional(),
+    }),
+    z.looseObject({
+      $bind: z.string(),
+      fallback: z.unknown().optional(),
+      format: bindingFormatSchema.optional(),
+      source: z.literal("single"),
+      sourceKey: z.string(),
+    }),
+  ]);
+}
+
+const bindingSchema = bindingSchemaOver(bindingSourcesWithoutSingle);
+
+/**
+ * A binding in a document's own metadata, which is read once for the page:
+ * every source but a list item, which only a list's children can read.
+ */
+const seoBindingSchema = bindingSchemaOver(
+  bindingSourcesWithoutSingle.filter(
+    source => source !== "item"
+  ) as unknown as readonly [BindingSource, ...BindingSource[]]
+);
+
+/**
+ * One piece of a document's metadata text: literal text, used as written, or a
+ * binding. The bounds, and the sources a binding may read, are the ones a
+ * save refuses beyond.
+ */
+const seoTextSchema = z
+  .array(z.union([z.string().max(MAX_SEO_TEXT_LENGTH), seoBindingSchema]))
+  .max(MAX_SEO_SEGMENTS);
+
+/**
+ * A document's own metadata: its title and description, each a list of
+ * literal text and bindings, and its social image, one binding. Strict, as
+ * the validator is: a key it does not know is refused, not carried.
+ */
+const documentSeoSchema = z.strictObject({
+  title: seoTextSchema.optional(),
+  description: seoTextSchema.optional(),
+  image: seoBindingSchema.optional(),
+});
 
 /**
  * One block instance.
@@ -654,6 +692,7 @@ const blockDocumentObject = z.looseObject({
     .looseObject({
       styles: nodeStylesSchema.optional(),
       customCss: z.string().optional(),
+      seo: documentSeoSchema.optional(),
     })
     .optional(),
   /**
