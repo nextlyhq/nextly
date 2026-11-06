@@ -207,7 +207,10 @@ minutes, so none older than the change survives.
 A plugin that has authenticated someone elsewhere finishes the login through
 core rather than assembling a session itself, using `ctx.auth.completeLogin`.
 It applies the same account-state rules, hooks and audit trail as a password
-login, so a plugin cannot grant a session core would have refused.
+login, so a plugin cannot grant a session core would have refused. The app
+must also list the plugin in `auth.loginPlugins`: an enabled plugin that
+declares the login capability, or a hook that decides who is signed in,
+without being listed refuses to start, naming the plugin and the line to add.
 
 A sign-in interrupted by a second factor resumes on the login page without a
 token ever appearing in a URL: the pending token travels in an HttpOnly cookie

@@ -36,7 +36,10 @@ export default definePlugin({
   contributes: {
     settings: z.object({
       providers: z
-        .record(z.string(), z.object({ clientId: z.string(), clientSecret: z.string() }))
+        .record(
+          z.string(),
+          z.object({ clientId: z.string(), clientSecret: z.string() })
+        )
         .default({}),
     }),
   },
@@ -54,7 +57,8 @@ The runtime holds the plugin to what it declared, for the things it can:
 settings store encrypts exactly those keys, `ctx.db.raw` has no `execute` or
 `run` unless the plugin declares `rawSql` and the app lists it (see
 [Raw SQL](#raw-sql)), and `ctx.auth.completeLogin` refuses a plugin that did
-not declare `auth.login`. An invalid manifest fails boot with the plugin named,
+not declare `auth.login` or that the app has not listed in `auth.loginPlugins`
+(see [Finishing a login](#finishing-a-login)). An invalid manifest fails boot with the plugin named,
 rather than becoming a surface that quietly does not exist: an unknown key
 anywhere inside `capabilities`, a value of the wrong type, an outbound entry
 that is not a hostname, an empty or unparseable `requires` range, secrets
@@ -307,11 +311,11 @@ authenticated or rate limited; a larger body is refused with
 
 For a POST, PUT, PATCH or DELETE; a GET is never checked.
 
-| Caller                                                   | `csrf` unset                                                                          | `csrf: true`     | `csrf: false` |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------- | ------------- |
-| The session cookie authenticates it                      | origin; on a public route nothing here, and `ctx.auth.currentUser` checks the origin | origin and token | refused       |
-| It sends `Authorization: Bearer …`, and no session does | nothing                                                                               | nothing          | nothing       |
-| Anonymous: no session and no `Bearer` token              | nothing                                                                               | origin, no token | nothing       |
+| Caller                                                  | `csrf` unset                                                                         | `csrf: true`     | `csrf: false` |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------- | ------------- |
+| The session cookie authenticates it                     | origin; on a public route nothing here, and `ctx.auth.currentUser` checks the origin | origin and token | refused       |
+| It sends `Authorization: Bearer …`, and no session does | nothing                                                                              | nothing          | nothing       |
+| Anonymous: no session and no `Bearer` token             | nothing                                                                              | origin, no token | nothing       |
 
 - **Origin** means the request's `Origin`, or without one its `Referer`, names
   your site or an origin in `NEXTLY_ALLOWED_ORIGINS`. A write that names no
@@ -376,7 +380,9 @@ export async function signIn(
   const client = limits.clientKey(request);
   const reserved = await limits.reserve([
     { rule: "signIn", key: address, count: "unanimous" },
-    ...(client ? [{ rule: "signIn", key: client, count: "always" as const }] : []),
+    ...(client
+      ? [{ rule: "signIn", key: client, count: "always" as const }]
+      : []),
   ]);
   if (reserved.status === "unavailable") return "try again shortly";
   if (reserved.status === "refused") return `wait ${reserved.retryAfterMs} ms`;
@@ -388,12 +394,14 @@ export async function signIn(
 ```
 
 **Rules.** A rule is one of two kinds:
+
 - `window`: 1 to 4 rolling windows, each `max` attempts (1 to 10,000) per `perMs` (1 second to 30 days). An attempt is admitted only while every window has room. A window's edge is exact to 1/32 of its span, never past its `max`: at worst it refuses a little early.
 - `backoff`: `free` attempts in a row (1 to 1000) admitted with no wait. Then each attempt that brings the count to `free` or more sets a wait: `waitsMs[count - free]`, the last one repeating. Waits never shorten, and each is 1 ms to 24 hours. With no waits listed, there's no room once the count reaches `free`. The count is forgotten after `forgetAfterMs` (1 minute to 30 days) with nothing counted, never while a wait is in force.
 
 The app refuses to start on a rule outside these bounds, naming the plugin and the rule (`limit-rule-invalid`). Changing a rule starts its counts again: what an entry holds is read only under the rule it was written under.
 
 **Reserving.** `reserve` takes 1 to 16 entries, each a rule and a key, and decides and counts them in one atomic step on the [limit store](/docs/configuration/limit-store). So concurrent attempts, on every instance sharing the store, are admitted no more than the rules allow. A key is any non-empty string of at most 512 characters. It's stored only as a keyed hash, namespaced to your plugin and the rule: no other plugin can name, read or spend it. Each entry says:
+
 - `enforce` (default `true`): whether its lack of room refuses the reservation. `false` lets the attempt through while still reporting the entry's verdict.
 - `count`, when the entry is counted:
   - `"admitted"` (default): when the reservation is admitted and this entry's rule has room;
@@ -403,6 +411,7 @@ The app refuses to start on a rule outside these bounds, naming the plugin and t
   An entry whose rule has no room is never counted unless `"always"`. Counting it then never moves a wait in force; it only makes the next wait longer.
 
 The answer is one of:
+
 - `admitted`, with each entry's verdict (`hadRoom`, `counted`) and an id to give the attempt back with;
 - `refused`, with `retryAfterMs`, the rules that refused, and each entry's verdict. A refused attempt never starts.
 - `unavailable`: the store didn't answer. The attempt is **not admitted**. It may still have been counted, if the store failed after committing.
@@ -507,14 +516,22 @@ exist is stored without its metadata, and a warning is logged.
 A plugin that authenticated someone elsewhere does not assemble a session
 itself. `ctx.auth.completeLogin` applies the same account-state rules, hooks and
 audit trail as a password login, so a plugin cannot grant a session core would
-have refused. See [plugin authentication](/docs/plugins/auth).
+have refused. It can run only for a login-capable plugin the app lists in
+`auth.loginPlugins` — login-capable meaning the plugin declares
+`capabilities.auth.login` OR contributes a `determineUser` hook, which decides
+who is signed in; an enabled plugin holding either spelling without being
+listed refuses the boot, naming the line to add. See
+[plugin authentication](/docs/plugins/auth).
 
 ## A checklist before installing
 
 - Read the manifest. Does what it declares match what the plugin says it does?
 - Does it ask for outbound hosts you recognise?
-- Does it finish logins (`capabilities.auth.login`)? That plugin can sign in any
-  account it names, so it should be a sign-in provider you chose.
+- Does it finish logins (`capabilities.auth.login`, or a `determineUser`
+  hook)? That plugin can sign in any account it names, so it should be a
+  sign-in provider you chose — and the boot refuses it until you add it to
+  `auth.loginPlugins`. Either way, read the grant as total: a session is the
+  whole account, on every collection its roles reach.
 - Does it declare raw SQL (`capabilities.db.rawSql`)? Most plugins should not,
   and the boot refuses one until you add it to `db.rawSqlPlugins`. Either way,
   read the database access as total: without the capability the plugin still

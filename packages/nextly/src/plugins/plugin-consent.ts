@@ -37,6 +37,14 @@ export interface PluginConsent {
    * `ctx.db.raw`. From `db.rawSqlPlugins` in `nextly.config.ts`.
    */
   rawSql: readonly string[];
+  /**
+   * Plugins allowed to finish logins: `capabilities.auth.login`, or a
+   * `determineUser` auth hook, which decides who is signed in. From
+   * `auth.loginPlugins` in `nextly.config.ts`. Optional so a consent written
+   * before the login listing still reads; every consent the boot holds
+   * (`snapshotPluginConsent`) carries it.
+   */
+  login?: readonly string[];
 }
 
 /** No plugin is granted anything: what an app that lists nothing gets. */
@@ -54,8 +62,12 @@ export const NO_PLUGIN_CONSENT: PluginConsent = snapshotPluginConsent({
  */
 export function pluginConsentFromConfig(config: {
   db?: { rawSqlPlugins?: readonly string[] };
+  auth?: { loginPlugins?: readonly string[] };
 }): PluginConsent {
-  return snapshotPluginConsent({ rawSql: config.db?.rawSqlPlugins ?? [] });
+  return snapshotPluginConsent({
+    rawSql: config.db?.rawSqlPlugins ?? [],
+    login: config.auth?.loginPlugins ?? [],
+  });
 }
 
 /**
@@ -68,7 +80,10 @@ export function pluginConsentFromConfig(config: {
  * checks, so the boot holds this copy rather than the caller's object.
  */
 export function snapshotPluginConsent(consent: PluginConsent): PluginConsent {
-  return Object.freeze({ rawSql: Object.freeze([...consent.rawSql]) });
+  return Object.freeze({
+    rawSql: Object.freeze([...consent.rawSql]),
+    login: Object.freeze([...(consent.login ?? [])]),
+  });
 }
 
 /**
@@ -258,6 +273,13 @@ export function setupTransformerInput<C extends object>(
   if (isPlainObject(db) && Array.isArray(db.rawSqlPlugins)) {
     db.rawSqlPlugins = Object.freeze([...(db.rawSqlPlugins as unknown[])]);
   }
+  // The `auth` block's login listing arrives frozen for the same reason the
+  // `db` block's does: it is what the consent rules read, and a transformer
+  // that pushed its own name onto it would grant itself on the next read.
+  const auth = input.auth;
+  if (isPlainObject(auth) && Array.isArray(auth.loginPlugins)) {
+    auth.loginPlugins = Object.freeze([...(auth.loginPlugins as unknown[])]);
+  }
   return input as C & { plugins: PluginDefinition[] };
 }
 
@@ -270,11 +292,14 @@ export function setupTransformerInput<C extends object>(
 export interface PluginGrants {
   /** Plugins whose `ctx.db.raw` is the live database handle. */
   readonly rawSql: readonly string[];
+  /** Plugins that may finish logins (`AUTH_LOGIN_RULE`). */
+  readonly login: readonly string[];
 }
 
 /** Nothing granted: what a context built outside a boot receives. */
 export const NO_PLUGIN_GRANTS: PluginGrants = Object.freeze({
   rawSql: Object.freeze([]),
+  login: Object.freeze([]),
 });
 
 /**
@@ -293,7 +318,10 @@ export function decidePluginGrants(
         .filter(plugin => plugin.enabled !== false && rule.declares(plugin))
         .map(plugin => plugin.name)
     );
-  return Object.freeze({ rawSql: granted(RAW_SQL_RULE) });
+  return Object.freeze({
+    rawSql: granted(RAW_SQL_RULE),
+    login: granted(AUTH_LOGIN_RULE),
+  });
 }
 
 /** One capability that needs the app's consent. */
@@ -325,7 +353,68 @@ const RAW_SQL_RULE: ConsentRule = {
   consentKey: "rawSql",
 };
 
-const CONSENT_RULES: readonly ConsentRule[] = [RAW_SQL_RULE];
+/**
+ * Whether a plugin's own declaration makes it login-capable: the manifest
+ * capability, or a `determineUser` auth hook, which decides who is signed in.
+ *
+ * The one definition the consent rule and the introspection summary read, so
+ * `nextly plugins info` reports what the consent actually grants rather than
+ * what one spelling of the declaration says.
+ */
+export function isLoginCapable(plugin: PluginDefinition): boolean {
+  return (
+    plugin.capabilities?.auth?.login === true ||
+    typeof plugin.contributes?.auth?.hooks?.determineUser === "function"
+  );
+}
+
+/**
+ * Finishing a login signs in whichever account the plugin names, so a plugin
+ * holds this only when the app lists it. Declaring the manifest capability is
+ * one spelling; a `determineUser` auth hook is the other, because a hook that
+ * answers who is signed in decides the question the login capability exists
+ * to gate, whatever its manifest says about logins.
+ */
+const AUTH_LOGIN_RULE: ConsentRule = {
+  capability: "capabilities.auth.login or a determineUser auth hook",
+  grants:
+    "the ability to finish logins with ctx.auth.completeLogin, signing in whichever account it names",
+  declares: isLoginCapable,
+  listed: consent => consent.login ?? [],
+  configLine: names =>
+    `auth: { loginPlugins: [${names.map(name => JSON.stringify(name)).join(", ")}] }`,
+  configKey: "auth.loginPlugins",
+  consentKey: "login",
+};
+
+const CONSENT_RULES: readonly ConsentRule[] = [RAW_SQL_RULE, AUTH_LOGIN_RULE];
+
+/**
+ * The name each resolved plugin copy carried when the boot decided its
+ * grants, keyed on that copy.
+ *
+ * Filled by `resolveTransformedPlugins` after the consent checks, read by
+ * `bootNameOf` at every later boundary. A map rather than a frozen property:
+ * an `init` that assigns `this.name` is plugin code touching its own
+ * definition and must not fail the boot, so the definition stays writable
+ * and the recorded answer is what every grant check reads.
+ */
+const bootNames = new WeakMap<PluginDefinition, string>();
+
+/**
+ * The name the boot resolved `plugin` under — the identity its grants were
+ * decided against. Falls back to the live name for a plugin no boot
+ * resolved, such as a hand-built fixture or a context built outside a boot,
+ * which hold no recorded verdict either.
+ */
+export function bootNameOf(plugin: PluginDefinition): string {
+  return bootNames.get(plugin) ?? plugin.name;
+}
+
+/** Record the name the boot resolved `plugin` under, for `bootNameOf`. */
+export function recordBootName(plugin: PluginDefinition): void {
+  bootNames.set(plugin, plugin.name);
+}
 
 /**
  * Refuse the boot when an enabled plugin declares a capability the app has

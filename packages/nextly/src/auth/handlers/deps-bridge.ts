@@ -29,6 +29,7 @@ import {
   type RateLimitStore,
 } from "../../middleware/rate-limit";
 import {
+  bootNameOf,
   NO_PLUGIN_GRANTS,
   type PluginGrants,
 } from "../../plugins/plugin-consent";
@@ -579,7 +580,12 @@ export function buildAuthRouterDeps(
       grants
     );
     if (authContrib.hooks) {
-      authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
+      authHooks.add(
+        bindHooksToContext(
+          determineUserIfGranted(authContrib.hooks, plugin, grants),
+          ownCtx
+        )
+      );
     }
     for (const def of authContrib.challenges ?? []) {
       challengeRegistry.add(bindChallengeToContext(def, ownCtx));
@@ -777,6 +783,32 @@ function readPluginGrants(getService: (name: string) => unknown): PluginGrants {
   } catch {
     return NO_PLUGIN_GRANTS;
   }
+}
+
+/**
+ * `determineUser` decides who is signed in, which is one spelling of the
+ * login capability, so it registers only from a plugin the boot granted the
+ * login grant — meaning the hook was in the manifest when the consent rule
+ * ran and the app listed the plugin. A hook that appears only after boot,
+ * on a plugin holding no grant, registers nothing: `init` runs after the
+ * consent rule and can mutate its own `contributes`, and this bridge reads
+ * those contributions afterwards, so binding them alone would register
+ * whatever `init` added rather than what the app consented to. The other
+ * auth hooks are ordinary contributions rather than login-capability
+ * declarations, and bind as before.
+ */
+export function determineUserIfGranted(
+  hooks: AuthHooks,
+  plugin: PluginDefinition,
+  grants: PluginGrants
+): AuthHooks {
+  if (
+    hooks.determineUser === undefined ||
+    grants.login.includes(bootNameOf(plugin))
+  ) {
+    return hooks;
+  }
+  return { ...hooks, determineUser: undefined };
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */
