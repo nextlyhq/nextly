@@ -172,7 +172,7 @@ describe("the list", () => {
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
   });
 
-  it("lists no look among the shared styles", async () => {
+  it("lists no look among the shared styles, only among the block looks", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",
       slug: "button-outline",
@@ -183,7 +183,52 @@ describe("the list", () => {
     };
     await panel({ library: [CARD, outline] });
     expect(row(/^Card, \.nx-c-card/)).toBeTruthy();
-    expect(screen.queryByText("Outline")).toBeNull();
+    const shared = screen.getByRole("region", { name: "Shared styles" });
+    expect(within(shared).queryByText("Outline")).toBeNull();
+    // It is listed with its block type's looks instead.
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    expect(within(looks).getByText("Outline")).toBeTruthy();
+  });
+
+  it("lists each block type's own look first, with a Default chip and no count, and edits a look on a click", async () => {
+    const primary: NamedClass = {
+      id: "look:core/button:primary",
+      slug: "button-primary",
+      label: "Primary",
+      orderIndex: 0,
+      blockType: "core/button",
+      isDefault: true,
+      styles: {},
+    };
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 1,
+      blockType: "core/button",
+      styles: {},
+    };
+    const onEditLook = vi.fn();
+    await panel({
+      library: [CARD, primary, outline],
+      looks: { onEdit: onEditLook, editingId: outline.id },
+    });
+    const looks = screen.getByRole("region", { name: "Block looks" });
+    const rows = within(looks).getAllByRole("button");
+    expect(rows.map(each => each.textContent)).toEqual([
+      expect.stringMatching(/^ButtonPrimaryown lookDefault$/),
+      expect.stringMatching(/^ButtonOutline\.nx-l-button-outline/),
+    ]);
+    // The own look says what it covers, on hover and to a screen reader.
+    expect(rows[0]?.getAttribute("aria-description")).toBe(
+      "Default · applies to every Button without another look"
+    );
+    expect(rows.map(each => each.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "true",
+    ]);
+    fireEvent.click(rows[0] as HTMLElement);
+    expect(onEditLook).toHaveBeenCalledWith(primary.id);
   });
 
   it("says how to make one when there are none, with no + to create an empty one", async () => {

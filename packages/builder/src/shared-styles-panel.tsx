@@ -42,6 +42,8 @@ import {
 import { Lock, Moon, Search } from "lucide-react";
 import * as React from "react";
 
+import { blockLookGroups, type BlockLookGroup } from "./block-look-rows";
+import { BlockLooksGroup } from "./block-looks-group";
 import { useSurvivingReport } from "./builder-notices";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { BACKGROUND_JOBS_DOCS_HREF } from "./docs-links";
@@ -176,6 +178,21 @@ export interface SharedStylesPanelProps {
   currentRenameAttempt?: (classId: string) => number;
   /** The name each style is being renamed to while its write is open. */
   pendingNames?: Readonly<Record<string, string>>;
+  /**
+   * Choosing a look to edit in the inspector, with no block selected. Absent:
+   * the Block looks group is listed, not chosen.
+   *
+   * @experimental
+   */
+  looks?: PanelLookEditing;
+}
+
+/** How the Block looks group's rows choose the look the inspector edits. */
+export interface PanelLookEditing {
+  /** Edit a look in the inspector. */
+  readonly onEdit: (lookId: string) => void;
+  /** The look the inspector is editing, whose row shows as chosen. */
+  readonly editingId: string | null;
 }
 
 /** How many rows mount before the author asks for more; also one usage read. */
@@ -261,6 +278,86 @@ function useRows(
   );
 }
 
+/**
+ * The site's looks by block type, narrowed by the search to the looks whose
+ * name holds it; a type with none left is not listed.
+ */
+function useLookGroups(
+  library: readonly NamedClass[] | undefined,
+  suppliedClassIds: readonly string[] | undefined,
+  query: string
+): BlockLookGroup[] {
+  const suppliedKey = idsKey(suppliedClassIds ?? []);
+  const groups = React.useMemo(
+    () =>
+      library === undefined
+        ? []
+        : blockLookGroups(library, new Set(idsOf(suppliedKey))),
+    [library, suppliedKey]
+  );
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return groups;
+  return groups
+    .map(group => ({
+      ...group,
+      rows: group.rows.filter(row => row.name.toLowerCase().includes(needle)),
+    }))
+    .filter(group => group.rows.length > 0);
+}
+
+/**
+ * The Block looks group above the shared styles: the site's looks by block
+ * type, found by the same search, with the worn looks' counts read as the
+ * shared styles' are. An own look has no count of its own.
+ */
+function PanelLooks({
+  library,
+  suppliedClassIds,
+  query,
+  access,
+  paint,
+  editing,
+}: {
+  library: readonly NamedClass[];
+  suppliedClassIds: readonly string[] | undefined;
+  query: string;
+  access: SharedStylesAccess | undefined;
+  paint: TilePaint;
+  editing: PanelLookEditing | undefined;
+}): React.JSX.Element | null {
+  const groups = useLookGroups(library, suppliedClassIds, query);
+  const usage = useUsage(access, wornLookIds(groups));
+  return (
+    <BlockLooksGroup
+      groups={groups}
+      library={library}
+      tokens={paint.tokens}
+      mode={paint.mode}
+      editingId={editing?.editingId}
+      onEdit={editing?.onEdit}
+      countOf={row => {
+        const reach = usage.styles.get(row.id);
+        return reach === undefined ? null : <ReachChip reach={reach} />;
+      }}
+    />
+  );
+}
+
+/** Whether a style may be renamed here: the tab is writable and a rename has a host. */
+function mayRename(
+  readOnly: boolean,
+  onRename: SharedStylesPanelProps["onRename"]
+): boolean {
+  return !readOnly && onRename !== undefined;
+}
+
+/** The worn looks among the groups, whose counts are read. */
+function wornLookIds(groups: readonly BlockLookGroup[]): string[] {
+  return groups.flatMap(group =>
+    group.rows.filter(row => !row.own).map(row => row.id)
+  );
+}
+
 export function SharedStylesPanel({
   library,
   absence = "pending",
@@ -273,6 +370,7 @@ export function SharedStylesPanel({
   onRename,
   currentRenameAttempt,
   pendingNames = NO_NAMES,
+  looks,
 }: SharedStylesPanelProps): React.JSX.Element {
   const paint = usePaint(tokens);
   const [query, setQuery] = React.useState("");
@@ -316,7 +414,7 @@ export function SharedStylesPanel({
 
   const blocksOf = (id: string): BlocksOnThisPage =>
     pageBlocksOf(pageBlocks, id);
-  const writable = !readOnly && onRename !== undefined;
+  const writable = mayRename(readOnly, onRename);
   // Any rename still being stored. A rename writes the whole list of styles,
   // and so do Lock, Remove and Remove unused, so each waits for every
   // pending rename, not only its own row's: whichever landed second would put
@@ -350,6 +448,14 @@ export function SharedStylesPanel({
           readOnly={readOnly}
           usageFailed={usage.failed}
           issue={issueBesideList(issue, openId)}
+        />
+        <PanelLooks
+          library={library}
+          suppliedClassIds={suppliedClassIds}
+          query={query}
+          access={access}
+          paint={paint}
+          editing={looks}
         />
         <section
           className="nx-vars__group"

@@ -6519,6 +6519,59 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-muted-foreground);
 }
 
+/* The Block looks group above the shared styles: one heading per block type,
+   then its looks, each drawn as a small block of its type on the row's left.
+   A chosen row (the look the inspector edits) is ringed in the selection
+   colour, as a chosen look tile is. */
+.nx-block-looks__type-head {
+  margin: 0.5rem 0 0.125rem;
+  padding: 0 2px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-block-looks__type-count {
+  font-weight: 400;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-looks__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-block-looks__row {
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  border-radius: var(--radius-sm);
+  border-bottom: 0;
+}
+
+.nx-block-looks__row[aria-pressed="true"] {
+  background: var(--nx-muted);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-block-looks__row:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+}
+
+/* The specimen's stage, at the row's size rather than a tile's. */
+.nx-block-looks__specimen .nx-look-tile__stage {
+  block-size: 2.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* The own look's chip: what it covers is its tooltip and description. */
+.nx-block-looks__default {
+  color: var(--nx-foreground);
+}
+
 /* The note that counts are minimums, under the list's head, and the row
    that counts them now. */
 .nx-shared-styles__counting {
