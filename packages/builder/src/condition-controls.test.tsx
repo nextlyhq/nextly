@@ -250,4 +250,31 @@ describe("Show when", () => {
     expect(text).toContain("Ada");
     expect(text).toContain("Grace");
   });
+
+  it("says when the site's collections couldn't be listed, rather than blaming the conditions", async () => {
+    function Unlisted(): React.JSX.Element {
+      const editor = useEditorState({
+        initialDocument: withConditions([[{ field: "title", op: "exists" }]]),
+      });
+      return (
+        <ShowWhen
+          editor={editor}
+          nodeId="a"
+          services={{
+            listLoopCollections: () => Promise.reject(new Error("offline")),
+            entryCollection: "posts",
+          }}
+        />
+      );
+    }
+    render(<Unlisted />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText(
+        "The site's collections could not be listed, so conditions can't be chosen here."
+      )
+    ).toBeTruthy();
+  });
 });

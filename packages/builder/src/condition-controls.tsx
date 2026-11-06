@@ -511,20 +511,55 @@ type ConditionProblems = ReturnType<typeof problemsOf>;
 /** Why visitors never see the block, when a condition can't be checked. */
 function ShowWhenNotice({
   problems,
+  unreadable,
 }: {
   problems: ConditionProblems;
+  /** Conditions stored in a shape no row can show, which the page leaves out. */
+  unreadable: boolean;
 }): React.JSX.Element | null {
-  if (problems.whole.length === 0 && problems.rows.size === 0) return null;
+  if (!unreadable && problems.whole.length === 0 && problems.rows.size === 0) {
+    return null;
+  }
   return (
     <div className="nx-show-when__notice" role="alert">
       <AlertCircle aria-hidden="true" size={14} />
       <p>
         <strong>Visitors never see this block.</strong>{" "}
-        {problems.whole.length > 0
-          ? problems.whole.join(" ")
-          : "A condition can’t be checked, so the page leaves it out until it’s fixed."}
+        {noticeWords(problems, unreadable)}
       </p>
     </div>
+  );
+}
+
+/** Why the page leaves the block out, in the notice's words. */
+function noticeWords(problems: ConditionProblems, unreadable: boolean): string {
+  // A shape the condition reader leaves to the format check, which the
+  // engine's own findings therefore don't cover; the page still leaves the
+  // block out, so the notice says so.
+  if (unreadable) {
+    return "Its conditions can’t be read, so the page leaves it out until they’re removed.";
+  }
+  return problems.whole.length > 0
+    ? problems.whole.join(" ")
+    : "A condition can’t be checked, so the page leaves it out until it’s fixed.";
+}
+
+/**
+ * Said when the site's collections couldn't be listed: no field can be
+ * offered, and a stored condition's field can't be named, for that reason
+ * rather than any wrong with the conditions.
+ */
+function FieldsUnavailable({
+  listing,
+}: {
+  listing: ConditionListing;
+}): React.JSX.Element | null {
+  if (listing !== "unavailable") return null;
+  return (
+    <p className="nx-inspector__note">
+      The site&apos;s collections could not be listed, so conditions can&apos;t
+      be chosen here.
+    </p>
   );
 }
 
@@ -719,11 +754,15 @@ function GroupBody({
 }
 
 /** The collections the inspector knows, and where the block's conditions read. */
+/** Whether the site's collections, and so the fields, have been listed. */
+type ConditionListing = "loading" | "ready" | "unavailable";
+
 function useConditionSource(
   editor: EditorState,
   node: BlockNode | undefined,
   services: ContentServices | undefined
 ): {
+  listing: ConditionListing;
   collections: readonly LoopCollection[] | undefined;
   source: ConditionSource | undefined;
   fields: readonly ConditionField[];
@@ -749,7 +788,17 @@ function useConditionSource(
     () => (collection === undefined ? [] : conditionFieldsOf(collection)),
     [collection]
   );
-  return { collections, source, fields, listFields: collection?.fields ?? [] };
+  const listing: ConditionListing =
+    listed === undefined || listed.kind === "failed"
+      ? "unavailable"
+      : listed.kind;
+  return {
+    listing,
+    collections,
+    source,
+    fields,
+    listFields: collection?.fields ?? [],
+  };
 }
 
 /** The "Show when" group of a block's Content tab. */
@@ -762,11 +811,8 @@ export function ShowWhen({
 }: ShowWhenProps): React.JSX.Element | null {
   const id = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
-  const { collections, source, fields, listFields } = useConditionSource(
-    editor,
-    node,
-    services
-  );
+  const { listing, collections, source, fields, listFields } =
+    useConditionSource(editor, node, services);
   const groups = node === undefined ? [] : storedGroups(node);
   const stored = groups?.[0] ?? [];
   const state = useSentenceRows<Condition, DraftCondition>(stored, toDraft, {});
@@ -812,7 +858,8 @@ export function ShowWhen({
           {source.words}
         </span>
       </div>
-      <ShowWhenNotice problems={problems} />
+      <ShowWhenNotice problems={problems} unreadable={groups === undefined} />
+      <FieldsUnavailable listing={listing} />
       <GroupBody
         groups={groups}
         stored={stored}
