@@ -15,6 +15,10 @@ export function createNoOpHookRegistry(): HookRegistry {
     execute: async () => {},
     getHooks: () => [],
     hasHooks: () => false,
+    // Asked by every collection write before its in-transaction phase: none
+    // is ever registered here, so the phase is never run.
+    hasInTransaction: () => false,
+    inTransactionRunners: () => [],
     clear: () => {},
   } as unknown as HookRegistry;
 }

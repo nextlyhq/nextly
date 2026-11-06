@@ -28,6 +28,7 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -58,6 +59,7 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
+import { addressClaimsCollection } from "./collections/address-claims";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -72,6 +74,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -236,6 +239,12 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { templateActionsRoute } from "./templates/template-actions-route";
+import {
+  registerTemplateGuard,
+  templateHolderReader,
+  type TemplateGuardSetup,
+} from "./templates/template-guard";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
@@ -1240,6 +1249,23 @@ export const pageBuilder = (
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
 
   /**
+   * The templates guard's lookups over the installed plugin: the RESOLVED
+   * templates slug, the plugin's own collections, the registry and the
+   * hook-free own read. Published by `init`, and read by the template route
+   * and service per call, so a request reaching them before `init` refuses
+   * rather than judging against slugs nothing resolved.
+   */
+  let templateGuard: TemplateGuardSetup | null = null;
+  const requireTemplateGuard = (): TemplateGuardSetup => {
+    if (templateGuard === null) {
+      throw new Error(
+        "[page-builder] a template action ran before the plugin was installed"
+      );
+    }
+    return templateGuard;
+  };
+
+  /**
    * The repair's deps for one run, the Direct API resolved at call time. A run
    * before `init` refuses with a named reason and the sweep is re-queued,
    * rather than writing to slugs the plugin has not resolved.
@@ -1596,6 +1622,28 @@ export const pageBuilder = (
           ctx.self.collections[COMPONENTS_SLUG] ?? COMPONENTS_SLUG,
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
+
+      // One template per collection: the guard that sets each template's
+      // place and names the template already holding it. RESOLVED slugs, for
+      // the reason the guard above takes them.
+      const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      templateGuard = {
+        templatesCollection: templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        readCollection: async slug => {
+          try {
+            return (await ctx.services.collections.getCollection(
+              slug,
+              undefined as never
+            )) as unknown as Record<string, unknown>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
+        },
+        holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+      };
+      registerTemplateGuard(ctx, templateGuard);
 
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
@@ -2018,6 +2066,7 @@ export const pageBuilder = (
             store: componentStoreOf(opts),
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
+            templates: { guard: requireTemplateGuard },
           }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
@@ -2085,10 +2134,15 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Who holds each served address, so no two documents share one.
+        addressClaimsCollection(),
         // Each component's retired field and slot ids, recorded when a
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
         componentRetiredCollection(),
+        // The designs a collection's entries are drawn with, one per
+        // collection.
+        templatesCollection(),
         // The backfill's former progress collection. Nothing reads or writes
         // it any more: progress lives in the plugin's own tables. Still
         // declared so an existing site keeps its table and registry row as
@@ -2266,6 +2320,8 @@ export const pageBuilder = (
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
+        // Give a collection its template and publish it, each with a dry run.
+        templateActionsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -2297,6 +2353,7 @@ export const pageBuilder = (
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        addressWaitingRoute(),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.

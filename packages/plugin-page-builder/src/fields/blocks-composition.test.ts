@@ -25,6 +25,7 @@ import {
   type HostFinder,
   type HostRef,
   type LockedExposures,
+  type PlacementUnjudged,
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
@@ -205,6 +206,7 @@ function judge(
     onHostsBroken?: (broken: BrokenHosts) => void;
     onLockedExposures?: (found: LockedExposures) => void;
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
+    onPlacementUnjudged?: (found: PlacementUnjudged) => void;
     composesDocuments?: boolean;
     localized?: boolean;
     listFields?: ListFieldsReader;
@@ -1140,6 +1142,130 @@ describe("a page's placed lists, judged as the page composes them", () => {
       expect(codes(issues)).toEqual(["list-sort-invalid"]);
       expect(issues[0]!.message).toContain('"cards"');
     }
+  });
+
+  it("keeps a placed list's problem, and says so, where the stored page cannot be read", async () => {
+    // A localized field whose language store is not ready: the stored page
+    // may already compose to the problem, so nothing tells it from a new one.
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: "not-ready" } },
+    });
+    const onPlacementUnjudged = vi.fn();
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+          localized: true,
+          onPlacementUnjudged,
+        }
+      )
+    ).toEqual([]);
+    expect(onPlacementUnjudged).toHaveBeenCalledWith(
+      expect.objectContaining({ field: FIELD, slug: "pages", breaks: 1 })
+    );
+  });
+
+  it("keeps a placed list's problem, and says so, where the stored page composes only in part", async () => {
+    // The stored page held the placement in a frame component's slot, and
+    // the frame can no longer be read: composed in part, the stored page
+    // cannot say whether it already held the list's problem.
+    const framed = page([
+      {
+        ...placing("f1", "frame"),
+        slots: {
+          body: [
+            {
+              ...placing("i1", "cards"),
+              props: { componentId: "cards", overrides: { order: "secret" } },
+            },
+          ],
+        },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        cards: { published: sorted },
+        frame: { published: "unreadable" },
+      },
+      pages: { p1: { published: framed } },
+    });
+    const onPlacementUnjudged = vi.fn();
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+          onPlacementUnjudged,
+        }
+      )
+    ).toEqual([]);
+    expect(onPlacementUnjudged).toHaveBeenCalledWith(
+      expect.objectContaining({ field: FIELD, slug: "pages", breaks: 1 })
+    );
+    // CONTROL: a page never stored has no problem to keep, and is refused.
+    expect(
+      codes(
+        await judge(placed({ order: "secret" }), write(readStored, "pages"), {
+          listFields,
+        })
+      )
+    ).toEqual(["list-field-protected"]);
+  });
+
+  it("judges a component's newly placed list of the entry's related entries by its shape, as the pages placing it are judged", async () => {
+    // A component holding a list of each entry's categories, placed for the
+    // first time by another component: the entries are the pages' own.
+    const related = component([
+      {
+        id: "r1",
+        type: "core/collection-loop",
+        version: 1,
+        props: {
+          collection: "categories",
+          relation: { of: "entry", field: "categories" },
+        },
+        slots: { children: [] },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: { related: { published: related } },
+    });
+    // The component store as the server reads it: a collection with no
+    // such relation.
+    const storeFields: ListFieldsReader = async collection =>
+      collection === COMPONENTS || collection === "pages"
+        ? {
+            declared: new Set(["id", "title", FIELD]),
+            readable: [{ name: "id", type: "text" }],
+          }
+        : collection === "categories"
+          ? {
+              declared: new Set(["id", "name"]),
+              readable: [{ name: "id", type: "text" }],
+            }
+          : undefined;
+    expect(
+      await judge(
+        component([placing("i1", "related")]),
+        write(readStored, COMPONENTS, "outer"),
+        { listFields: storeFields }
+      )
+    ).toEqual([]);
+    // CONTROL: placed on a page of a collection without that relation, the
+    // list is that page's to fix, and refused.
+    expect(
+      codes(
+        await judge(
+          page([placing("i1", "related")]),
+          write(readStored, "pages", "p9"),
+          { listFields: storeFields }
+        )
+      )
+    ).toEqual(["list-field-unknown"]);
   });
 
   it("keeps a sort the stored page already composed to, however it reads", async () => {

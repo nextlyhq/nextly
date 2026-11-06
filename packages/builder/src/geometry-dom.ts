@@ -720,7 +720,19 @@ export function canvasScroller(
  * keep to it, so a tag or a bar is never drawn where the canvas cuts it off.
  */
 export function onScreenOf(space: OverlaySpace): Rect {
-  const { root, frame } = space;
+  return space.place(onScreenBandOf(space.root, space.frame));
+}
+
+/**
+ * What of a canvas is on screen, in the canvas's own content coordinates:
+ * {@link onScreenOf} before it is placed in the chrome's, for chrome drawn
+ * inside the canvas, such as a Layout region's lock, which is positioned in
+ * the page's own pixels.
+ */
+export function onScreenBandOf(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null
+): Rect {
   const scroller = canvasScroller(root, frame !== null);
   const band =
     scroller === null
@@ -729,7 +741,7 @@ export function onScreenOf(space: OverlaySpace): Rect {
   // A frame zoomed past the region around it is clipped and scrolled by the
   // host's scroller as well, so what is on screen is the part both show.
   const host = frame === null ? null : hostScrollerBandOf(frame, root);
-  return space.place(host === null ? band : intersectionOf(band, host));
+  return host === null ? band : intersectionOf(band, host);
 }
 
 /** The part two rectangles share; empty, at the first's corner, if none. */

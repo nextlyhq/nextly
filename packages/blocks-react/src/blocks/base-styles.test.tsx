@@ -325,6 +325,7 @@ describe("every default the core library declares", () => {
       "core/embed",
       "core/form",
       "core/gallery",
+      "core/icon",
       "core/image",
       "core/list",
       "core/quote",
