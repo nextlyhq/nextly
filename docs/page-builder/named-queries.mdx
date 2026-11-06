@@ -104,7 +104,7 @@ sources register, stops the boot and names both sources.
   collection the query reads). A list stores one value per input it sets.
 - **`reads`** names every collection, Single and site setting `run` may read. A read of
   anything else is refused before it is made. A published page is refreshed when any of
-  them changes, whether or not that render read it.
+  them changes, whether or not that render read it. At most 64 in all.
 - **`rows`** is what a row is: a collection's entries (`{ collection }`, keyed by id), or
   a field schema of your own with a text or number `key`. The editor's binding picker and
   the binding checks read a list's items from it.
