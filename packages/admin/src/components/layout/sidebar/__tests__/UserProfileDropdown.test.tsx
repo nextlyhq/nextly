@@ -23,11 +23,19 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("@admin/components/ui", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/components/ui")>()),
+  toast,
+}));
+
 /** The signed-in person as the server holds them, and what was written. */
 const me = vi.hoisted(() => ({
   interfaceLanguage: null as string | null,
   written: [] as Array<[string, unknown]>,
   reads: 0,
+  /** The next save fails with this, as a network or server error would. */
+  failNext: null as Error | null,
 }));
 
 vi.mock("@admin/hooks/useApi", () => ({
@@ -44,6 +52,11 @@ vi.mock("@admin/hooks/useApi", () => ({
           };
         },
         patch: async (path: string, body: { interfaceLanguage: unknown }) => {
+          if (me.failNext) {
+            const failure = me.failNext;
+            me.failNext = null;
+            throw failure;
+          }
           me.written.push([path, body]);
           me.interfaceLanguage = body.interfaceLanguage as string | null;
           return { message: "Profile updated.", item: {} };
@@ -57,6 +70,8 @@ afterEach(() => {
   me.interfaceLanguage = null;
   me.written = [];
   me.reads = 0;
+  me.failNext = null;
+  toast.error.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -134,5 +149,43 @@ describe("the user menu's interface language", () => {
     await vi.waitFor(() =>
       expect(me.written).toEqual([["/me", { interfaceLanguage: null }]])
     );
+  });
+
+  it("shows a stored language the admin has no catalog for as chosen, marked not available", async () => {
+    // Its plugin removed, say: the admin falls back, and the menu still shows
+    // what is stored, which returns if the catalog does.
+    me.interfaceLanguage = "de";
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    const stored = await screen.findByRole("menuitemradio", {
+      name: "Deutsch (not available)",
+    });
+    expect(stored.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .filter(item => item.getAttribute("aria-checked") === "true")
+    ).toHaveLength(1);
+  });
+
+  it("tells the person when the choice could not be saved", async () => {
+    me.failNext = new Error("The connection was lost.");
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: "Français" })
+    );
+
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Your interface language could not be saved.",
+        { description: "The connection was lost." }
+      )
+    );
+    expect(me.written).toEqual([]);
   });
 });
