@@ -1323,15 +1323,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             });
           }
           // The dialog's answer on a translated field's rename, refused when it does not say,
-          // before anything changes.
+          // before anything changes. This and the preflights below ask where the values are stored
+          // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated
+          // Single kept per language moves a field leaving translation out of its companion too.
           const companionRename = await resolveCompanionRename(
             renameResolutions,
             {
               tableName,
               oldFields: single.fields as unknown as FieldDefinition[],
               newFields: fields as unknown as FieldDefinition[],
-              wasLocalized,
-              isLocalized,
+              wasLocalized: layout.wasStored,
+              isLocalized: layout.isStored,
               dialect: adapter.dialect,
               // A Single's table is built by the collection's generator.
               builtBy: "collection",
@@ -1352,8 +1354,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             kind: "single",
             oldFields: single.fields as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: layout.wasStored,
+            isLocalized: layout.isStored,
             // This apply's push refuses a main-table column drop the admin did not confirm.
             mainDropsConfirmed: true,
           });
@@ -1370,8 +1372,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const settingsDeferred = fieldsWithLeavingSettingsDeferred({
             oldFields: single.fields as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
+            wasLocalized: layout.wasStored,
+            isLocalized: layout.isStored,
             renamed: companionRename,
           });
 

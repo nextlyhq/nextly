@@ -42,6 +42,7 @@ import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-li
 import { refuseCompanionColumnsThatCannotHold } from "../runtime/companion-io";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
 import {
+  _resetPerLanguageStorage,
   perLanguageStorageEnabled,
   setPerLanguageStorage,
 } from "../per-language-storage";
@@ -262,6 +263,127 @@ describe.each(getConfiguredTestDialects())(
         {}
       );
       expect(row?.status).toBe("published");
+    });
+
+    // A transform of another plugin's entity is judged by where each field keeps its values, which
+    // under the setting is per language for an untranslated entity too. The boot folds plugin
+    // contributions with the choice already published, so a fresh process judges as the site does.
+    it("refuses at boot a plugin transform that moves another plugin's field out of its per-language table", async () => {
+      _resetPerLanguageStorage();
+      const shop = {
+        name: "shop",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            { slug: "orders", fields: [{ name: "title", type: "text" }] },
+          ],
+        },
+      };
+      const reviews = {
+        name: "reviews",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        dependsOn: { shop: "*" },
+        contributes: {
+          transforms: [
+            {
+              target: "orders",
+              transform: (entity: { fields: Record<string, unknown>[] }) => ({
+                ...entity,
+                fields: entity.fields.map(field =>
+                  field.name === "title"
+                    ? { ...field, localized: false }
+                    : field
+                ),
+              }),
+            },
+          ],
+        },
+      };
+      const booted = createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        plugins: [shop, reviews] as never,
+      });
+      const refused = await booted.then(
+        async t => {
+          current = t;
+          return undefined;
+        },
+        (error: unknown) => error
+      );
+      expect(JSON.stringify(refused)).toContain("TRANSFORM_FIELD_PROTECTED");
+    });
+
+    // An untranslated Single kept per language holds a value in each language, so a Required field
+    // it makes shared through its schema dialog leaves translation as on a translated Single: the
+    // main table takes the column without its setting first, the default language's value is
+    // copied in, and only then is the setting applied, so the save succeeds with the value shared.
+    it("makes a Required field of an untranslated Single shared in its dialog, keeping its value", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        // A code-first neighbour, so the site has content before the Builder adds its own.
+        singles: [
+          defineSingle({ slug: "site", fields: [text({ name: "x" })] }),
+        ],
+      });
+      vi.stubEnv("NODE_ENV", "development");
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "hero",
+          label: "Hero",
+          fields: [{ name: "heading", type: "text", required: true }],
+        }
+      );
+      for (const [locale, heading] of [
+        ["en", "Hello"],
+        ["de", "Hallo"],
+      ] as const) {
+        await current.nextly.updateSingle({
+          slug: "hero",
+          locale,
+          data: { heading },
+        });
+      }
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const [row] = await current.adapter.executeQuery<{
+        version: number | string | null;
+      }>(
+        `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_singles")} WHERE ${q("slug")} = 'hero'`
+      );
+      const applied = await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields: [
+            { name: "heading", type: "text", required: true, localized: false },
+          ],
+          confirmed: true,
+          schemaVersion: Number(row?.version ?? 1),
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(applied).toBeUndefined();
+      const [main] = await current.adapter.select<{ heading: unknown }>(
+        "single_hero",
+        {}
+      );
+      expect(main?.heading).toBe("Hello");
+      const archived = await current.adapter.executeQuery<{
+        locale: string;
+        value: string;
+      }>(
+        `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")}`
+      );
+      expect(archived).toEqual([{ locale: "de", value: "Hallo" }]);
     });
 
     // `nextly migrate` refuses, before it records the new definitions, a translations column that

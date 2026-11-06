@@ -948,12 +948,6 @@ async function registerServicesOnce(
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
 
-  // Published before the schema registry registers a single table, since registration already
-  // decides where translatable values are stored, and chosen here once: a reload refuses to change
-  // it. A site restarted over the database it laid out would otherwise register its tables as if
-  // the setting were off, naming translatable columns its main tables do not have.
-  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
-
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -1376,6 +1370,13 @@ async function resolveBootConfig(
   // DEFERRED here (candidate Builder-made collections) and finalized after the
   // DB is reachable below — this is how extending/relating to a Builder
   // collection works.
+  //
+  // Published before the fold, because the fold already decides where translatable values are
+  // stored: a transform of another plugin's entity is refused when it changes that. The schema
+  // registry registers no table before this either, and the choice is made here once: a reload
+  // refuses to change it. A site restarted over the database it laid out would otherwise register
+  // its tables as if the setting were off, naming translatable columns its main tables lack.
+  setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
   const { config: contributedConfig, deferredExtends } =
     applyPluginSchemaContributionsDeferred(
       transformedSetupConfig,
@@ -2082,10 +2083,35 @@ async function addMissingCompanionColumns(
     status: boolean;
   }
 ): Promise<void> {
-  const { reconcileCompanionColumns } = await import(
+  const { ensureCompanionTable, reconcileCompanionColumns } = await import(
     "../domains/i18n/runtime/companion-io"
   );
   let failure: unknown;
+  // An entity whose every field was shared has no companion yet, and the reconcile below only
+  // brings an existing one up: the first translatable field a plugin adds creates it here.
+  await ensureCompanionTable(
+    ctx.adapter,
+    {
+      builtBy: entity.builtBy,
+      slug: entity.slug,
+      tableName: entity.tableName,
+      fields: entity.fields as { name: string; type: string }[],
+      dialect: ctx.dialect,
+      status: entity.status,
+    },
+    error => {
+      failure = error;
+    }
+  );
+  if (failure !== undefined) {
+    throw NextlyError.internal({
+      ...(failure instanceof Error ? { cause: failure } : {}),
+      logContext: {
+        reason: "builder-companion-create-failed",
+        slug: entity.slug,
+      },
+    });
+  }
   const inStep = await reconcileCompanionColumns(
     ctx.adapter,
     {

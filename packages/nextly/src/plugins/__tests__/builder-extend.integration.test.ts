@@ -434,4 +434,34 @@ describe("plugin extend → untranslated UI-Builder collection under per-languag
     const got = await handle.nextly.findByID({ collection: "articles", id });
     expect((got as { meta_title?: string } | null)?.meta_title).toBe("My Meta");
   });
+
+  // A collection whose every field is shared has no per-language table yet, so the first
+  // translatable field a plugin adds has to create it, or every write in a language fails.
+  it("creates the per-language table for the first translatable field a plugin adds", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "views", type: "number", source: "ui" }],
+      storedPerLanguage: true,
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      perLanguageStorage: true,
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      plugins: [seoPlugin(["articles"])],
+    });
+
+    expect(await columnsOf(adapter, "dc_articles")).not.toContain("meta_title");
+    expect(await columnsOf(adapter, "dc_articles_locales")).toContain(
+      "meta_title"
+    );
+    const created = await handle.nextly.create({
+      collection: "articles",
+      data: { title: "T", views: 3, meta_title: "My Meta" },
+    });
+    const id = (created.item as { id: string }).id;
+    const got = await handle.nextly.findByID({ collection: "articles", id });
+    expect((got as { meta_title?: string } | null)?.meta_title).toBe("My Meta");
+  });
 });
