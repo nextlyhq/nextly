@@ -22,6 +22,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 const silentLogger = {
@@ -186,6 +187,24 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (read.data as { writer?: unknown } | undefined)?.writer
       ).toMatchObject({ id: "author-1", name: "Ada" });
+    });
+
+    it("moves a field group's targets where its registry's storage was migrated to its new name", async () => {
+      await seed(dialect);
+      // The field-group storage migration renames the registry; the registry's own resolver reads
+      // it under either name, and so does the rename.
+      await t().adapter.executeQuery(
+        `ALTER TABLE dynamic_components RENAME TO ${MIGRATION_TARGET.registryTable}`
+      );
+
+      await rename("authors", "writers");
+
+      expect(
+        field(
+          (await stored(MIGRATION_TARGET.registryTable, "byline")).fields,
+          "person"
+        ).relationTo
+      ).toBe("writers");
     });
 
     it("refuses while a polymorphic field lists the collection, naming it, and renames nothing", async () => {

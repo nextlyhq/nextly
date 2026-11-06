@@ -29,7 +29,7 @@ import { calculateSchemaHash } from "../schema/services/schema-hash";
 
 import { fieldsOf } from "./many-to-many-links";
 import type { EntitySlugMove } from "./move-entity-slug";
-import { STORED_FIELD_CONFIGURATIONS } from "./slug-columns";
+import { storedFieldConfigurationTables } from "./slug-columns";
 
 /** A registry row as this reads it. */
 interface RegistryRow {
@@ -145,7 +145,8 @@ async function registryRows(
   present: ReadonlySet<string>
 ): Promise<Array<{ table: string; rows: RegistryRow[] }>> {
   const read: Array<{ table: string; rows: RegistryRow[] }> = [];
-  for (const { table } of STORED_FIELD_CONFIGURATIONS) {
+  // Under each name a registry can have, so one whose storage is migrated is read too.
+  for (const table of storedFieldConfigurationTables()) {
     if (!present.has(table)) continue;
     const rows = await tx.select<RegistryRow>(table, {
       columns: ["id", "slug", "source", "fields"],
