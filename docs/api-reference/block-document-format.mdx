@@ -98,7 +98,7 @@ rejects a moment later with a better message.
   "formatVersion": 1,
   "kind": "page",
   "nodes": [],
-  "settings": { "styles": {}, "customCss": "" },
+  "settings": { "styles": {}, "customCss": "", "seo": {} },
   "assets": { "mediaIds": [] }
 }
 ```
@@ -225,6 +225,45 @@ one warning per report, naming the page.
 
 Image bindings are checked but not filled yet: a bound image keeps its own
 value.
+
+#### The document's own metadata
+
+`settings.seo` holds the title, description and social image a document states
+for its page as a whole. A collection template uses it to give each entry's
+page its own metadata:
+
+```json
+{
+  "settings": {
+    "seo": {
+      "title": [
+        { "$bind": "title" },
+        " | ",
+        { "$bind": "applicationName", "source": "site" }
+      ],
+      "description": [{ "$bind": "excerpt", "fallback": "Read the post." }],
+      "image": { "$bind": "featuredImage" }
+    }
+  }
+}
+```
+
+- **Text is a list of segments**, joined in order: a string is literal text,
+  used as written, and an object is a binding, filled the way a text prop's
+  binding is, with its checks, format and fallback. It is never a template
+  string: nothing in the literal text is read as a placeholder. A value holds
+  at most 32 segments, each literal at most 1,000 characters.
+- **The image is one binding**, to a media field (its address when the read
+  populates it, its media otherwise) or a URL field. Any other field renders the
+  binding's fallback. An address goes through the same scheme and host checks
+  as a picture on the page.
+- **Sources** are the entry, a Single and the site settings. A list item is
+  refused when the document is saved, since the metadata is read once for the
+  page.
+- **What wins.** A value the document states replaces what its blocks offer for
+  that field, so `metadata`'s `derived` argument carries it. The document's
+  image is tried before the blocks' images. A blank value states nothing, and
+  the blocks answer.
 
 ### Visibility
 

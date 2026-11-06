@@ -1107,7 +1107,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     reveal,
     readMedia,
     preview: componentView.preview,
-    entryCollection: listEntryCollectionOf(identity),
+    // The stored document's kind too: a component's lists relate to the
+    // entries of the pages placing it, as its save judges them.
+    entryCollection: listEntryCollectionOf(identity, mount.initialDocument),
   };
   useOpenAtSection({
     sectionId: openAt,
