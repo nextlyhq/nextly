@@ -74,7 +74,11 @@ import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { mintDomId, remapIdReferences } from "./tree";
-import { isConditionGated } from "./visibility";
+import {
+  conditionGatesOf,
+  isConditionGated,
+  placementGatesOf,
+} from "./visibility";
 
 /**
  * Why an instance was left standing instead of being replaced by its
@@ -1834,37 +1838,30 @@ function inlinedDefinition(
 /**
  * Carry an instance's visibility conditions onto the roots that replace it,
  * for a resolution that expands conditioned instances (`conditioned:
- * "carry"`). A root shows where the instance would have and where it would
- * itself: each of the instance's groups joined with each of the root's, an
- * OR of ANDs as both are stored. A root whose own conditions restrict nobody
- * takes the instance's as they are; one whose conditions nothing can read is
- * left as it is, still gated, so it fails closed rather than being served.
+ * "carry"`). A root shows where the instance would have AND where it would
+ * itself, so each of the instance's gates joins the root's own as a gate of
+ * its own (`within`), judged separately rather than multiplied into the
+ * root's groups: the product of two ORs grows with every nesting level, and
+ * past the per-block limit would hide a block whose conditions all hold.
+ *
+ * An instance gated by a shape nothing can read passes that shape on as a
+ * gate, so each root fails closed as the instance would have. A root whose
+ * own envelope nothing can read is left as it is, still gated by it.
  */
 function withInstanceConditions(
   roots: ResolvedBlockNode[],
   instance: ResolvedBlockNode
 ): ResolvedBlockNode[] {
-  if (!isConditionGated(instance)) return roots;
-  const envelope = instance.visibility;
-  const outer = isPlainRecord(envelope) ? envelope.conditions : undefined;
-  // An instance gated by a shape nothing can read passes that shape on, so
-  // each root is gated by it too.
-  if (!Array.isArray(outer)) {
-    return roots.map(root => ({
-      ...root,
-      visibility: { ...(root.visibility ?? {}), conditions: outer as never },
-    }));
-  }
+  const carried = conditionGatesOf(instance.visibility);
+  if (carried.length === 0) return roots;
   return roots.map(root => {
     const own = root.visibility;
-    if (own !== undefined && own !== null && !isPlainRecord(own)) return root;
-    const inner = isConditionGated(root) ? own?.conditions : undefined;
-    if (inner !== undefined && !Array.isArray(inner)) return root;
-    const joined =
-      inner === undefined
-        ? outer
-        : outer.flatMap(group => inner.map(mine => [...group, ...mine]));
-    return { ...root, visibility: { ...(own ?? {}), conditions: joined } };
+    if (own === undefined || own === null) {
+      return { ...root, visibility: { within: [...carried] } };
+    }
+    if (!isPlainRecord(own)) return root;
+    const within = [...placementGatesOf(own), ...carried];
+    return { ...root, visibility: { ...own, within } };
   });
 }
 

@@ -709,3 +709,56 @@ describe("what a page's conditions read of its entry", () => {
     expect(conditionScopeIn({ type: "core/box" }, "children", page)).toBe(page);
   });
 });
+
+describe("a block expanded from conditioned component placements", () => {
+  // Five one-condition groups on each side: multiplied into one OR of ANDs
+  // they would be 25 groups of two, 50 conditions, past the per-block limit.
+  const ratings = [1, 2, 3, 4, 5].map(value => [
+    { field: "rating", op: "equals", value },
+  ]);
+  const titles = ["t1", "t2", "t3", "t4", "t5"].map(value => [
+    { field: "title", op: "equals", value },
+  ]);
+  const expanded = {
+    id: "n1",
+    visibility: { conditions: titles, within: [{ conditions: ratings }] },
+  } as Pick<BlockNode, "id" | "visibility">;
+  const judged = (values: Record<string, unknown>) =>
+    evaluateConditions(expanded, { source: "entry", subject: subject(values) });
+
+  it("is shown when its own conditions and every placement's hold, however many groups each has", () => {
+    // The product the gates replace would be past the limit.
+    expect(ratings.length * titles.length * 2).toBeGreaterThan(CONDITION_MAX);
+    expect(judged({ rating: 3, title: "t4" })).toEqual({
+      shown: true,
+      issues: [],
+    });
+  });
+
+  it("is hidden when a placement's conditions fail, though its own hold", () => {
+    expect(judged({ rating: 9, title: "t4" }).shown).toBe(false);
+    // CONTROL: and when its own fail, though the placement's hold.
+    expect(judged({ rating: 3, title: "t9" }).shown).toBe(false);
+  });
+
+  it("asks the entry for the fields every placement reads", () => {
+    const demand = conditionDemand([
+      { type: "core/text", version: 1, props: {}, ...expanded },
+    ] as BlockNode[]);
+    expect([...demand.entryFields].sort()).toEqual(["rating", "title"]);
+  });
+
+  it("fails closed when what the placements left can't be read", () => {
+    const result = evaluateConditions(
+      { id: "n1", visibility: { within: "hidden" } } as unknown as Pick<
+        BlockNode,
+        "id" | "visibility"
+      >,
+      { source: "entry", subject: subject({}) }
+    );
+    expect(result.shown).toBe(false);
+    expect(result.issues.map(issue => issue.code)).toEqual([
+      "condition-malformed",
+    ]);
+  });
+});

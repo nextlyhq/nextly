@@ -97,12 +97,23 @@ export interface BoundaryBindings {
   readonly bound: ReadonlyMap<string, BoundValues>;
   /** Where a list item's binding and condition problems go, once each. */
   readonly report: (issues: readonly PageIssue[]) => void;
+}
+
+/**
+ * What a render decided about its conditioned blocks, threaded to every
+ * boundary whether or not the page has bindings to fill: a page drawn with
+ * list data and no bindings still decides its items' conditions, and still
+ * serves the rules of the blocks they show.
+ */
+export interface BoundaryConditions {
   /**
    * The blocks whose visibility conditions held for the page's entry, by id,
    * as the route decided them once it read the entry. Carried here, beside
    * the context rather than on it, as everything a render threads down is.
    */
   readonly held?: ReadonlySet<string>;
+  /** Where a list item's condition problems go, once each. */
+  readonly report?: (issues: readonly PageIssue[]) => void;
   /**
    * The rules of each block a list's item decides, with those of every block
    * inside it, by the decided block's id, held out of the page's sheet: a
@@ -121,10 +132,10 @@ export interface BoundaryBindings {
  */
 function itemRulesFor(
   id: string,
-  bindings: BoundaryBindings | undefined
+  conditions: BoundaryConditions | undefined
 ): ReactNode {
-  const rules = bindings?.itemRules?.get(id);
-  const served = bindings?.itemRulesServed;
+  const rules = conditions?.itemRules?.get(id);
+  const served = conditions?.itemRulesServed;
   if (rules === undefined || served === undefined || served.has(id)) {
     return null;
   }
@@ -240,6 +251,8 @@ export interface BlockBoundaryProps {
   nodeAttribute?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
+  /** What the render decided about its conditioned blocks. */
+  conditions?: BoundaryConditions;
 }
 
 /**
@@ -1428,6 +1441,7 @@ export function BlockBoundary({
   spacingMode,
   nodeAttribute,
   bindings,
+  conditions,
 }: BlockBoundaryProps): ReactNode {
   /*
    * FIRST, before anything on this path can run author code.
@@ -1598,6 +1612,7 @@ export function BlockBoundary({
             {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
             bindings={bindings}
+            {...(conditions === undefined ? {} : { conditions })}
           />
         ),
       })
@@ -1676,6 +1691,8 @@ export interface BlockListProps {
   nodeAttribute?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
+  /** What the render decided about its conditioned blocks. */
+  conditions?: BoundaryConditions;
 }
 
 /**
@@ -1695,6 +1712,7 @@ export function BlockList({
   spacingMode,
   nodeAttribute,
   bindings,
+  conditions,
 }: BlockListProps): ReactNode {
   return (
     nodes
@@ -1702,13 +1720,15 @@ export function BlockList({
       // the page's entry, or holding for the list item being drawn.
       .filter(node =>
         conditionAllows(node, context, {
-          ...(bindings?.held === undefined ? {} : { held: bindings.held }),
-          ...(bindings === undefined ? {} : { report: bindings.report }),
+          ...(conditions?.held === undefined ? {} : { held: conditions.held }),
+          ...(conditions?.report === undefined
+            ? {}
+            : { report: conditions.report }),
         })
       )
       .map(node => (
         <Fragment key={node.id}>
-          {itemRulesFor(node.id, bindings)}
+          {itemRulesFor(node.id, conditions)}
           <BlockBoundary
             node={node}
             context={context}
@@ -1719,6 +1739,7 @@ export function BlockList({
             {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
             {...(bindings === undefined ? {} : { bindings })}
+            {...(conditions === undefined ? {} : { conditions })}
           />
         </Fragment>
       ))

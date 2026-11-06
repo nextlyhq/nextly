@@ -16,7 +16,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
-import { BlockList, type BoundaryBindings } from "./block-boundary";
+import {
+  BlockList,
+  type BoundaryBindings,
+  type BoundaryConditions,
+} from "./block-boundary";
 import {
   createStandaloneContext,
   type BindingIssuesHandler,
@@ -742,9 +746,6 @@ export function PageRenderer({
           run: bindingRun,
           bound: stages.boundValues,
           report,
-          // The blocks the route kept because their conditions held for the
-          // page's entry, drawn where any other conditioned block is not.
-          held: heldConditionsOf(prepared),
         };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
@@ -933,10 +934,17 @@ export function PageRenderer({
   // The rules of each block a list's item decides, served beside the first
   // instance a list draws, so a block no item shows publishes nothing.
   const itemRules = itemDecidedRules(resolvedStyles, styleInput, drawsNothing);
-  const drawnBindings: BoundaryBindings | undefined =
-    boundaryBindings === undefined || itemRules.size === 0
-      ? boundaryBindings
-      : { ...boundaryBindings, itemRules, itemRulesServed: new Set() };
+  // Threaded apart from the bindings, so a page drawn with list data and no
+  // bindings still decides its items' conditions and serves their rules.
+  const boundaryConditions: BoundaryConditions = {
+    // The blocks the route kept because their conditions held for the page's
+    // entry, drawn where any other conditioned block is not.
+    held: heldConditionsOf(prepared),
+    report,
+    ...(itemRules.size === 0
+      ? {}
+      : { itemRules, itemRulesServed: new Set<string>() }),
+  };
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
   // Tokens LAYERED over the defaults, never replacing them: a site supplying
@@ -1074,7 +1082,10 @@ export function PageRenderer({
           ? {}
           : { spacingMode: shared.spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
-        {...(drawnBindings === undefined ? {} : { bindings: drawnBindings })}
+        {...(boundaryBindings === undefined
+          ? {}
+          : { bindings: boundaryBindings })}
+        conditions={boundaryConditions}
       />
     </div>
   );

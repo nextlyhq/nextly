@@ -27,8 +27,10 @@ import {
   readListQuery,
   regionDocument,
   resolveDocumentSeo,
+  resolveNodeBindings,
   safeTimeZone,
   type BindingDemand,
+  type BindingRun,
   type BindingFieldShape,
   type BlockDocument,
   type ConditionDemand,
@@ -1983,13 +1985,14 @@ async function readSite(
  */
 function listCollectionsWhere(
   documents: readonly BlockDocument[],
-  wanted: (query: ListQuery, list: BlockNode) => boolean
+  wanted: (query: ListQuery, list: BlockNode) => boolean,
+  run?: BindingRun
 ): Set<string> {
   const found = new Set<string>();
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (node.type === collectionLoop.name) {
-      const { query } = readListQuery(node.props);
+      const { query } = readListQuery(listPropsAsBound(node, run));
       if (query.collection !== undefined && wanted(query, node)) {
         found.add(query.collection);
       }
@@ -1999,6 +2002,21 @@ function listCollectionsWhere(
     }
   }
   return found;
+}
+
+/**
+ * A list's props as the page's binding pass fills them, so a list whose
+ * collection an entry binding names is asked about that collection, the one
+ * it draws, rather than the fallback stored beside the binding. A binding to
+ * a list item is filled only as an item is drawn, so it leaves its prop as
+ * stored here.
+ */
+function listPropsAsBound(
+  list: BlockNode,
+  run: BindingRun | undefined
+): Record<string, unknown> {
+  if (run === undefined || list.bindings === undefined) return list.props;
+  return resolveNodeBindings(list, run, { phase: "page" }).props;
 }
 
 /** The collections the page's lists draw, whose items its bindings read. */
@@ -2012,12 +2030,16 @@ function listCollections(documents: readonly BlockDocument[]): Set<string> {
  * day by the field's shape, and a list whose entries hold a block its item's
  * fields decide the visibility of.
  */
-function listsComparingDays(documents: readonly BlockDocument[]): Set<string> {
+function listsComparingDays(
+  documents: readonly BlockDocument[],
+  run: BindingRun | undefined
+): Set<string> {
   return listCollectionsWhere(
     documents,
     (query, list) =>
       query.filters.some(row => isListDay(row.value)) ||
-      conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any
+      conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).any,
+    run
   );
 }
 
@@ -2030,11 +2052,18 @@ async function listDayInputs(args: {
   config: BlocksPageConfig;
   documents: readonly BlockDocument[];
   bindings: PageBindings | undefined;
+  resolver: BlockResolver;
   budget: QueryBudget;
   window: number | false | undefined;
   context: RenderContext;
 }): Promise<Pick<PageContext, "timeZone" | "fieldShapes">> {
-  const collections = listsComparingDays(args.documents);
+  // The page's binding pass, so a list whose collection is bound is asked
+  // about the collection it will draw.
+  const run =
+    args.bindings === undefined
+      ? undefined
+      : pageBindingRun(args.bindings, args.context.locale, args.resolver);
+  const collections = listsComparingDays(args.documents, run);
   if (collections.size === 0) return {};
   const site =
     args.bindings?.site ??
@@ -2832,6 +2861,7 @@ function blocksRouteConfig(
         config,
         documents: presented,
         bindings,
+        resolver,
         budget,
         window: listWindow,
         context,

@@ -36,7 +36,7 @@ import {
   type ListFieldSource,
 } from "./list-query";
 import { isPlainRecord } from "./plain-record";
-import { isConditionGated } from "./visibility";
+import { conditionGatesOf, isConditionGated } from "./visibility";
 
 /**
  * The operators a condition may use, spelled as a list's filter spells them
@@ -864,8 +864,25 @@ export function evaluateConditions(
 ): ConditionEvaluation {
   if (!isConditionGated(node)) return { shown: true, issues: [] };
   const nodeId = typeof node.id === "string" ? node.id : "";
+  // Every gate must hold: the block's own conditions and those of each
+  // component placement it was expanded from, judged one set at a time so
+  // none is multiplied into another.
+  const issues: ConditionIssue[] = [];
+  for (const gate of conditionGatesOf(node.visibility)) {
+    const evaluation = evaluateGate(nodeId, gate, input);
+    if (!evaluation.shown) return evaluation;
+    issues.push(...evaluation.issues);
+  }
+  return { shown: true, issues };
+}
+
+/** One gate's envelope judged: its groups, an OR of ANDs, for the subject. */
+function evaluateGate(
+  nodeId: string,
+  envelope: unknown,
+  input: ConditionInput
+): ConditionEvaluation {
   const registry = input.registry ?? CONDITION_REGISTRY;
-  const envelope: unknown = node.visibility;
   const groups = isPlainRecord(envelope)
     ? readGroups(envelope.conditions)
     : undefined;
@@ -1259,12 +1276,13 @@ function demandOf(
   node: Readonly<Record<string, unknown>>,
   fields: Set<string>
 ): boolean {
-  const envelope = node.visibility;
-  const groups = isPlainRecord(envelope)
-    ? readGroups(envelope.conditions)
-    : undefined;
+  // Every gate's fields: the block's own and those of the placements it was
+  // expanded from, since each is judged against the same entry.
+  const storedConditions = conditionGatesOf(node.visibility).flatMap(gate =>
+    isPlainRecord(gate) ? (readGroups(gate.conditions)?.flat() ?? []) : []
+  );
   let orders = false;
-  for (const stored of groups?.flat() ?? []) {
+  for (const stored of storedConditions) {
     fields.add(stored.field);
     const op = conditionOp(stored.op);
     if (op === "greater_than" || op === "less_than") orders = true;

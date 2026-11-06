@@ -1105,6 +1105,29 @@ describe("a page's blocks shown by their visibility conditions", () => {
     ).toBe(true);
   });
 
+  it("reads the field shapes of the collection a bound list draws, for its items' conditions", async () => {
+    // The list's collection is filled from the entry's title ("Public"); the
+    // stored "posts" is only the fallback beside the binding.
+    const nextly = instance(
+      page({
+        id: "loop",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", limit: 1 },
+        bindings: { collection: { $bind: "title" } },
+        slots: {
+          children: [
+            shownWhen("pill", "Featured", [[{ field: "title", op: "exists" }]]),
+          ],
+        },
+      })
+    );
+    await renderedPage(createBlocksPage, base, nextly);
+    // Read only from the stored "posts" before, so the bound list's items
+    // had no shapes and every condition failed closed.
+    expect(runtime.judged).toContain("shapes collection:Public");
+  });
+
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { html } = await renderedPage(
