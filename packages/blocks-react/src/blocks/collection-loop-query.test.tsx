@@ -25,7 +25,7 @@ import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 
 import { coreBlocks } from "./index";
-import { dayStartIn, listCountRead, listShownOf } from "./list-read";
+import { dayStartIn, listEntryCount } from "./list-read";
 
 const node = (
   id: string,
@@ -388,6 +388,32 @@ describe("a collection list's query, rendered", () => {
       ]);
     });
 
+    it("compares a day-shaped value on a field not holding a date as stored", async () => {
+      // A text field's value spelled like a day is text: it is not moved to
+      // the start of a day in the site's zone.
+      const { provider, queries } = source({ posts: [] });
+      await drawn(
+        page(
+          list({
+            collection: "posts",
+            filters: [
+              { field: "code", op: "greater_than", value: "2026-09-01" },
+            ],
+          })
+        ),
+        context({
+          data: provider,
+          timeZone: "Asia/Karachi",
+          fieldShapes: {
+            fieldsOf: () => [{ name: "code", type: "text" }],
+          },
+        })
+      );
+      expect(queries[0]?.filters).toEqual([
+        { field: "code", op: "gt", value: "2026-09-01" },
+      ]);
+    });
+
     it("finds each day's start on a day the clocks change", () => {
       // New York springs forward on 8 March 2026: that day starts at UTC-5,
       // the next at UTC-4.
@@ -581,6 +607,161 @@ describe("a collection list's query, rendered", () => {
       });
     });
 
+    describe("with more related entries than one read takes", () => {
+      /** 250 entries whose titles repeat, so ties are broken by the id. */
+      const MANY: Row[] = Array.from({ length: 250 }, (_, index) => ({
+        id: `c${String(index).padStart(3, "0")}`,
+        title: `T${String((index * 37) % 60).padStart(2, "0")}`,
+        kind: index % 3 === 0 ? "series" : "topic",
+      }));
+
+      /** The order a reader sorts in: each key, then the id. */
+      const ordered = (rows: readonly Row[], sort: string): Row[] => {
+        const keys = sort === "" ? [] : sort.split(",");
+        const compare = (a: Row, b: Row): number => {
+          for (const key of [...keys, "id"]) {
+            const field = key.replace(/^-/, "");
+            const sign = key.startsWith("-") ? -1 : 1;
+            const left = String(a[field]);
+            const right = String(b[field]);
+            if (left !== right) return left < right ? -sign : sign;
+          }
+          return 0;
+        };
+        return [...rows].sort(compare);
+      };
+
+      /**
+       * A source that sorts and windows as the reader does, and refuses an
+       * `in` row or a page of more than 100, as the list entries route does.
+       */
+      function boundedSource(): {
+        provider: BlocksDataProvider;
+        queries: BlocksQuery[];
+      } {
+        const queries: BlocksQuery[] = [];
+        const rows: Record<string, Row[]> = {
+          posts: [{ id: "p1", title: "Post", categories: [] }],
+          categories: MANY,
+        };
+        return {
+          queries,
+          provider: {
+            find: query => {
+              queries.push(query);
+              const ins = (query.filters ?? []).filter(row => row.op === "in");
+              if (
+                (query.limit ?? 10) > 100 ||
+                ins.some(
+                  row => Array.isArray(row.value) && row.value.length > 100
+                )
+              ) {
+                return Promise.reject(
+                  Object.assign(new Error("Too many values."), {
+                    code: "VALIDATION_ERROR",
+                  })
+                );
+              }
+              const matching = (rows[query.collection] ?? []).filter(row =>
+                (query.filters ?? []).every(filter => meets(row, filter))
+              );
+              const sort = typeof query.sort === "string" ? query.sort : "";
+              const start = query.offset ?? 0;
+              return Promise.resolve({
+                items: ordered(matching, sort).slice(
+                  start,
+                  start + (query.limit ?? 10)
+                ),
+              });
+            },
+          },
+        };
+      }
+
+      /** A post page whose public read holds every one of MANY's ids, shuffled. */
+      function manyPage(read: ReturnType<typeof boundedSource>): PageContext {
+        const stored = MANY.map(row => row.id).sort((a, b) =>
+          String(a).split("").reverse().join("") <
+          String(b).split("").reverse().join("")
+            ? -1
+            : 1
+        );
+        const post = read.provider;
+        return context({
+          data: {
+            find: query =>
+              query.collection === "posts"
+                ? Promise.resolve({
+                    items: [{ id: "p1", categories: stored }],
+                  })
+                : post.find(query),
+          },
+          entry: { id: "p1" },
+          entryCollection: "posts",
+          diagnostics: true,
+        });
+      }
+
+      const titles = (rows: readonly Row[]) =>
+        rows.map(row => String(row.title));
+
+      it.each([
+        ["title", 40, 30],
+        ["-title", 0, 7],
+        ["kind,-title", 90, 20],
+        ["title", 230, 100],
+      ])(
+        "sorts by %s across every read, then skips %i and shows %i",
+        async (sort, offset, limit) => {
+          const read = boundedSource();
+          const host = await drawn(
+            postCategories({ sort, offset, limit }),
+            manyPage(read)
+          );
+          expect(note(host)).toBeNull();
+          expect(headings(host)).toEqual(
+            titles(ordered(MANY, sort).slice(offset, offset + limit))
+          );
+          for (const query of relatedReads(read.queries)) {
+            expect(query.limit ?? 10).toBeLessThanOrEqual(100);
+          }
+        }
+      );
+
+      it("applies its filters before the window", async () => {
+        const read = boundedSource();
+        const host = await drawn(
+          postCategories({
+            sort: "-title",
+            filters: [{ field: "kind", op: "equals", value: "series" }],
+            offset: 5,
+            limit: 10,
+          }),
+          manyPage(read)
+        );
+        const series = MANY.filter(row => row.kind === "series");
+        expect(headings(host)).toEqual(
+          titles(ordered(series, "-title").slice(5, 15))
+        );
+      });
+
+      it("claims each read after the first from the page's allowance", async () => {
+        const read = boundedSource();
+        let left = 3;
+        const host = await drawn(postCategories({ sort: "title", limit: 5 }), {
+          ...manyPage(read),
+          queries: { take: () => left-- > 0 },
+        });
+        // The list's read and the relation's are claimed; the related
+        // entries take more than the one left, so the list says it failed.
+        expect(headings(host)).toEqual(["Nothing here yet"]);
+        expect(note(host)?.getAttribute("data-nx-list-diagnostic")).toBe(
+          "query-failed"
+        );
+        expect(note(host)?.textContent).toContain("used up the reads");
+      });
+    });
+
     it("shows each post's categories inside a list of posts, from the rows the list read", async () => {
       const { provider, queries } = source({
         posts: [
@@ -723,7 +904,24 @@ describe("a list's empty state, as an author looks at it", () => {
 });
 
 describe("a list's count, for the editor", () => {
-  it("counts with the very filters the list reads with, and no window", async () => {
+  /** A source that answers with the total of what matched, as the reader does. */
+  function counting(rows: Row[]) {
+    const read = source({ posts: rows });
+    return {
+      queries: read.queries,
+      provider: {
+        find: async (query: BlocksQuery) => {
+          const answer = await read.provider.find(query);
+          const total = rows.filter(row =>
+            (query.filters ?? []).every(filter => meets(row, filter))
+          ).length;
+          return { ...answer, total };
+        },
+      } satisfies BlocksDataProvider,
+    };
+  }
+
+  it("counts from the very read the list makes, sort and window included", async () => {
     const props = {
       collection: "posts",
       filters: [
@@ -734,46 +932,90 @@ describe("a list's count, for the editor", () => {
       limit: 2,
       offset: 1,
     };
-    const ctx = context({ timeZone: "Asia/Karachi" });
-    const { provider, queries } = source({ posts: [] });
-    await drawn(page(list(props)), { ...ctx, data: provider });
-    const read = listCountRead(props, ctx);
-    // The list's own read, less what a count does not take.
-    expect(read?.query).toEqual({
-      collection: queries[0]?.collection,
-      filters: queries[0]?.filters,
+    const ctx = context({ timeZone: "Asia/Karachi", locale: "fr" });
+    const drawnRead = counting(POSTS);
+    await drawn(page(list(props)), { ...ctx, data: drawnRead.provider });
+    const counted = counting(POSTS);
+    await listEntryCount(props, ctx, counted.provider);
+    // The same query, so a provider keeping its answers counts the rows it
+    // drew rather than reading again.
+    expect(counted.queries).toEqual(drawnRead.queries);
+  });
+
+  it("shows what the window leaves of the matching entries, never fewer than none", async () => {
+    const ten = Array.from({ length: 10 }, (_, index) => ({
+      id: `p${String(index)}`,
+      title: "Post",
+    }));
+    const count = (props: Record<string, unknown>) =>
+      listEntryCount(
+        { collection: "posts", ...props },
+        context({}),
+        counting(ten).provider
+      );
+    await expect(count({ offset: 2, limit: 3 })).resolves.toEqual({
+      matching: 10,
+      shown: 3,
     });
-    expect(read).toMatchObject({ offset: 1, limit: 2 });
-  });
-
-  it("shows what the window leaves of the matching entries, never fewer than none", () => {
-    const read = { offset: 2, limit: 3 };
-    expect(listShownOf(10, read)).toBe(3);
-    expect(listShownOf(4, read)).toBe(2);
-    expect(listShownOf(1, read)).toBe(0);
+    await expect(count({ offset: 8, limit: 3 })).resolves.toEqual({
+      matching: 10,
+      shown: 2,
+    });
+    await expect(count({ offset: 12, limit: 3 })).resolves.toEqual({
+      matching: 10,
+      shown: 0,
+    });
     // No limit stored is the list's own default.
-    const stored = listCountRead({ collection: "posts" }, context({}));
-    expect(stored).toMatchObject({ offset: 0, limit: 10 });
-    expect(listShownOf(25, stored ?? read)).toBe(10);
+    await expect(count({})).resolves.toEqual({ matching: 10, shown: 10 });
   });
 
-  it("makes no count where one read cannot answer it", () => {
+  it("makes no count where the list's read cannot answer it", async () => {
+    const { provider, queries } = counting(POSTS);
     // A related source's ids are read first, and no collection is no list.
-    expect(
-      listCountRead(
-        { collection: "posts", relation: { of: "entry", field: "related" } },
-        context({})
+    for (const props of [
+      { collection: "posts", relation: { of: "entry", field: "related" } },
+      { collection: " " },
+      {
+        collection: "posts",
+        filters: [{ field: "title", op: "like", value: "o" }],
+      },
+    ]) {
+      await expect(
+        listEntryCount(props, context({}), provider)
+      ).resolves.toBeUndefined();
+    }
+    expect(queries).toEqual([]);
+    // A provider that gives no total says nothing to count by.
+    await expect(
+      listEntryCount(
+        { collection: "posts" },
+        context({}),
+        source({ posts: POSTS }).provider
       )
-    ).toBeUndefined();
-    expect(listCountRead({ collection: " " }, context({}))).toBeUndefined();
-    expect(
-      listCountRead(
-        {
-          collection: "posts",
-          filters: [{ field: "title", op: "like", value: "o" }],
-        },
-        context({})
+    ).resolves.toBeUndefined();
+  });
+
+  it("counts by the id order the list falls back to when its sort is refused", async () => {
+    const queries: BlocksQuery[] = [];
+    const provider: BlocksDataProvider = {
+      find: query => {
+        queries.push(query);
+        return query.sort === "internalScore"
+          ? Promise.reject(
+              Object.assign(new Error("Not sortable."), {
+                code: "INVALID_INPUT",
+              })
+            )
+          : Promise.resolve({ items: POSTS, total: 3 });
+      },
+    };
+    await expect(
+      listEntryCount(
+        { collection: "posts", sort: "internalScore" },
+        context({}),
+        provider
       )
-    ).toBeUndefined();
+    ).resolves.toEqual({ matching: 3, shown: 3 });
+    expect(queries.map(query => query.sort)).toEqual(["internalScore", []]);
   });
 });

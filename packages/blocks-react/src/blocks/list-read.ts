@@ -26,6 +26,7 @@
  * @module blocks/list-read
  */
 import {
+  listFieldKind,
   readListQuery,
   safeTimeZone,
   isListDay,
@@ -38,6 +39,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type {
+  BlocksDataProvider,
   BlocksFilter,
   BlocksFilterOp,
   BlocksQuery,
@@ -199,20 +201,39 @@ function comparesOrder(op: ListFilterOp): boolean {
 }
 
 /**
- * The zone a day on `field` is compared in: none for a field holding a
- * calendar day, which is stored as that day; the site's for an instant, and
- * for a field whose shape is not known.
+ * The zone a day on `field` is compared in, or `undefined` when the field
+ * is known not to hold a date, whose day-shaped value is compared as
+ * stored: none for a field holding a calendar day, which is stored as that
+ * day; the site's for an instant, and for a field whose shape is not known.
+ * The save refuses an order on a field of another kind, so this guards a
+ * stored row only.
  */
 function dayZoneOf(
   field: string,
   collection: string,
   ctx: Pick<PageContext, "timeZone" | "fieldShapes">
-): string {
+): string | undefined {
   const shape = ctx.fieldShapes
     ?.fieldsOf({ collection })
     ?.find(candidate => candidate.name === field);
+  if (shape !== undefined && listFieldKind(shape) !== "date") return undefined;
   if (shape?.dateOnly === true) return "UTC";
   return safeTimeZone(ctx.timeZone).zone;
+}
+
+/** One stored filter row as the reader takes it. */
+function readerFilter(
+  row: ListFilter,
+  collection: string,
+  ctx: Pick<PageContext, "timeZone" | "fieldShapes">
+): BlocksFilter {
+  const zone =
+    comparesOrder(row.op) && isListDay(row.value)
+      ? dayZoneOf(row.field, collection, ctx)
+      : undefined;
+  return zone === undefined || !isListDay(row.value)
+    ? { field: row.field, op: READER_OP[row.op], value: row.value }
+    : dayRow({ ...row, value: row.value }, zone);
 }
 
 /** The stored filter rows as the reader takes them. */
@@ -221,14 +242,7 @@ function readerFilters(
   collection: string,
   ctx: Pick<PageContext, "timeZone" | "fieldShapes">
 ): BlocksFilter[] {
-  return filters.map(row =>
-    comparesOrder(row.op) && isListDay(row.value)
-      ? dayRow(
-          { ...row, value: row.value },
-          dayZoneOf(row.field, collection, ctx)
-        )
-      : { field: row.field, op: READER_OP[row.op], value: row.value }
-  );
+  return filters.map(row => readerFilter(row, collection, ctx));
 }
 
 /** The id one related value names: an id, or an entry read in its place. */
@@ -393,36 +407,203 @@ interface ListReads {
   readonly claim: () => boolean;
 }
 
+/** A list's rows, as one read or several give them back. */
+type Rows = readonly Record<string, unknown>[];
+
+/** A read with the stored keys, or with none, which the reader orders by id. */
+function sortedQuery(query: BlocksQuery, sort: readonly string[]): BlocksQuery {
+  return { ...query, sort: sort.length === 0 ? [] : sort.join(",") };
+}
+
 /**
  * A sorted read, and the same read in id order when the reader refused the
- * stored sort. The first read is claimed by the caller; a retry after a
- * refusal made before reading costs no second claim, and one made after
- * reading (a hidden field, which the reader judges once it has read) claims
- * its own.
+ * stored sort. `run` makes the read with the keys it is given. The first
+ * read is claimed by the caller; a retry after a refusal made before
+ * reading costs no second claim, and one made after reading (a hidden field,
+ * which the reader judges once it has read) claims its own.
  */
 async function readSorted(
   reads: ListReads,
-  query: BlocksQuery,
+  run: (sort: readonly string[]) => Promise<Rows>,
   sort: readonly string[]
-): Promise<{
-  items: readonly Record<string, unknown>[];
-  diagnostic?: ListDiagnostic;
-}> {
-  if (sort.length === 0)
-    return { items: await reads.find({ ...query, sort: [] }) };
+): Promise<{ items: Rows; diagnostic?: ListDiagnostic }> {
+  if (sort.length === 0) return { items: await run([]) };
   try {
-    return { items: await reads.find({ ...query, sort: sort.join(",") }) };
+    return { items: await run(sort) };
   } catch (error) {
     if (!readWasRefused(error)) throw error;
     const named = refusedSortFields(error);
     if (named.length === 0 && !reads.claim()) throw error;
     return {
-      items: await reads.find({ ...query, sort: [] }),
+      items: await run([]),
       diagnostic: sortFallback(
         named.length > 0 ? named : sort.map(key => key.replace(/^-/, ""))
       ),
     };
   }
+}
+
+/** A list's read of its collection, sorted as stored or in id order. */
+async function readCollection(
+  reads: ListReads,
+  base: BlocksQuery,
+  sort: readonly string[]
+): Promise<{ items: Rows; diagnostic?: ListDiagnostic }> {
+  return readSorted(reads, keys => reads.find(sortedQuery(base, keys)), sort);
+}
+
+/** Claim one more read, or stop the list's read: its entries are not all read. */
+function claimOrStop(reads: ListReads): void {
+  if (!reads.claim()) {
+    throw new Error(
+      "This page has used up the reads it may make, so this list's related entries were not all read."
+    );
+  }
+}
+
+/** A row's id as a key, so a string id and a number id compare alike. */
+function idKey(row: Readonly<Record<string, unknown>>): string {
+  return String(row.id);
+}
+
+/** How many entries of each side one merging read orders: half a read each. */
+const MERGE_SIDE = RELATED_READ_SIZE / 2;
+
+/**
+ * Two runs of rows, each in the reader's order, merged into the first
+ * `wanted` of both in that order.
+ *
+ * The reader decides every comparison, as the database's own collation and
+ * its empty-values-last order cannot be repeated here: up to half a read
+ * from the front of each run is read again together, by id and with the
+ * sort, and the rows are taken in the order that read gives until one side's
+ * part is used up while that side has more, since a row after that point
+ * could belong behind a row not yet read. Each read takes at least one whole
+ * part, so the merge ends; each is claimed from the page's allowance.
+ *
+ * A row that no longer matches when read again (it changed between reads)
+ * is dropped from its run and the step is taken again.
+ */
+async function mergeInOrder(
+  reads: ListReads,
+  order: (ids: readonly (string | number)[]) => Promise<Rows>,
+  runs: { readonly left: Rows; readonly right: Rows },
+  wanted: number
+): Promise<Rows> {
+  const merged: Record<string, unknown>[] = [];
+  let left = runs.left;
+  let right = runs.right;
+  while (merged.length < wanted && left.length > 0 && right.length > 0) {
+    const fromLeft = left.slice(0, MERGE_SIDE);
+    const fromRight = right.slice(0, MERGE_SIDE);
+    claimOrStop(reads);
+    const together = await order(
+      [...fromLeft, ...fromRight].flatMap(row => {
+        const id = idOf(row.id);
+        return id === undefined ? [] : [id];
+      })
+    );
+    const present = new Set(together.map(idKey));
+    if (present.size < fromLeft.length + fromRight.length) {
+      left = left.filter(
+        row => present.has(idKey(row)) || !fromLeft.includes(row)
+      );
+      right = right.filter(
+        row => present.has(idKey(row)) || !fromRight.includes(row)
+      );
+      continue;
+    }
+    const taken = takeInOrder(together, {
+      left: new Set(fromLeft.map(idKey)),
+      leftMore: left.length > fromLeft.length,
+      rightSize: fromRight.length,
+      rightMore: right.length > fromRight.length,
+      room: wanted - merged.length,
+    });
+    merged.push(...taken.rows);
+    left = left.slice(taken.left);
+    right = right.slice(taken.right);
+  }
+  return [...merged, ...left, ...right].slice(0, wanted);
+}
+
+/**
+ * The rows of one merging read that are surely next, in its order: up to
+ * and including the last of a side's part when that side has more, and no
+ * more than `room`. With how many it took from each side.
+ */
+function takeInOrder(
+  together: Rows,
+  sides: {
+    readonly left: ReadonlySet<string>;
+    readonly leftMore: boolean;
+    readonly rightSize: number;
+    readonly rightMore: boolean;
+    readonly room: number;
+  }
+): { rows: Rows; left: number; right: number } {
+  const rows: Record<string, unknown>[] = [];
+  let left = 0;
+  let right = 0;
+  for (const row of together) {
+    if (rows.length >= sides.room) break;
+    rows.push(row);
+    if (sides.left.has(idKey(row))) left += 1;
+    else right += 1;
+    const leftDone = left === sides.left.size && sides.leftMore;
+    const rightDone = right === sides.rightSize && sides.rightMore;
+    if (leftDone || rightDone) break;
+  }
+  return { rows, left, right };
+}
+
+/**
+ * The entries of a related source with a sort, when it holds more ids than
+ * one read takes. The ids are read a read's worth at a time, each sorted
+ * and cut to the window's end, and each read's rows are merged into the
+ * ones kept so far by the reader's own order ({@link mergeInOrder}), so the
+ * window is cut from the whole relation in the order one read of it would
+ * give. Every read names at most a read's worth of ids and asks for at
+ * most a read's worth of rows; each after the first is claimed.
+ */
+async function readRelatedSorted(
+  reads: ListReads,
+  base: BlocksQuery,
+  sort: readonly string[],
+  ids: readonly (string | number)[],
+  window: { readonly offset: number; readonly limit: number }
+): Promise<Rows> {
+  const wanted = window.offset + window.limit;
+  const { offset: _offset, ...unwindowed } = base;
+  const named = (chunk: readonly (string | number)[], limit: number) =>
+    reads.find(
+      sortedQuery(
+        {
+          ...unwindowed,
+          filters: [
+            ...(base.filters ?? []),
+            { field: "id", op: "in", value: chunk },
+          ],
+          limit,
+        },
+        sort
+      )
+    );
+  let kept: Rows = [];
+  for (let start = 0; start < ids.length; start += RELATED_READ_SIZE) {
+    if (start > 0) claimOrStop(reads);
+    const read = await named(
+      ids.slice(start, start + RELATED_READ_SIZE),
+      Math.min(wanted, RELATED_READ_SIZE)
+    );
+    kept = await mergeInOrder(
+      reads,
+      chunk => named(chunk, chunk.length),
+      { left: kept, right: read },
+      wanted
+    );
+  }
+  return kept.slice(window.offset, wanted);
 }
 
 /** The stored keys as the reader takes them. */
@@ -500,8 +681,9 @@ function errorDetail(error: unknown): string | undefined {
 
 /**
  * A stored list's read before its source is read: its query as the engine
- * reads it, and the reader's base query with its window. One reading, so the
- * list's read and the editor's count of it cannot drift apart.
+ * reads it, the reader's base query with its window, and the sort keys it
+ * reads with. One reading, so the list's read and the editor's count of it
+ * cannot drift apart.
  */
 function listReadBase(
   props: unknown,
@@ -511,10 +693,12 @@ function listReadBase(
   | { readonly blocking: string }
   | {
       readonly query: ListQuery;
-      readonly problems: ReturnType<typeof readListQuery>["problems"];
       readonly base: BlocksQuery;
       readonly offset: number;
       readonly limit: number;
+      readonly sort: readonly string[];
+      /** Why the stored sort is not read, which lists in id order. */
+      readonly sortProblem?: string;
     } {
   const { query, problems } = readListQuery(props);
   const blocking = blockingProblem(problems);
@@ -529,60 +713,70 @@ function listReadBase(
     ...(offset === 0 ? {} : { offset }),
     ...(ctx.locale === undefined ? {} : { locale: ctx.locale }),
   };
-  return { query, problems, base, offset, limit };
-}
-
-/**
- * The one read that counts a list's matching entries, and the window it
- * shows them through, for the editor to say "N entries match, so M show".
- *
- * The count's query is the list's own read less its sort and window, so it
- * counts exactly the entries the list chooses from, as a visitor reads them.
- * Undefined where one read cannot answer it: no collection named; a query
- * that cannot be read as stored; and a related source, whose ids are read
- * from the entry or the outer item first.
- *
- * @experimental
- */
-export interface ListCountRead {
-  readonly query: Pick<BlocksQuery, "collection" | "filters" | "locale">;
-  readonly offset: number;
-  readonly limit: number;
-}
-
-/** A stored list's count read: see {@link ListCountRead}. @experimental */
-export function listCountRead(
-  props: unknown,
-  ctx: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">
-): ListCountRead | undefined {
-  const named = readListQuery(props).query;
-  if (named.collection === undefined || named.relation !== undefined) {
-    return undefined;
-  }
-  const read = listReadBase(props, named.collection, ctx);
-  if ("blocking" in read) return undefined;
+  const sortProblem = problems.find(problem => problem.prop === "sort");
   return {
-    query: {
-      collection: read.base.collection,
-      ...(read.base.filters === undefined
-        ? {}
-        : { filters: read.base.filters }),
-      ...(read.base.locale === undefined ? {} : { locale: read.base.locale }),
-    },
-    offset: read.offset,
-    limit: read.limit,
+    query,
+    base,
+    offset,
+    limit,
+    sort: sortProblem === undefined ? sortTexts(query) : [],
+    ...(sortProblem === undefined ? {} : { sortProblem: sortProblem.message }),
   };
 }
 
 /**
- * How many of `matching` entries a list shows: those after the skipped ones,
- * up to its limit, and never fewer than none. @experimental
+ * How many entries a list's query matches, and how many of them it shows:
+ * those after the skipped ones, up to its limit.
+ *
+ * @experimental
  */
-export function listShownOf(
-  matching: number,
-  window: Pick<ListCountRead, "offset" | "limit">
-): number {
-  return Math.max(0, Math.min(matching - window.offset, window.limit));
+export interface ListEntryCount {
+  readonly matching: number;
+  readonly shown: number;
+}
+
+/**
+ * The editor's count of a list's matching entries, taken from the list's own
+ * read: the very reads the list makes of `data` (its sort, and its id order
+ * when the sort is refused), whose answer's total is the count. A provider
+ * that keeps its answers therefore counts the rows it drew, never a second
+ * read of its own. Undefined where the list's read does not say: no
+ * collection named, a query that cannot be read as stored, a related source
+ * (its ids are read from the entry or the outer item first), and a provider
+ * that gives no total.
+ *
+ * @experimental
+ */
+export async function listEntryCount(
+  props: unknown,
+  terms: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">,
+  data: BlocksDataProvider
+): Promise<ListEntryCount | undefined> {
+  const named = readListQuery(props).query;
+  if (named.collection === undefined || named.relation !== undefined) {
+    return undefined;
+  }
+  const read = listReadBase(props, named.collection, terms);
+  if ("blocking" in read) return undefined;
+  let total: number | undefined;
+  await readCollection(
+    {
+      find: async query => {
+        const answer = await data.find(query);
+        total = answer.total;
+        return answer.items;
+      },
+      // The editor's own read, outside any page's allowance.
+      claim: () => true,
+    },
+    read.base,
+    read.sort
+  );
+  if (typeof total !== "number") return undefined;
+  return {
+    matching: total,
+    shown: Math.max(0, Math.min(total - read.offset, read.limit)),
+  };
 }
 
 /**
@@ -600,9 +794,7 @@ export async function readList(
   if ("blocking" in read) {
     return { items: [], failed: true, diagnostic: failure(read.blocking) };
   }
-  const { query, problems, base, offset, limit } = read;
-  const sortProblem = problems.find(problem => problem.prop === "sort");
-  const sort = sortProblem === undefined ? sortTexts(query) : [];
+  const { query, base, offset, limit, sort, sortProblem } = read;
   try {
     // A related source's ids first, as a visitor reads them; with none to
     // read, the list draws its empty state and an author is told why.
@@ -613,17 +805,17 @@ export async function readList(
     if (related !== undefined && "problem" in related) {
       return { items: [], failed: true, diagnostic: failure(related.problem) };
     }
-    const read = await readSource(base, sort, related?.ids, reads, {
+    const found = await readSource(base, sort, related?.ids, reads, {
       offset,
       limit,
     });
     const diagnostic =
-      read.diagnostic ??
+      found.diagnostic ??
       (sortProblem === undefined
         ? undefined
-        : { kind: "sort-fallback" as const, message: sortProblem.message });
+        : { kind: "sort-fallback" as const, message: sortProblem });
     return {
-      items: read.items,
+      items: found.items,
       failed: false,
       ...(diagnostic === undefined ? {} : { diagnostic }),
     };
@@ -634,7 +826,9 @@ export async function readList(
 
 /**
  * Read from the list's source: its collection, or, when `ids` is given, the
- * related entries those ids name.
+ * related entries those ids name: in their stored order with no sort, in
+ * one read with a sort when they fit one, and read by parts and merged in
+ * the reader's order when they do not.
  */
 async function readSource(
   base: BlocksQuery,
@@ -642,24 +836,29 @@ async function readSource(
   ids: readonly (string | number)[] | undefined,
   reads: ListReads,
   window: { readonly offset: number; readonly limit: number }
-): Promise<{
-  items: readonly Record<string, unknown>[];
-  diagnostic?: ListDiagnostic;
-}> {
-  if (ids === undefined) {
-    return readSorted(reads, base, sort);
-  }
+): Promise<{ items: Rows; diagnostic?: ListDiagnostic }> {
+  if (ids === undefined) return readCollection(reads, base, sort);
   if (ids.length === 0) return { items: [] };
   if (sort.length === 0) {
     const { offset: _offset, ...unwindowed } = base;
     return { items: await readInStoredOrder(reads, unwindowed, ids, window) };
   }
+  if (ids.length <= RELATED_READ_SIZE) {
+    return readCollection(
+      reads,
+      {
+        ...base,
+        filters: [
+          ...(base.filters ?? []),
+          { field: "id", op: "in", value: ids },
+        ],
+      },
+      sort
+    );
+  }
   return readSorted(
     reads,
-    {
-      ...base,
-      filters: [...(base.filters ?? []), { field: "id", op: "in", value: ids }],
-    },
+    keys => readRelatedSorted(reads, base, keys, ids, window),
     sort
   );
 }
