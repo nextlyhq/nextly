@@ -2252,7 +2252,7 @@ describe.each(getConfiguredTestDialects())(
             t.nextly.update({
               collection: "pages",
               id,
-              data: { body: { v: "refused" } },
+              data: { body: { v: "refused" }, _overwrite: true },
               user: caller.user,
               overrideAccess: false,
             } as never)
@@ -2285,7 +2285,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id,
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -2362,7 +2362,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "hookgated",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2407,7 +2411,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "locked",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2473,7 +2481,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "restored",
           id,
-          data: { title: "ordinary", body: { v: "ordinary" } },
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
           user: editor.user,
           overrideAccess: false,
         } as never);
@@ -2600,7 +2612,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "flipped",
           id,
-          data: asSent,
+          data: { ...asSent, _overwrite: true },
           overrideAccess: true,
         } as never);
         const after = await live();

@@ -115,7 +115,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "pages",
             id: item.id,
-            data: { slug: "docs//install" },
+            data: { slug: "docs//install", _overwrite: true },
             overrideAccess: true,
           })
         )
