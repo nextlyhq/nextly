@@ -262,9 +262,12 @@ describe("createBlocksPage", () => {
         },
       ],
     };
+    // The core blocks, as a site registers them: a block the route does not
+    // know is not drawn, so its reads are not asked for.
     const filtered = await render({
       collections: ["pages"],
       field: "content",
+      blocks: coreResolver(),
       timeZone: "Asia/Karachi",
       nextly: reader({ slug: "about", content: dayList }),
     });
@@ -274,6 +277,7 @@ describe("createBlocksPage", () => {
     const plain = await render({
       collections: ["pages"],
       field: "content",
+      blocks: coreResolver(),
       timeZone: "Asia/Karachi",
       nextly: reader({ slug: "about", content: document }),
     });

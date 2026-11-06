@@ -598,6 +598,49 @@ export interface PageBindings {
  */
 export type BindingIssuesHandler = (issues: readonly BindingIssue[]) => void;
 
+/**
+ * Reads one page render may perform when the route was given no number.
+ *
+ * Generous for a page and small against a database: a document would have to
+ * nest loops to approach it, which is the shape the budget exists to bound. A
+ * page that exceeds it renders what it could reach rather than failing, so the
+ * cost of the default being low is visible content, while the cost of having no
+ * default at all is an unbounded read amplification reachable by URL.
+ *
+ * @experimental
+ */
+export const DEFAULT_MAX_QUERIES = 500;
+
+/**
+ * A budget for ONE page render: `max` reads, then none.
+ *
+ * Here rather than beside the route, so every surface that draws a page
+ * bounds its reads the same way: the published route and the editor's
+ * canvas alike.
+ *
+ * Created per render rather than per route: the counter is spent, so a single
+ * budget shared across requests would exhaust on the first few pages and serve
+ * every later request truncated — a fault that grows with uptime and disappears
+ * on restart, which is the hardest kind to attribute.
+ */
+export function createQueryBudget(
+  max: number = DEFAULT_MAX_QUERIES
+): QueryBudget {
+  // `NaN` is what `Number(process.env.MAX_QUERIES)` produces for an unset or
+  // malformed variable, and every comparison against it is false — so
+  // `remaining <= 0` never fires and the budget silently becomes unlimited.
+  // That is the failure this exists to prevent, reached by a configuration
+  // mistake rather than by a document.
+  let remaining = Number.isNaN(max) ? DEFAULT_MAX_QUERIES : max;
+  return {
+    take: () => {
+      if (remaining <= 0) return false;
+      remaining -= 1;
+      return true;
+    },
+  };
+}
+
 /** A context with nothing wired up: the standalone default. */
 export function createStandaloneContext(
   overrides: Partial<PageContext> = {}

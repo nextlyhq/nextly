@@ -37,7 +37,9 @@ export type {
 } from "./context";
 export {
   createDefaultDataProvider,
+  createQueryBudget,
   createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
   defineBlock,
   emptyDataProvider,
 } from "./context";

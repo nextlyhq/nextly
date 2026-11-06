@@ -403,6 +403,8 @@ describe("the root entry", () => {
       "COMPONENT_DOCUMENT_FIELD",
       // The editor marker namespace, public so an editor refuses a name the
       // renderer would drop rather than keeping a list beside it.
+      // The read budget's default: see `createQueryBudget`.
+      "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
       "INSTANCE_ATTRIBUTE",
       // The action a collection list's note offers on the editor's canvas,
@@ -430,6 +432,9 @@ describe("the root entry", () => {
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.
       "createDefaultDataProvider",
+      // The bound on one render's reads, and its default, public so every
+      // surface that draws a page (the editor's canvas too) bounds alike.
+      "createQueryBudget",
       "createStandaloneContext",
       "defineBlock",
       // The definitions a document reaches, discovered as the render does.
@@ -598,9 +603,8 @@ describe("the blocks entry", () => {
       "image",
       "list",
       // Added deliberately: the editor's count of a list's matching entries,
-      // made with the list's own reading, so the two cannot disagree.
-      "listCountRead",
-      "listShownOf",
+      // taken from the list's own read, so the two cannot disagree.
+      "listEntryCount",
       "paragraph",
       "quote",
       "renderContainer",
