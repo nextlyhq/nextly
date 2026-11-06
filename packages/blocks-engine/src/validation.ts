@@ -57,6 +57,7 @@ import {
 import { blockLabelFrom, placementRefusalMessage } from "./placement-wording";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
+import { checkSeoBinding, type SeoBindingPlace } from "./seo-binding-check";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
 import type { ActiveSlotLock } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
@@ -641,8 +642,11 @@ export function validateDocument(
   if (isPlainRecord(settings) && settings.styles !== undefined) {
     validateStyleEnvelope(settings.styles, "/settings/styles", state);
   }
-  if (isPlainRecord(settings) && settings.seo !== undefined) {
-    validateDocumentSeo(settings.seo, "/settings/seo", issues);
+  // Skipped past the document's limits, as the other per-value checks are:
+  // the survey stopped reading, and a value of any width would otherwise be
+  // walked whole.
+  if (!overLimits && isPlainRecord(settings) && settings.seo !== undefined) {
+    validateDocumentSeo(settings.seo, "/settings/seo", issues, ctx);
   }
 
   validateNodeForest(envelope.nodes, state, survey.limits.maxNodes);
@@ -3294,7 +3298,8 @@ function validBindingShape(
 function validateDocumentSeo(
   seo: unknown,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (!isPlainRecord(seo)) {
     issues.push({
@@ -3308,9 +3313,9 @@ function validateDocumentSeo(
   for (const [field, value] of Object.entries(seo)) {
     const at = pointer(path, field);
     if (field === "title" || field === "description") {
-      validateSeoText(value, at, issues);
+      validateSeoText(value, at, issues, ctx);
     } else if (field === "image") {
-      validateSeoBinding(value, at, issues);
+      validateSeoBinding(value, at, "image", issues, ctx);
     } else {
       issues.push({
         path: at,
@@ -3326,7 +3331,8 @@ function validateDocumentSeo(
 function validateSeoText(
   value: unknown,
   path: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (!Array.isArray(value)) {
     issues.push({
@@ -3360,17 +3366,44 @@ function validateSeoText(
       }
       return;
     }
-    validateSeoBinding(segment, at, issues);
+    validateSeoBinding(segment, at, "text", issues, ctx);
   });
 }
 
-/** One metadata binding: a binding's shape, read for the page. */
+/**
+ * One metadata binding: a binding's shape, read for the page, and, when the
+ * context carries the sources' schema, the check the routed page applies
+ * before using it (`seo-binding-check`), so a save accepts only what the page
+ * can show.
+ */
 function validateSeoBinding(
   value: unknown,
   path: string,
-  issues: ValidationIssue[]
+  place: SeoBindingPlace,
+  issues: ValidationIssue[],
+  ctx: ValidationContext
 ): void {
   if (!validBindingShape(value, path, issues)) return;
+  if (ctx.bindingSchema !== undefined) {
+    const check = checkSeoBinding({
+      binding: value,
+      place,
+      id: path,
+      schema: ctx.bindingSchema,
+      ...(ctx.bindingEntry === undefined
+        ? {}
+        : { refs: { entry: ctx.bindingEntry } }),
+    });
+    for (const issue of check.issues) {
+      if (issue.code === "binding-malformed") continue;
+      issues.push({
+        path,
+        code: issue.code,
+        severity: "error",
+        message: issue.message,
+      });
+    }
+  }
   if (value.source === "item") {
     issues.push({
       path: pointer(path, "source"),

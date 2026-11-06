@@ -13,6 +13,7 @@ import {
   type DocumentSeo,
 } from "./document";
 import { resolveDocumentSeo } from "./document-seo";
+import { DEFAULT_LIMITS } from "./limits";
 import { bindingDemand, createBindingRun } from "./resolve-bindings";
 import { FIXTURE_BREAKPOINTS } from "./validation.fixtures";
 import { validate } from "./validation";
@@ -155,6 +156,15 @@ describe("a document's social image", () => {
     ).toEqual({ kind: "media", value: "7" });
   });
 
+  it("reads a URL field's fallback as an address, whatever it looks like", () => {
+    const document = documentWith({
+      image: { $bind: "avatarUrl", fallback: "images/default.png" },
+    });
+    expect(
+      resolveDocumentSeo(document, runFor({ avatarUrl: "" })).image
+    ).toEqual({ kind: "url", value: "images/default.png" });
+  });
+
   it("is the address a URL field holds", () => {
     const document = documentWith({ image: { $bind: "avatarUrl" } });
     expect(
@@ -277,6 +287,41 @@ describe("saving a document's metadata", () => {
       { path: "/settings/seo/description/0/source", code: "invalid-binding" },
       { path: "/settings/seo/image/$bind", code: "invalid-binding" },
     ]);
+  });
+
+  it("holds bindings to the sources' schema when it is given, as the page will", () => {
+    const issues = validate(
+      documentWith({
+        title: [{ $bind: "views" }],
+        image: { $bind: "title" },
+      }),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        bindingSchema: schema,
+        bindingEntry: { collection: "posts" },
+      }
+    ).map(issue => ({ path: issue.path, code: issue.code }));
+    expect(issues).toEqual([
+      { path: "/settings/seo/title/0", code: "binding-type-misfit" },
+      { path: "/settings/seo/image", code: "binding-type-misfit" },
+    ]);
+  });
+
+  it("walks no metadata past the document's limits", () => {
+    const wide = Object.fromEntries(
+      Array.from({ length: 5000 }, (_unused, index) => [
+        `key${String(index)}`,
+        ["x"],
+      ])
+    );
+    const issues = validate(documentWith(wide), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits: { ...DEFAULT_LIMITS, maxBytes: 1024 },
+    });
+    expect(issues.some(issue => issue.code === "invalid-seo")).toBe(false);
+    expect(issues.length).toBeGreaterThan(0);
   });
 
   it("bounds how many pieces a value holds, and how long its text is", () => {

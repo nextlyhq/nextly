@@ -22,7 +22,7 @@
  * @module document-seo
  */
 import type { BindingIssue } from "./binding-issues";
-import { checkBinding, type CheckedBinding } from "./binding-rules";
+import type { CheckedBinding } from "./binding-rules";
 import type { SeoImageCandidate } from "./derive-seo";
 import {
   MAX_SEO_SEGMENTS,
@@ -36,6 +36,7 @@ import {
   type BindingRun,
 } from "./resolve-bindings";
 import { ownEntry } from "./safe-record";
+import { checkSeoBinding } from "./seo-binding-check";
 
 /** The document's metadata, filled, with only the parts that produced one. */
 export interface ResolvedDocumentSeo {
@@ -165,7 +166,7 @@ function filledSegment(
  * order with the blocks' own: from a media field, the media (its address when
  * the read populated it, its id otherwise); from a URL field, the address. An
  * address is still judged by the caller's scheme and host checks, as an
- * image block's is.
+ * image block's is. Checked by the same rule a save is (`seo-binding-check`).
  */
 function imageOf(
   binding: unknown,
@@ -174,40 +175,23 @@ function imageOf(
 ): SeoImageCandidate | undefined {
   if (!isPlainRecord(binding)) return undefined;
   if (run === undefined) return candidateOf(ownEntry(binding, "fallback"));
-  const refs = run.entryRef === undefined ? {} : { entry: run.entryRef };
-  const check = (type: "upload" | "url") =>
-    checkBinding({
-      nodeId: "seo:image",
-      prop: "image",
-      binding,
-      props: { image: { type } },
-      ...(run.schema === undefined ? {} : { schema: run.schema }),
-      refs,
-    });
-  // A media field first, then a URL field: the binding fits at most one. A
-  // link prop also takes a plain text field, which an image does not, since
-  // only a URL field says its value is an address.
-  let checked = check("upload");
-  if (checked.outcome !== "resolve" && misfits(checked.issues)) {
-    checked = check("url");
-    if (checked.outcome === "resolve" && !isAddressField(checked.binding)) {
-      issues.push(
-        imageIssue(
-          checked.binding.path,
-          "binding-type-misfit",
-          "A social image binds to a media field or a URL field, so its fallback is shown."
-        )
-      );
-      return candidateOf(checked.binding.fallback?.value);
-    }
-  }
-  issues.push(...checked.issues);
+  const checked = checkSeoBinding({
+    binding,
+    place: "image",
+    id: IMAGE_ID,
+    ...(run.schema === undefined ? {} : { schema: run.schema }),
+    ...(run.entryRef === undefined ? {} : { refs: { entry: run.entryRef } }),
+  });
+  for (const issue of checked.issues) issues.push(issue);
   if (checked.outcome === "ignore") return undefined;
   if (checked.outcome === "fallback") {
     return candidateOf(checked.fallback?.value);
   }
+  // A fallback is read by the kind of field the binding ended at, as its
+  // value is: a URL field's fallback is an address, whatever it looks like.
+  const kind = checked.binding.kind;
+  const fallback = () => candidateOf(checked.binding.fallback?.value, kind);
   const read = boundSourceValue(checked.binding, run, { phase: "page" });
-  const fallback = () => candidateOf(checked.binding.fallback?.value);
   if (!read.read) {
     // Reported as a block's binding to an unread source is, so a refused
     // read is told apart from an image the entry does not have.
@@ -223,7 +207,7 @@ function imageOf(
   // A URL field's value is an address. Anything else stored there, a media
   // object included, is a value of the wrong type, not an image.
   if (
-    checked.binding.kind === "link" &&
+    kind === "link" &&
     read.value !== undefined &&
     read.value !== null &&
     typeof read.value !== "string"
@@ -237,8 +221,11 @@ function imageOf(
     );
     return fallback();
   }
-  return candidateOf(read.value, checked.binding) ?? fallback();
+  return candidateOf(read.value, kind) ?? fallback();
 }
+
+/** Names the document's social image in its issues. */
+const IMAGE_ID = "seo:image";
 
 /** An issue with the document's social image binding. */
 function imageIssue(
@@ -246,17 +233,7 @@ function imageIssue(
   code: BindingIssue["code"],
   message: string
 ): BindingIssue {
-  return { nodeId: "seo:image", prop: "image", code, message, path };
-}
-
-/** Whether a binding ends at a URL field, or at a field whose type is unknown. */
-function isAddressField(binding: CheckedBinding): boolean {
-  return binding.field === undefined || binding.field.type === "url";
-}
-
-/** Whether a check refused a binding only because its field's type did not fit. */
-function misfits(issues: readonly BindingIssue[]): boolean {
-  return issues.some(issue => issue.code === "binding-type-misfit");
+  return { nodeId: IMAGE_ID, prop: "value", code, message, path };
 }
 
 /** An address rather than a media id: absolute over HTTP, or a path on the site. */
@@ -269,7 +246,7 @@ const ADDRESS = /^(?:https?:\/\/|\/)/i;
  */
 function candidateOf(
   value: unknown,
-  binding?: CheckedBinding
+  kind?: CheckedBinding["kind"]
 ): SeoImageCandidate | undefined {
   if (isPlainRecord(value)) {
     // A populated media record by its address; one read without a usable
@@ -291,7 +268,7 @@ function candidateOf(
   }
   if (typeof value !== "string" || value.trim() === "") return undefined;
   const text = value.trim();
-  if (binding?.kind === "link" || ADDRESS.test(text)) {
+  if (kind === "link" || ADDRESS.test(text)) {
     return { kind: "url", value: text };
   }
   return { kind: "media", value: text };

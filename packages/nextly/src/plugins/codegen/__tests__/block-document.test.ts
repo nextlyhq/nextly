@@ -134,6 +134,8 @@ describe("block document schema", () => {
       42,
       { title: "Not a list" },
       { title: [{ $bind: 7 }] },
+      { title: [{ $bind: "title", source: "item" }] },
+      { image: { $bind: "cover", source: "item" } },
       { title: Array.from({ length: 33 }, () => "a") },
       { title: ["a".repeat(1001)] },
       { keywords: ["a"] },
