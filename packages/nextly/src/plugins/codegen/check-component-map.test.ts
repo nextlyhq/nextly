@@ -4,6 +4,7 @@
  * wrote the list on one line or a formatter laid it out a path a line, naming each component
  * missing (with its owner and widget) and each path no longer declared.
  */
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -464,4 +465,34 @@ describe("a plugin collection's own views", () => {
       ]);
     }
   );
+});
+
+describe("a site collection's own views", () => {
+  it("does not agree when a site collection names a view the map does not list", async () => {
+    await generate([shop]);
+    const siteCollections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "@acme/cards/admin#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as CollectionConfig[];
+
+    const found = await checkComponentMapFiles(
+      [shop],
+      TYPES,
+      root,
+      undefined,
+      undefined,
+      siteCollections
+    );
+
+    expect(found.missing.map(each => each.path)).toEqual([
+      "@acme/cards/admin#OrderEditor",
+    ]);
+  });
 });

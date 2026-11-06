@@ -272,6 +272,20 @@ function siteWidgetEntries(siteDashboard: unknown): ComponentMapEntry[] {
 }
 
 /**
+ * The views the site config's own collections name for their screens, named
+ * as the site config's and marked, as its widgets' are, when written relative
+ * to the config file. The same collector a plugin's collections go through.
+ */
+function siteCollectionViewEntries(
+  siteCollections: readonly CollectionConfig[] | undefined
+): ComponentMapEntry[] {
+  return collectCollectionOwnViewPaths(siteCollections).map(path => ({
+    ...entry(path, SITE_CONFIG, "collection view"),
+    ...(isConfigRelative(parsePath(path).module) ? { fromConfig: true } : {}),
+  }));
+}
+
+/**
  * The module a map imports a config-relative component from: the path joined
  * onto the config file's own folder, as the map's import of the config names
  * it (`configImport`, from the map's folder). Unchanged with no config import.
@@ -469,11 +483,14 @@ export function componentUses(
   plugins: readonly PluginDefinition[],
   // The site config's `admin.dashboard`, whose own widgets draw through the
   // map as a plugin's do.
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): ComponentMapEntry[] {
   return [
     ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
     ...siteWidgetEntries(siteDashboard),
+    ...siteCollectionViewEntries(siteCollections),
     // Block editor components register through the same map, so the editor
     // bundle loads a contributed block's inspector without a hand-written
     // import -- the same guarantee admin contributions already have.
@@ -497,10 +514,12 @@ export function componentUses(
  */
 export function componentImportMapEntries(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  for (const each of componentUses(plugins, siteDashboard)) {
+  for (const each of componentUses(plugins, siteDashboard, siteCollections)) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -515,9 +534,11 @@ export function componentImportMapEntries(
 /** The paths of {@link componentImportMapEntries}, in its order. */
 export function componentImportMapPaths(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): string[] {
-  return componentImportMapEntries(plugins, siteDashboard).map(
+  return componentImportMapEntries(plugins, siteDashboard, siteCollections).map(
     each => each.path
   );
 }
@@ -694,9 +715,15 @@ export function configImportOf(mapCode: string): string | undefined {
 export function buildComponentImportMap(
   plugins: PluginDefinition[],
   configImport?: string,
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): string {
-  const entries = componentImportMapEntries(plugins, siteDashboard);
+  const entries = componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    siteCollections
+  );
   const blockEditor = blockEditorHandOff(plugins, entries);
   // An editor entry exports block definitions, not a component, so it is
   // handed to the page builder alone and never put in the component registry,
@@ -871,9 +898,11 @@ const PATHS_HEADER = [
  */
 export function buildComponentPathsModule(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): string {
-  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard))}\n`;
+  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard, siteCollections))}\n`;
 }
 
 /**
@@ -890,17 +919,24 @@ export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
   typesOutputPath: string,
   configImport?: string,
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins, configImport, siteDashboard),
+      code: buildComponentImportMap(
+        plugins,
+        configImport,
+        siteDashboard,
+        siteCollections
+      ),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
-      code: buildComponentPathsModule(plugins, siteDashboard),
+      code: buildComponentPathsModule(plugins, siteDashboard, siteCollections),
     },
   ];
 }

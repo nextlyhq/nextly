@@ -1,3 +1,4 @@
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1152,5 +1153,57 @@ describe("a plugin collection's own views", () => {
     expect(code).toContain('import * as _p0 from "@acme/forms/admin";');
     expect(code).toContain('"@acme/forms/admin#FormEditor": _p0.FormEditor');
     expect(code).toContain('"@acme/forms/admin#FormList": _p0.FormList');
+  });
+});
+
+describe("the site config's own collections' views", () => {
+  // A site collection replaces its edit screen by naming a component, as the
+  // collections guide shows, beside a plugin's; written relative to the
+  // config, or as a package's.
+  const siteCollections = [
+    {
+      slug: "orders",
+      fields: [],
+      admin: {
+        components: {
+          views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          BeforeListTable: "@acme/cards/admin#OrderTotals",
+        },
+      },
+    },
+  ] as unknown as CollectionConfig[];
+
+  it("are listed as the site config's, beside the plugins'", () => {
+    expect(
+      componentImportMapEntries([], undefined, siteCollections)
+    ).toEqual([
+      {
+        path: "./views/orders#OrderEditor",
+        owner: "the site config",
+        use: "collection view",
+        fromConfig: true,
+      },
+      {
+        path: "@acme/cards/admin#OrderTotals",
+        owner: "the site config",
+        use: "collection view",
+      },
+    ]);
+  });
+
+  it("are imported from the map's folder, a relative one through where the config file is", () => {
+    const map = buildComponentImportMap(
+      [],
+      "../../../nextly.config",
+      undefined,
+      siteCollections
+    );
+    expect(map).toContain('import * as _p0 from "../../../views/orders";');
+    expect(map).toContain('"./views/orders#OrderEditor": _p0.OrderEditor,');
+    expect(map).toContain('"@acme/cards/admin#OrderTotals": _p1.OrderTotals,');
+    // And listed, so the admin's check reads them as registered.
+    expect(
+      buildComponentPathsModule([], undefined, siteCollections)
+    ).toContain("./views/orders#OrderEditor");
   });
 });

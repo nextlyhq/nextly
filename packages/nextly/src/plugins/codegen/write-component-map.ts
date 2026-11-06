@@ -10,6 +10,7 @@
  * @module plugins/codegen/write-component-map
  */
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
@@ -51,7 +52,9 @@ export async function planComponentMapFiles(
    */
   config?: string | { import: string },
   /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[]
 ): Promise<PlannedComponentMapFile[]> {
   const configImport =
     config === undefined || typeof config !== "string"
@@ -65,7 +68,8 @@ export async function planComponentMapFiles(
       plugins,
       typesOutputPath,
       configImport,
-      siteDashboard
+      siteDashboard,
+      siteCollections
     ).map(async artifact => {
       const file = resolve(cwd, artifact.path);
       return {

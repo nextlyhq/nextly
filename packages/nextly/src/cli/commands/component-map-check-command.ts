@@ -57,7 +57,9 @@ export async function runComponentMapCheck(
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
-      loaded.config.admin?.dashboard
+      loaded.config.admin?.dashboard,
+      // And the views the site's own collections name.
+      loaded.config.collections
     );
   } catch (error) {
     // What stopped the check, in the error shape; the status still says it was not an answer.

@@ -16,6 +16,7 @@
  * @module plugins/codegen/check-component-map
  */
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -88,7 +89,9 @@ export async function checkComponentMapFiles(
   cwd: string,
   configFile: string | undefined,
   /** The site config's `admin.dashboard`, whose own widgets the map must list too. */
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map must list too. */
+  siteCollections?: readonly CollectionConfig[]
 ): Promise<ComponentMapAgreement> {
   const dir = resolve(cwd, dirname(typesOutputPath));
   const files = [
@@ -97,7 +100,11 @@ export async function checkComponentMapFiles(
   ] as const;
   const [map, list] = await Promise.all(files.map(contentOf));
   const listed = list === undefined ? [] : listedPathsOf(list);
-  const declared = componentImportMapEntries(plugins, siteDashboard);
+  const declared = componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    siteCollections
+  );
   const held = new Set(listed ?? []);
   const declaredPaths = new Set(declared.map(each => each.path));
   return {
