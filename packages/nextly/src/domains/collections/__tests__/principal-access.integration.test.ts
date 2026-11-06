@@ -263,7 +263,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "verified_only",
             id: entryId,
-            data: { title: "changed" },
+            data: { title: "changed", _overwrite: true },
             principal: unverified,
           })
         ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
@@ -331,7 +331,8 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "members_only",
           where: { staff_note: { equals: "internal" } },
-          data: { title: "probed" },
+          // Refused for the withheld field, not for want of a version.
+          data: { title: "probed", _overwrite: true },
           principal: member,
         })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
@@ -345,7 +346,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "members_only",
         where: { title: { equals: "seeded" } },
-        data: { title: "renamed" },
+        data: { title: "renamed", _overwrite: true },
         principal: member,
       });
       const renamed = (await t.nextly.findByID({
@@ -399,7 +400,8 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.collectionsHandler.bulkUpdateByQuery({
             collectionName: "members_only",
             where: { staff_note: { equals: "internal" } },
-            data: { title: "probed" },
+            // Refused for the withheld field, not for want of a version.
+            data: { title: "probed", _overwrite: true },
             overrideAccess: false,
           })
         )
@@ -446,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "members_only",
         id: staffRow,
-        data: { title: "edited by a person" },
+        data: { title: "edited by a person", _overwrite: true },
         principal: member,
       });
 

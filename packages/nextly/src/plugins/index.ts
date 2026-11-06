@@ -102,7 +102,10 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   FieldSurface,
+  PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
 } from "./contributions";
 
@@ -116,9 +119,18 @@ export type {
   PluginCollectionView,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
+  PluginAdminPlaceDeclaration,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";
+
+// The places on admin pages plugins add to, and the ids every surface takes.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./admin-places";
 
 // Plugin HTTP routes — `contributes.routes` surface.
 export type {

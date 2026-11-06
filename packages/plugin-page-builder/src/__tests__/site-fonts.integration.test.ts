@@ -601,6 +601,54 @@ describe.each(getConfiguredTestDialects())(
       expect(families.filter(name => name === "Merriweather")).toHaveLength(2);
     });
 
+    it("appends the faces with the version of the read it appended them to", async () => {
+      // A save of the site's style between that read and the write refuses
+      // the write, rather than losing what the save stored.
+      const t = await boot();
+      const fonts = resolveFontOptions({
+        catalogue: { api: catalogue.origin, files: catalogue.origin },
+      });
+      if (fonts === false) throw new Error("the catalogue is on");
+      const real = t.nextly as unknown as SiteFontsDirectApi;
+      const readRevs: unknown[] = [];
+      const sentRevs: unknown[] = [];
+      const recording: SiteFontsDirectApi = {
+        ...real,
+        media: real.media,
+        findSingle: async args => {
+          const doc = await real.findSingle(args);
+          readRevs.push((doc as Record<string, unknown> | null)?._rev);
+          return doc;
+        },
+        updateSingle: async args => {
+          sentRevs.push(args.data._rev);
+          return real.updateSingle(args);
+        },
+      };
+      const [, addRoute] = siteFontRoutes({
+        fonts,
+        nextly: async () => recording,
+      });
+      const answer = await addRoute?.handler(
+        new Request(`${ORIGIN}/x`, {
+          method: "POST",
+          body: JSON.stringify(LORA_400_700),
+        }),
+        {
+          self: { collections: {}, singles: {} },
+          user: null,
+          caller: { can: async () => true },
+          fetch: (input, init) => fetch(input, init),
+        }
+      );
+
+      expect(answer?.status).toBe(200);
+      expect(sentRevs).toHaveLength(1);
+      expect(typeof sentRevs[0]).toBe("string");
+      // The read the write appended to is the last one before it.
+      expect(sentRevs[0]).toBe(readRevs.at(-1));
+    });
+
     it("makes one Fonts folder when the first two adds start together", async () => {
       const t = await boot();
       catalogue.json("/v1/fonts/merriweather", {
@@ -917,6 +965,7 @@ describe.each(getConfiguredTestDialects())(
             src: [{ url: "https://fonts.gstatic.com/s/lora.woff2" }],
           },
         ],
+        _overwrite: true,
       });
       expect(answer.status).toBeGreaterThanOrEqual(400);
       expect(await storedFonts(t)).toEqual([]);

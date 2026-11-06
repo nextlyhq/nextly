@@ -61,6 +61,7 @@ import {
   reloadDocument,
   useSharedFieldsRecovery,
 } from "@admin/hooks/useSharedFieldsRecovery";
+import { staleVersionOf } from "@admin/lib/document-version";
 import {
   createServerErrorHandler,
   parseServerErrorMessage,
@@ -361,6 +362,18 @@ export function useUpdateEntry<
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
         queryClient.setQueryData(localeKey, context.previousEntry);
+      }
+
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The entry is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: entryKeys.detail(collectionSlug, entryId),
+        });
+        onError?.(error);
+        return;
       }
 
       // Try to map server errors to form fields

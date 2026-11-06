@@ -26,18 +26,21 @@ export interface ComponentMapWrite {
   readonly changed: readonly string[];
 }
 
+/** One file of the component map: where it goes, what it would hold, and what it holds now. */
+export interface PlannedComponentMapFile {
+  file: string;
+  code: string;
+  /** Its content on disk, or undefined where there is no such file yet. */
+  previous: string | undefined;
+}
+
 /**
- * Writes the map and its path list beside the generated types file, resolved
- * against `cwd`, creating the folder when it is missing.
- *
- * 🔴 The pair changes together or not at all. The map refuses to load when it
- * disagrees with its list, so one file replaced and the other not leaves an
- * admin that does not load, where the old pair at least agreed. So both are
- * read before either is written, and a file that cannot be read stops the
- * write unchanged; and when a write fails, every file it started on is put
- * back as it was read before the error is thrown.
+ * The map and its path list as `writeComponentMapFiles` writes them, read and
+ * computed without writing anything: a file whose `previous` differs from its
+ * `code` is one the write changes. A dry run reports from this plan, and the
+ * writer writes from it.
  */
-export async function writeComponentMapFiles(
+export async function planComponentMapFiles(
   plugins: PluginDefinition[],
   typesOutputPath: string,
   cwd: string,
@@ -49,7 +52,7 @@ export async function writeComponentMapFiles(
   config?: string | { import: string },
   /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
   siteDashboard?: unknown
-): Promise<ComponentMapWrite> {
+): Promise<PlannedComponentMapFile[]> {
   const configImport =
     config === undefined || typeof config !== "string"
       ? config?.import
@@ -72,6 +75,24 @@ export async function writeComponentMapFiles(
       };
     })
   );
+  return planned;
+}
+
+/**
+ * Writes the map and its path list beside the generated types file, resolved
+ * against `cwd`, creating the folder when it is missing.
+ *
+ * 🔴 The pair changes together or not at all. The map refuses to load when it
+ * disagrees with its list, so one file replaced and the other not leaves an
+ * admin that does not load, where the old pair at least agreed. So both are
+ * read before either is written, and a file that cannot be read stops the
+ * write unchanged; and when a write fails, every file it started on is put
+ * back as it was read before the error is thrown.
+ */
+export async function writeComponentMapFiles(
+  ...args: Parameters<typeof planComponentMapFiles>
+): Promise<ComponentMapWrite> {
+  const planned = await planComponentMapFiles(...args);
   // Every file a write was started on, the failing one included: a write
   // that fails partway can leave its own file cut short.
   const touched: (typeof planned)[number][] = [];

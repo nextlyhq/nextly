@@ -193,7 +193,7 @@ describe.each(getConfiguredTestDialects())(
       const first = docOrItem(
         await t.nextly.updateSingle({
           slug: SETTINGS as never,
-          data: { notice: "first" },
+          data: { notice: "first", _overwrite: true },
           overrideAccess: true,
         } as never)
       );

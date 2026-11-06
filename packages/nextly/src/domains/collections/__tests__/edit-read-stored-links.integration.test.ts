@@ -205,6 +205,7 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
       ],
       logo: media[0],
       gallery: [media[1], media[0]],
+      _overwrite: true,
     },
     { overrideAccess: true }
   );
@@ -255,7 +256,7 @@ async function saveRef(
       user: { id: fx.editor },
       routeAuthorized: true,
     },
-    data
+    { ...data, _overwrite: true }
   );
   expect(result.success).toBe(true);
 }
@@ -285,12 +286,14 @@ async function saveHomepage(
   fx: Fixture,
   data: Record<string, unknown>
 ): Promise<void> {
-  const result = await fx.t
-    .getService("singleEntryService")
-    .update("homepage", data, {
+  const result = await fx.t.getService("singleEntryService").update(
+    "homepage",
+    { ...data, _overwrite: true },
+    {
       user: { id: fx.editor },
       routeAuthorized: true,
-    });
+    }
+  );
   expect(result.success).toBe(true);
 }
 
@@ -348,7 +351,7 @@ describe.each(getConfiguredTestDialects())(
         .getService("singleEntryService")
         .update(
           "homepage",
-          { gallery: [fx.media[1], "media-deleted"] },
+          { gallery: [fx.media[1], "media-deleted"], _overwrite: true },
           { overrideAccess: true }
         );
       const read = await editReadHomepage(fx);
@@ -587,7 +590,7 @@ describe.each(getConfiguredTestDialects())(
           user: { id: "denied" },
           routeAuthorized: true,
         },
-        { name: "renamed", tags }
+        { name: "renamed", tags, _overwrite: true }
       );
       expect(saved.success).toBe(true);
       const after = await handler.getEntry({

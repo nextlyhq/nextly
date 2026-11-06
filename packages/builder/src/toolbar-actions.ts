@@ -71,7 +71,7 @@ import {
   lockBlockingMove,
 } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, OpPosition } from "./ops";
+import type { BuilderOp, OpPosition } from "./op-vocabulary";
 import {
   isRefusal,
   selectionDeletion,

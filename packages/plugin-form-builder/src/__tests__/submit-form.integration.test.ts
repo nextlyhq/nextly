@@ -279,7 +279,7 @@ describe("what a form that is not taking submissions says", () => {
       await current.nextly.update({
         collection: "forms",
         where: { slug: { equals: "contact" } },
-        data: { status },
+        data: { status, _overwrite: true },
       });
     }
 
@@ -349,7 +349,7 @@ describe("what a form that is not taking submissions says", () => {
     await current.nextly.update({
       collection: "forms",
       where: { slug: { equals: "contact" } },
-      data: { status: "closed" },
+      data: { status: "closed", _overwrite: true },
     });
 
     const result = await submitForm(

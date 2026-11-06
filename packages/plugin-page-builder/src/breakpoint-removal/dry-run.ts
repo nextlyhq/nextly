@@ -105,6 +105,14 @@ export const NAMED_AT_MOST = 10;
 /** How many documents one ask of the caller names at once. */
 const NAMES_PER_ASK = 50;
 
+/**
+ * How many documents one dry run reads by their saved titles, however many
+ * breakpoints it removes. Each is a read by id, the only read that shows a
+ * pending working draft; past this, a document keeps the title the batched
+ * access read gave it.
+ */
+const SAVED_TITLES_AT_MOST = 20;
+
 /** What the dry run reads the site through. */
 export interface DryRunDeps {
   /** Every document holding blocks, as the shared walk yields them. */
@@ -120,6 +128,17 @@ export interface DryRunDeps {
    */
   readonly namesFor: (
     hosts: readonly HostAddress[]
+  ) => Promise<ReadonlyMap<string, string>>;
+  /**
+   * Each of `hosts` by its title as saved, a pending working draft's own
+   * included, by document key, where it differs from what `namesFor` read;
+   * absent keeps that name. Asked once a list has chosen the documents it
+   * names, so only for those, and at most once per document.
+   */
+  readonly savedTitles?: (
+    hosts: readonly HostAddress[],
+    /** When to stop starting reads: one the dry run could not wait for. */
+    deadline: Date | undefined
   ) => Promise<ReadonlyMap<string, string>>;
   /** The bounds the compiler reads a document within. */
   readonly limits: DocumentLimits;
@@ -340,21 +359,87 @@ type NameCache = Map<string, string | null>;
 async function named(
   naming: Naming,
   deps: DryRunDeps,
-  cache: NameCache
+  caches: NameCaches
 ): Promise<NamedDocuments> {
-  const names: string[] = [];
+  const picked: Picked[] = [];
   let unnamed = naming.unnamed;
   for (let at = 0; at < naming.hosts.length; at += NAMES_PER_ASK) {
     const left = naming.hosts.length - at;
-    if (names.length >= NAMED_AT_MOST)
-      return { named: names, unnamed: unnamed + left };
-    const batch = naming.hosts.slice(at, at + NAMES_PER_ASK);
-    if (!(await askBatch(batch, deps, cache))) {
-      return { named: names, unnamed: unnamed + left };
+    if (picked.length >= NAMED_AT_MOST) {
+      unnamed += left;
+      break;
     }
-    unnamed += takeNames(batch, cache, names);
+    const batch = naming.hosts.slice(at, at + NAMES_PER_ASK);
+    if (!(await askBatch(batch, deps, caches.names))) {
+      unnamed += left;
+      break;
+    }
+    unnamed += takeNames(batch, caches.names, picked);
   }
-  return { named: names, unnamed };
+  return { named: await savedNames(picked, deps, caches.saved), unnamed };
+}
+
+/** A document a list names, and the name the access read gave it. */
+interface Picked {
+  readonly host: HostAddress;
+  readonly name: string;
+}
+
+/** What has been asked of the caller, shared by every list of one dry run. */
+interface NameCaches {
+  /** Each document's name, `null` where the caller may not read it. */
+  readonly names: NameCache;
+  /** Each named document's title as saved, `null` where it did not differ. */
+  readonly saved: Map<string, string | null>;
+}
+
+/**
+ * The picked documents' names, each by its title as saved where the site can
+ * say (a pending draft may have renamed it, and the editor shows that), in
+ * the order they were picked. Asked only for the documents named, once each;
+ * past the deadline the names the access read gave are kept.
+ */
+async function savedNames(
+  picked: readonly Picked[],
+  deps: DryRunDeps,
+  saved: Map<string, string | null>
+): Promise<string[]> {
+  // Within the dry run's own allowance of such reads, and never once the
+  // deadline has passed: a read started then could not be heard.
+  const room = SAVED_TITLES_AT_MOST - saved.size;
+  // Only an entry has a title to read as saved: a Single is named by its
+  // slug, so it takes nothing from the allowance.
+  const unasked = picked
+    .map(entry => entry.host)
+    .filter(
+      host => host.kind === "collection" && !saved.has(documentKeyOf(host))
+    )
+    .slice(0, Math.max(room, 0));
+  if (
+    deps.savedTitles !== undefined &&
+    unasked.length > 0 &&
+    !pastDeadline(deps)
+  ) {
+    const answer = await beforeDeadline(
+      deps.savedTitles(unasked, deps.deadline),
+      deps
+    );
+    // Timed out means the deadline has passed, so no later list asks again.
+    if (answer !== TIMED_OUT) {
+      for (const host of unasked) {
+        const key = documentKeyOf(host);
+        saved.set(key, answer.get(key) ?? null);
+      }
+    }
+  }
+  return picked.map(
+    entry => saved.get(documentKeyOf(entry.host)) ?? entry.name
+  );
+}
+
+/** Whether the deadline has passed. */
+function pastDeadline(deps: DryRunDeps): boolean {
+  return deps.deadline !== undefined && Date.now() >= deps.deadline.getTime();
 }
 
 /**
@@ -378,19 +463,20 @@ async function askBatch(
 }
 
 /**
- * Name a batch's documents from the cache while the list has room; answers
- * how many were only counted.
+ * Pick a batch's documents the caller may read while the list has room;
+ * answers how many were only counted.
  */
 function takeNames(
   batch: readonly HostAddress[],
   cache: NameCache,
-  names: string[]
+  picked: Picked[]
 ): number {
   let unnamed = 0;
   for (const host of batch) {
     const name = cache.get(documentKeyOf(host)) ?? null;
-    if (name !== null && names.length < NAMED_AT_MOST) names.push(name);
-    else unnamed += 1;
+    if (name !== null && picked.length < NAMED_AT_MOST) {
+      picked.push({ host, name });
+    } else unnamed += 1;
   }
   return unnamed;
 }
@@ -510,7 +596,7 @@ export async function countRemoval(
       ? { unreadable: 0, complete: true }
       : await walkSite(ids, per, deps);
   const out: RemovedBreakpoint[] = [];
-  const names: NameCache = new Map();
+  const names: NameCaches = { names: new Map(), saved: new Map() };
   for (const [id, entry] of per) {
     out.push({
       id,

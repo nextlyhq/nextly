@@ -69,6 +69,7 @@ import {
   readLayoutSettings,
   type DefaultLayoutDirectApi,
 } from "./default-layout/store";
+import { asOverwrite } from "./document-version";
 import { chunked, ID_BATCH_SIZE } from "./id-batches";
 import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import { readingAsUser, type ComponentStore } from "./library-route";
@@ -691,7 +692,9 @@ function refusalReason(error: unknown): string {
  * may publish a Layout without reading any component, and a permission on
  * one collection would refuse a write core allows on the other. One refusal
  * does not stop the rest: the author asked for each of them, and the page
- * publishes regardless.
+ * publishes regardless. Nothing here reads the documents it publishes, so
+ * each write chooses to publish whatever is stored (`_overwrite`) rather than
+ * sending a version.
  */
 export function publishDependenciesRoute(setup: PublishReadinessSetup): {
   method: "POST";
@@ -715,7 +718,7 @@ export function publishDependenciesRoute(setup: PublishReadinessSetup): {
           await ctx.services.collections.updateEntry(
             kind === "component" ? stores.components : stores.layouts,
             id,
-            { status: "published" },
+            asOverwrite({ status: "published" }),
             asCaller(ctx)
           );
           published.push({ kind, id });

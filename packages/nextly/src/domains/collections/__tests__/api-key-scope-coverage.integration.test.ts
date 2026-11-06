@@ -278,7 +278,7 @@ describe("API-key scope coverage on delete + version-label gates", () => {
           permissions: ["update-posts"],
         },
       },
-      [{ id, data: { status: "published" } }]
+      [{ id, data: { status: "published", _overwrite: true } }]
     );
     expect(denied.successful).toBe(0);
     expect(denied.failed).toBe(1);
@@ -290,7 +290,7 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         collectionName: "posts",
         user: { id: "admin", roles: ["super-admin"] },
       },
-      [{ id, data: { status: "published" } }]
+      [{ id, data: { status: "published", _overwrite: true } }]
     );
     expect(allowed.successful).toBe(1);
     expect(allowed.failed).toBe(0);
@@ -389,7 +389,7 @@ describe("API-key scope coverage on delete + version-label gates", () => {
           permissions: ["read-posts"],
         },
       },
-      [{ id, data: { title: "b" } }]
+      [{ id, data: { title: "b", _overwrite: true } }]
     );
     expect(denied.successful).toBe(0);
     expect(denied.failed).toBe(1);
@@ -400,7 +400,7 @@ describe("API-key scope coverage on delete + version-label gates", () => {
         collectionName: "posts",
         user: { id: "admin", roles: ["super-admin"] },
       },
-      [{ id, data: { title: "c" } }]
+      [{ id, data: { title: "c", _overwrite: true } }]
     );
     expect(allowed.successful).toBe(1);
     expect(allowed.failed).toBe(0);

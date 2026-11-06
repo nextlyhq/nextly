@@ -3,7 +3,7 @@ title: Lifecycle, dependencies & order
 description: How and when a plugin runs — the setup/init/destroy lifecycle, load order, declaring dependencies on other plugins, version compatibility, and enabling/disabling.
 ---
 
-This page covers *when* a plugin's code runs, in *what order*, and how to express
+This page covers _when_ a plugin's code runs, in _what order_, and how to express
 ordering and version constraints. For the errors these rules produce, see the
 [error reference](/docs/plugins/error-reference).
 
@@ -12,7 +12,7 @@ ordering and version constraints. For the errors these rules produce, see the
 ```ts
 definePlugin({
   name: "@acme/nextly-plugin-thing",
-  version: "1.0.0",      // your plugin's semver (used by others' dependsOn ranges)
+  version: "1.0.0", // your plugin's semver (used by others' dependsOn ranges)
   nextly: ">=0.0.2-alpha.63", // core-compat range (see Version compatibility)
   contributes: {
     /* declarative nouns: collections, extend, permissions, routes, admin, events */
@@ -112,7 +112,12 @@ so disabling a plugin doesn't drop its tables or strand its data. This lets an
 integrator turn a plugin's behavior off without a destructive schema change.
 
 ```ts
-definePlugin({ name: "@acme/nextly-plugin-thing", version: "1.0.0", nextly: ">=0.0.2-alpha.63", enabled: false });
+definePlugin({
+  name: "@acme/nextly-plugin-thing",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.63",
+  enabled: false,
+});
 ```
 
 To actually remove a plugin's tables and data, run `nextly plugins uninstall <name>`
@@ -154,6 +159,33 @@ once `nextly plugins install` has finished on that database: a production boot
 refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
 `nextly plugins install --all` installs every enabled plugin in your config, its
 dependencies first, and stops at the first that fails.
+
+A pending module that deletes data needs the data-loss consent before the install
+applies anything, exactly as `nextly migrate` asks for it. The install lists each
+module above what it deletes. At a terminal it asks once. Without a terminal it is
+refused, with nothing changed, unless `--accept-data-loss` (alone, or naming each
+table or `table.column`) or `NEXTLY_ACCEPT_DATA_LOSS` covers every deletion:
+
+```bash
+nextly plugins install @acme/notes --accept-data-loss=acme__drafts
+```
+
+A no at the terminal stops the install with exit code 1, and nothing is changed.
+With `--all`, each plugin is judged before its own install changes anything, and the
+run stops at the first refusal: the plugins installed before it stay installed.
+
+`--dry-run` on either command shows what it would do and changes nothing: it
+opens the database read-only, takes no lock, asks no consent and exits 0, naming
+the refusal a real run would meet. An install names each pending module with
+what it deletes, and the record it would make; with `--all`, a plugin is planned
+as if the installs before it had run. An uninstall names each module's DOWN, the
+tables and columns it drops (none with `--keep-data`), and the records it would
+make. Neither runs `onInstall` or `onUninstall`: a hook is plugin code the dry
+run does not simulate, and it says so.
+
+```bash
+nextly plugins uninstall @acme/notes --dry-run
+```
 
 A disabled plugin (`enabled: false`) is not installed, by `--all` or by name, and a
 production boot does not require it to be: you can keep a plugin disabled, never

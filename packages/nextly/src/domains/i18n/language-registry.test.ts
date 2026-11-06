@@ -75,6 +75,47 @@ describe("the language registry", () => {
     expect(registry.current()).toBeUndefined();
   });
 
+  it("serves the implicit language while nothing is stored, for a site keeping every translatable field per language", async () => {
+    const stored = storedRows([]);
+    const registry = new LanguageRegistry({
+      reader: stored.reader,
+      implicitLanguage: true,
+    });
+
+    await registry.refresh();
+    expect(registry.current()).toEqual({
+      defaultLocale: "en",
+      fallback: true,
+      locales: [
+        { code: "en", label: "English", rtl: false, fallbackLocale: [] },
+      ],
+    });
+    // Pinned for a request like any other list.
+    expect(
+      await registry.runWithLatest(async () => codes(registry.current()))
+    ).toEqual(["en"]);
+
+    // A language stored in Settings takes over: adding one is data only.
+    stored.set([french]);
+    await registry.refresh({ force: true });
+    expect(codes(registry.current())).toEqual(["fr"]);
+  });
+
+  it("serves the configuration's languages over the implicit one", () => {
+    const configured: SanitizedLocalizationConfig = {
+      defaultLocale: "fr",
+      fallback: true,
+      locales: [
+        { code: "fr", label: "French", rtl: false, fallbackLocale: [] },
+      ],
+    };
+    const registry = new LanguageRegistry({
+      configured,
+      implicitLanguage: true,
+    });
+    expect(registry.current()).toBe(configured);
+  });
+
   it("asks for the fingerprint at most once per interval, and reads the rows only when it changes", async () => {
     let now = 0;
     const stored = storedRows([english]);

@@ -45,10 +45,21 @@ export interface WriteGeneratedTypesOptions {
   warn: (message: string) => void;
 }
 
-/** Generates the types file, writes it, and returns the path it was written to. */
-export async function writeGeneratedTypesFile(
-  options: WriteGeneratedTypesOptions
-): Promise<string> {
+/** A file a generator would write: where, and what. */
+export interface GeneratedFile {
+  /** Absolute path. */
+  path: string;
+  /** The whole content the file would hold. */
+  code: string;
+}
+
+/**
+ * Generates the types file without writing it: the path and content
+ * `writeTypesFile` writes, for a run that only reports them.
+ */
+export function generateTypesFile(
+  options: Omit<WriteGeneratedTypesOptions, "warn">
+): GeneratedFile {
   // Without these names the types write `PermissionSlug` and `EventName` as
   // bare `string`, widening what the app's own permissions and events narrow.
   const { permissionSlugs, eventNames } = collectCodegenNames(
@@ -70,9 +81,22 @@ export async function writeGeneratedTypesFile(
     eventNames
   );
 
-  const typesFilePath = generatedTypesFile(options.cwd, options.outputFile);
-  await mkdir(dirname(typesFilePath), { recursive: true });
-  await writeFile(typesFilePath, typesFile.code, "utf-8");
+  return {
+    path: generatedTypesFile(options.cwd, options.outputFile),
+    code: typesFile.code,
+  };
+}
+
+/**
+ * Writes a types file `generateTypesFile` produced, then tells the developer
+ * about a file the old default left beside it.
+ */
+async function writeTypesFile(
+  typesFile: GeneratedFile,
+  options: Pick<WriteGeneratedTypesOptions, "cwd" | "outputFile" | "warn">
+): Promise<void> {
+  await mkdir(dirname(typesFile.path), { recursive: true });
+  await writeFile(typesFile.path, typesFile.code, "utf-8");
   // After the new file exists, so a message naming it names a real file.
   for (const notice of retireOldDefaultTypesFile(
     options.cwd,
@@ -80,5 +104,38 @@ export async function writeGeneratedTypesFile(
   )) {
     options.warn(notice);
   }
-  return typesFilePath;
+}
+
+/**
+ * Writes what `generate:types` and `build` generate: the Zod schemas and their
+ * index, each folder made first, then the types file. The one writer behind
+ * both commands, which plan these files first so a dry run can name them.
+ */
+export async function writeGeneratedOutput(
+  output: GeneratedOutput,
+  options: Pick<WriteGeneratedTypesOptions, "cwd" | "outputFile" | "warn">
+): Promise<void> {
+  for (const file of generatedOutputOrder(output)) {
+    if (file === output.types) {
+      await writeTypesFile(file, options);
+    } else {
+      await mkdir(dirname(file.path), { recursive: true });
+      await writeFile(file.path, file.code, "utf-8");
+    }
+  }
+}
+
+/** What `generate:types` and `build` generate: the Zod files and the types file. */
+export interface GeneratedOutput {
+  zod: readonly GeneratedFile[];
+  types?: GeneratedFile;
+}
+
+/**
+ * The files of `output` in the order `writeGeneratedOutput` writes them, which
+ * is the order a dry run names them in: should a write fail part way, the
+ * files before it are the ones a real run had already written.
+ */
+export function generatedOutputOrder(output: GeneratedOutput): GeneratedFile[] {
+  return [...output.zod, ...(output.types ? [output.types] : [])];
 }

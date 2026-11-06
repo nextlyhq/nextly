@@ -172,7 +172,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                   entryId: doc.id,
                   overrideAccess: true,
                 },
-                { status: "draft" }
+                { status: "draft", _overwrite: true }
               );
             },
           ],
@@ -711,7 +711,7 @@ describe.each(getConfiguredTestDialects())(
       for (const id of ids) {
         await handlerOf(t).updateEntry(
           { collectionName: POSTS, entryId: id, overrideAccess: true },
-          { title: "edited", status: "published" }
+          { title: "edited", status: "published", _overwrite: true }
         );
       }
 
@@ -805,7 +805,7 @@ describe.each(getConfiguredTestDialects())(
       // working draft and leaves the live row alone.
       await handlerOf(t).updateEntry(
         { collectionName: LOCKED, entryId: id, overrideAccess: true },
-        { title: "pending title" }
+        { title: "pending title", _overwrite: true }
       );
       const releaseId = await dueRelease(t, [id], {
         scopeKind: "collection",
@@ -834,7 +834,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Seite", status: "draft" }
+        { title: "Seite", status: "draft", _overwrite: true }
       );
       const releaseId = await dueRelease(t, [id], {
         scopeKind: "collection",
@@ -926,7 +926,7 @@ describe.each(getConfiguredTestDialects())(
       const singles: SingleEntryService = t.getService("singleEntryService");
       await singles.update(
         SETTINGS,
-        { siteName: "Site", status: "draft" },
+        { siteName: "Site", status: "draft", _overwrite: true },
         { overrideAccess: true }
       );
       const rows = await t.adapter.select<{ id: string }>(

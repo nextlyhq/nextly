@@ -77,11 +77,15 @@ describe.each(getConfiguredTestDialects())(
       // Saved published, then as a draft: the Single's one row is the draft.
       await trusted.updateSingle({
         slug: "vpage",
-        data: { title: "published page", status: "published" },
+        data: {
+          title: "published page",
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       await trusted.updateSingle({
         slug: "vpage",
-        data: { title: "draft page", status: "draft" },
+        data: { title: "draft page", status: "draft", _overwrite: true },
       } as never);
     }, 180_000);
 

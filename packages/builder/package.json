@@ -65,7 +65,8 @@
   },
   "dependencies": {
     "@nextlyhq/blocks-engine": "workspace:*",
-    "@nextlyhq/blocks-react": "workspace:*"
+    "@nextlyhq/blocks-react": "workspace:*",
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",

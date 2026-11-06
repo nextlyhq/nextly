@@ -150,7 +150,7 @@ describe.each(getConfiguredTestDialects())(
         ] as const) {
           const live = await singles.update(
             slug,
-            { siteName, status: "published" },
+            { siteName, status: "published", _overwrite: true },
             { locale, overrideAccess: true }
           );
           expect(live.success, JSON.stringify(live)).toBe(true);
@@ -158,7 +158,7 @@ describe.each(getConfiguredTestDialects())(
         // English's pending change: held, not yet live.
         const held = await singles.update(
           slug,
-          { siteName: "Hello again" },
+          { siteName: "Hello again", _overwrite: true },
           { locale: "en", overrideAccess: true }
         );
         expect(held.success, JSON.stringify(held)).toBe(true);
@@ -167,12 +167,13 @@ describe.each(getConfiguredTestDialects())(
 
       const alone = await singles.update(
         ONE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(alone.success, JSON.stringify(alone)).toBe(true);
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
 
@@ -214,14 +215,14 @@ describe.each(getConfiguredTestDialects())(
       for (const slug of [ONE, EVERY]) {
         const live = await singles.update(
           slug,
-          { siteName: "Hello", status: "published" },
+          { siteName: "Hello", status: "published", _overwrite: true },
           { locale: "en", overrideAccess: true }
         );
         expect(live.success, JSON.stringify(live)).toBe(true);
         // French: saved, never published.
         const saved = await singles.update(
           slug,
-          { siteName: "Bonjour" },
+          { siteName: "Bonjour", _overwrite: true },
           { locale: "fr", overrideAccess: true }
         );
         expect(saved.success, JSON.stringify(saved)).toBe(true);
@@ -230,12 +231,13 @@ describe.each(getConfiguredTestDialects())(
 
       const alone = await singles.update(
         ONE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "fr", overrideAccess: true }
       );
       expect(alone.success, JSON.stringify(alone)).toBe(true);
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
 
@@ -259,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
         // translation row of its own yet.
         const live = await singles.update(
           slug,
-          { tagline: "Shared", status: "published" },
+          { tagline: "Shared", status: "published", _overwrite: true },
           { overrideAccess: true }
         );
         expect(live.success, JSON.stringify(live)).toBe(true);
@@ -272,7 +274,7 @@ describe.each(getConfiguredTestDialects())(
         // English's first translated value, held as a pending change.
         const held = await singles.update(
           slug,
-          { siteName: "Hello" },
+          { siteName: "Hello", _overwrite: true },
           { locale: "en", overrideAccess: true }
         );
         expect(held.success, JSON.stringify(held)).toBe(true);
@@ -285,12 +287,13 @@ describe.each(getConfiguredTestDialects())(
 
       const alone = await singles.update(
         ONE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(alone.success, JSON.stringify(alone)).toBe(true);
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
 
@@ -318,7 +321,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = await boot(dialect);
       const live = await singles.update(
         EVERY,
-        { tagline: "Shared", status: "published" },
+        { tagline: "Shared", status: "published", _overwrite: true },
         { overrideAccess: true }
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
@@ -327,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const held = await singles.update(
         EVERY,
-        { siteName: "Hello" },
+        { siteName: "Hello", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -342,6 +345,7 @@ describe.each(getConfiguredTestDialects())(
 
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
 
@@ -362,7 +366,12 @@ describe.each(getConfiguredTestDialects())(
         ] as const) {
           const live = await singles.update(
             slug,
-            { siteName: locale, banner: { heading }, status: "published" },
+            {
+              siteName: locale,
+              banner: { heading },
+              status: "published",
+              _overwrite: true,
+            },
             { locale, overrideAccess: true }
           );
           expect(live.success, JSON.stringify(live)).toBe(true);
@@ -370,7 +379,7 @@ describe.each(getConfiguredTestDialects())(
         // German's pending change edits its own component.
         const held = await singles.update(
           slug,
-          { banner: { heading: "Pending de" } },
+          { banner: { heading: "Pending de" }, _overwrite: true },
           { locale: "de", overrideAccess: true }
         );
         expect(held.success, JSON.stringify(held)).toBe(true);
@@ -389,12 +398,13 @@ describe.each(getConfiguredTestDialects())(
 
       const alone = await singles.update(
         ONE,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
       expect(alone.success, JSON.stringify(alone)).toBe(true);
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
 
@@ -423,7 +433,7 @@ describe.each(getConfiguredTestDialects())(
       ] as const) {
         const live = await singles.update(
           EVERY,
-          { ...data, status: "published" },
+          { ...data, status: "published", _overwrite: true },
           { locale, overrideAccess: true }
         );
         expect(live.success, JSON.stringify(live)).toBe(true);
@@ -431,7 +441,7 @@ describe.each(getConfiguredTestDialects())(
       // German's pending change edits the shared field, held until published.
       const held = await singles.update(
         EVERY,
-        { tagline: "New" },
+        { tagline: "New", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -450,6 +460,7 @@ describe.each(getConfiguredTestDialects())(
 
       const every = await singles.publishAllLocales(EVERY, {
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(every.success, JSON.stringify(every)).toBe(true);
       const live = await read();

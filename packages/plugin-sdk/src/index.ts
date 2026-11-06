@@ -234,7 +234,9 @@ export { isLocaleSelector } from "nextly";
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
- *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
+ *   `PluginEmailTemplate` (D65), `PluginSchedule` and the earlier
+ *   `ScheduledTask` (deprecated: mapped to a `PluginSchedule` and run, with
+ *   a warning, or not run, with a warning saying why) — are also
  *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
  *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
@@ -259,7 +261,10 @@ export type {
   PluginFieldValidationResult,
   PluginFieldCodegen,
   PluginFieldCodegenImport,
+  PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
@@ -702,6 +707,21 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * Admin places: the named places on admin pages a plugin adds to, and the
+ * places a plugin declares on its own pages (`contributes.admin.places`).
+ * A plugin types its own places by augmenting `AdminPlaces` from this module.
+ * @experimental No first-party plugin declares or adds to a place yet (see
+ *   STABILITY.md).
+ */
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+  type PluginAdminPlaceDeclaration,
 } from "nextly";
 
 /**

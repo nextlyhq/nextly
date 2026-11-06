@@ -107,17 +107,20 @@ describe.each(getConfiguredTestDialects())(
         { title: "a", status: "draft" }
       );
       const id = (created.data as { id: string }).id;
-      await t.handler.updateEntry(
+      /** The version a write's result carries, for the next write. */
+      const revOf = (result: { data?: unknown }) =>
+        String((result.data as { _rev: string })._rev);
+      const saved = await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "b" }
+        { title: "b", _rev: revOf(created) }
+      );
+      const published = await t.handler.updateEntry(
+        { collectionName: "posts", entryId: id, ...as },
+        { status: "published", _rev: revOf(saved) }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "published" }
-      );
-      await t.handler.updateEntry(
-        { collectionName: "posts", entryId: id, ...as },
-        { status: "draft" }
+        { status: "draft", _rev: revOf(published) }
       );
       await t.handler.deleteEntry({
         collectionName: "posts",
@@ -186,7 +189,7 @@ describe.each(getConfiguredTestDialects())(
       for (const status of ["published", "draft"]) {
         await t.handler.updateEntry(
           { collectionName: "posts", entryId: edited, ...as },
-          { status }
+          { status, _overwrite: true }
         );
       }
       // Inside a caller's transaction, as a batch updates: its own write.
@@ -198,7 +201,7 @@ describe.each(getConfiguredTestDialects())(
             .updateEntryInTransaction(
               tx as never,
               { collectionName: "posts", entryId: batched, ...as },
-              { status }
+              { status, _overwrite: true }
             )
         );
         expect(result.success).toBe(true);
@@ -225,11 +228,11 @@ describe.each(getConfiguredTestDialects())(
       // No status on a published document: held as a draft over it.
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "held" }
+        { title: "held", _overwrite: true }
       );
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const events = await t.eventsOf(id);
@@ -258,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "posts", entryId: id, ...as },
-        { title: "a" }
+        { title: "a", _rev: String((created.data as { _rev: string })._rev) }
       );
 
       expect((await t.eventsOf(id)).map(e => e.kind)).toEqual(["created"]);
@@ -308,12 +311,13 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await t.handler.updateEntry(
         { collectionName: "translated", entryId: id, locale: "es", ...as },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
       const published = await t.handler.publishAllLocales({
         collectionName: "translated",
         entryId: id,
         ...as,
+        data: { _overwrite: true },
       });
       expect(published.success).toBe(true);
 
@@ -340,7 +344,7 @@ describe.each(getConfiguredTestDialects())(
       const result = await t.handler
         .updateEntry(
           { collectionName: "posts", entryId: id, ...as },
-          { title: "lost" }
+          { title: "lost", _overwrite: true }
         )
         .catch(error => {
           refusal = error;

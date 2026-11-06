@@ -79,7 +79,12 @@ async function seed(seen: { token: unknown[]; siteName: unknown[] }) {
   });
   await nextly.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", apiToken: "secret-token", leak: "x" },
+    data: {
+      siteName: "Acme",
+      apiToken: "secret-token",
+      leak: "x",
+      _overwrite: true,
+    },
   });
   return nextly;
 }
