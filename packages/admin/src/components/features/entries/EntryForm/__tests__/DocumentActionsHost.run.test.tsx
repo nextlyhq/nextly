@@ -506,6 +506,43 @@ describe("running an action a plugin overrides", () => {
     });
   });
 
+  it("keeps a hidden action hidden when the page contributes one under its id", async () => {
+    // The built-in wins an id collision, so a contribution reusing `delete`
+    // is dropped while the built-in stands. Hiding the built-in must not let
+    // that contribution through in its place.
+    const contributed = vi.fn();
+    const onDelete = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const runner = renderHost({
+      entry: published,
+      onDelete,
+      contributedActions: [
+        {
+          action: {
+            id: "delete",
+            label: "Delete everywhere",
+            placement: "menu",
+            group: "danger",
+          },
+          binding: { onSelect: contributed },
+        },
+      ],
+      actionOverrides: { delete: { kind: "hidden" } },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(contributed).not.toHaveBeenCalled();
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message: "This action isn't offered for this document.",
+    });
+  });
+
   it("replaces Unpublish without asking the built-in question first", async () => {
     const onUnpublish = vi.fn(() => Promise.resolve(saved));
     const open = vi.fn(() => Promise.resolve({ ok: true as const }));

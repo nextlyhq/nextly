@@ -671,7 +671,10 @@ export function useDocumentActionBindings({
     // is not offered where every write to it is refused.
     isReadingHistory || writesRefused
       ? []
-      : heldUnderLock(contributedActions, documentLocked),
+      : heldUnderLock(
+          withoutHiddenIds(contributedActions, actionOverrides),
+          documentLocked
+        ),
     currentValues,
     currentDirty
   );
@@ -713,6 +716,21 @@ export function useDocumentActionBindings({
     saveState,
     lastStoredAt: storedAt(gate.lastStore),
   };
+}
+
+/**
+ * The page's contributions, less any under the id of an action a plugin
+ * hides. A built-in wins an id collision, so such a contribution is dropped
+ * while the built-in stands; once hidden, the built-in no longer stands in
+ * the merge, and without this its id would pass to the contribution.
+ */
+function withoutHiddenIds(
+  contributed: readonly ContributedAction[],
+  overrides: DocumentActionOverrides
+): readonly ContributedAction[] {
+  return contributed.filter(
+    entry => overrideOf(overrides, entry.action.id)?.kind !== "hidden"
+  );
 }
 
 /**
