@@ -2913,19 +2913,36 @@ function storedSourceWords(reading: ListQueryReading): string | undefined {
 
 /**
  * The canvas's tag for a list whose new source waits: set while it waits,
- * and cleared once it is written, abandoned, or the list is no longer the
- * one being edited.
+ * and cleared once it is written or abandoned, once the inspector shows
+ * another list, and once it is gone. Each tag is cleared through the
+ * function that set it, which names its own list.
  */
 function useStillShowing(
+  nodeId: string,
   tag: ((words: string | undefined) => void) | undefined,
   words: string | undefined
 ): void {
   const latest = React.useRef(tag);
   latest.current = tag;
+  const shown = React.useRef<
+    | {
+        readonly nodeId: string;
+        readonly words: string;
+        readonly clear: () => void;
+      }
+    | undefined
+  >(undefined);
   React.useEffect(() => {
-    latest.current?.(words);
-  }, [words]);
-  React.useEffect(() => () => latest.current?.(undefined), []);
+    const held = shown.current;
+    if (held?.nodeId === nodeId && held.words === words) return;
+    held?.clear();
+    shown.current = undefined;
+    const set = latest.current;
+    if (words === undefined || set === undefined) return;
+    set(words);
+    shown.current = { nodeId, words, clear: () => set(undefined) };
+  }, [nodeId, words]);
+  React.useEffect(() => () => shown.current?.clear(), []);
 }
 
 /** The draft of a custom source, dropped when what the list stores changes. */
@@ -2988,7 +3005,7 @@ function useNamedEditing(
   const { query } = reading;
   const [draft, setDraft] = useNamedDraft(nodeId, query);
   const named = shownNamedOf(query, draft, reading.customsRead);
-  useStillShowing(onStillShowing, stillWords(draft, reading));
+  useStillShowing(nodeId, onStillShowing, stillWords(draft, reading));
   const pickCustom = (source: CustomSource) => {
     const name = source.declaration.name;
     setDraft(undefined);
