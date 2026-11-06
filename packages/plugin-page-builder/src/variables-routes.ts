@@ -3,13 +3,15 @@
  * and removing the ones the site added that nothing uses.
  *
  * A variable (design token) is used by a document whose blocks or page
- * settings name it in a `$token` reference, and by a shared style whose own
- * styles name it; the second counts whether or not any block applies the
- * style. Documents are read from the variable usage index (`token-usage`),
- * through the same listing the shared-style counts are read from, so a
- * count, its split by kind and the where-used list cannot disagree. Shared
- * styles are read from the site style as the compiler merges it: the code's
- * and the stored ones.
+ * settings name it in a `$token` reference, by a shared style whose own
+ * styles name it, and by a block type whose own default styles
+ * (`baseStyles`) name it; the last two count whether or not any page applies
+ * the style or places the block. Documents are read from the variable usage
+ * index (`token-usage`), through the same listing the shared-style counts
+ * are read from, so a count, its split by kind and the where-used list cannot
+ * disagree. Shared styles are read from the site style as the compiler
+ * merges it: the code's and the stored ones. Block types are read from the
+ * block registry the pages are rendered with.
  *
  * ## One check, on every path
  *
@@ -28,10 +30,18 @@
  * stored documents themselves, just before the write. The site-style write is
  * made with the version of the read the check judged, so a change to the
  * shared styles or the variables in between refuses the removal rather than
- * being overwritten. What none of this closes is a page save whose
- * validation ran before the removal's write and whose commit lands after the
- * rescan read that page: the shared-style removal has the same window, and
- * the usage index records the page's reference when it commits.
+ * being overwritten.
+ *
+ * ## What isn't closed
+ *
+ * Once its write has landed, the removal rescans the stored documents once
+ * more, and a page saved during the removal that uses one of the variables
+ * puts them back: the removed entries are written back where they were, and
+ * the removal is refused as in use. What remains is a page save whose
+ * validation ran before the removal's write and whose commit lands after
+ * that final rescan read the page. A lock over the whole composition, taken
+ * in the transaction of every page write and of the removal's, is what would
+ * close it.
  *
  * @module variables-routes
  */
@@ -57,6 +67,7 @@ import {
   VARIABLE_USAGE_IDS_MAX,
   VARIABLE_USAGE_ROUTE_PATH,
   VARIABLE_WHERE_USED_ROUTE_PATH,
+  SHARED_STYLE_WHERE_USED_MAX,
   SHARED_STYLE_WHERE_USED_PAGES_MAX,
   type VariableRemoveRequest,
   type VariablesUsageResponse,
@@ -78,6 +89,7 @@ import {
   namedSingleReader,
   NOTHING_FOUND,
   readableUses,
+  removalRefusalOf,
   respondWithUsesPage,
   siteStylePermission,
   usageOf,
@@ -98,7 +110,12 @@ import {
   type VariablesInUseCheck,
 } from "./site-style-storage";
 import { readStoredJson } from "./stored-json";
-import { sharedStylesUsing, tokenUsageOf } from "./token-usage";
+import {
+  blockDefaultsUsing,
+  sharedStylesUsing,
+  tokenUsageOf,
+  type BlockTypeDefaults,
+} from "./token-usage";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
 
 /** A variable's identity, as the engine bounds one it can write. */
@@ -119,9 +136,16 @@ export interface StillUsedVariables {
   firstReadable?(uses: readonly StoredUse[]): Promise<string | undefined>;
 }
 
-/** What the in-use check reads: the usage index, and the stored documents. */
+/** The block types registered now, as the pages are rendered with them. */
+export type RegisteredBlocks = () => readonly BlockTypeDefaults[];
+
+/**
+ * What the in-use check reads: the usage index, the registered block types,
+ * and the stored documents.
+ */
 export interface VariableUseSources {
   readonly usage: SharedStyleUsageSource;
+  readonly blocks: RegisteredBlocks;
   readonly stillUsed: StillUsedVariables;
 }
 
@@ -149,29 +173,27 @@ function sharedStyleReasons(
 }
 
 /**
- * The refusal for reasons found against a removal: the in-use refusal, one
- * issue per variable at `pathOf` its identity, when any is a use; else a
- * conflict naming every reason. Either way nothing is half removed.
+ * The reasons the registered block types give against removing each
+ * variable: a type whose own default styles name it changes every instance of
+ * it, on every page placing one, once the variable is gone.
  */
-function refusalOf(
-  reasons: readonly UsageReason[],
-  pathOf: (id: string) => string,
-  ids: readonly string[]
-): NextlyError {
-  if (reasons.some(reason => reason.used)) {
-    return NextlyError.validation({
-      errors: reasons.map(reason => ({
-        path: reason.id === undefined ? "" : pathOf(reason.id),
-        code: SHARED_STYLE_IN_USE_CODE,
-        message: reason.message,
-      })),
-      logContext: { variableIds: ids },
-    });
-  }
-  return NextlyError.conflict({
-    reason: "state",
-    message: `Nothing was removed. ${reasons.map(reason => reason.message).join(" ")}`,
-    logContext: { variableIds: ids },
+function blockDefaultReasons(
+  removable: readonly NamedVariable[],
+  blocks: readonly BlockTypeDefaults[]
+): UsageReason[] {
+  const using = blockDefaultsUsing(
+    blocks,
+    new Set(removable.map(variable => variable.id))
+  );
+  return removable.flatMap(({ id, name }) => {
+    const types = using.get(id);
+    if (types === undefined) return [];
+    const labels = types.map(type => type.label).join(", ");
+    const style =
+      types.length === 1 ? "block's default style" : "blocks' default styles";
+    return [
+      { id, message: `${name} is used by the ${labels} ${style}.`, used: true },
+    ];
   });
 }
 
@@ -194,8 +216,9 @@ function stillUsedWords(
  *
  * In order, each read only once the cheaper ones found nothing: the usage
  * index must be whole and count no document for any of them, and no shared
- * style (`classes`, the site's as merged) may name one; then the stored
- * documents themselves are read, since an index zero is not proof. `pathOf`
+ * style (`classes`, the site's as merged) and no registered block type's own
+ * default styles may name one; then the stored documents themselves are
+ * read, since an index zero is not proof. `pathOf`
  * says where each variable's issue is filed: its identity for the route, the
  * section for a write of the Single.
  */
@@ -210,11 +233,25 @@ export async function refuseVariablesInUse(
   const reasons = [
     ...(await usageRefusals(removable, sources.usage, "variable")),
     ...sharedStyleReasons(removable, classes),
+    ...blockDefaultReasons(removable, sources.blocks()),
   ];
-  if (reasons.length > 0) throw refusalOf(reasons, pathOf, ids);
-  const uses = await sources.stillUsed.uses(ids);
+  if (reasons.length > 0) {
+    throw removalRefusalOf(reasons, { variableIds: ids }, pathOf);
+  }
+  await refuseStoredVariableUses(ids, sources.stillUsed);
+}
+
+/**
+ * Refuse, with the in-use refusal, when a stored document still uses any of
+ * the variables: the stored documents' own answer, read past the index, which
+ * the removal asks last before its write and once more after it.
+ */
+async function refuseStoredVariableUses(
+  ids: readonly string[],
+  stillUsed: StillUsedVariables
+): Promise<void> {
+  const uses = await stillUsed.uses(ids);
   if (uses.length === 0) return;
-  const { stillUsed } = sources;
   const canName = stillUsed.firstReadable !== undefined;
   const message = stillUsedWords(
     uses.length,
@@ -258,13 +295,15 @@ export async function readVariableUsage(
   req: Request,
   ctx: Pick<PluginRouteContext, "caller" | "self">,
   usage: SharedStyleUsageSource,
-  sharedStyles: SharedStylesNow
+  sharedStyles: SharedStylesNow,
+  blocks: RegisteredBlocks
 ): Promise<VariablesUsageResponse> {
   const ids = usageIds(req.url);
   const health = await usage.health();
   // One index read for the whole page of variables, and one site-style read.
   const found = await usage.documentsUsingEach(ids, health);
   const styles = sharedStylesUsing(await sharedStyles(), new Set(ids));
+  const defaults = blockDefaultsUsing(blocks(), new Set(ids));
   // Built from entries, so an identity like `__proto__` is an own key.
   const variables: Record<string, VariableUsage> = Object.fromEntries(
     ids.map(id => [
@@ -274,6 +313,8 @@ export async function readVariableUsage(
           usage.kindOf(collection)
         ),
         sharedStyles: (styles.get(id) ?? []).map(style => style.id).sort(),
+        // In type order already, as the walk reads the registry.
+        blockDefaults: (defaults.get(id) ?? []).map(block => block.type),
       },
     ])
   );
@@ -285,27 +326,41 @@ export async function readVariableUsage(
   };
 }
 
-/** What a where-used read asks for: one variable, and which page of its uses. */
+/**
+ * What a where-used read asks for: one variable, and which page of its uses.
+ * The page's upper bound depends on the site, so it is asked after the
+ * places beside the documents are read ({@link variableUsesPagesMax}).
+ */
 const WhereUsedQuery = z.object({
   id: IDENTITY,
-  page: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(SHARED_STYLE_WHERE_USED_PAGES_MAX)
-    .default(1),
+  page: z.coerce.number().int().min(1).default(1),
 });
 
 /**
+ * The last page a variable's where-used list can reach: every document one
+ * usage listing can name, which is what bounds a shared style's list, and
+ * the places beside them that this site has, twenty to a page.
+ */
+export function variableUsesPagesMax(placesBesideDocuments: number): number {
+  const documents =
+    SHARED_STYLE_WHERE_USED_PAGES_MAX * SHARED_STYLE_WHERE_USED_MAX;
+  return Math.ceil(
+    (documents + placesBesideDocuments) / SHARED_STYLE_WHERE_USED_MAX
+  );
+}
+
+/**
  * The places a variable is used, a page of twenty at a time: the shared
- * styles naming it, by id, then the documents, read as the caller so only
- * readable ones are named and the rest counted in `meta.hiddenCount`.
+ * styles naming it, by id, then the block types whose default styles name
+ * it, by type, then the documents, read as the caller so only readable ones
+ * are named and the rest counted in `meta.hiddenCount`.
  */
 export async function readVariableUses(
   req: Request,
   usage: SharedStyleUsageSource,
   readers: { named: ReadNamedDocuments; single: ReadNamedSingle },
   sharedStyles: SharedStylesNow,
+  blocks: RegisteredBlocks,
   siteStyleSlug: string
 ): Promise<Response> {
   const params = new URL(req.url).searchParams;
@@ -329,12 +384,27 @@ export async function readVariableUses(
       kind: "shared-style" as const,
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // In type order already, as the walk reads the registry.
+  const defaults: VariableUseItem[] = (
+    blockDefaultsUsing(blocks(), new Set([id])).get(id) ?? []
+  ).map(block => ({
+    id: block.type,
+    title: block.label,
+    collection: "",
+    kind: "block-default" as const,
+  }));
+  if (page > variableUsesPagesMax(styles.length + defaults.length)) {
+    throw invalidRequest(
+      "That page is past the last place a variable can be used."
+    );
+  }
   const found = await listingOf(usage, id, await usage.health());
   const { readable, hidden } = await readableUses(found, usage, readers);
-  return respondWithUsesPage<VariableUseItem>([...styles, ...readable], page, {
-    hidden,
-    complete: found.complete,
-  });
+  return respondWithUsesPage<VariableUseItem>(
+    [...styles, ...defaults, ...readable],
+    page,
+    { hidden, complete: found.complete }
+  );
 }
 
 /** The stored tokens section, as stored, and the version of the read. */
@@ -350,8 +420,14 @@ export interface VariableRead {
 /** The stored tokens section, read and written as the remove route needs it. */
 export interface VariableStore {
   read(): Promise<VariableRead>;
-  /** Store the section, with the version of the read it was made from. */
-  write(section: Record<string, unknown>, from: VariableRead): Promise<void>;
+  /**
+   * Store the section, with the version of the read it was made from, and
+   * answer the document as the write left it, read as {@link read} reads it.
+   */
+  write(
+    section: Record<string, unknown>,
+    from: VariableRead
+  ): Promise<VariableRead>;
 }
 
 /** The section without the entries whose identity is among `gone`. */
@@ -369,6 +445,28 @@ function withoutVariables(
       return id === undefined || !gone.has(id);
     }),
   };
+}
+
+/**
+ * The section as a write left it, with the entries whose identity is among
+ * `gone` put back where `original` held them. Each goes back at its index in
+ * `original`, in order, so a section the write changed in nothing else comes
+ * back exactly as it was read.
+ */
+function withVariablesBack(
+  written: Record<string, unknown>,
+  original: Record<string, unknown>,
+  gone: ReadonlySet<string>
+): Record<string, unknown> {
+  const entries = Array.isArray(written.tokens) ? [...written.tokens] : [];
+  const was: unknown[] = Array.isArray(original.tokens) ? original.tokens : [];
+  was.forEach((entry, at) => {
+    const id = identityOfEntry(entry);
+    if (id !== undefined && gone.has(id)) {
+      entries.splice(Math.min(at, entries.length), 0, entry);
+    }
+  });
+  return { ...written, tokens: entries };
 }
 
 /** A stored entry's identity, read by the Single's own token rules. */
@@ -412,12 +510,18 @@ function storedRefusals(
  * Remove variables the site added that nothing uses: every check on what the
  * server reads just before the write, never on what the panel showed. One
  * refusal refuses the whole request, so nothing is half removed.
+ *
+ * Once the write has landed the stored documents are read once more, by the
+ * check's own rescan: a page saved while the removal ran, that uses one of
+ * the variables, puts every removed entry back where it was, and the removal
+ * is refused as that rescan refuses. A rescan that cannot finish puts them
+ * back too, since nothing then says no page uses them.
  */
 export async function removeVariables(
   req: Request,
   store: VariableStore,
   supplied: ReadonlySet<string>,
-  inUse: VariablesInUseCheck
+  checks: VariableRemovalChecks
 ): Promise<Response> {
   const parsed = RemoveBody.safeParse(await jsonBody(req));
   if (!parsed.success) {
@@ -437,8 +541,20 @@ export async function removeVariables(
       logContext: { variableIds: ids },
     });
   }
-  await inUse(removable, read.classes);
-  await store.write(withoutVariables(read.section, new Set(ids)), read);
+  await checks.inUse(removable, read.classes);
+  const gone = new Set(ids);
+  const written = await store.write(withoutVariables(read.section, gone), read);
+  try {
+    await refuseStoredVariableUses(ids, checks.stillUsed);
+  } catch (refusal) {
+    // Made from the read the removal's write produced, so a save of the
+    // Single since then refuses this rather than being overwritten.
+    await store.write(
+      withVariablesBack(written.section, read.section, gone),
+      written
+    );
+    throw refusal;
+  }
   return respondMutation(
     ids.length === 1
       ? "The variable was removed."
@@ -480,6 +596,22 @@ export function mergedSharedStyles(
   return resolveSiteStyle(defaults, stored).classes ?? [];
 }
 
+/** The site-style Single's document as the remove route reads it. */
+function variableReadOf(
+  doc: unknown,
+  defaults: SiteStyleData | undefined
+): VariableRead {
+  const section = readStoredJson(storedDocument(doc).tokens);
+  return {
+    section:
+      section !== null && typeof section === "object" && !Array.isArray(section)
+        ? (section as Record<string, unknown>)
+        : {},
+    classes: mergedSharedStyles(doc, defaults),
+    rev: documentVersionOf(doc),
+  };
+}
+
 /**
  * The stored tokens section of the RESOLVED site-style Single, read and
  * written past its own permission: the route's declared permission admits
@@ -492,29 +624,23 @@ export function siteStyleVariableStore(
 ): VariableStore {
   const slug = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
   return {
-    read: async () => {
-      const doc = await nextly.findSingle({ slug, overrideAccess: true });
-      const section = readStoredJson(storedDocument(doc).tokens);
-      return {
-        section:
-          section !== null &&
-          typeof section === "object" &&
-          !Array.isArray(section)
-            ? (section as Record<string, unknown>)
-            : {},
-        classes: mergedSharedStyles(doc, defaults),
-        rev: documentVersionOf(doc),
-      };
-    },
-    write: async (section, from) => {
-      await nextly.updateSingle({
-        slug,
-        data: withVersionFrom({ tokens: section }, from.rev),
-        overrideAccess: true,
-        context: { ...VARIABLE_REMOVE_WRITE_CONTEXT },
-        ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
-      });
-    },
+    read: async () =>
+      variableReadOf(
+        await nextly.findSingle({ slug, overrideAccess: true }),
+        defaults
+      ),
+    // The update answers the document it stored, with its new version.
+    write: async (section, from) =>
+      variableReadOf(
+        await nextly.updateSingle({
+          slug,
+          data: withVersionFrom({ tokens: section }, from.rev),
+          overrideAccess: true,
+          context: { ...VARIABLE_REMOVE_WRITE_CONTEXT },
+          ...(ctx.user === null ? {} : { user: { id: ctx.user.id } }),
+        }),
+        defaults
+      ),
   };
 }
 
@@ -539,11 +665,13 @@ export interface VariableRouteSetup {
   readonly defaults: SiteStyleData | undefined;
   /** The variable usage index for this request. */
   readonly usage: (ctx: PluginRouteContext) => SharedStyleUsageSource;
-  /** The in-use check, as the installed plugin makes it for this caller. */
+  /** The block types registered now. */
+  readonly blocks: RegisteredBlocks;
+  /** The removal's checks, as the installed plugin makes them for this caller. */
   readonly inUse: (
     ctx: PluginRouteContext,
     readNamed: ReadNamedDocuments
-  ) => VariablesInUseCheck;
+  ) => VariableRemovalChecks;
 }
 
 /**
@@ -579,7 +707,8 @@ export function variableRoutes(setup: VariableRouteSetup): {
             req,
             ctx,
             setup.usage(ctx),
-            sharedStylesOf(ctx)
+            sharedStylesOf(ctx),
+            setup.blocks
           )
         );
       },
@@ -594,6 +723,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
           setup.usage(ctx),
           { named: namedDocumentsReader(ctx), single: namedSingleReader(ctx) },
           sharedStylesOf(ctx),
+          setup.blocks,
           ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG
         );
       },
@@ -614,39 +744,65 @@ export function variableRoutes(setup: VariableRouteSetup): {
 }
 
 /**
- * The in-use check, bound to the variable index and the stored documents:
- * what the remove route makes for its caller, and what the site-style
- * Single's guard makes for any other write that drops a variable. The stored
- * documents are walked by `tokenUsageOf` under the page's bounds, the walk
- * the index records from.
+ * The remove route's checks: the in-use check it makes before its write, and
+ * the stored documents' own answer that check reads last, which the route
+ * asks once more after its write.
  */
-export function variablesInUseCheck(args: {
+export interface VariableRemovalChecks {
+  readonly inUse: VariablesInUseCheck;
+  readonly stillUsed: StillUsedVariables;
+}
+
+/** What the in-use check is bound to. */
+export interface VariableCheckSetup {
   readonly usage: SharedStyleUsageSource;
+  readonly blocks: RegisteredBlocks;
   readonly documents: () => Promise<StoredDocuments>;
   readonly limits: DocumentLimits;
   readonly firstReadable?: (
     uses: readonly StoredUse[]
   ) => Promise<string | undefined>;
   readonly pathOf: (id: string) => string;
-}): VariablesInUseCheck {
-  return (removable, classes) =>
-    refuseVariablesInUse(
-      removable,
-      classes,
-      {
-        usage: args.usage,
-        stillUsed: {
-          uses: async ids =>
-            storedUsesOf(
-              ids,
-              await args.documents(),
-              stored => tokenUsageOf(stored, args.limits).ids
-            ),
-          ...(args.firstReadable === undefined
-            ? {}
-            : { firstReadable: args.firstReadable }),
-        },
-      },
-      args.pathOf
-    );
+}
+
+/**
+ * The in-use check, bound to the variable index, the registered block types
+ * and the stored documents, with the rescan it ends on. The stored documents
+ * are walked by `tokenUsageOf` under the page's bounds, the walk the index
+ * records from.
+ */
+export function variableRemovalChecks(
+  args: VariableCheckSetup
+): VariableRemovalChecks {
+  const stillUsed: StillUsedVariables = {
+    uses: async ids =>
+      storedUsesOf(
+        ids,
+        await args.documents(),
+        stored => tokenUsageOf(stored, args.limits).ids
+      ),
+    ...(args.firstReadable === undefined
+      ? {}
+      : { firstReadable: args.firstReadable }),
+  };
+  return {
+    stillUsed,
+    inUse: (removable, classes) =>
+      refuseVariablesInUse(
+        removable,
+        classes,
+        { usage: args.usage, blocks: args.blocks, stillUsed },
+        args.pathOf
+      ),
+  };
+}
+
+/**
+ * The in-use check alone: what the site-style Single's guard makes for any
+ * write that drops a variable other than the remove route's.
+ */
+export function variablesInUseCheck(
+  args: VariableCheckSetup
+): VariablesInUseCheck {
+  return variableRemovalChecks(args).inUse;
 }

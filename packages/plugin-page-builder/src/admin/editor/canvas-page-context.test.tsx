@@ -36,6 +36,17 @@ describe("the collection a document's lists read the entry of", () => {
     expect(listEntryCollectionOf({ kind: "single", slug: "home" })).toBeNull();
     expect(listEntryCollectionOf(null)).toBeUndefined();
   });
+
+  it("is not known for a component, whatever entry stores it, as its save judges it", () => {
+    // A component is drawn on the pages placing it, which are the entries.
+    const component = { formatVersion: 1, kind: "component", nodes: [] };
+    const store = { kind: "collection", slug: "nx_pb_components" };
+    expect(listEntryCollectionOf(store, component)).toBeUndefined();
+    // CONTROL: a page stored there is that collection's entry.
+    expect(listEntryCollectionOf(store, { ...component, kind: "page" })).toBe(
+      "nx_pb_components"
+    );
+  });
 });
 
 describe("the canvas's page context", () => {
@@ -61,6 +72,17 @@ describe("the canvas's page context", () => {
     readMedia.mockResolvedValue(null);
     const { result } = renderHook(() => useCanvasPageContext());
     await expect(result.current.resolveMedia("gone")).resolves.toBeNull();
+  });
+
+  it("draws an icon from the set a published page draws with", async () => {
+    const { result } = renderHook(() => useCanvasPageContext());
+    const star = await result.current.resolveIcon?.("lucide:star");
+    expect(star?.id).toBe("lucide:star");
+    expect(star?.body).toContain("<path");
+    // An id the set does not draw answers nothing, so the block draws nothing.
+    await expect(
+      result.current.resolveIcon?.("lucide:not-an-icon")
+    ).resolves.toBeNull();
   });
 
   it("is one object for the editor's life, which the canvas keeps its drawn blocks by", () => {

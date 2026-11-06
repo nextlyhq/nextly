@@ -1,7 +1,7 @@
 /**
  * The removal's rescan, against fake stored documents: which rows still
  * reference a style, read through the blocks fields the builder opens, a page
- * at a time by id; and the refusal's words.
+ * at a time by id, in every stored form; and the refusal's words.
  */
 import {
   DEFAULT_LIMITS,
@@ -10,12 +10,14 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { classUsageOf } from "./class-usage";
+import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import {
   referencesAny,
   stillUsedMessage,
   storedUsesOf,
   type StoredDocuments,
 } from "./shared-style-rescan";
+import { storedDocumentsOf } from "./shared-styles-routes";
 import type { BuilderDocumentType } from "./site-style-route";
 import { tokenUsageOf } from "./token-usage";
 
@@ -75,11 +77,15 @@ describe("whether a stored row references a style", () => {
   });
 });
 
-/** Stored documents: `rows` per collection, by id order, `size` to a page. */
+/**
+ * Stored documents: `rows` per collection, by id order, `size` to a page,
+ * and each row's other stored forms by its id.
+ */
 function storedOf(
   rows: Record<string, unknown>[],
   singles: { type: BuilderDocumentType; forms: unknown[] }[] = [],
-  size = 2
+  size = 2,
+  forms: Record<string, unknown[] | Error> = {}
 ): { documents: StoredDocuments; cursors: (string | undefined)[] } {
   const cursors: (string | undefined)[] = [];
   const documents: StoredDocuments = {
@@ -91,6 +97,11 @@ function storedOf(
         row => after === undefined || String(row.id) > after
       );
       return { items: rest.slice(0, size), hasNext: rest.length > size };
+    },
+    rowForms: async (_type, id) => {
+      const found = Object.hasOwn(forms, id) ? forms[id] : [];
+      if (found instanceof Error) throw found;
+      return found ?? [];
     },
     singleForms: async type =>
       singles.find(single => single.type.slug === type.slug)?.forms ?? [],
@@ -161,6 +172,44 @@ describe("every stored document still using a style", () => {
     ).toEqual([]);
   });
 
+  it("finds a use held only by a row's other stored forms, and reads them only when the listed one has none", async () => {
+    const asked: string[] = [];
+    const { documents } = storedOf(
+      [
+        { id: "a", content: blocks("c-card") },
+        { id: "b", content: blocks() },
+        { id: "c", content: blocks() },
+      ],
+      [],
+      2,
+      // `b`'s pending draft, or one of its languages, places the style.
+      { b: [{ content: blocks() }, { content: blocks("c-card") }] }
+    );
+    const rowForms = documents.rowForms;
+    documents.rowForms = async (type, id) => {
+      asked.push(id);
+      return rowForms(type, id);
+    };
+    expect(await storedUsesOf(["c-card"], documents, classes)).toEqual([
+      { kind: "collection", slug: "pages", id: "a" },
+      { kind: "collection", slug: "pages", id: "b" },
+    ]);
+    // `a` was found in the listed form, so its other forms were not read.
+    expect(asked).toEqual(["b", "c"]);
+  });
+
+  it("refuses when a row's other form cannot be read, rather than taking it for unused", async () => {
+    const { documents } = storedOf([{ id: "a", content: blocks() }], [], 2, {
+      a: new Error("the draft read failed"),
+    });
+    await expect(
+      storedUsesOf(["c-card"], documents, classes)
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      logContext: { reason: "shared-style-rescan-form-unreadable", id: "a" },
+    });
+  });
+
   it("refuses a row with no id, rather than passing over it", async () => {
     const { documents } = storedOf([{ content: blocks("c-card") }]);
     await expect(
@@ -168,6 +217,126 @@ describe("every stored document still using a style", () => {
     ).rejects.toMatchObject({
       code: "INTERNAL_ERROR",
     });
+  });
+});
+
+describe("the stored documents, as the rescan reads them on a real site", () => {
+  /** A site with one pages collection holding `content`, in these languages. */
+  function siteOf(locales: readonly string[]) {
+    return {
+      self: { collections: {}, singles: {} },
+      config:
+        locales.length === 0
+          ? {}
+          : { localization: { locales: locales.map(code => ({ code })) } },
+      services: {
+        collections: {
+          listCollections: async () => ({
+            data: [
+              {
+                slug: "pages",
+                label: "Pages",
+                fields: [{ name: "content", type: "blocks" }],
+              },
+            ],
+            pagination: { hasMore: false },
+          }),
+        },
+        singles: { list: async () => ({ data: [], total: 0 }) },
+      },
+    };
+  }
+
+  /**
+   * The Direct API over stored forms keyed `id|locale|form`, recording each
+   * by-id read. A draft form is answered as the overlay answers one; any
+   * form not stored answers the live row, as a read without a sidecar does.
+   */
+  function directApiOf(
+    listed: Record<string, unknown>[],
+    stored: Record<string, unknown>
+  ) {
+    const reads: string[] = [];
+    const findByID: ClassUsageDirectApi["findByID"] = async args => {
+      const key = `${args.id}|${args.locale ?? ""}|${args.draft === true ? "draft" : "published"}`;
+      reads.push(`${key}|fallback:${String(args.fallbackLocale)}`);
+      if (Object.hasOwn(stored, key)) {
+        return {
+          id: args.id,
+          content: stored[key],
+          ...(args.draft === true ? { _isWorkingDraft: true } : {}),
+        };
+      }
+      return { id: args.id, content: blocks() };
+    };
+    return {
+      reads,
+      nextly: {
+        find: async () => ({ items: listed, meta: { hasNext: false } }),
+        findByID,
+        findSingle: async () => null,
+      },
+    };
+  }
+
+  it("finds a use only a non-default language stores, reading each language with its fallback off", async () => {
+    const { nextly, reads } = directApiOf([{ id: "p1", content: blocks() }], {
+      "p1|fr|published": blocks("c-card"),
+    });
+    expect(
+      await storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(siteOf(["en", "fr"]) as never, nextly),
+        classes
+      )
+    ).toEqual([{ kind: "collection", slug: "pages", id: "p1" }]);
+    expect(reads).toEqual([
+      "p1|en|published|fallback:false",
+      "p1|en|draft|fallback:false",
+      "p1|fr|published|fallback:false",
+      "p1|fr|draft|fallback:false",
+    ]);
+  });
+
+  it("finds a use only a pending working draft holds, on a site without languages", async () => {
+    const { nextly, reads } = directApiOf([{ id: "p1", content: blocks() }], {
+      "p1||draft": blocks("c-card"),
+    });
+    expect(
+      await storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(siteOf([]) as never, nextly),
+        classes
+      )
+    ).toEqual([{ kind: "collection", slug: "pages", id: "p1" }]);
+    // The listed row is the default form, so only the draft is read again.
+    expect(reads).toEqual(["p1||draft|fallback:undefined"]);
+  });
+
+  it("passes a row none of whose forms holds the style", async () => {
+    // The control for the two above: every form is read, and none holds it.
+    const { nextly } = directApiOf([{ id: "p1", content: blocks() }], {});
+    expect(
+      await storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(siteOf(["en", "fr"]) as never, nextly),
+        classes
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses when a form's read fails", async () => {
+    const { nextly } = directApiOf([{ id: "p1", content: blocks() }], {});
+    nextly.findByID = async () => {
+      throw new Error("the companion table is unreadable");
+    };
+    await expect(
+      storedUsesOf(
+        ["c-card"],
+        storedDocumentsOf(siteOf(["en"]) as never, nextly),
+        classes
+      )
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 });
 

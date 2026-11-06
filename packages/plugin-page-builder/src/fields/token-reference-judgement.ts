@@ -18,14 +18,20 @@
  * @module fields/token-reference-judgement
  */
 import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
-import type {
-  PluginFieldIssue,
-  PluginFieldValidateArgs,
+import {
+  NextlyError,
+  type PluginFieldIssue,
+  type PluginFieldValidateArgs,
 } from "@nextlyhq/plugin-sdk";
 
 import { tokenUsageOf } from "../token-usage";
 
-import { addedUndefinedIds, type StoredForms } from "./added-undefined-ids";
+import {
+  addedUndefinedIds,
+  storedFormsFor,
+  storedReadReaches,
+  type StoredForms,
+} from "./added-undefined-ids";
 import { isTopLevel } from "./layers-lock-judgement";
 
 /** The engine's code for a reference to a variable the site does not define. */
@@ -33,6 +39,31 @@ const UNKNOWN_TOKEN = "unknown-token";
 
 /** How many undefined variables one refusal names; the rest are counted. */
 const NAMED_AT_MOST = 5;
+
+/** The stored forms of a field the stored read refuses to name: none held. */
+const NOTHING_HELD: StoredForms = { forms: [], readable: true };
+
+/**
+ * The stored forms, read as `stored` reads them, except that a nested field
+ * the stored read refuses to name (one inside a group kept per language)
+ * answers that nothing is held, which refuses every undefined reference
+ * instead of passing the write unjudged. Any other failure propagates.
+ */
+function closedWhenUnreachable(
+  stored: () => Promise<StoredForms>,
+  path: string
+): () => Promise<StoredForms> {
+  return async () => {
+    try {
+      return await stored();
+    } catch (error) {
+      if (!isTopLevel(path) && NextlyError.isCode(error, "INVALID_INPUT")) {
+        return NOTHING_HELD;
+      }
+      throw error;
+    }
+  };
+}
 
 /**
  * The issues a write adding a reference to an undefined variable is refused
@@ -45,6 +76,14 @@ const NAMED_AT_MOST = 5;
  * those is undefined, so an ordinary save pays nothing. A value with no entry
  * write behind it, and a field whose stored value cannot be read, are not
  * judged: nothing tells a new reference from an old one.
+ *
+ * A blocks field inside named groups (`hero.body`) is judged like a top-level
+ * one, its stored value read at its path: the editor opens it, so a fence
+ * that skipped it would let a page save a first use of a variable just
+ * removed. Where that stored value cannot be read (a group kept per
+ * language), it is judged as holding nothing, so every undefined variable the
+ * write names is refused rather than let through. A field in a repeater's
+ * rows has no stored path, and the editor does not open it.
  */
 export async function newTokenReferenceIssues(
   value: unknown,
@@ -58,14 +97,17 @@ export async function newTokenReferenceIssues(
     readonly storedForms?: () => Promise<StoredForms>;
   }
 ): Promise<PluginFieldIssue[]> {
-  if (args.write === undefined || !isTopLevel(args.path)) return [];
+  if (args.write === undefined || !storedReadReaches(args.path)) return [];
   const limits = site.limits ?? DEFAULT_LIMITS;
   const added = await addedUndefinedIds(
     args,
     tokenUsageOf(value, limits).ids,
     site.tokenIds,
     form => tokenUsageOf(form, limits).ids,
-    site.storedForms
+    closedWhenUnreachable(
+      site.storedForms ?? (() => storedFormsFor(args)),
+      args.path
+    )
   );
   if (added.length === 0) return [];
   const named = added

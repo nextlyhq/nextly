@@ -14,7 +14,11 @@
  *
  * @module admin/loop-collections-client
  */
-import { isListFieldKind } from "@nextlyhq/blocks-engine";
+import {
+  isListFieldKind,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  type FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine";
 import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -136,7 +140,7 @@ function readableOf(value: unknown): LoopReadableField | undefined {
   if (typeof record?.name !== "string" || typeof record.type !== "string") {
     return undefined;
   }
-  const { relationTo } = record;
+  const { relationTo, storage } = record;
   return {
     name: record.name,
     type: record.type,
@@ -146,7 +150,18 @@ function readableOf(value: unknown): LoopReadableField | undefined {
       relationTo.every(each => typeof each === "string"))
       ? { relationTo: relationTo as string | readonly string[] }
       : {}),
+    // Both decide a field's kind for a list, as the save reads them.
+    ...(record.timeOnly === true ? { timeOnly: true as const } : {}),
+    ...(isStoragePrimitive(storage) ? { storage } : {}),
   };
+}
+
+/** Whether a value names a storage primitive the engine maps to a field type. */
+function isStoragePrimitive(value: unknown): value is FieldStoragePrimitive {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(STORAGE_PRIMITIVE_AS_FIELD_TYPE, value)
+  );
 }
 
 /** One related source, or `undefined` for an entry of another shape. */

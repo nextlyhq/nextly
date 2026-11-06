@@ -1102,7 +1102,7 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-select", "--nx-builder-select-text"],
   },
   {
-    selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",
+    selector: ".nx-canvas-region__mark",
     tokens: [
       "--nx-builder-border",
       "--nx-builder-surface-raised",

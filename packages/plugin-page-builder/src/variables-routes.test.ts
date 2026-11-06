@@ -27,8 +27,10 @@ import {
   siteStyleVariableStore,
   variableRoutes,
   variablesInUseCheck,
+  variableUsesPagesMax,
   type StillUsedVariables,
   type VariableRead,
+  type VariableRemovalChecks,
   type VariableStore,
 } from "./variables-routes";
 
@@ -93,6 +95,16 @@ function usageOf(
   return { source, batches };
 }
 
+/** No block type of the site's names a variable in its default styles. */
+const NO_BLOCKS = () => [];
+
+/** A registered block type whose own default styles name `token`. */
+const blockNaming = (name: string, label: string, token: string) => ({
+  name,
+  editor: { label },
+  baseStyles: { base: { base: { color: { $token: token } } } },
+});
+
 /** A caller holding exactly the permissions named, as `action-resource`. */
 const holding = (...held: string[]) => ({
   self: {
@@ -128,7 +140,11 @@ describe("the variable routes' permissions", () => {
   const setup = {
     defaults: undefined,
     usage: () => usageOf(WHOLE).source,
-    inUse: () => async () => undefined,
+    blocks: NO_BLOCKS,
+    inUse: () => ({
+      inUse: async () => undefined,
+      stillUsed: { uses: async () => [] },
+    }),
   };
   const scope = {
     plugin: "@nextlyhq/plugin-page-builder",
@@ -191,7 +207,11 @@ describe("how widely variables are used", () => {
       usageRequest("t-accent", "color.brand", "color.unused"),
       design,
       source,
-      async () => styles
+      async () => styles,
+      () => [
+        blockNaming("acme/card", "Card", "color.brand"),
+        blockNaming("acme/button", "Button", "color.brand"),
+      ]
     );
     expect(answer).toEqual({
       whole: true,
@@ -204,18 +224,22 @@ describe("how widely variables are used", () => {
           byKind: { pages: 2, components: 1, patterns: 0, layouts: 0 },
           // In id order, whatever order the site style lists them in.
           sharedStyles: ["c-card", "c-hero"],
+          blockDefaults: [],
           complete: true,
         },
         "color.brand": {
           documents: 0,
           byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
           sharedStyles: ["c-quote"],
+          // In type order, whatever order the registry lists them in.
+          blockDefaults: ["acme/button", "acme/card"],
           complete: true,
         },
         "color.unused": {
           documents: 0,
           byKind: { pages: 0, components: 0, patterns: 0, layouts: 0 },
           sharedStyles: [],
+          blockDefaults: [],
           complete: true,
         },
       },
@@ -228,7 +252,8 @@ describe("how widely variables are used", () => {
       usageRequest("t-accent"),
       holding("read-renamed_site-style", "update-renamed_site-style"),
       source,
-      async () => []
+      async () => [],
+      NO_BLOCKS
     );
     expect(answer).toMatchObject({
       whole: false,
@@ -245,7 +270,8 @@ describe("how widely variables are used", () => {
       usageRequest("t-a", "t-b", "t-a"),
       design,
       source,
-      sharedStyles
+      sharedStyles,
+      NO_BLOCKS
     );
     expect(batches).toEqual([["t-a", "t-b"]]);
     expect(sharedStyles).toHaveBeenCalledTimes(1);
@@ -263,7 +289,8 @@ describe("how widely variables are used", () => {
       usageRequest("__proto__"),
       design,
       source,
-      async () => []
+      async () => [],
+      NO_BLOCKS
     );
     expect(Object.hasOwn(answer.variables, "__proto__")).toBe(true);
     expect(answer.variables.__proto__?.documents).toBe(1);
@@ -279,7 +306,8 @@ describe("how widely variables are used", () => {
             usageRequest(...ids),
             design,
             source,
-            async () => []
+            async () => [],
+            NO_BLOCKS
           )
         )
       ).toMatchObject({ code: "VALIDATION_ERROR" });
@@ -295,14 +323,15 @@ describe("where a variable is used", () => {
     query: string,
     documents: DocumentsUsing["collections"],
     styles: readonly unknown[],
-    health: UsageIndexHealth = WHOLE
+    blocks: ReturnType<typeof blockNaming>[] = []
   ) {
-    const { source } = usageOf(health, { "t-accent": documents });
+    const { source } = usageOf(WHOLE, { "t-accent": documents });
     const response = await readVariableUses(
       new Request(`http://local/variables/where-used?${query}`),
       source,
       { named, single: async () => null },
       async () => styles,
+      () => blocks,
       "renamed_site-style"
     );
     return (await response.json()) as {
@@ -311,7 +340,7 @@ describe("where a variable is used", () => {
     };
   }
 
-  it("names the shared styles first, in id order, then the documents the caller may read", async () => {
+  it("names the shared styles first, in id order, then the block types, then the documents the caller may read", async () => {
     const body = await uses(
       "id=t-accent",
       [
@@ -322,6 +351,10 @@ describe("where a variable is used", () => {
         styleNaming("c-hero", "Hero", "t-accent"),
         styleNaming("c-card", "Card", "t-accent"),
         styleNaming("c-quote", "Quote", "color.brand"),
+      ],
+      [
+        blockNaming("acme/quote", "Quote", "color.brand"),
+        blockNaming("acme/button", "Button", "t-accent"),
       ]
     );
     expect(body.items).toEqual([
@@ -337,9 +370,15 @@ describe("where a variable is used", () => {
         collection: "renamed_site-style",
         kind: "shared-style",
       },
+      {
+        id: "acme/button",
+        title: "Button",
+        collection: "",
+        kind: "block-default",
+      },
       { id: "p1", title: "T p1", collection: "pages", kind: "pages" },
     ]);
-    expect(body.meta).toMatchObject({ total: 3, hiddenCount: 2 });
+    expect(body.meta).toMatchObject({ total: 4, hiddenCount: 2 });
   });
 
   it("pages the shared styles and the documents as one list", async () => {
@@ -372,6 +411,40 @@ describe("where a variable is used", () => {
       hasNext: false,
       hasPrev: true,
     });
+  });
+
+  it("reaches the last page of the longest list a variable can have", async () => {
+    // Every document one listing can name, then the shared styles beside
+    // them: three places past the documents' own last page.
+    const documents = Array.from(
+      { length: variableUsesPagesMax(0) * 20 },
+      (_, n) => `p${String(n).padStart(5, "0")}`
+    );
+    const styles = [0, 1, 2].map(n =>
+      styleNaming(`c-${n}`, `S${n}`, "t-accent")
+    );
+    const last = variableUsesPagesMax(styles.length);
+    expect(last).toBe(variableUsesPagesMax(0) + 1);
+    const body = await uses(
+      `id=t-accent&page=${last}`,
+      [{ collection: "pages", documents }],
+      styles
+    );
+    expect(body.items.map(item => item.id)).toEqual(documents.slice(-3));
+    expect(body.meta).toMatchObject({
+      page: last,
+      totalPages: last,
+      hasNext: false,
+    });
+    expect(
+      await refusal(
+        uses(
+          `id=t-accent&page=${last + 1}`,
+          [{ collection: "pages", documents }],
+          styles
+        )
+      )
+    ).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("refuses a missing identity and a page that is not a positive whole number", async () => {
@@ -409,7 +482,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
-          { usage: usageOf(NOT_WHOLE).source, stillUsed },
+          { usage: usageOf(NOT_WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
       )
@@ -434,7 +507,7 @@ describe("the in-use check every removal makes", () => {
             styleNaming("c-card", "Card", "color.brand"),
             styleNaming("c-hero", "Hero", "color.brand"),
           ],
-          { usage, stillUsed },
+          { usage, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
       )
@@ -458,6 +531,80 @@ describe("the in-use check every removal makes", () => {
     expect(uses).not.toHaveBeenCalled();
   });
 
+  it("refuses a variable a registered block type's own default styles name, before reading any document", async () => {
+    const { stillUsed, uses } = stillUsedOf([]);
+    expect(
+      await refusal(
+        refuseVariablesInUse(
+          removable,
+          [],
+          {
+            usage: usageOf(WHOLE).source,
+            blocks: () => [
+              blockNaming("acme/card", "Card", "color.brand"),
+              blockNaming("acme/button", "Button", "t-accent"),
+              blockNaming("acme/badge", "Badge", "t-accent"),
+            ],
+            stillUsed,
+          },
+          pathOf
+        )
+      )
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "at:t-accent",
+            code: "IN_USE",
+            message:
+              "Accent is used by the Badge, Button blocks' default styles.",
+          },
+          {
+            path: "at:color.brand",
+            code: "IN_USE",
+            message: "Brand is used by the Card block's default style.",
+          },
+        ],
+      },
+    });
+    expect(uses).not.toHaveBeenCalled();
+  });
+
+  it("refuses as a conflict, carrying no in-use code, when one variable is used and another's uses could not all be counted", async () => {
+    const { stillUsed } = stillUsedOf([]);
+    const usage: SharedStyleUsageSource = {
+      health: async () => WHOLE,
+      documentsUsingEach: async ids =>
+        new Map(
+          ids.map(id => [
+            id,
+            id === "t-accent"
+              ? {
+                  collections: [{ collection: "pages", documents: ["p1"] }],
+                  complete: true,
+                }
+              : { collections: [], complete: false },
+          ])
+        ),
+      kindOf: () => "pages",
+    };
+    const refused = await refusal(
+      refuseVariablesInUse(
+        removable,
+        [],
+        { usage, blocks: NO_BLOCKS, stillUsed },
+        pathOf
+      )
+    );
+    expect(refused).toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. Accent is used on 1 document. Brand's uses could not all be counted.",
+    });
+    expect(JSON.stringify(refused)).not.toContain("IN_USE");
+  });
+
   it("refuses a variable the index counts on nothing while a stored document still uses it", async () => {
     const { stillUsed, uses } = stillUsedOf(
       [
@@ -471,7 +618,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable.slice(0, 1),
           [],
-          { usage: usageOf(WHOLE).source, stillUsed },
+          { usage: usageOf(WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
       )
@@ -500,7 +647,7 @@ describe("the in-use check every removal makes", () => {
         refuseVariablesInUse(
           removable,
           [],
-          { usage: usageOf(WHOLE).source, stillUsed },
+          { usage: usageOf(WHOLE).source, blocks: NO_BLOCKS, stillUsed },
           pathOf
         )
       )
@@ -524,7 +671,7 @@ describe("the in-use check every removal makes", () => {
       refuseVariablesInUse(
         removable,
         [styleNaming("c-card", "Card", "color.other")],
-        { usage: usage.source, stillUsed },
+        { usage: usage.source, blocks: NO_BLOCKS, stillUsed },
         pathOf
       )
     ).resolves.toBeUndefined();
@@ -534,7 +681,7 @@ describe("the in-use check every removal makes", () => {
     await refuseVariablesInUse(
       [],
       [],
-      { usage: idle.source, stillUsed },
+      { usage: idle.source, blocks: NO_BLOCKS, stillUsed },
       pathOf
     );
     expect(idle.source.health).not.toHaveBeenCalled();
@@ -548,8 +695,22 @@ function storeOf(section: Record<string, unknown>, rev?: string) {
     classes: [styleNaming("c-card", "Card", "color.other")],
     rev,
   };
-  const write = vi.fn<VariableStore["write"]>(async () => undefined);
+  // Each write answers the document it left, with the next version.
+  let version = Number(rev ?? "0");
+  const write = vi.fn<VariableStore["write"]>(async written => {
+    version += 1;
+    return { section: written, classes: read.classes, rev: String(version) };
+  });
   return { store: { read: async () => read, write }, write, read };
+}
+
+/** The removal's checks: `inUse` as given, and a final rescan finding `found`. */
+function checksOf(
+  inUse: VariablesInUseCheck = async () => undefined,
+  found: readonly StoredUse[] = []
+): VariableRemovalChecks & { uses: ReturnType<typeof stillUsedOf>["uses"] } {
+  const { stillUsed, uses } = stillUsedOf(found, "Home");
+  return { inUse, stillUsed, uses };
 }
 
 describe("removing variables", () => {
@@ -566,7 +727,7 @@ describe("removing variables", () => {
       post({ ids: ["t-accent"] }),
       store,
       supplied,
-      inUse
+      checksOf(inUse)
     );
 
     // Judged on the read the write is made from, with its shared styles.
@@ -584,13 +745,79 @@ describe("removing variables", () => {
     });
   });
 
+  it("rescans once its write has landed, and writes once when nothing uses the variables", async () => {
+    const { store, write } = storeOf({ tokens: [brand, accent] }, "7");
+    const checks = checksOf();
+    await removeVariables(post({ ids: ["t-accent"] }), store, supplied, checks);
+    expect(checks.uses).toHaveBeenCalledWith(["t-accent"]);
+    // The rescan follows the write: it reads what a page saved meanwhile left.
+    expect(checks.uses.mock.invocationCallOrder[0]).toBeGreaterThan(
+      write.mock.invocationCallOrder[0] ?? Infinity
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts every removed variable back where it was when a page saved meanwhile uses one, and refuses as in use", async () => {
+    const unreadable = { name: 42 };
+    const original = { tokens: [accent, brand, unreadable], fonts: ["kept"] };
+    const { store, write } = storeOf(original, "7");
+    const refused = await refusal(
+      removeVariables(
+        post({ ids: ["t-accent", "color.brand"] }),
+        store,
+        supplied,
+        checksOf(
+          async () => undefined,
+          [{ kind: "collection", slug: "pages", id: "p9" }]
+        )
+      )
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "",
+            code: "IN_USE",
+            message: "Still used on Home. Remove them from that page first.",
+          },
+        ],
+      },
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    // The removal's write, then the section as it was read, each entry at its
+    // place, made from the version the removal's own write produced.
+    expect(write.mock.calls[0]?.[0]).toEqual({
+      tokens: [unreadable],
+      fonts: ["kept"],
+    });
+    expect(write.mock.calls[1]?.[0]).toEqual(original);
+    expect(write.mock.calls[1]?.[1]).toMatchObject({ rev: "8" });
+  });
+
+  it("puts the variables back when the final rescan cannot finish", async () => {
+    const { store, write } = storeOf({ tokens: [accent] }, "3");
+    const unreadable = new Error("a form could not be read");
+    const checks = checksOf();
+    checks.uses.mockRejectedValueOnce(unreadable);
+    expect(
+      await refusal(
+        removeVariables(post({ ids: ["t-accent"] }), store, supplied, checks)
+      )
+    ).toBe(unreadable);
+    expect(write.mock.calls.map(call => call[0])).toEqual([
+      { tokens: [] },
+      { tokens: [accent] },
+    ]);
+  });
+
   it("removes several in one write, named by identity", async () => {
     const { store, write } = storeOf({ tokens: [brand, accent] });
     const response = await removeVariables(
       post({ ids: ["t-accent", "color.brand"] }),
       store,
       supplied,
-      async () => undefined
+      checksOf()
     );
     expect(write.mock.calls[0]?.[0]).toEqual({ tokens: [] });
     expect(await response.json()).toMatchObject({
@@ -603,8 +830,11 @@ describe("removing variables", () => {
     const inUse = new Error("in use");
     expect(
       await refusal(
-        removeVariables(post({ ids: ["t-accent"] }), store, supplied, () =>
-          Promise.reject(inUse)
+        removeVariables(
+          post({ ids: ["t-accent"] }),
+          store,
+          supplied,
+          checksOf(() => Promise.reject(inUse))
         )
       )
     ).toBe(inUse);
@@ -625,7 +855,7 @@ describe("removing variables", () => {
           post({ ids: ["t-accent", "color.code"] }),
           store,
           supplied,
-          inUse
+          checksOf(inUse)
         )
       )
     ).toMatchObject({
@@ -642,12 +872,7 @@ describe("removing variables", () => {
     const { store, write } = storeOf({ tokens: [accent] });
     expect(
       await refusal(
-        removeVariables(
-          post({ ids: ["t-none"] }),
-          store,
-          supplied,
-          async () => undefined
-        )
+        removeVariables(post({ ids: ["t-none"] }), store, supplied, checksOf())
       )
     ).toMatchObject({ code: "NOT_FOUND" });
     expect(write).not.toHaveBeenCalled();
@@ -657,9 +882,7 @@ describe("removing variables", () => {
     const { store } = storeOf({ tokens: [accent] });
     for (const body of [{}, { ids: [] }, { ids: ["t-accent"], extra: 1 }]) {
       expect(
-        await refusal(
-          removeVariables(post(body), store, supplied, async () => undefined)
-        )
+        await refusal(removeVariables(post(body), store, supplied, checksOf()))
       ).toMatchObject({ code: "VALIDATION_ERROR" });
     }
   });
@@ -734,6 +957,27 @@ describe("the site style's stored variables, as the remove route reads and write
     ]);
   });
 
+  it("answers the document its write stored, with the version the write gave it", async () => {
+    const store = siteStyleVariableStore(
+      { self: { singles: {} }, user: null } as never,
+      {
+        findSingle: async () => ({}),
+        updateSingle: async () => ({
+          tokens: { tokens: [accent] },
+          classes: [],
+          _rev: "10",
+        }),
+      },
+      undefined
+    );
+    expect(
+      await store.write(
+        { tokens: [accent] },
+        { section: {}, classes: [], rev: "9" }
+      )
+    ).toEqual({ section: { tokens: [accent] }, classes: [], rev: "10" });
+  });
+
   it("merges the code's shared styles under the stored ones by id", () => {
     const stored = { ...styleNaming("c-code", "Mine", "t-accent") };
     expect(mergedSharedStyles({ classes: [stored] }, defaults)).toEqual([
@@ -768,6 +1012,7 @@ describe("the in-use check, bound to the stored documents", () => {
     ],
     singles: async () => [],
     rowsAfter: async () => ({ items: rows, hasNext: false }),
+    rowForms: async () => [],
     singleForms: async () => [],
   });
 
@@ -775,6 +1020,7 @@ describe("the in-use check, bound to the stored documents", () => {
     const firstReadable = vi.fn(async () => "Home");
     const check = variablesInUseCheck({
       usage: usageOf(WHOLE).source,
+      blocks: NO_BLOCKS,
       documents: async () =>
         documentsOf([pageNaming("p1", "t-accent"), pageNaming("p2", "t-x")]),
       limits: DEFAULT_LIMITS,

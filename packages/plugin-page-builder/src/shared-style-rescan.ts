@@ -20,14 +20,18 @@
  * (`classUsageOf` for shared styles, `tokenUsageOf` for variables), so the
  * rescan and the index cannot disagree about what a reference is.
  *
- * ## What it does not
+ * ## Every stored form
  *
- * A collection row is read as stored, in the default language, without its
- * pending working draft: a list read overlays neither, and reading each
- * document again by id per language and per draft would cost a query per
- * document per form. Those forms stay covered by the usage index, which
- * removal asks first; this read guards the stored rows the index can lose.
- * A Single is one document, so both of its forms are read.
+ * A list read gives a collection row as stored in the default language,
+ * without its pending working draft. A removal is the one act that turns a
+ * use the rescan missed into lost styling, so each listed row is read again
+ * in every other form it may be stored in: each of the site's languages, and
+ * the working draft in each, by the by-id read the usage index is maintained
+ * through (`class-usage-runtime`), so the two agree on what each form is. A
+ * Single is read in the same forms. A form that cannot be read refuses the
+ * removal rather than being taken for one using nothing.
+ *
+ * That costs a read per form of each document, which only a removal pays.
  *
  * @module shared-style-rescan
  */
@@ -79,7 +83,16 @@ export interface StoredDocuments {
     type: BuilderDocumentType,
     after: string | undefined
   ): Promise<{ items: readonly unknown[]; hasNext: boolean }>;
-  /** A Single's stored forms: its document, and its pending draft if any. */
+  /**
+   * A row's stored forms beyond the listed one: its document in each of the
+   * site's languages, and its pending working draft in each. A form the row
+   * does not have is left out; one that cannot be read throws.
+   */
+  rowForms(type: BuilderDocumentType, id: string): Promise<readonly unknown[]>;
+  /**
+   * A Single's stored forms: its document and its pending draft, in each of
+   * the site's languages.
+   */
   singleForms(type: BuilderDocumentType): Promise<readonly unknown[]>;
 }
 
@@ -120,6 +133,34 @@ function rowId(row: unknown): string | undefined {
 }
 
 /**
+ * Whether any other stored form of a listed row references one of `ids`.
+ * A form that cannot be read is refused, so the removal fails closed rather
+ * than passing over a use it could not see.
+ */
+async function otherFormsReference(
+  type: BuilderDocumentType,
+  id: string,
+  ids: ReadonlySet<string>,
+  documents: StoredDocuments,
+  referencesOf: ReferencesOf
+): Promise<boolean> {
+  let forms: readonly unknown[];
+  try {
+    forms = await documents.rowForms(type, id);
+  } catch (error) {
+    throw NextlyError.internal({
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: {
+        reason: "shared-style-rescan-form-unreadable",
+        collection: type.slug,
+        id,
+      },
+    });
+  }
+  return forms.some(form => referencesAny(form, type.paths, ids, referencesOf));
+}
+
+/**
  * The rows of one collection that reference any of `ids`.
  *
  * Paged by id rather than by offset: a document deleted behind an offset
@@ -139,7 +180,7 @@ async function collectionUses(
       const page = await documents.rowsAfter(type, after);
       return { items: [...page.items], meta: { hasNext: page.hasNext } };
     },
-    onPage: items => {
+    onPage: async items => {
       for (const row of items) {
         const id = rowId(row);
         // A row with no id cannot move the cursor or be named, and skipping
@@ -153,7 +194,10 @@ async function collectionUses(
             },
           });
         }
-        if (referencesAny(row, type.paths, ids, referencesOf)) {
+        if (
+          referencesAny(row, type.paths, ids, referencesOf) ||
+          (await otherFormsReference(type, id, ids, documents, referencesOf))
+        ) {
           uses.push({ kind: "collection", slug: type.slug, id });
         }
         after = id;

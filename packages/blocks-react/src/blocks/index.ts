@@ -37,6 +37,7 @@ import { embed } from "./embed";
 import { form } from "./form";
 import { gallery } from "./gallery";
 import { heading } from "./heading";
+import { icon } from "./icon";
 import { image } from "./image";
 import { list } from "./list";
 import { paragraph } from "./paragraph";
@@ -66,6 +67,7 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
@@ -163,6 +165,7 @@ type CoreBlockList = [
   typeof divider,
   typeof quote,
   typeof embed,
+  typeof icon,
   typeof collectionLoop,
 ];
 
@@ -197,5 +200,6 @@ export const coreBlocks: CoreBlockList[number][] = [
   divider,
   quote,
   embed,
+  icon,
   collectionLoop,
 ] satisfies CoreBlockList;

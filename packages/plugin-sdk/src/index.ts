@@ -753,6 +753,26 @@ export type {
 } from "nextly";
 
 /**
+ * Contributions a plugin adds to admin places (`contributes.admin.contributions`):
+ * blocks, tabs, list columns, row and bulk actions and side panel sections,
+ * each ordered at its place, with a declared visibility rule and permission.
+ * @experimental Nothing in the admin draws them yet (see STABILITY.md).
+ */
+export type {
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
+  AdminContributionKind,
+  RowPredicate,
+  RowPredicateValue,
+} from "nextly";
+
+/**
  * Hook types.
  * @public `HookContext` — exercised by `plugin-form-builder`'s collection hook.
  * @experimental `HookType`, `HookContextPhase`, `HookHandler` — the `ctx.hooks`
@@ -763,6 +783,11 @@ export type {
  * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
  * `offBeforeOperation` accept, and are exported so a plugin can type a handler
  * it holds in a variable in order to unregister the same function later.
+ *
+ * @experimental `InTransactionHandler`, `InTransactionContext` — what
+ *   `ctx.hooks.onInTransaction`/`offInTransaction` accept: a handler run inside
+ *   a write's own transaction, and the write plus the plugin's database bound
+ *   to that transaction. New, and not yet exercised by a first-party plugin.
  */
 export type {
   BeforeOperationArgs,
@@ -772,6 +797,8 @@ export type {
   HookContextPhase,
   HookHandler,
   HookType,
+  InTransactionContext,
+  InTransactionHandler,
 } from "nextly";
 
 /**

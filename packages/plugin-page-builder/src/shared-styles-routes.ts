@@ -35,6 +35,11 @@ import type { WhereFilter } from "nextly";
 import { z } from "nextly/zod";
 
 import { classUsageOf } from "./class-usage";
+import {
+  storedFormsReader,
+  type ClassUsageDirectApi,
+  type StoredDocumentForm,
+} from "./class-usage-runtime";
 import { documentVersionOf, withVersionFrom } from "./document-version";
 import { titleFieldIn } from "./entries-route";
 import { entryOf, findAsCaller, singleReadableByCaller } from "./entry-reads";
@@ -68,7 +73,9 @@ import {
 } from "./shared-style-rescan";
 import {
   collectionsTheBuilderOpens,
+  siteLocales,
   singlesTheBuilderOpens,
+  type LocalizedConfig,
   type SiteStyleRouteContext,
 } from "./site-style-route";
 import {
@@ -480,22 +487,28 @@ function storedRefusals(
   ids: readonly string[],
   classes: readonly Record<string, unknown>[],
   configClassIds: ReadonlySet<string>
-): { reasons: string[]; removable: { id: string; name: string }[] } {
-  const reasons: string[] = [];
+): { reasons: UsageReason[]; removable: { id: string; name: string }[] } {
+  const reasons: UsageReason[] = [];
   const removable: { id: string; name: string }[] = [];
   for (const id of ids) {
     const entry = classes.find(current => current.id === id);
     if (configClassIds.has(id)) {
-      reasons.push(
-        `${entry === undefined ? id : sharedStyleName(entry)} is defined in the site's code.`
-      );
+      reasons.push({
+        id,
+        message: `${entry === undefined ? id : sharedStyleName(entry)} is defined in the site's code.`,
+        used: false,
+      });
     } else if (entry === undefined) {
       throw NextlyError.notFound({
         message: "There is no shared style with this id.",
         logContext: { classId: id },
       });
     } else if (entry.locked === true) {
-      reasons.push(`${sharedStyleName(entry)} is locked.`);
+      reasons.push({
+        id,
+        message: `${sharedStyleName(entry)} is locked.`,
+        used: false,
+      });
     } else {
       removable.push({ id, name: sharedStyleName(entry) });
     }
@@ -559,26 +572,33 @@ export async function usageRefusals(
 }
 
 /**
- * The refusal when a removal is refused: the in-use refusal, carrying
- * {@link SHARED_STYLE_IN_USE_CODE}, when any style is used, so the editor
- * reads every "it is used" alike, whichever check found it; else a conflict.
- * Either names every reason, so nothing is half removed.
+ * The refusal for the reasons found against a removal, the one rule both
+ * removal routes refuse by. The in-use refusal, carrying
+ * {@link SHARED_STYLE_IN_USE_CODE}, only when every reason is a use, so the
+ * editor reads every "it is used" alike, whichever check found it, and the
+ * code never marks a reason that is not one; any other is a conflict naming
+ * every reason. `pathOf` files one issue per reason at its id's path; without
+ * it the one issue names every reason. Either way nothing is half removed.
  */
-function removalRefusal(
-  message: string,
-  used: boolean,
-  classIds: readonly string[]
+export function removalRefusalOf(
+  reasons: readonly UsageReason[],
+  logContext: Record<string, unknown>,
+  pathOf?: (id: string) => string
 ): NextlyError {
-  if (used) {
-    return NextlyError.validation({
-      errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],
-      logContext: { classIds },
-    });
+  const message = `Nothing was removed. ${reasons.map(reason => reason.message).join(" ")}`;
+  if (reasons.length === 0 || !reasons.every(reason => reason.used)) {
+    return NextlyError.conflict({ reason: "state", message, logContext });
   }
-  return NextlyError.conflict({
-    reason: "state",
-    message,
-    logContext: { classIds },
+  return NextlyError.validation({
+    errors:
+      pathOf === undefined
+        ? [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }]
+        : reasons.map(reason => ({
+            path: reason.id === undefined ? "" : pathOf(reason.id),
+            code: SHARED_STYLE_IN_USE_CODE,
+            message: reason.message,
+          })),
+    logContext,
   });
 }
 
@@ -649,14 +669,9 @@ export async function removeSharedStyles(
   const classes = read.entries;
   const { reasons, removable } = storedRefusals(ids, classes, configClassIds);
   // Read just before the write, never taken from what the panel showed.
-  const counted = await usageRefusals(removable, usage, "shared style");
-  reasons.push(...counted.map(reason => reason.message));
+  reasons.push(...(await usageRefusals(removable, usage, "shared style")));
   if (reasons.length > 0) {
-    throw removalRefusal(
-      `Nothing was removed. ${reasons.join(" ")}`,
-      counted.some(reason => reason.used),
-      ids
-    );
+    throw removalRefusalOf(reasons, { classIds: ids });
   }
   // Only once the index found nothing: its refusals name every reason
   // cheaply, and this read walks every document the builder opens.
@@ -783,8 +798,13 @@ export function namedSingleReader(
   };
 }
 
-/** The slice of the Direct API the rescan reads stored documents through. */
-export interface RescanDirectApi {
+/**
+ * The slice of the Direct API the rescan reads stored documents through: a
+ * list read for the rows, and the by-id and by-slug reads every other form is
+ * read by.
+ */
+export interface RescanDirectApi
+  extends Pick<ClassUsageDirectApi, "findByID" | "findSingle"> {
   find(args: {
     collection: string;
     where?: WhereFilter;
@@ -795,15 +815,6 @@ export interface RescanDirectApi {
     depth: number;
     overrideAccess: boolean;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
-  findSingle(args: {
-    slug: string;
-    select: Record<string, boolean>;
-    draft?: boolean;
-    status: "all";
-    createIfMissing: false;
-    depth: number;
-    overrideAccess: boolean;
-  }): Promise<unknown>;
 }
 
 /** The top-level fields a row is read with: the id, and each path's first key. */
@@ -815,14 +826,36 @@ function rescanSelect(paths: readonly string[]): Record<string, boolean> {
 }
 
 /**
+ * Every form a document may be stored in on a site with these languages:
+ * each language and the working draft in each, or with none configured, the
+ * one document and its draft. The draft is read whether or not a collection
+ * keeps drafts, since the draft read answers nothing where none is surfaced.
+ */
+function storedFormsOn(locales: readonly string[]): StoredDocumentForm[] {
+  return (locales.length > 0 ? locales : [""]).flatMap(locale => [
+    { locale, variant: "published" as const },
+    { locale, variant: "draft" as const },
+  ]);
+}
+
+/** The form a list read answers: the default language, without the draft. */
+const LISTED_FORM: StoredDocumentForm = { locale: "", variant: "published" };
+
+/**
  * The stored documents the builder opens, read as the system: the removal's
  * rescan must see a document the caller may not, since that document's
- * styling is lost all the same.
+ * styling is lost all the same. Every form of each is read, in each of the
+ * site's languages and as its working draft.
  */
 export function storedDocumentsOf(
-  ctx: Pick<SiteStyleRouteContext, "self" | "services" | "config">,
+  ctx: Pick<SiteStyleRouteContext, "self" | "services"> & {
+    readonly config: SiteStyleRouteContext["config"] & LocalizedConfig;
+  },
   nextly: RescanDirectApi
 ): StoredDocuments {
+  const formsOf = storedFormsReader(nextly);
+  // Read per walk, as every reader of the site's languages reads them.
+  const forms = () => storedFormsOn(siteLocales(ctx.config));
   return {
     collections: () => collectionsTheBuilderOpens(ctx),
     singles: () => singlesTheBuilderOpens(ctx),
@@ -842,20 +875,18 @@ export function storedDocumentsOf(
       });
       return { items: page.items, hasNext: page.meta.hasNext };
     },
-    singleForms: async type => {
-      const read = (draft: boolean) =>
-        nextly.findSingle({
-          slug: type.slug,
-          select: rescanSelect(type.paths),
-          ...(draft ? { draft: true } : {}),
-          // Every state, and never created by being read.
-          status: "all",
-          createIfMissing: false,
-          depth: 0,
-          overrideAccess: true,
-        });
-      return [await read(false), await read(true)];
-    },
+    // The listed form is the row already in hand, so it is not read again.
+    rowForms: (type, id) =>
+      formsOf(
+        { scope: "collection", entity: type.slug, entityKey: id },
+        forms().filter(
+          form =>
+            form.locale !== LISTED_FORM.locale ||
+            form.variant !== LISTED_FORM.variant
+        )
+      ),
+    singleForms: type =>
+      formsOf({ scope: "single", entity: type.slug, entityKey: "" }, forms()),
   };
 }
 

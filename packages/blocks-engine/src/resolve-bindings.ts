@@ -41,6 +41,7 @@ import {
 import type { PropSchema } from "./block";
 import {
   DEFAULT_BINDING_SOURCE,
+  MAX_SEO_SEGMENTS,
   type BlockDocument,
   type BlockNode,
 } from "./document";
@@ -238,6 +239,23 @@ function sourceOf(
     case "item":
       return scope.phase === "item" ? scope.item : undefined;
   }
+}
+
+/**
+ * What a checked binding reads in a scope, before it is shaped for any prop:
+ * `read: false` when its source was not read for this page. For a reader
+ * whose target is not a block's prop, such as a document's social image,
+ * which takes a media object or an address rather than a prop's value.
+ */
+export function boundSourceValue(
+  binding: CheckedBinding,
+  run: BindingRun,
+  scope: BindingScope
+): { readonly read: false } | { readonly read: true; readonly value: unknown } {
+  const source = sourceOf(binding, run, scope);
+  return source === undefined
+    ? { read: false }
+    : { read: true, value: readPath(source, binding.segments) };
 }
 
 /** A value shaped for its prop, or why it cannot be. */
@@ -633,7 +651,9 @@ export function bindingDemand(
     formatsDates: false,
   };
   for (const document of documents) {
-    if (isPlainRecord(document)) visitForest(document.nodes, limits, demand);
+    if (!isPlainRecord(document)) continue;
+    visitForest(document.nodes, limits, demand);
+    visitDocumentSeo(document, demand);
   }
   return {
     any: demand.any,
@@ -722,6 +742,34 @@ function addSingle(
   const key = ownEntry(binding, "sourceKey");
   if (typeof key !== "string" || key === "") return;
   demand.singles.set(key, addPath(demand.singles.get(key), segments));
+}
+
+/**
+ * Add the bindings of a document's own metadata: each bound segment of its
+ * title and description, and its social image. They are read for the page,
+ * as a node's page bindings are.
+ */
+function visitDocumentSeo(
+  document: Readonly<Record<string, unknown>>,
+  demand: DemandSoFar
+): void {
+  const settings = ownEntry(document, "settings");
+  const seo = isPlainRecord(settings) ? ownEntry(settings, "seo") : undefined;
+  if (!isPlainRecord(seo)) return;
+  const visit = (binding: unknown): void => {
+    if (!isPlainRecord(binding)) return;
+    demand.any = true;
+    visitBinding(binding, demand);
+  };
+  for (const field of ["title", "description"]) {
+    const segments = ownEntry(seo, field);
+    if (!Array.isArray(segments)) continue;
+    // A stored document may hold more than a save allows; only the segments
+    // the metadata reads are read for.
+    const read = Math.min(segments.length, MAX_SEO_SEGMENTS);
+    for (let index = 0; index < read; index += 1) visit(segments[index]);
+  }
+  visit(ownEntry(seo, "image"));
 }
 
 /** Add every binding one node holds. */

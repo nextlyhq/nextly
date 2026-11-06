@@ -5,7 +5,7 @@
  * it, no later save can bring a first use of it.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CompositionSetup } from "./blocks-composition";
@@ -43,18 +43,28 @@ const settingsUsing = (identity: string) => ({
   },
 });
 
-/** An entry write whose stored forms hold `published` and `draft`. */
-function write(stored: {
-  published?: unknown;
-  draft?: unknown;
-  id?: string;
-}): PluginFieldWrite {
+/**
+ * An entry write whose stored forms hold `published` and `draft`, at the
+ * field path `at` (the top-level `content` unless named); recording the
+ * fields each stored read named.
+ */
+function write(
+  stored: {
+    published?: unknown;
+    draft?: unknown;
+    id?: string;
+  },
+  at = "content",
+  read: string[] = []
+): PluginFieldWrite {
   return {
     kind: "collection",
     slug: "pages",
     ...(stored.id === undefined ? { id: "p1" } : {}),
     inTransaction: false,
     readStored: async target => {
+      read.push(target.field);
+      if (target.field !== at) return { kind: "absent" };
       const value =
         target.form === "published" ? stored.published : stored.draft;
       return value === undefined
@@ -86,11 +96,12 @@ function setup() {
 
 async function validate(
   value: unknown,
-  how: { mode: "create" | "update"; write?: PluginFieldWrite }
+  how: { mode: "create" | "update"; write?: PluginFieldWrite; path?: string }
 ) {
+  const path = how.path ?? "content";
   return setup().field.validate?.(value, {
-    path: "content",
-    field: { name: "content", type: "blocks" },
+    path,
+    field: { name: path.split(".").at(-1), type: "blocks" },
     data: {},
     mode: how.mode,
     ...(how.write === undefined ? {} : { write: how.write }),
@@ -173,5 +184,61 @@ describe("a page write's references to the site's variables", () => {
       } as never)
     ).toBe(true);
     expect(siteDefinitions).not.toHaveBeenCalled();
+  });
+});
+
+describe("a blocks field inside named groups", () => {
+  it("refuses a newly added undefined variable, read against the stored value at its path", async () => {
+    const read: string[] = [];
+    const result = await validate(page(["color.gone"]), {
+      mode: "update",
+      path: "hero.body",
+      write: write({ published: page(["color.brand"]) }, "hero.body", read),
+    });
+    expect(codes(result)).toEqual(["unknown-token"]);
+    expect(read).toContain("hero.body");
+  });
+
+  it("keeps saving a reference the stored value at its path already held", async () => {
+    // The control: the same write, with the reference already stored there.
+    expect(
+      await validate(page(["color.gone"]), {
+        mode: "update",
+        path: "hero.body",
+        write: write({ published: page(["color.gone"]) }, "hero.body"),
+      })
+    ).toBe(true);
+  });
+
+  it("refuses an undefined variable where the stored read cannot name the field", async () => {
+    // A group kept per language: nothing proves the page held it already.
+    const refusing = {
+      ...write({}),
+      readStored: async () => {
+        throw NextlyError.invalidInput({
+          message:
+            '"pages.hero.body" cannot be read here: it is inside a group kept per language.',
+        });
+      },
+    } as PluginFieldWrite;
+    expect(
+      codes(
+        await validate(page(["color.gone"]), {
+          mode: "update",
+          path: "hero.body",
+          write: refusing,
+        })
+      )
+    ).toEqual(["unknown-token"]);
+  });
+
+  it("does not judge a field in a repeater's rows, which has no stored path", async () => {
+    expect(
+      await validate(page(["color.gone"]), {
+        mode: "update",
+        path: "rows[0].body",
+        write: write({ published: page([]) }, "rows[0].body"),
+      })
+    ).toBe(true);
   });
 });

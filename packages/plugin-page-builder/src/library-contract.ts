@@ -689,6 +689,55 @@ export interface SiteBreakpointRemoval {
   readonly runId: string;
   readonly finished: boolean;
   readonly left: number;
+  /** For a run undoing a removal: what it undoes, and what stayed out. */
+  readonly undo?: SiteBreakpointUndo;
+}
+
+/**
+ * Where an undo of a breakpoint removal is asked for: `POST` with the
+ * removal's id ({@link SiteBreakpointRemovalRequest}), under the same
+ * permission as the save. Only the newest removal can be undone, once, within
+ * 30 days. The breakpoints it removed are defined again, and every value it
+ * took out goes back where nothing has been set since; its walk is carried on
+ * through {@link SITE_BREAKPOINT_REMOVAL_ROUTE_PATH} like a removal's.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
+
+/**
+ * Values an undo could not put back into one document, for one reason (a
+ * document may be listed once per reason):
+ * - `changed`: something else was set there after the removal;
+ * - `block-deleted`: their block (or shared style) was deleted after it;
+ * - `gone`: the document was deleted after it;
+ * - `draft-gone`: the draft they were taken from was published or discarded;
+ * - `unreadable`: the document cannot be read, so nothing is known of them.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoSkipped {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  readonly id?: string;
+  readonly values: number;
+  readonly reason:
+    | "changed"
+    | "block-deleted"
+    | "gone"
+    | "draft-gone"
+    | "unreadable";
+}
+
+/**
+ * What an undo did: the removal it undoes and, once its walk is finished,
+ * each document it could not put every value back into.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndo {
+  readonly undoes: string;
+  readonly skipped?: readonly SiteBreakpointUndoSkipped[];
 }
 
 /**
@@ -952,7 +1001,10 @@ export interface SharedStyleUsage {
 /**
  * The code the remove route's issue carries when a stored document still uses
  * a style, so the editor can tell that refusal from one for a lock or a count
- * no longer whole.
+ * no longer whole. Carried only when every reason a removal is refused for is
+ * a use: a refusal any of whose reasons is not (a lock, a style the site's
+ * code defines, uses that could not all be counted) is a conflict naming
+ * every reason, so the code never marks one that is not a use.
  *
  * @experimental Settles when the Shared styles tab ships.
  */
@@ -1090,10 +1142,12 @@ export const VARIABLE_USAGE_IDS_MAX = 50;
 
 /**
  * How widely one variable is used: the documents whose blocks or page
- * settings name it, from the variable usage index, and the shared styles
- * whose own styles name it, from the site style. A shared style's reference
- * is a use whether or not any block applies the style. The places it is used
- * are `documents` plus `sharedStyles.length`.
+ * settings name it, from the variable usage index; the shared styles whose
+ * own styles name it, from the site style; and the block types whose own
+ * default styles name it, from the block registry. A shared style's reference
+ * is a use whether or not any block applies the style, and a block type's
+ * whether or not any page places the block. The places it is used are
+ * `documents` plus `sharedStyles.length` plus `blockDefaults.length`.
  */
 export interface VariableUsage {
   /** How many documents use it, gated and hidden content included. */
@@ -1102,6 +1156,11 @@ export interface VariableUsage {
   readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
   /** The ids of the shared styles whose styles name it, in id order. */
   readonly sharedStyles: readonly string[];
+  /**
+   * The registered block types (`core/button`) whose own default styles
+   * (`baseStyles`) name it, in type order.
+   */
+  readonly blockDefaults: readonly string[];
   /** False makes `documents` and `byKind` floors: "at least". */
   readonly complete: boolean;
 }
@@ -1128,22 +1187,34 @@ export interface VariablesUsageResponse {
 
 /**
  * Where the Variables panel lists the places a variable is used: first the
- * shared styles naming it, then the documents, read as the caller (documents
- * the caller may not read are counted in `meta.hiddenCount`, not named). The
- * canonical list envelope, twenty to a page with `?page=` from 1.
+ * shared styles naming it, then the block types whose default styles name
+ * it, then the documents, read as the caller (documents the caller may not
+ * read are counted in `meta.hiddenCount`, not named). The canonical list
+ * envelope, twenty to a page with `?page=` from 1, up to the page the longest
+ * such list ends on: every document one usage listing can name, with every
+ * shared style and block type the site has.
  *
  * @experimental Settles when the Variables panel shows usage.
  */
 export const VARIABLE_WHERE_USED_ROUTE_PATH = "/variables/where-used";
 
-/** Which kind of place a variable is used in: a document's kind, or a shared style. */
-export type VariableUseKind = SharedStyleUsageKind | "shared-style";
+/**
+ * Which kind of place a variable is used in: a document's kind, a shared
+ * style, or a block type's own default style.
+ */
+export type VariableUseKind =
+  | SharedStyleUsageKind
+  | "shared-style"
+  | "block-default";
 
 /**
  * One place a variable is used. A document is named by its collection and id,
  * as the shared-style where-used names one. A shared style is named by its
  * class id in `id`, with the site-style Single's slug as its `collection`, so
- * the panel can open it in Design > Shared styles.
+ * the panel can open it in Design > Shared styles. A block type's default
+ * style is named by the type in `id` (`core/button`) and its label in
+ * `title`, with an empty `collection`: it is the block's code, not a stored
+ * document.
  */
 export interface VariableUseItem {
   readonly id: string;
@@ -1158,10 +1229,14 @@ export interface VariableUseItem {
  * variable the site's code supplies cannot be removed, only reset.
  *
  * Refused in use with a validation error whose issues carry
- * {@link SHARED_STYLE_IN_USE_CODE}: one issue per variable the index or a
- * shared style finds in use, its `path` that variable's identity, or one
- * issue with an empty `path` when the stored documents themselves still use
- * one. Refused with a conflict when the uses cannot be counted.
+ * {@link SHARED_STYLE_IN_USE_CODE}: one issue per variable the index, a
+ * shared style or a block type's default style finds in use, its `path` that
+ * variable's identity, or one issue with an empty `path` when the stored
+ * documents themselves still use one. Refused with a conflict naming every
+ * reason when the uses cannot be counted, even if another variable asked
+ * about is in use: no issue carries the in-use code for a variable whose
+ * uses are not known. A page saved while the removal writes, that uses one
+ * of the variables, puts it back and refuses the removal as in use.
  *
  * @experimental Settles when the Variables panel shows usage.
  */
