@@ -94,6 +94,7 @@ describe.each(getConfiguredTestDialects())(
     const claimsOf = (ctx: PluginContext): Claims => ({
       services: ctx.services,
       slug: ADDRESS_CLAIMS_SLUG,
+      dialect: ctx.dialect,
     });
 
     /** Run `work` in one transaction, as a save does. */
@@ -355,6 +356,21 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored(claims, "address")).toEqual([["/news/page/3", "e1"]]);
     });
 
+    it("stops a list paginating while it keeps its own address", async () => {
+      const claims = claimsOf(await boot());
+      await claim(claims, "/news", page("list"));
+      await paginate(claims, "/news", page("list"));
+      await saving(claims, tx =>
+        releaseClaims(claims, tx, page("list"), {
+          address: at("/news"),
+          kind: "space",
+        })
+      );
+      expect(await stored(claims, "address")).toEqual([["/news", "list"]]);
+      expect(await stored(claims, "space")).toEqual([]);
+      await claim(claims, "/news/page/2", page("p1"));
+    });
+
     it("releases every claim a holder has, however many reads that takes", async () => {
       const claims = claimsOf(await boot());
       await saving(claims, async tx => {
@@ -398,10 +414,18 @@ describe.each(getConfiguredTestDialects())(
         const together = new Promise<void>(resolve => {
           bothArrived = resolve;
         });
+        const meet = async () => {
+          arrived += 1;
+          if (arrived === 2) bothArrived();
+          await Promise.race([
+            together,
+            new Promise(resolve => setTimeout(resolve, 500)),
+          ]);
+        };
         const real = ctx.services.collections;
-        // The service with the one method replaced. Its methods are frozen
-        // own properties, which a proxy may not hand back changed, so the
-        // copy inherits them and defines its own in their place.
+        // The service with one method replaced. Its methods are frozen own
+        // properties, which a proxy may not hand back changed, so the copy
+        // inherits them and defines its own in its place.
         const collections: typeof real = Object.create(real);
         const create: typeof real.createEntryInTransaction = async (
           tx,
@@ -409,14 +433,7 @@ describe.each(getConfiguredTestDialects())(
           data,
           opts
         ) => {
-          if (data.kind === "address" || data.kind === "space") {
-            arrived += 1;
-            if (arrived === 2) bothArrived();
-            await Promise.race([
-              together,
-              new Promise(resolve => setTimeout(resolve, 500)),
-            ]);
-          }
+          if (data.kind === "address" || data.kind === "space") await meet();
           return real.createEntryInTransaction(tx, collection, data, opts);
         };
         Object.defineProperty(collections, "createEntryInTransaction", {
@@ -425,6 +442,7 @@ describe.each(getConfiguredTestDialects())(
         return {
           services: { ...ctx.services, collections },
           slug: ADDRESS_CLAIMS_SLUG,
+          dialect: ctx.dialect,
         };
       }
 
@@ -456,6 +474,83 @@ describe.each(getConfiguredTestDialects())(
           ...(await stored(claims, "address")),
         ];
         expect(held).toHaveLength(1);
+      });
+
+      it("serves a document that starts waiting for an address while it is released", async () => {
+        const ctx = await boot();
+        await claim(claimsOf(ctx), "/x", page("p1"));
+        // Forces the one order that loses the waiter: the wait reads the old
+        // claim, the release then deletes it and finds no one waiting, and
+        // only after the release commits is the wait written. Each side gives
+        // up waiting for the other after a second, which is what happens when
+        // the other is held behind a lock instead.
+        let waiterRead: () => void = () => undefined;
+        const read = new Promise<void>(resolve => {
+          waiterRead = resolve;
+        });
+        let releaseDone: () => void = () => undefined;
+        const released = new Promise<void>(resolve => {
+          releaseDone = resolve;
+        });
+        const within = (gate: Promise<void>) =>
+          Promise.race([
+            gate,
+            new Promise<void>(resolve => setTimeout(resolve, 1000)),
+          ]);
+        const real = ctx.services.collections;
+        const collections: typeof real = Object.create(real);
+        const create: typeof real.createEntryInTransaction = async (
+          tx,
+          collection,
+          data,
+          opts
+        ) => {
+          if (data.kind === "waiting") {
+            waiterRead();
+            await within(released);
+          }
+          return real.createEntryInTransaction(tx, collection, data, opts);
+        };
+        const remove: typeof real.deleteEntryInTransaction = async (
+          tx,
+          collection,
+          id,
+          opts
+        ) => {
+          await within(read);
+          return real.deleteEntryInTransaction(tx, collection, id, opts);
+        };
+        Object.defineProperty(collections, "createEntryInTransaction", {
+          value: create,
+        });
+        Object.defineProperty(collections, "deleteEntryInTransaction", {
+          value: remove,
+        });
+        const claims: Claims = {
+          services: { ...ctx.services, collections },
+          slug: ADDRESS_CLAIMS_SLUG,
+          dialect: ctx.dialect,
+        };
+        const [releaseOutcome, waitOutcome] = await Promise.allSettled([
+          release(claims, page("p1")).finally(releaseDone),
+          saving(claims, tx =>
+            claimOrWait(claims, tx, { address: at("/x"), holder: post("e1") })
+          ),
+        ]);
+        expect(waitOutcome.status).toBe("fulfilled");
+        if (releaseOutcome.status === "rejected") {
+          // MySQL reads a transaction's rows from its snapshot, so a release
+          // that met a wait committed after it began is refused, as a
+          // conflict to retry, with nothing done. Retried, it sees the wait.
+          expect(dialect).toBe("mysql");
+          expect(NextlyError.isCode(releaseOutcome.reason, "CONFLICT")).toBe(
+            true
+          );
+          await release(claimsOf(ctx), page("p1"));
+        }
+        // Either way the waiter is never lost: it holds the address.
+        expect(await stored(claims, "address")).toEqual([["/x", "e1"]]);
+        expect(await stored(claims, "waiting")).toEqual([]);
       });
     });
   }
@@ -639,6 +734,20 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (answered.body.items as { blockedBy: unknown }[])[0]?.blockedBy
       ).toEqual({ collection: "components", id: hidden, title: null });
+    });
+
+    it("names a holder in a collection the site no longer has by its id", async () => {
+      const t = await boot();
+      const author = await person(t, "author");
+      await grant(t, author, ["read-pages", "update-pages"]);
+      const waiting = await create(t, "pages", pageData("Waiting page"));
+      await seedWait(t, waiting, { collection: "removed_things", id: "x1" });
+
+      const answered = await report(await sessionOf(t, author));
+      expect(answered.status).toBe(200);
+      expect(
+        (answered.body.items as { blockedBy: unknown }[])[0]?.blockedBy
+      ).toEqual({ collection: "removed_things", id: "x1", title: null });
     });
 
     it("refuses a malformed page as the caller's mistake", async () => {

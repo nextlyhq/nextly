@@ -126,6 +126,9 @@ async function titles(
   }
   const found = new Map<string, Map<string, string>>();
   for (const [collection, set] of ids) {
+    // A collection the site no longer has (a claim can outlive one removed
+    // from its configuration) yields no titles here, like one the caller may
+    // not read, so its documents are named by id; a test holds this.
     found.set(
       collection,
       await titlesAsCaller(ctx, nextly, collection, [...set])
@@ -167,6 +170,7 @@ export function addressWaitingRoute(): {
             services: ctx.services,
             slug:
               ctx.self.collections[ADDRESS_CLAIMS_SLUG] ?? ADDRESS_CLAIMS_SLUG,
+            dialect: ctx.dialect,
           },
           // The Direct API, read through the one method the reads need.
           nextly: (await getCachedNextly()) as unknown as Parameters<

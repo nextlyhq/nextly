@@ -63,6 +63,8 @@ export interface Claims {
   >;
   /** The collection's slug as stored, which a host may have renamed. */
   readonly slug: string;
+  /** The database the site runs on, which decides how a lock is held. */
+  readonly dialect: PluginRouteContext["dialect"];
 }
 
 type Tx = PluginCollectionTransaction;
@@ -76,6 +78,11 @@ export interface ReleaseScope {
   readonly locale?: string;
   /** Only those on this address. */
   readonly address?: ServedAddress;
+  /**
+   * Only claims of this kind: `"space"` for a list that stops paginating but
+   * keeps its own address.
+   */
+  readonly kind?: "address" | "space";
 }
 
 /** How many claims one read asks for; a read pages through the rest. */
@@ -270,13 +277,31 @@ async function insert(
   return row;
 }
 
-/** Delete a claim, and remember this transaction did. */
+/**
+ * Delete a claim, and remember this transaction did.
+ *
+ * A row another save committed after this transaction's snapshot was taken
+ * (MySQL's default isolation reads every statement from that snapshot) can
+ * be found by the store's reads and still be missing to the delete. The save
+ * is then refused as a conflict to retry: nothing it did stands, the row it
+ * met is left as it was, and the retry sees it.
+ */
 async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
-  await claims.services.collections.deleteEntryInTransaction(
-    tx,
-    claims.slug,
-    row.id
-  );
+  try {
+    await claims.services.collections.deleteEntryInTransaction(
+      tx,
+      claims.slug,
+      row.id
+    );
+  } catch (error) {
+    if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
+    throw NextlyError.conflict({
+      message:
+        "Another save changed who holds or waits for this address just now. Try again.",
+      logContext: { reason: "address-claim-changed", claimId: row.id },
+      cause: error instanceof Error ? error : undefined,
+    });
+  }
   const { gone, written } = pendingOf(tx);
   gone.add(row.id);
   if (written.get(row.key)?.id === row.id) written.delete(row.key);
@@ -284,18 +309,24 @@ async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
 
 /**
  * Hold `list`'s lock row until this transaction ends, so whatever else
- * claims in that space waits, then reads what this transaction claimed.
+ * claims in that space waits, then reads what this transaction claimed. One
+ * that exists is held by updating it, which reads it for update; one created
+ * here is held the same way, another transaction creating it waiting on the
+ * key's index for this one to end. An address's lock row is created by the
+ * save that first claims it, so the waits and releases that contend for it
+ * later only update it. (On MySQL two saves creating one lock row at once can
+ * deadlock; the database then refuses one of them as a conflict to retry, and
+ * nothing is claimed by it.)
  *
- * A lock row created here is held the same way: another transaction creating
- * it waits on the key's index for this one to end, is refused as a
- * duplicate, and then finds it. One that already exists is held by updating
- * it, which reads it for update.
+ * SQLite runs one writer at a time, so a transaction there already has every
+ * claim to itself, and takes no lock.
  */
 async function lock(
   claims: Claims,
   tx: Tx,
   list: ServedAddress
 ): Promise<void> {
+  if (claims.dialect === "sqlite") return;
   const key = claimKey("lock", list);
   let [row] = await keyed(claims, tx, [key]);
   if (row === undefined) {
@@ -318,8 +349,34 @@ async function lock(
 }
 
 /**
+ * Lock each of `addresses`, in key order, so two saves never wait on each
+ * other crosswise.
+ */
+async function lockInOrder(
+  claims: Claims,
+  tx: Tx,
+  addresses: readonly ServedAddress[]
+): Promise<void> {
+  const byKey = new Map(addresses.map(at => [claimKey("lock", at), at]));
+  // Plain code-unit order, the same in every process, whatever its locale.
+  for (const key of [...byKey.keys()].sort()) {
+    const at = byKey.get(key);
+    if (at !== undefined) await lock(claims, tx, at);
+  }
+}
+
+/**
+ * The addresses whose locks serialise claiming, waiting for and releasing
+ * `address`: its own, and the space that holds it, if any.
+ */
+function locksFor(address: ServedAddress): ServedAddress[] {
+  const space = spaceHolding(address);
+  return space === null ? [address] : [address, space];
+}
+
+/**
  * The claims an address claim would contend with: the address itself, and
- * the space that holds it, if any, read under that space's lock.
+ * the space that holds it, if any, read under their locks.
  */
 async function heldAt(
   claims: Claims,
@@ -327,7 +384,7 @@ async function heldAt(
   address: ServedAddress
 ): Promise<ClaimRow[]> {
   const space = spaceHolding(address);
-  if (space !== null) await lock(claims, tx, space);
+  await lockInOrder(claims, tx, locksFor(address));
   return keyed(claims, tx, [
     claimKey("address", address),
     ...(space === null ? [] : [claimKey("space", space)]),
@@ -465,28 +522,8 @@ export async function claimOrWait(
   tx: Tx,
   claim: { readonly address: ServedAddress; readonly holder: Holder }
 ): Promise<"claimed" | "waiting"> {
-  let blocking = await heldAt(claims, tx, claim.address);
-  if (blocking.some(row => sameHolder(row.holder, claim.holder))) {
-    return "claimed";
-  }
-  if (blocking.length === 0) {
-    if (
-      (await insert(
-        claims,
-        tx,
-        addressColumns(claim.address, claim.holder)
-      )) !== null
-    ) {
-      return "claimed";
-    }
-    // Taken by a save that committed meanwhile, now read.
-    blocking = await keyed(claims, tx, [claimKey("address", claim.address)]);
-  }
-  if (blocking.length === 0) {
-    throw NextlyError.internal({
-      logContext: { reason: "address-held-by-no-claim" },
-    });
-  }
+  const blocking = await blockingClaims(claims, tx, claim);
+  if (blocking === "claimed") return "claimed";
   for (const row of blocking) {
     // Already waiting on this one is a duplicate key, and changes nothing.
     await insert(claims, tx, {
@@ -502,35 +539,47 @@ export async function claimOrWait(
   return "waiting";
 }
 
-/** The space whose later pages `row` holds, or holds one of, if any. */
-function spaceOf(row: ClaimRow): ServedAddress | null {
-  if (row.address === null) return null;
-  return row.kind === "space" ? row.address : spaceHolding(row.address);
+/**
+ * The claims in the way of `claim`, or "claimed" when there are none and the
+ * address is now `claim`'s (or already was).
+ */
+async function blockingClaims(
+  claims: Claims,
+  tx: Tx,
+  claim: { readonly address: ServedAddress; readonly holder: Holder }
+): Promise<ClaimRow[] | "claimed"> {
+  const held = await heldAt(claims, tx, claim.address);
+  if (held.some(row => sameHolder(row.holder, claim.holder))) return "claimed";
+  if (held.length > 0) return held;
+  if (
+    (await insert(claims, tx, addressColumns(claim.address, claim.holder))) !==
+    null
+  ) {
+    return "claimed";
+  }
+  // Taken by a save that committed meanwhile, now read.
+  const taken = await keyed(claims, tx, [claimKey("address", claim.address)]);
+  if (taken.length === 0) {
+    throw NextlyError.internal({
+      logContext: { reason: "address-held-by-no-claim" },
+    });
+  }
+  return taken;
 }
 
 /**
- * Lock every space `rows` touch, in key order, so two releases never wait on
- * each other crosswise.
+ * The locks releasing `row` takes: an address claim's (its own and its
+ * space's, the locks a wait for it takes), and a space's.
  */
-async function lockSpacesOf(
-  claims: Claims,
-  tx: Tx,
-  rows: readonly ClaimRow[]
-): Promise<void> {
-  const spaces = new Map<string, ServedAddress>();
-  for (const row of rows) {
-    const space = spaceOf(row);
-    if (space !== null) spaces.set(claimKey("lock", space), space);
-  }
-  // Plain code-unit order, the same in every process, whatever its locale.
-  for (const key of [...spaces.keys()].sort()) {
-    const space = spaces.get(key);
-    if (space !== undefined) await lock(claims, tx, space);
-  }
+function locksOf(row: ClaimRow): ServedAddress[] {
+  if (row.address === null) return [];
+  if (row.kind === "address") return locksFor(row.address);
+  return row.kind === "space" ? [row.address] : [];
 }
 
 /** Whether `row`, one of the holder's, is within `scope`. */
 function inScope(row: ClaimRow, scope: ReleaseScope): boolean {
+  if (scope.kind !== undefined && row.kind !== scope.kind) return false;
   if (scope.address !== undefined) {
     return sameAddress(row.address, scope.address);
   }
@@ -561,7 +610,7 @@ export async function releaseClaims(
     },
     row => sameHolder(row.holder, holder) && inScope(row, scope)
   );
-  await lockSpacesOf(claims, tx, held);
+  await lockInOrder(claims, tx, held.flatMap(locksOf));
   for (const row of held) {
     if (row.kind !== "lock") await remove(claims, tx, row);
   }
