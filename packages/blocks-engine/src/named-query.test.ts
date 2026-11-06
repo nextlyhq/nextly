@@ -116,6 +116,29 @@ describe("a named query's declaration", () => {
       'entries of "posts"',
     ],
     [
+      "rows naming both a collection and fields",
+      {
+        rows: {
+          collection: "events",
+          key: "id",
+          fields: [{ name: "id", type: "text" }],
+        },
+      },
+      "both a collection and fields",
+    ],
+    [
+      // Read as its consumers read it: `fields` decides, so fields that are
+      // not a list are refused even beside a collection the query reads.
+      "fields that are not a list, beside a collection",
+      { rows: { collection: "events", fields: "bad" } },
+      "both a collection and fields",
+    ],
+    [
+      "rows with fields but no key",
+      { rows: { fields: [{ name: "id", type: "text" }] } },
+      "key",
+    ],
+    [
       "a row field a binding could not address",
       {
         rows: {

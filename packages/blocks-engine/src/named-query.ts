@@ -977,19 +977,28 @@ function rowsProblem(
   if (!isPlainRecord(rows)) {
     return "its rows are not { collection } or { fields, key }";
   }
+  // Read as every consumer reads it (`"fields" in rows`): rows holding
+  // `fields` are a schema of their own, whatever else they hold, so both
+  // shapes at once are refused, and `fields` is judged whenever it is there.
+  if ("fields" in rows && "collection" in rows) {
+    return "its rows name both a collection and fields; give { collection } or { fields, key }, not both";
+  }
+  if ("fields" in rows) {
+    const fields = rows.fields;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      return "its rows are not { collection } or { fields, key }";
+    }
+    return (
+      rowFieldsProblem(fields, "its rows") ??
+      rowKeyProblem(rows, fields as BindingFieldShape[])
+    );
+  }
   if (typeof rows.collection === "string") {
     return collections.has(rows.collection)
       ? undefined
       : `its rows are entries of "${rows.collection}", which it does not declare in reads.collections`;
   }
-  const fields = rows.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return "its rows are not { collection } or { fields, key }";
-  }
-  return (
-    rowFieldsProblem(fields, "its rows") ??
-    rowKeyProblem(rows, fields as BindingFieldShape[])
-  );
+  return "its rows are not { collection } or { fields, key }";
 }
 
 /** Why a declaration's reads are not lists of slugs, or nothing. */
