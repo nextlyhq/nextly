@@ -266,30 +266,43 @@ const EXISTENCE =
 /** A statement that reads or writes the migration ledger. */
 const LEDGER = /nextly_schema_events/i;
 
+/**
+ * Whether `introspection` is the start's read of the two registry tables for
+ * rules left in their retired `access_rules` column, and nothing more.
+ */
+function readsRetiredAccessRules(
+  introspection: Asker["introspection"]
+): boolean {
+  return (
+    introspection !== undefined &&
+    introspection.caller.startsWith("init/first-run.ts") &&
+    introspection.tables.length > 0 &&
+    introspection.tables.every(table =>
+      RETIRED_ACCESS_RULES_TABLES.includes(table)
+    )
+  );
+}
+
+/** Why a statement nothing labelled breaks the rule, or undefined. */
+function unlabelledBreach(text: string, sent: string): string | undefined {
+  if (CATALOG.test(text) && !EXISTENCE.test(text)) {
+    return `an unlabelled catalog read: ${sent}`;
+  }
+  if (LEDGER.test(text) && !CATALOG.test(text)) {
+    return `a ledger read outside the plugin readiness check: ${sent}`;
+  }
+  return undefined;
+}
+
 /** Why `call` breaks the rule, or undefined when a production start may send it. */
 function breach(call: RecordedStatement): string | undefined {
   const asker = call.context as Asker | undefined;
   const sent = call.text.replace(/\s+/g, " ").slice(0, 90);
   if (asker?.kept) return undefined;
   const introspection = asker?.introspection;
-  if (introspection) {
-    const accessRules =
-      introspection.caller.startsWith("init/first-run.ts") &&
-      introspection.tables.length > 0 &&
-      introspection.tables.every(table =>
-        RETIRED_ACCESS_RULES_TABLES.includes(table)
-      );
-    return accessRules
-      ? undefined
-      : `${introspection.caller} read the shape of ${introspection.tables.join(", ")}: ${sent}`;
-  }
-  if (CATALOG.test(call.text) && !EXISTENCE.test(call.text)) {
-    return `an unlabelled catalog read: ${sent}`;
-  }
-  if (LEDGER.test(call.text) && !CATALOG.test(call.text)) {
-    return `a ledger read outside the plugin readiness check: ${sent}`;
-  }
-  return undefined;
+  if (introspection === undefined) return unlabelledBreach(call.text, sent);
+  if (readsRetiredAccessRules(introspection)) return undefined;
+  return `${introspection.caller} read the shape of ${introspection.tables.join(", ")}: ${sent}`;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -409,17 +422,11 @@ describe.each(getConfiguredTestDialects())(
         ).toBe(true);
         // The retired access rules notice still reads the registry tables.
         expect(
-          calls.some(call => {
-            const introspection = (call.context as Asker | undefined)
-              ?.introspection;
-            return (
-              introspection?.caller.startsWith("init/first-run.ts") === true &&
-              introspection.tables.length > 0 &&
-              introspection.tables.every(table =>
-                RETIRED_ACCESS_RULES_TABLES.includes(table)
-              )
-            );
-          }),
+          calls.some(call =>
+            readsRetiredAccessRules(
+              (call.context as Asker | undefined)?.introspection
+            )
+          ),
           "the registry tables are read for retired access rules"
         ).toBe(true);
       },

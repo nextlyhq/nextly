@@ -15,8 +15,6 @@
  * @module cli/commands/component-map-check-command
  */
 
-import { relative, sep } from "node:path";
-
 import {
   checkComponentMapFiles,
   componentMapAgrees,
@@ -24,6 +22,7 @@ import {
 } from "../../plugins/codegen/check-component-map";
 import { describeComponentUse } from "../../plugins/codegen/component-import-map";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { projectPath } from "../dry-run";
 import { componentMapOutOfDate } from "../errors/areas/commands";
 import { printCliError } from "../errors/report";
 import type { CommandContext } from "../program";
@@ -77,7 +76,7 @@ function outOfDateReport(
   found: ComponentMapAgreement,
   cwd: string
 ): { files: string; disagreements: string[] } {
-  const shown = (file: string) => relative(cwd, file).split(sep).join("/");
+  const shown = (file: string) => projectPath(cwd, file);
   const [map, list] = found.files.map(shown) as [string, string];
   return {
     files: `${map} and ${list}`,
