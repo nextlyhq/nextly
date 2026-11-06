@@ -1556,6 +1556,7 @@ function FiltersGroup({
     fields,
     rows.map(row => row.draft)
   );
+  const filterLimit = listLimit(rows.length, LIST_MAX_FILTERS, id);
   const change = (row: ShownRow, draft: DraftFilter) => {
     const field = fields.find(each => each.name === draft.field);
     const completed = completedFilter(draft, field);
@@ -1643,9 +1644,8 @@ function FiltersGroup({
         size="sm"
         variant="ghost"
         className="nx-list-query__add"
-        disabled={
-          disabled || fields.length === 0 || rows.length >= LIST_MAX_FILTERS
-        }
+        disabled={disabled || fields.length === 0 || filterLimit.full}
+        aria-describedby={filterLimit.describedBy}
         onClick={() => {
           nextKey.current += 1;
           const key = `new:${String(nextKey.current)}`;
@@ -1657,7 +1657,41 @@ function FiltersGroup({
         <Plus aria-hidden="true" size={14} />
         Add filter
       </Button>
+      <LimitNote limit={filterLimit}>
+        Up to {LIST_MAX_FILTERS} filters.
+      </LimitNote>
     </section>
+  );
+}
+
+/** Whether a list holds the most of something it takes, and the note saying so. */
+interface ListLimit {
+  full: boolean;
+  /** The note's id while the limit is reached, for the Add button to name. */
+  describedBy: string | undefined;
+  id: string;
+}
+
+/** The limit of `count` against `most`, its note under `${id}-limit`. */
+function listLimit(count: number, most: number, id: string): ListLimit {
+  const full = count >= most;
+  const noteId = `${id}-limit`;
+  return { full, describedBy: full ? noteId : undefined, id: noteId };
+}
+
+/** Why an Add button is off: shown only once the list holds the most it takes. */
+function LimitNote({
+  limit,
+  children,
+}: {
+  limit: ListLimit;
+  children: React.ReactNode;
+}): React.JSX.Element | null {
+  if (!limit.full) return null;
+  return (
+    <p id={limit.id} className="nx-inspector__note nx-list-query__hint">
+      {children}
+    </p>
   );
 }
 
@@ -1967,10 +2001,13 @@ function useFocusOnAsk(
 function AddSortButton({
   fields,
   disabled,
+  describedBy,
   onPick,
 }: {
   fields: readonly LoopListField[];
   disabled: boolean;
+  /** The note saying why the button is off, when it is. */
+  describedBy: string | undefined;
   onPick: (field: LoopListField) => void;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
@@ -1990,6 +2027,7 @@ function AddSortButton({
           // Where an ask to fix the sort lands when there is no row.
           data-list-add-sort=""
           disabled={disabled || fields.length === 0}
+          aria-describedby={describedBy}
         >
           <Plus aria-hidden="true" size={14} />
           Add sort
@@ -2046,6 +2084,7 @@ function SortGroup({
   onSort: (keys: readonly ListSortKey[]) => void;
 }): React.JSX.Element {
   const keys = query.sort;
+  const sortLimit = listLimit(keys.length, LIST_MAX_SORT_KEYS, id);
   const group = React.useRef<HTMLElement>(null);
   useFocusOnAsk(group, fieldAsked, `${id}-0-field`);
   const sortable = fields.filter(field => listKindSortable(field.kind));
@@ -2159,7 +2198,8 @@ function SortGroup({
           field => !keys.some(key => key.field === field.name)
         )}
         // No key past the most a list sorts by, which the save refuses.
-        disabled={disabled || keys.length >= LIST_MAX_SORT_KEYS}
+        disabled={disabled || sortLimit.full}
+        describedBy={sortLimit.describedBy}
         onPick={field =>
           onSort([
             ...keys,
@@ -2167,6 +2207,7 @@ function SortGroup({
           ])
         }
       />
+      <LimitNote limit={sortLimit}>Up to {LIST_MAX_SORT_KEYS} sorts.</LimitNote>
       {shown.length === 0 ? null : (
         <p className="nx-inspector__note nx-list-query__hint">
           Entries with the same values keep a fixed order. Entries with no value

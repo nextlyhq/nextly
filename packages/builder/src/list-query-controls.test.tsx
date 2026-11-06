@@ -31,6 +31,7 @@ import * as React from "react";
 import {
   clearBlocks,
   COLLECTION_LIST_TYPE,
+  LIST_MAX_FILTERS,
   LIST_MAX_SORT_KEYS,
   registerBlocks,
   type BlockDocument,
@@ -351,7 +352,42 @@ describe("a list's source", () => {
   });
 });
 
+/** The text of the notes an element names as describing it. */
+function describedText(element: HTMLElement): string | undefined {
+  const ids = element.getAttribute("aria-describedby");
+  if (ids === null) return undefined;
+  return ids
+    .split(" ")
+    .map(each => document.getElementById(each)?.textContent ?? "")
+    .join(" ");
+}
+
 describe("a list's filters", () => {
+  it("turns Add filter off at the most filters a list holds, and says why", async () => {
+    const filtersOf = (count: number) =>
+      Array.from({ length: count }, () => ({
+        field: "title",
+        op: "contains" as const,
+        value: "a",
+      }));
+    mount({ collection: "posts", filters: filtersOf(LIST_MAX_FILTERS - 1) });
+    const below = (await screen.findByRole("button", {
+      name: "Add filter",
+    })) as HTMLButtonElement;
+    expect(below.disabled).toBe(false);
+    expect(below.getAttribute("aria-describedby")).toBeNull();
+    cleanup();
+    clearBlocks();
+    mount({ collection: "posts", filters: filtersOf(LIST_MAX_FILTERS) });
+    const full = (await screen.findByRole("button", {
+      name: "Add filter",
+    })) as HTMLButtonElement;
+    expect(full.disabled).toBe(true);
+    expect(describedText(full)).toBe(
+      `Up to ${String(LIST_MAX_FILTERS)} filters.`
+    );
+  });
+
   it("offers only the fields visitors can see, none holding several values, and says so", async () => {
     mount({ collection: "posts" });
     fireEvent.click(await screen.findByRole("button", { name: "Add filter" }));
@@ -557,15 +593,22 @@ describe("a list's sort", () => {
       });
       return screen.getByRole("button", { name: "Add sort" });
     };
+    const below = (await addSortWith(
+      LIST_MAX_SORT_KEYS - 1
+    )) as HTMLButtonElement;
+    expect(below.disabled).toBe(false);
+    expect(below.getAttribute("aria-describedby")).toBeNull();
     expect(
-      ((await addSortWith(LIST_MAX_SORT_KEYS - 1)) as HTMLButtonElement)
-        .disabled
-    ).toBe(false);
+      screen.queryByText(`Up to ${String(LIST_MAX_SORT_KEYS)} sorts.`)
+    ).toBeNull();
     cleanup();
     clearBlocks();
-    expect(
-      ((await addSortWith(LIST_MAX_SORT_KEYS)) as HTMLButtonElement).disabled
-    ).toBe(true);
+    const full = (await addSortWith(LIST_MAX_SORT_KEYS)) as HTMLButtonElement;
+    expect(full.disabled).toBe(true);
+    // Off, and saying why, as Add filter does at its own limit.
+    expect(describedText(full)).toBe(
+      `Up to ${String(LIST_MAX_SORT_KEYS)} sorts.`
+    );
   });
 
   it("marks a stored key the collection no longer has, with the engine's reason", async () => {
