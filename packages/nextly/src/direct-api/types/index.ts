@@ -123,6 +123,13 @@ export type {
 } from "./field-groups";
 
 export type {
+  // The site's languages, from the `locales` map `TypeGenerator` emits where the configuration
+  // locks them: what a read's `locale` and `fallbackLocale` take.
+  Locale,
+  LocaleOption,
+} from "./locales";
+
+export type {
   FindEmailProvidersArgs,
   FindEmailProviderByIDArgs,
   CreateEmailProviderArgs,
