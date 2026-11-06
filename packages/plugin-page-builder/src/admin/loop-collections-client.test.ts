@@ -32,6 +32,15 @@ describe("listLoopCollections", () => {
     });
   });
 
+  it("asks in the language being edited, as a save judges the page's lists", async () => {
+    readPluginRoute.mockResolvedValue({ items: [], meta: {} });
+    await listLoopCollections("fr");
+    expect(readPluginRoute.mock.calls[0]?.[0]).toEqual({
+      plugin: "@nextlyhq/plugin-page-builder",
+      path: "/loop-collections?locale=fr",
+    });
+  });
+
   it("keeps each collection, field and relation of the promised shape, and drops the rest", async () => {
     readPluginRoute.mockResolvedValue({
       items: [
