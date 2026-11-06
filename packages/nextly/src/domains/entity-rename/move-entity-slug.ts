@@ -37,6 +37,7 @@ import { NextlyError } from "../../errors";
 import {
   jsonSlugColumns,
   renamedSlugColumns,
+  storedFieldConfigurationTables,
   type EndingSlugColumn,
   type FollowingSlugColumn,
   type JsonSlugColumn,
@@ -71,7 +72,11 @@ function writtenColumns(): WrittenColumn[] {
 export async function slugKeyedTablesPresent(db: {
   listTables(): Promise<string[]>;
 }): Promise<ReadonlySet<string>> {
-  const declared = new Set(writtenColumns().map(column => column.table));
+  // The registries whose stored relationship targets a rename rewrites are asked about too.
+  const declared = new Set([
+    ...writtenColumns().map(column => column.table),
+    ...storedFieldConfigurationTables(),
+  ]);
   return new Set((await db.listTables()).filter(name => declared.has(name)));
 }
 
