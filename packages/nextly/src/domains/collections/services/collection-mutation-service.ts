@@ -1483,6 +1483,13 @@ interface EntryValidationArgs {
    * `ValidateEntryOptions` for the boundary.
    */
   assembledFromStorage?: boolean;
+  /**
+   * The paths that hold a value kept from the stored row because a rule
+   * denies it to this writer — the restore's answer, which the whole-number
+   * rule skips: a legacy stored fraction under a denied path is the row's
+   * own content, not this write's. Absent on a write that restores nothing.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -2949,6 +2956,9 @@ export class CollectionMutationService extends BaseService {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
         ...(args.assembledFromStorage ? { assembledFromStorage: true } : {}),
+        ...(args.storedProvenancePaths
+          ? { storedProvenancePaths: args.storedProvenancePaths }
+          : {}),
         ...args.localeCtx,
         // A component inside a group or repeater is judged here, since no
         // component write reaches it; read on the write's own connection.
@@ -3650,7 +3660,13 @@ export class CollectionMutationService extends BaseService {
       locale?: string;
     };
     executor?: unknown;
-  }): Promise<void> {
+    /**
+     * The paths that hold a value kept from the stored row because a rule
+     * denies it to this writer, so the whole-number rule leaves them to the
+     * row — a legacy stored fraction under one is the row's own content,
+     * not this write's. Empty on a write that restores nothing.
+     */
+  }): Promise<ReadonlySet<string>> {
     // One resolver for the entry's rules and the field groups', read on the
     // write's own connection: inside a transaction, the pool's would wait on
     // the connection the transaction holds and miss its writes.
@@ -3670,7 +3686,7 @@ export class CollectionMutationService extends BaseService {
       access,
       executor: args.executor,
     });
-    await keepDeniedAtStoredOnUpdate({
+    return keepDeniedAtStoredOnUpdate({
       data: args.data,
       stored: await storedIn.read(args.params.locale),
       storedIn,
@@ -13454,7 +13470,7 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
+      const storedPaths = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -13503,6 +13519,7 @@ export class CollectionMutationService extends BaseService {
             ? {}
             : { writeLocale: params.locale }),
           id: params.entryId,
+          storedProvenancePaths: storedPaths,
         });
       }
 
@@ -13536,12 +13553,14 @@ export class CollectionMutationService extends BaseService {
 
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
-      // decide, on every verb this gate guards.
+      // decide, on every verb this gate guards. Paths the restore kept from
+      // the row for a denied rule are the row's own, not judged.
       const hookIssues = hookChangedWholeNumberIssues(
         finalData,
         fields,
         "",
-        await this.hookWalkComponentResolver(fields)
+        await this.hookWalkComponentResolver(fields),
+        storedPaths
       );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
@@ -18791,7 +18810,7 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
+      const storedPaths = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -18835,6 +18854,7 @@ export class CollectionMutationService extends BaseService {
           reader: params,
           id: entryId,
           tx,
+          storedProvenancePaths: storedPaths,
         });
       }
 
@@ -18864,12 +18884,14 @@ export class CollectionMutationService extends BaseService {
         });
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
-        // decide, on every verb this gate guards.
+        // decide, on every verb this gate guards. Paths the restore kept
+        // from the row for a denied rule are the row's own, not judged.
         const hookIssues = hookChangedWholeNumberIssues(
           finalData,
           fields,
           "",
-          await this.hookWalkComponentResolver(fields)
+          await this.hookWalkComponentResolver(fields),
+          storedPaths
         );
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });

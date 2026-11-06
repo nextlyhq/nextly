@@ -12,7 +12,10 @@
 
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
-import { keepDeniedAtStored } from "../../shared/lib/denied-change";
+import {
+  keepDeniedAtStored,
+  storedProvenancePaths,
+} from "../../shared/lib/denied-change";
 import { detachData } from "../../shared/lib/detach";
 import {
   anyFieldGroupHasAccessRule,
@@ -67,8 +70,8 @@ export async function keepDeniedAtStoredOnUpdate(params: {
    * judged in every language it removes; `stored` is the write's own.
    */
   storedIn?: StoredFieldGroupsInLanguages;
-}): Promise<void> {
-  if (params.access.overrideAccess) return;
+}): Promise<ReadonlySet<string>> {
+  if (params.access.overrideAccess) return new Set();
   if (anyFieldGroupHasAccessRule("update")) {
     await keepProtectedStoredInstances({
       data: params.data,
@@ -101,9 +104,27 @@ export async function keepDeniedAtStoredOnUpdate(params: {
       });
     },
   });
+  // The paths that now hold the row's own value, for the whole-number rule
+  // to leave to the row: the write is judged after this, and a legacy
+  // stored fraction under a denied path is the row's own content, carried
+  // by this restore, not a value this write produced. Computed with the
+  // same rules the restore judged, on the restored document itself.
+  const storedPaths = await storedProvenancePaths(kept, async document => {
+    await params.ownRules(document);
+    await applyInlineFieldGroupWriteAccess({
+      data: document,
+      fields: params.fields,
+      source: params.source,
+      operation: "update",
+      access: params.access,
+      executor: params.executor,
+      stored: params.stored,
+    });
+  });
   // In place: the caller holds this object, and so may what it was handed to.
   for (const key of Object.keys(params.data)) delete params.data[key];
   Object.assign(params.data, kept);
+  return storedPaths;
 }
 
 /**

@@ -52,6 +52,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../collection-service";
 import type { SingleEntryService } from "../../../../domains/singles/services/single-entry-service";
+import { grantTo, userWhoMay } from "../../../../__tests__/fixtures/permission-holders";
 
 interface ValidationIssueShape {
   path: string;
@@ -90,6 +91,11 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: SLUG,
             status: true,
+            // Named so the denied-child tests below may write WITHOUT
+            // overrideAccess: the collection lets any caller update, while
+            // the `locked` group's rating child denies the write by its own
+            // field rule. The trusted tests above bypass both anyway.
+            access: { read: () => true, update: () => true },
             fields: [
               text({ name: "title" }),
               number({ name: "quantity" }),
@@ -107,6 +113,19 @@ describe.each(getConfiguredTestDialects())(
               group({
                 name: "meta",
                 fields: [number({ name: "rating" })],
+              }),
+              group({
+                name: "locked",
+                fields: [
+                  text({ name: "label" }),
+                  number({
+                    name: "rating",
+                    // Readable by anyone, writable by none: the update
+                    // below edits the sibling and omits this child, so the
+                    // restore puts the stored value back for the write.
+                    access: { read: () => true, update: () => false },
+                  }),
+                ],
               }),
             ],
           }),
@@ -487,6 +506,56 @@ describe.each(getConfiguredTestDialects())(
       expect((published.data as Record<string, unknown>).quantity).toBe(
         storedCount
       );
+    });
+
+    it("a sibling edit passes while a denied child keeps its legacy stored fraction", async () => {
+      // `locked` holds a whole-number child no caller may write. A row
+      // seeded straight into the table carries a fraction under it — the
+      // group's JSON column keeps what a pre-floor write stored, on every
+      // dialect. The update names the group and edits the ALLOWED sibling,
+      // omitting the denied child: the restore puts the stored child back
+      // so the whole-written group does not clear it, and the floor leaves
+      // the row's own value to the row instead of refusing the edit for a
+      // fraction nobody sent.
+      const timestamp =
+        dialect === "sqlite" ? String(Math.floor(Date.now() / 1000)) : "NOW()";
+      await handle!.adapter.executeQuery(
+        `INSERT INTO ${TABLE} (id, title, slug, status, locked, created_at, updated_at)
+         VALUES ('denied-frac-1', 'denied legacy', 'denied-legacy', 'draft', '{"label":"kept","rating":2.5}', ${timestamp}, ${timestamp})`
+      );
+
+      // A real signed-in editor holds read and update on the collection —
+      // the write's own read is judged for this caller — while the
+      // `locked` group's rating child denies the WRITE by its field rule.
+      await userWhoMay(handle!, "sibling-editor", "read", [SLUG]);
+      await grantTo(handle!, "sibling-editor", "update", [SLUG]);
+
+      const edited = (await collections.updateEntry(
+        SLUG,
+        "denied-frac-1",
+        { locked: { label: "sibling edit" } },
+        { overrideAccess: false, user: { id: "sibling-editor" } }
+      )) as unknown as Record<string, unknown>;
+      expect(edited.title).toBe("denied legacy");
+      expect((edited.locked as Record<string, unknown>).label).toBe(
+        "sibling edit"
+      );
+      expect((edited.locked as Record<string, unknown>).rating).toBe(2.5);
+    });
+
+    it("a fraction the caller sends at an allowed path is still refused beside a denied child", async () => {
+      // The skip is bounded by the denied paths: a fractional value the
+      // caller carries at a field they may write is refused as ever, on the
+      // same write that leaves the denied child alone.
+      const refusal = await refusalOf(
+        collections.updateEntry(
+          SLUG,
+          "denied-frac-1",
+          { quantity: 2.5 },
+          { overrideAccess: false, user: { id: "sibling-editor" } }
+        )
+      );
+      expectFractionRefusal(refusal, "quantity");
     });
   }
 );

@@ -246,6 +246,68 @@ export async function keepDeniedAtStored(input: {
 }
 
 /**
+ * The paths of the restored document that hold a value the rules deny —
+ * the values {@link keepDeniedAtStored} put back from the row, wherever it
+ * placed them.
+ *
+ * Computed on the RESTORED document by applying the rules to a detached
+ * copy and collecting where the copy loses a value, because the restore
+ * walks by row identity and splices whole rows back: a path recorded while
+ * restoring would address the document as the restore built it, not as the
+ * caller holds it when the write is judged. Both sides here are the one
+ * restored document's shape, so a path answers for it as it is written.
+ *
+ * Lists pair by the same row identity the restore pairs by, so a restored
+ * row among kept ones denies only itself — a position-only walk would
+ * shift every later row onto the wrong stored value. Rows without ids
+ * still fall back to position, as the restore itself does for them.
+ */
+export async function storedProvenancePaths(
+  document: Record<string, unknown>,
+  applyRules: (document: Record<string, unknown>) => Promise<void>
+): Promise<Set<string>> {
+  const permitted = detachData(document);
+  await applyRules(permitted);
+  return new Set(deniedStoredPaths(document, permitted, ""));
+}
+
+/**
+ * Where `before` holds a value `after` lost, lists paired by row identity
+ * rather than position — the restore's own pairing — so a row the rules
+ * removed denies itself alone and the rows after it keep their own paths.
+ */
+function deniedStoredPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string
+): string[] {
+  if (Array.isArray(before)) {
+    if (!Array.isArray(after)) return prefix === "" ? [] : [prefix];
+    const pairing = rowPairing(before, after);
+    return before.flatMap((row, index) => {
+      const at = pairing(index);
+      return deniedStoredPaths(
+        row,
+        at === undefined ? undefined : after[at],
+        `${prefix}[${index}]`
+      );
+    });
+  }
+  if (!isRecord(before)) return [];
+  if (!isRecord(after)) return prefix === "" ? [] : [prefix];
+  const out: string[] = [];
+  for (const key of Object.keys(before)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (!hasOwn(after, key)) {
+      out.push(path);
+      continue;
+    }
+    out.push(...deniedStoredPaths(before[key], after[key], path));
+  }
+  return out;
+}
+
+/**
  * Every path the rules deny, on the promoted document AND on the live row,
  * both kept whole.
  *

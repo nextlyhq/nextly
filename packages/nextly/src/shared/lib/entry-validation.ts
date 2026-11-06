@@ -143,6 +143,22 @@ export interface ValidateEntryOptions {
    */
   assembledFromStorage?: boolean;
   /**
+   * The paths of the document that hold a value kept from the stored row
+   * because a rule denies it to this writer — `keepDeniedAtStored` puts the
+   * row's value back so a whole-written container does not clear it, and
+   * this write never carried it.
+   *
+   * The whole-number rule skips exactly these paths, on the document the
+   * gate judges and in the post-hook walk: a legacy stored fraction under a
+   * denied path is the row's own value, not this write's, so refusing the
+   * write for it would block an edit the caller is allowed to make on a
+   * value they may not see. Paths under a denied container are covered by
+   * the container's own path. Nothing else is exempt — a fraction the
+   * caller sends anywhere the rules let it through, or a hook produces
+   * outside the denied paths, is refused as before.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
+  /**
    * The entry write being validated, for the field types that judge a value
    * against stored rows. Absent where no entry write is behind the validation,
    * and then no type is handed one.
@@ -271,6 +287,26 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
+ * Whether a path sits under one the write kept from the stored row because
+ * a rule denies it to this writer: the path itself, a leaf under a denied
+ * container, or a row of a denied list. The value there is the row's own,
+ * not this write's, so the whole-number rule leaves it to the row.
+ */
+function isStoredProvenancePath(
+  path: string,
+  stored: ReadonlySet<string> | undefined
+): boolean {
+  if (!stored || stored.size === 0) return false;
+  if (stored.has(path)) return true;
+  for (const denied of stored) {
+    if (path.startsWith(`${denied}.`) || path.startsWith(`${denied}[`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The whole-number floor, judged over the document the write will store,
  * after the beforeChange hooks have had their turn.
  *
@@ -297,7 +333,8 @@ export function hookChangedWholeNumberIssues(
   data: Record<string, unknown>,
   fields: ValidatableField[],
   path = "",
-  componentFields?: (slug: string) => ValidatableField[] | undefined
+  componentFields?: (slug: string) => ValidatableField[] | undefined,
+  storedPaths?: ReadonlySet<string>
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const byName = new Map(
@@ -317,6 +354,11 @@ export function hookChangedWholeNumberIssues(
     const field = byName.get(key);
     if (!field || !isJudgedOnWrite(field)) continue;
     const childPath = path ? `${path}.${key}` : key;
+    // A value kept from the row because a rule denies it was never this
+    // write's to judge — the caller's own values were refused at the gate,
+    // so anything the walk would flag under a denied path is the row's own
+    // stored content, carried by the restore, not produced by a hook.
+    if (isStoredProvenancePath(childPath, storedPaths)) continue;
 
     // A group or repeater carries rows of child fields: the hook runner
     // recurses into those rows and its handlers mutate them IN PLACE, so
@@ -342,7 +384,8 @@ export function hookChangedWholeNumberIssues(
             row as Record<string, unknown>,
             field.fields as ValidatableField[],
             field.type === "repeater" ? `${childPath}[${index}]` : childPath,
-            componentFields
+            componentFields,
+            storedPaths
           )
         );
       });
@@ -381,7 +424,8 @@ export function hookChangedWholeNumberIssues(
             instance as Record<string, unknown>,
             own,
             at,
-            componentFields
+            componentFields,
+            storedPaths
           )
         );
       }
@@ -786,6 +830,7 @@ async function validateFieldValue(
         if (
           !fieldJudgesFractions(field) &&
           !options.assembledFromStorage &&
+          !isStoredProvenancePath(p, options.storedProvenancePaths) &&
           !Number.isInteger(v)
         ) {
           issues.push({
