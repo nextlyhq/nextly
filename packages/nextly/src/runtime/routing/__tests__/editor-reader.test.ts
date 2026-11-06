@@ -257,6 +257,8 @@ describe("the canvas's reader", () => {
     expect(findByID.mock.calls[0]?.[0]).toMatchObject({
       collection: "posts",
       id: "p1",
+      // Core loads only the fields asked for, with the id.
+      select: { id: true, title: true },
       overrideAccess: false,
       user: person.user,
       status: "all",

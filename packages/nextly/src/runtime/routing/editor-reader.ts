@@ -262,6 +262,15 @@ export function toEditorFindById(
     collection: query.collection,
     id: String(query.id),
     ...(locale === undefined ? {} : { locale }),
+    // Only the fields asked for, with the id, so a large field nothing binds
+    // is not loaded; the answer is narrowed again to the same fields.
+    ...(query.select === undefined || query.select.length === 0
+      ? {}
+      : {
+          select: Object.fromEntries(
+            ["id", ...query.select].map(field => [field, true])
+          ),
+        }),
     // Relationships come back as ids: nothing related is read here.
     depth: 0,
     status: "all",

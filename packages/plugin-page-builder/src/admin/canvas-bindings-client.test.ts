@@ -220,4 +220,36 @@ describe("the canvas's binding sources", () => {
     editing.userId = "u1";
     editing.identity = null;
   });
+
+  it("asks again once an answer has been kept its while", async () => {
+    // A source can change while what the page asks stays the same: the
+    // author saves a new title, or someone updates a Single.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      editing.identity = identity;
+      writePluginRoute.mockReset();
+      writePluginRoute
+        .mockResolvedValueOnce(answer("Before the save"))
+        .mockResolvedValueOnce(answer("After the save"));
+      const drawn = [page({ text: { $bind: "title" } })];
+      const { result } = renderHook(() => useCanvasBindings(drawn, "it"));
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({
+          id: "p1",
+          title: "Before the save",
+        })
+      );
+      await vi.advanceTimersByTimeAsync(15_001);
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({
+          id: "p1",
+          title: "After the save",
+        })
+      );
+      expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      editing.identity = null;
+    }
+  });
 });
