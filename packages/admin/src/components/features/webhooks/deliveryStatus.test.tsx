@@ -87,4 +87,27 @@ describe("formatting helpers", () => {
       })
     ).toBe("media");
   });
+
+  it("names the plugin for a plugin's event, never a collection", () => {
+    expect(
+      describeResource({
+        kind: "plugin",
+        plugin: "acme-shop",
+        collection: null,
+        id: "ord_1",
+        locale: null,
+      })
+    ).toBe("plugin acme-shop · ord_1");
+    // A collection that somehow arrived beside it still does not stand in
+    // for the plugin.
+    expect(
+      describeResource({
+        kind: "plugin",
+        plugin: "acme-shop",
+        collection: "acme-shop",
+        id: null,
+        locale: null,
+      })
+    ).toBe("plugin acme-shop");
+  });
 });

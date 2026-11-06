@@ -1036,6 +1036,8 @@ describe("executeTransaction", () => {
     const calls: string[] = [];
     const adapter = {
       getCapabilities: () => ({ dialect: "postgresql" }),
+      // No transaction is open around the migration, so it may run.
+      transactionOpenInFlow: () => false,
       executeQuery: vi.fn(async (statement: string) => {
         calls.push(`pool: ${statement}`);
         return [];

@@ -45,13 +45,13 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { CollectionControl, SortControl } from "./collection-loop-controls";
-import type { QueryField } from "./list-query-model";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
 import { propLabel, type EditableProp } from "./inspector";
+import type { QueryField } from "./list-query-model";
 import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
@@ -232,10 +232,12 @@ export interface ContentServices {
   ) => Promise<ListEntriesCount | undefined>;
   /**
    * The collection the document being edited is an entry of, so a list on
-   * it can show the entry's related entries. Absent where the document is
-   * not a collection's entry, such as a Single.
+   * it can show the entry's related entries. `null` where the document is
+   * known to be no collection's entry, such as a Single, so a list there
+   * showing the entry's related entries is refused as the save refuses it;
+   * absent where that is not known.
    */
-  readonly entryCollection?: string;
+  readonly entryCollection?: string | null;
   /**
    * A media item by its id, read with the signed-in author's own access, so a
    * stored file is shown by its picture and name rather than as "a file".

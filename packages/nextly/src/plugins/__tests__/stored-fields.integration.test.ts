@@ -53,6 +53,7 @@ import {
   type PluginConditionalUpdate,
   type PluginStoredDocument,
   type PluginStoredFieldsRequest,
+  type PluginStoredIdentity,
 } from "../stored-fields";
 import {
   createTestNextly,
@@ -399,6 +400,34 @@ describe.each(getConfiguredTestDialects())(
             fields: [{ name: "body", type: "doc", localized: true }],
           } as unknown as CollectionConfig,
           {
+            // A field laid out in a group with no name, inside a named group:
+            // stored in the named group's value, at the level the nameless
+            // group sits in.
+            slug: "laidout",
+            fields: [
+              {
+                name: "outer",
+                type: "group",
+                fields: [
+                  { type: "group", fields: [{ name: "body", type: "doc" }] },
+                ],
+              },
+            ],
+          } as unknown as CollectionConfig,
+          {
+            // A field every reader is refused by its own read rule, and a
+            // built-in field stored as JSON.
+            slug: "guarded",
+            fields: [
+              { name: "body", type: "doc", access: { read: () => false } },
+              {
+                name: "rows",
+                type: "repeater",
+                fields: [{ name: "body", type: "doc" }],
+              },
+            ],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -470,6 +499,7 @@ describe.each(getConfiguredTestDialects())(
         "worded",
         "germanless",
         "grouped",
+        "guarded",
         "staged",
         "stagedwords",
       ];
@@ -1148,6 +1178,22 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("languages and groups", () => {
+      it("reads a field laid out in a group with no name inside a named group, from that group's stored value", async () => {
+        const id = await created("laidout", {
+          outer: { body: { v: "laid" } },
+        });
+        const read = await readStoredFields(owner, {
+          collection: "laidout",
+          id,
+          fields: ["outer.body"],
+          form: "published",
+        });
+        expect(read).toEqual({
+          kind: "found",
+          values: { "outer.body": { kind: "value", value: { v: "laid" } } },
+        });
+      });
+
       it("judges the stored read in the language it reads, refusing one a read rule closes", async () => {
         const id = await created("germanless", { body: { v: "en" } });
         await t.nextly.update({
@@ -1672,6 +1718,242 @@ describe.each(getConfiguredTestDialects())(
         expect(await stored(entry, "body", "published")).toEqual({
           kind: "value",
           value: { v: "unreleased" },
+        });
+      });
+    });
+
+    describe("the system", () => {
+      /** The system: trusted server code, judged as `overrideAccess: true`. */
+      const SYSTEM = { overrideAccess: true } as const;
+
+      it("shows the system a never-published entry and its draft form, which a read-only person is not shown", async () => {
+        const id = await created("staged", {
+          body: { v: "unreleased" },
+          status: "draft",
+        });
+        const asked = {
+          collection: "staged",
+          id,
+          fields: ["body"],
+        } as const;
+        // A draft never published: no public state, and no working draft,
+        // which this lifecycle keeps none of.
+        const found = {
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "unreleased" } } },
+          live: { publicState: null, workingDraft: false },
+        };
+
+        expect(
+          await readStoredFields(reader, { ...asked, form: "published" })
+        ).toEqual({ kind: "absent" });
+        expect(
+          NextlyError.isForbidden(
+            await rejectionOf(
+              readStoredFields(reader, { ...asked, form: "draft" })
+            )
+          )
+        ).toBe(true);
+        expect(
+          await readStoredFields(SYSTEM, { ...asked, form: "published" })
+        ).toEqual(found);
+        expect(
+          await readStoredFields(SYSTEM, { ...asked, form: "draft" })
+        ).toEqual(found);
+      });
+
+      it("reads and writes as the system a field a read rule governs and a built-in JSON field, which a person is refused", async () => {
+        const id = await created("guarded", {
+          body: { v: 0 },
+          rows: [{ body: { v: "row" } }],
+        });
+        const entry = { collection: "guarded", id };
+        for (const field of ["body", "rows"]) {
+          const refusal = await rejectionOf(
+            readStoredFields(editor, {
+              ...entry,
+              fields: [field],
+              form: "published",
+            })
+          );
+          expect(NextlyError.isCode(refusal, "INVALID_INPUT")).toBe(true);
+        }
+
+        const read = await readStoredFields(SYSTEM, {
+          ...entry,
+          fields: ["body", "rows"],
+          form: "published",
+        });
+        expect(read).toMatchObject({
+          kind: "found",
+          values: {
+            body: { kind: "value", value: { v: 0 } },
+            rows: { kind: "value", value: [{ body: { v: "row" } }] },
+          },
+        });
+
+        await updateIfUnchanged(SYSTEM, {
+          ...entry,
+          data: { body: { v: 1 } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash({ kind: "value", value: { v: 0 } }),
+          },
+        });
+        expect(
+          await readStoredFields(SYSTEM, {
+            ...entry,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toMatchObject({
+          values: { body: { kind: "value", value: { v: 1 } } },
+        });
+        const personWrite = await rejectionOf(
+          updateIfUnchanged(editor, {
+            ...entry,
+            data: { body: { v: 2 } },
+            expect: {
+              field: "body",
+              form: "published",
+              hash: await storedValueHash({ kind: "value", value: { v: 1 } }),
+            },
+          })
+        );
+        expect(NextlyError.isCode(personWrite, "INVALID_INPUT")).toBe(true);
+      });
+
+      it("tells the system the live row's public state and whether a working draft is pending, and a person neither", async () => {
+        const id = await created("drafted", {
+          title: "t",
+          body: { v: "live" },
+          status: "published",
+        });
+        const asked = {
+          collection: "drafted",
+          id,
+          fields: ["body"],
+          form: "published",
+        } as const;
+        expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
+          kind: "found",
+          live: { publicState: "published", workingDraft: false },
+        });
+        // A save that does not publish: a working draft over the live row.
+        await t.nextly.update({
+          collection: "drafted",
+          id,
+          data: { body: { v: "draft" } },
+          overrideAccess: true,
+        } as never);
+        expect(await readStoredFields(SYSTEM, asked)).toMatchObject({
+          kind: "found",
+          values: { body: { kind: "value", value: { v: "live" } } },
+          live: { publicState: "published", workingDraft: true },
+        });
+        const staged = await created("staged", {
+          body: { v: 1 },
+          status: "draft",
+        });
+        expect(
+          await readStoredFields(SYSTEM, {
+            collection: "staged",
+            id: staged,
+            fields: ["body"],
+            form: "published",
+          })
+        ).toMatchObject({ live: { publicState: null, workingDraft: false } });
+
+        const asPerson = await readStoredFields(editor, asked);
+        expect(asPerson.kind).toBe("found");
+        expect("live" in asPerson).toBe(false);
+      });
+
+      it("lands a system conditional write whose field is unchanged", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const read = await readStoredFields(SYSTEM, {
+          ...page,
+          fields: ["body"],
+          form: "published",
+        });
+        if (read.kind !== "found") throw new Error("expected the entry");
+
+        await updateIfUnchanged(SYSTEM, {
+          ...page,
+          data: { body: { v: "system" } },
+          expect: {
+            field: "body",
+            form: "published",
+            hash: await storedValueHash(read.values.body ?? { kind: "absent" }),
+          },
+        });
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "system" },
+        });
+      });
+
+      it("refuses a stale system conditional write with a conflict, and changes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        await t.nextly.update({
+          collection: "pages",
+          id,
+          data: { body: { v: "author" } },
+          overrideAccess: true,
+        } as never);
+
+        const refusal = await rejectionOf(
+          updateIfUnchanged(SYSTEM, {
+            ...page,
+            data: { body: { v: "system" } },
+            expect: { field: "body", form: "published", hash },
+          })
+        );
+        expect(NextlyError.isCode(refusal, "CONFLICT")).toBe(true);
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: "author" },
+        });
+      });
+
+      it("refuses an identity that is neither a route's caller nor the system, and writes nothing", async () => {
+        const id = await created("pages", { title: "t", body: { v: 0 } });
+        const page = { collection: "pages", id };
+        const hash = await storedValueHash({ kind: "value", value: { v: 0 } });
+        // Plain JavaScript, or an object passed on unchecked, can carry any.
+        const junk: unknown[] = [
+          { overrideAccess: false },
+          { overrideAccess: true, user: owner.user },
+          { ...owner, overrideAccess: false },
+          { ...owner, overrideAccess: true },
+          {},
+          "system",
+        ];
+        for (const identity of junk) {
+          const read = await rejectionOf(
+            readStoredFields(identity as PluginStoredIdentity, {
+              ...page,
+              fields: ["body"],
+              form: "published",
+            })
+          );
+          expect(NextlyError.isCode(read, "INVALID_INPUT")).toBe(true);
+          const write = await rejectionOf(
+            updateIfUnchanged(identity as PluginStoredIdentity, {
+              ...page,
+              data: { body: { v: "junk" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isCode(write, "INVALID_INPUT")).toBe(true);
+        }
+        expect(await stored(page, "body", "published")).toEqual({
+          kind: "value",
+          value: { v: 0 },
         });
       });
     });

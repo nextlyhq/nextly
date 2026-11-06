@@ -118,6 +118,7 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
+import { assertNoInterfaceLanguage } from "../interface-language";
 
 import { emailVerificationColumns } from "./email-verification-write";
 import {
@@ -1639,6 +1640,27 @@ export class UserMutationService extends BaseService {
       // WITHOUT the custom-field data (which would report a created user while
       // dropping its custom fields).
       let userExtInsertFailed = false;
+      // The account as stored, read inside its own transaction, on that
+      // transaction's connection. Called inside an enclosing transaction (a
+      // plugin's `ctx.db.transaction`, another service's), this one joins it
+      // and the insert is not committed yet, so a read on another pooled
+      // connection would not find the row.
+      const pooled = this.db;
+      const readCreatedUser = (txDb: typeof pooled) =>
+        txDb.query.users.findFirst({
+          where: { email: requireFilterValue(email, "email") },
+          columns: {
+            id: true,
+            email: true,
+            emailVerified: true,
+            name: true,
+            image: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+      let user: Awaited<ReturnType<typeof readCreatedUser>>;
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
@@ -1666,6 +1688,7 @@ export class UserMutationService extends BaseService {
 
           await insertInviteToken(txDb);
           await recordCreatedEvent(txDb);
+          user = await readCreatedUser(tx as typeof pooled);
         });
       } catch (txErr) {
         // A unique custom field's value already held by another user: refuse
@@ -1689,10 +1712,25 @@ export class UserMutationService extends BaseService {
             await insertAccount(txDb);
             await insertInviteToken(txDb);
             await recordCreatedEvent(txDb);
+            user = await readCreatedUser(tx as typeof pooled);
           });
         } else {
           throw txErr;
         }
+      }
+
+      // The grant and the roles were written in the insert's transaction; the
+      // role caches that answered for this account before it existed are
+      // flushed once they commit. Inside an enclosing transaction that is its
+      // commit: flushed before it, a permission check on another connection
+      // could cache the account as holding no role, and keep that answer.
+      // Registered before the `user.created` announcement below, since
+      // after-commit effects run in the order they were registered: a
+      // subscriber asking what the new account may do is answered from the
+      // committed roles, not from what was cached before them.
+      if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
+        const userRoles = (await serviceContainerFor(this.adapter)).userRoles;
+        await this.afterCommit(() => userRoles.invalidateRoleCaches(newUserId));
       }
 
       // With the account and its outbox row committed, offer the shared
@@ -1705,20 +1743,6 @@ export class UserMutationService extends BaseService {
       // happened.
       await this.afterUserCreated(userCreatedRecorded, newUserId);
 
-      // Fetch created user
-      const user = await this.db.query.users.findFirst({
-        where: { email: requireFilterValue(email, "email") },
-        columns: {
-          id: true,
-          email: true,
-          emailVerified: true,
-          name: true,
-          image: true,
-          isActive: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
       if (!user) {
         // We just inserted; if we cannot read the row back, something is
         // genuinely wrong with the connection or the schema. Surface as an
@@ -1729,15 +1753,6 @@ export class UserMutationService extends BaseService {
             email,
           },
         });
-      }
-
-      // The grant and the roles were written in the insert's transaction; the
-      // role caches that answered for this account before it existed are
-      // flushed now.
-      if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
-        await (
-          await serviceContainerFor(this.adapter)
-        ).userRoles.invalidateRoleCaches(String(user.id));
       }
 
       // Hand the invite link back to the admin. The token was committed with
@@ -1803,6 +1818,9 @@ export class UserMutationService extends BaseService {
     options: UpdateUserOptions = {}
   ): Promise<UserMutationResponse> {
     try {
+      // The person's own to set, through their profile: refused here, first,
+      // for every door this edit is reached through.
+      assertNoInterfaceLanguage(changes, { entity: "user", userId });
       // Validate input (merged schema includes custom field validators when configured)
       const validation = this.getUpdateSchema().safeParse(changes);
       if (!validation.success) {

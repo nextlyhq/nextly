@@ -16,9 +16,9 @@ import { readFieldGroupType } from "../field-groups/storage/field-group-type-key
 
 import { componentTypeSegment } from "./expand-component-fields";
 import type {
+  RecordedEventType,
   WebhookActor,
   WebhookEvent,
-  WebhookEventType,
   WebhookResource,
 } from "./types";
 
@@ -114,7 +114,7 @@ export function computeChangedFields(
 export interface BuildEnvelopeInput {
   /** ULID; caller-generated so the envelope stays deterministic. */
   id: string;
-  type: WebhookEventType;
+  type: RecordedEventType;
   /** Event time as a Date; normalized to an ISO-8601 string on the envelope. */
   timestamp: Date;
   site?: string;

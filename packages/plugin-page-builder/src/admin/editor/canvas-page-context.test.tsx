@@ -21,8 +21,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: vi.fn(),
 }));
 
-const { useCanvasPageContext } = await import("./canvas-page-context");
+const { listEntryCollectionOf, useCanvasPageContext } = await import(
+  "./canvas-page-context"
+);
 const { canvasListReadsIn } = await import("../list-entries-client");
+
+describe("the collection a document's lists read the entry of", () => {
+  it("is a collection entry's collection, none on a Single, and not known without a document", () => {
+    expect(listEntryCollectionOf({ kind: "collection", slug: "posts" })).toBe(
+      "posts"
+    );
+    // A Single's page has no entry for a related list to read, which the
+    // inspector says as the save refuses it.
+    expect(listEntryCollectionOf({ kind: "single", slug: "home" })).toBeNull();
+    expect(listEntryCollectionOf(null)).toBeUndefined();
+  });
+});
 
 describe("the canvas's page context", () => {
   it("resolves a media id through the admin's media read", async () => {
