@@ -483,23 +483,12 @@ test.describe("the composition exit tests", () => {
     expect(framedAfter.drawn).toContain(v2);
     expect(framedAfter.drawn).not.toContain(v1);
 
-    // ...once: the new render is stored and served from then on. Next stores
-    // a render just after answering with it, so a request arriving in those
-    // few milliseconds renders again; the store is polled for until it
-    // answers, and then must keep answering: a second expiry, such as
-    // another write the publish set off, would show as a rebuild after the
-    // page had settled.
-    for (const target of [placed, framed]) {
-      await expect
-        .poll(async () => (await served(page.request, target.path)).cache, {
-          message: `${target.path} never settled back into the cache`,
-          intervals: [50, 100, 250, 500],
-          timeout: 5_000,
-        })
-        .toBe("HIT");
-    }
+    // ...once. Next stores a render just after answering with it, so the
+    // store is given that moment; from then on each page must be served from
+    // it. A second expiry the publish set off, before or after, would show
+    // here as another render.
+    await page.waitForTimeout(750);
     for (let round = 0; round < 3; round += 1) {
-      await page.waitForTimeout(300);
       for (const target of [placed, framed]) {
         const again = await served(page.request, target.path);
         expect
@@ -507,6 +496,7 @@ test.describe("the composition exit tests", () => {
           .toBe("HIT");
         expect(again.drawn).toContain(v2);
       }
+      await page.waitForTimeout(300);
     }
 
     // And the page that uses neither was not rebuilt at all.
@@ -781,6 +771,13 @@ test.describe("the composition exit tests", () => {
       { dryRun: true }
     );
     expect(variantDry.refusals).toEqual([]);
+    const cardVariants = async () => {
+      const read = (await (await api.get(`${PLUGIN}/manifest`)).json()) as {
+        components: { items: { id: string; variants: unknown[] }[] };
+      };
+      return read.components.items.find(item => item.id === card)?.variants;
+    };
+    expect(await cardVariants()).toEqual([]);
     const variant = await definition(
       { kind: "add-variant", label: `Dark ${STAMP}` },
       { publish: true }

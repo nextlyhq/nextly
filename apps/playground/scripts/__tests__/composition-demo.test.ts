@@ -21,9 +21,11 @@ import {
 import {
   featureCardDocument,
   heroPatternDocument,
+  seedCompositionDemo,
   siteFooterDocument,
   siteHeaderDocument,
   welcomePageDocument,
+  type DemoStore,
 } from "../../seed/composition-demo";
 import { SITE_STYLE_DEFAULTS } from "../../src/lib/site-style-defaults";
 
@@ -114,20 +116,23 @@ describe("the demo site's documents", () => {
   });
 
   it.each(DOCUMENTS)("%s names a token for every colour", (_, doc) => {
-    // A literal colour would hold its light value on a dark page.
+    // A literal colour would hold its light value on a dark page, whether it
+    // is a colour property's whole value or part of a shadow or gradient.
+    const LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|lab|lch)\(/i;
     const literal = walk(doc.nodes).flatMap(node =>
       Object.values(node.styles ?? {}).flatMap(states =>
         Object.values(states ?? {}).flatMap(set =>
           Object.entries((set ?? {}) as Record<string, unknown>)
-            .filter(([property]) => /colou?r$/i.test(property))
             .filter(
-              ([, value]) =>
-                value !== "transparent" &&
-                !(
-                  typeof value === "object" &&
-                  value !== null &&
-                  "$token" in value
-                )
+              ([property, value]) =>
+                (/colou?r$/i.test(property) &&
+                  value !== "transparent" &&
+                  !(
+                    typeof value === "object" &&
+                    value !== null &&
+                    "$token" in value
+                  )) ||
+                LITERAL.test(JSON.stringify(value))
             )
             .map(([property]) => `${node.id}.${property}`)
         )
@@ -164,5 +169,93 @@ describe("the welcome page", () => {
 
   it("draws inside a header whose blocks carry the Layers lock", () => {
     expect(siteHeaderDocument().nodes.map(node => node.locked)).toEqual([true]);
+  });
+});
+
+/** A store holding rows by collection and slug, as the seeder sees one. */
+function memoryStore(
+  seeded: Record<string, Record<string, unknown>> = {},
+  refuseOnce: ReadonlySet<string> = new Set()
+) {
+  const rows = new Map<string, Record<string, unknown>>(Object.entries(seeded));
+  const refused = new Set<string>();
+  const created: Array<{ collection: string; data: Record<string, unknown> }> =
+    [];
+  let next = 0;
+  const store: DemoStore = {
+    find: async ({ collection, where }) => {
+      const row = rows.get(`${collection}/${where.slug.equals}`);
+      return { items: row === undefined ? [] : [row] };
+    },
+    create: async ({ collection, data }) => {
+      const key = `${collection}/${String(data.slug)}`;
+      if (refuseOnce.has(key) && !refused.has(key)) {
+        // Another seed run's row lands first, and this insert is refused.
+        refused.add(key);
+        rows.set(key, { id: `winner-${key}`, ...data });
+        throw Object.assign(new Error("duplicate"), { code: "DUPLICATE" });
+      }
+      const row = { id: `id-${(next += 1)}`, ...data };
+      rows.set(key, row);
+      created.push({ collection, data });
+      return { item: row };
+    },
+  };
+  return { store, created, rows };
+}
+
+const noImage = { heroImage: async () => null };
+
+describe("seeding the welcome page", () => {
+  it("copies the hero from the stored pattern when the pattern is already there", async () => {
+    const edited = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "edited",
+          type: "core/heading",
+          version: 1,
+          props: { text: "An edited hero", level: "h1" },
+        },
+      ],
+    };
+    const { store, created } = memoryStore({
+      "patterns/demo-hero": { id: "stored-pattern", content: edited },
+    });
+    expect(await seedCompositionDemo(store, noImage)).toEqual({ created: 1 });
+
+    const page = created.find(row => row.collection === "pages");
+    if (page === undefined) throw new Error("no page was created");
+    const nodes = walk((page.data.content as BlockDocument).nodes);
+    expect(nodes[0]?.props.text).toBe("An edited hero");
+    expect(nodes[0]?.origin).toMatchObject({ id: "stored-pattern" });
+    expect(JSON.stringify(page.data.content)).not.toContain(
+      "Build pages, not pipelines"
+    );
+  });
+
+  it("uses the row another seed run made when its own insert is refused as a duplicate", async () => {
+    const { store, rows } = memoryStore(
+      {},
+      new Set(["components/demo-site-header", "pages/welcome"])
+    );
+    expect(await seedCompositionDemo(store, noImage)).toEqual({ created: 0 });
+
+    const layout = rows.get("layouts/demo-site") as {
+      areas: { area: string; component: string }[];
+    };
+    expect(layout.areas).toContainEqual({
+      area: "header",
+      component: "winner-components/demo-site-header",
+    });
+  });
+
+  it("leaves an existing welcome page and its parts alone", async () => {
+    const { store, created } = memoryStore({
+      "pages/welcome": { id: "kept" },
+    });
+    expect(await seedCompositionDemo(store, noImage)).toEqual({ created: 0 });
+    expect(created).toEqual([]);
   });
 });

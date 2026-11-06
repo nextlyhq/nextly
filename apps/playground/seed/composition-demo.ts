@@ -109,8 +109,18 @@ function text(id: string, value: string, styles?: NodeStyles): BlockNode {
   return node(id, "core/text", { text: value }, styles ? { styles } : {});
 }
 
-/** A text-look link: a button that reads as a link in the site's colour. */
-function navLink(id: string, label: string, href: string): BlockNode {
+/**
+ * A text-look link: a button that reads as a link in the site's colour.
+ * `inline` drops its side padding, for a link that starts a line; `desktop`
+ * hides it on phones, where the header keeps only its one action.
+ */
+function navLink(
+  id: string,
+  label: string,
+  href: string,
+  options: { inline?: boolean; desktop?: boolean } = {}
+): BlockNode {
+  const side = options.inline === true ? "0" : "0.75rem";
   return node(
     id,
     "core/button",
@@ -119,9 +129,12 @@ function navLink(id: string, label: string, href: string): BlockNode {
       styles: styled({
         backgroundColor: "transparent",
         color: TOKEN("color.text"),
-        padding: { inlineStart: "0.75rem", inlineEnd: "0.75rem" },
+        padding: { inlineStart: side, inlineEnd: side },
         fontWeight: 500,
       }),
+      ...(options.desktop === true
+        ? { visibility: { devices: { mobile: false } } }
+        : {}),
     }
   );
 }
@@ -184,11 +197,14 @@ export function siteHeaderDocument(): BlockDocument {
                   }),
                   slots: {
                     children: [
-                      navLink("site-header-features", "Features", "#features"),
+                      navLink("site-header-features", "Features", "#features", {
+                        desktop: true,
+                      }),
                       navLink(
                         "site-header-docs",
                         "Documentation",
-                        "https://nextlyhq.com/docs"
+                        "https://nextlyhq.com/docs",
+                        { desktop: true }
                       ),
                       node("site-header-start", "core/button", {
                         label: "Open the admin",
@@ -246,7 +262,8 @@ export function siteFooterDocument(): BlockDocument {
               navLink(
                 "site-footer-source",
                 "Source on GitHub",
-                "https://github.com/nextlyhq/nextly"
+                "https://github.com/nextlyhq/nextly",
+                { inline: true }
               ),
             ],
           },
@@ -356,7 +373,9 @@ export function heroPatternDocument(heroImage: string | null): BlockDocument {
       node(
         "hero",
         "core/section",
-        { as: "section", contained: true },
+        // Full width, so its surface spans the page; the blocks inside set
+        // their own widths and centre themselves.
+        { as: "section", contained: false },
         {
           name: "Hero",
           styles: styled(
@@ -481,7 +500,6 @@ export function heroPatternDocument(heroImage: string | null): BlockDocument {
                             style: "solid",
                             color: TOKEN("color.border"),
                           },
-                          boxShadow: "0 24px 48px -24px rgb(15 23 42 / 0.35)",
                         }),
                       }
                     ),
@@ -661,35 +679,70 @@ export interface DemoStore {
     collection: string;
     where: { slug: { equals: string } };
     limit: number;
-  }): Promise<{ items: Array<{ id?: unknown }> }>;
+  }): Promise<{ items: Array<{ id?: unknown; content?: unknown }> }>;
   create(args: {
     collection: string;
     data: Record<string, unknown>;
   }): Promise<{ item: { id?: unknown } }>;
 }
 
-/** The id of the published row stored under `slug`, made if there is none. */
-async function ensure(
+/** Whether a create was refused because the row is already there. */
+function isDuplicateRefusal(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "DUPLICATE"
+  );
+}
+
+/** The row stored under `slug`, or `undefined`. */
+async function storedRow(
   nextly: DemoStore,
   collection: string,
-  slug: string,
-  data: () => Record<string, unknown>
-): Promise<{ id: string; created: boolean }> {
+  slug: string
+): Promise<{ id: string; content?: unknown } | undefined> {
   const existing = await nextly.find({
     collection,
     where: { slug: { equals: slug } },
     limit: 1,
   });
-  const found = existing.items[0]?.id;
-  if (typeof found === "string") return { id: found, created: false };
-  const made = await nextly.create({
-    collection,
-    data: { ...data(), slug, status: "published" },
-  });
-  if (typeof made.item.id !== "string") {
-    throw new Error(`[seed] creating ${collection}/${slug} answered no id`);
+  const row = existing.items[0];
+  return typeof row?.id === "string" ? { ...row, id: row.id } : undefined;
+}
+
+/**
+ * The published row stored under `slug`, made if there is none.
+ *
+ * The find and the create are two operations and `slug` is unique, so two
+ * seed runs starting together (the app's own on boot and a contributor's
+ * `db:seed`) can both find nothing, and the loser's insert is refused as a
+ * duplicate. That refusal means the row is there, which is what this exists
+ * to reach, so the winner's row is read and used.
+ */
+async function ensure(
+  nextly: DemoStore,
+  collection: string,
+  slug: string,
+  data: () => Record<string, unknown> | Promise<Record<string, unknown>>
+): Promise<{ id: string; content?: unknown; created: boolean }> {
+  const found = await storedRow(nextly, collection, slug);
+  if (found !== undefined) return { ...found, created: false };
+  const fields = await data();
+  try {
+    const made = await nextly.create({
+      collection,
+      data: { ...fields, slug, status: "published" },
+    });
+    if (typeof made.item.id !== "string") {
+      throw new Error(`[seed] creating ${collection}/${slug} answered no id`);
+    }
+    return { id: made.item.id, content: fields.content, created: true };
+  } catch (error) {
+    if (!isDuplicateRefusal(error)) throw error;
+    const winner = await storedRow(nextly, collection, slug);
+    if (winner === undefined) throw error;
+    return { ...winner, created: false };
   }
-  return { id: made.item.id, created: true };
 }
 
 /**
@@ -706,12 +759,9 @@ export async function seedCompositionDemo(
     heroImage: () => Promise<string | null>;
   }
 ): Promise<{ created: number }> {
-  const page = await nextly.find({
-    collection: "pages",
-    where: { slug: { equals: DEMO_SLUGS.page } },
-    limit: 1,
-  });
-  if (page.items.length > 0) return { created: 0 };
+  if ((await storedRow(nextly, "pages", DEMO_SLUGS.page)) !== undefined) {
+    return { created: 0 };
+  }
 
   const header = await ensure(nextly, "components", DEMO_SLUGS.header, () => ({
     title: DEMO_HEADER_TITLE,
@@ -728,13 +778,17 @@ export async function seedCompositionDemo(
     description: "A feature with a title, a description and a link.",
     content: featureCardDocument(),
   }));
-  const heroDocument = heroPatternDocument(await options.heroImage());
-  const pattern = await ensure(nextly, "patterns", DEMO_SLUGS.pattern, () => ({
-    title: DEMO_PATTERN_TITLE,
-    description: "What the site is, two things to do next, and a picture.",
-    granularity: "section",
-    content: heroDocument,
-  }));
+  const pattern = await ensure(
+    nextly,
+    "patterns",
+    DEMO_SLUGS.pattern,
+    async () => ({
+      title: DEMO_PATTERN_TITLE,
+      description: "What the site is, two things to do next, and a picture.",
+      granularity: "section",
+      content: heroPatternDocument(await options.heroImage()),
+    })
+  );
   const layout = await ensure(nextly, "layouts", DEMO_SLUGS.layout, () => ({
     title: DEMO_LAYOUT_TITLE,
     description: "The site's header and footer.",
@@ -744,19 +798,16 @@ export async function seedCompositionDemo(
     ],
   }));
 
-  await nextly.create({
-    collection: "pages",
-    data: {
-      title: DEMO_PAGE_TITLE,
-      slug: DEMO_SLUGS.page,
-      status: "published",
-      layout: layout.id,
-      noHeaderFooter: false,
-      content: welcomePageDocument(
-        { id: pattern.id, document: heroDocument },
-        feature.id
-      ),
-    },
-  });
-  return { created: 1 };
+  // The hero is copied from the pattern as stored, so a pattern someone has
+  // edited since an earlier seed is the one the page starts from.
+  const page = await ensure(nextly, "pages", DEMO_SLUGS.page, () => ({
+    title: DEMO_PAGE_TITLE,
+    layout: layout.id,
+    noHeaderFooter: false,
+    content: welcomePageDocument(
+      { id: pattern.id, document: pattern.content as BlockDocument },
+      feature.id
+    ),
+  }));
+  return { created: page.created ? 1 : 0 };
 }

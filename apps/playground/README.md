@@ -33,7 +33,7 @@ The seed publishes a welcome page built from the page builder's shared parts, so
 - **A component with exposed fields**, "Feature card": placed three times, each placement with its own title, description and link.
 - **A Layout with a locked header**, "Site": its header and footer components are drawn around the page, read-only there, and the header's own blocks carry the Layers lock.
 
-Open it in the editor from **Pages → Welcome to Nextly → Open the page builder**. The pattern, the components and the Layout are under the Page Builder menu. The page and its parts are written by `seed/composition-demo.ts`, only where they are missing, so a re-seed keeps your edits.
+Open it in the editor from **Pages → Welcome to Nextly → Open Page Builder**. The pattern, the components and the Layout are under **Page Builder** in the admin menu (**Patterns**, **Components**, **Layouts**). The page and its parts are written by `seed/composition-demo.ts`, only where they are missing, so a re-seed keeps your edits.
 
 ## Switching databases
 
