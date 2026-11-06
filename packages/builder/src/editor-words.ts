@@ -7,6 +7,10 @@
  * the author's, not the code's: "Shared styles" rather than classes,
  * "Variables" rather than tokens, "Sections" rather than patterns.
  *
+ * The words for what a variable gives the places using it are here too, by
+ * kind, for the same reason: "colour" rather than color, "size" rather than
+ * dimension, said one way wherever a variable's loss is.
+ *
  * @module editor-words
  */
 import type { TokenKind } from "@nextlyhq/blocks-engine";
