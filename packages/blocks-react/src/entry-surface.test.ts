@@ -428,6 +428,10 @@ describe("the root entry", () => {
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
+      // Added deliberately: binding sources read on a server, carried to the
+      // editor's canvas and read back there, by one pair of functions.
+      "bindingsFromWire",
+      "bindingsToWire",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
       // so a route's own `data` can narrow it rather than rewrite it.

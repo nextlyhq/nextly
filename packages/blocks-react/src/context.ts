@@ -581,11 +581,15 @@ export interface BlocksFieldShapes {
 /**
  * What a page's bindings read, already read, and how their values are shown.
  *
- * Every source here is the PUBLIC's: the entry re-read as an anonymous visitor
- * reads it, the Singles and site settings likewise. The renderer takes values
- * only from here, never from the context's `entry`, which a route may have
- * read with more access than a visitor has. A source left out is one this
- * page did not read: its bindings render their fallbacks and are reported.
+ * On a published page every source here is the PUBLIC's: the entry re-read as
+ * an anonymous visitor reads it, the Singles and site settings likewise. On
+ * the editor's canvas the entry and the Singles are the person editing's,
+ * read with their own access (`readBindingSources` over an editor's reader),
+ * while the site settings and the field shapes stay the public's. The
+ * renderer takes values only from here, never from the context's `entry`,
+ * which a route may have read with more access than a visitor has. A source
+ * left out is one this page did not read: its bindings render their
+ * fallbacks and are reported.
  *
  * @experimental
  */

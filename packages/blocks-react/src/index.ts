@@ -46,6 +46,13 @@ export {
 } from "./context";
 
 export { PageRenderer } from "./page-renderer";
+// Binding sources read on a server, carried to the editor's canvas and read
+// back there. `@experimental` with the editor's binding sources.
+export {
+  bindingsFromWire,
+  bindingsToWire,
+  type WireBindings,
+} from "./binding-wire";
 export type { PageRendererProps } from "./page-renderer";
 // Re-exported because `PageRendererProps.siteStyles` NAMES it, and a prop a
 // consumer cannot type is a prop they cannot pass without reaching past this

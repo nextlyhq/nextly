@@ -76,6 +76,7 @@ import type {
 import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
+import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
 import { collectionLoop } from "./blocks/collection-loop";
 import { url } from "./blocks/props";
 import {
@@ -2026,11 +2027,6 @@ async function listDayInputs(args: {
 }
 
 /** A shape ref as a map key. */
-function refKey(ref: BlocksFieldShapeRef): string {
-  return "collection" in ref
-    ? `collection:${ref.collection}`
-    : `single:${ref.single}`;
-}
 
 /**
  * One source's field shapes, as `bindingFieldShapes` answers them in the
@@ -2060,7 +2056,7 @@ async function cachedFieldShapes(
         "nextly-binding-field-shapes",
         cache.scope,
         cache.locale ?? "",
-        refKey(ref),
+        shapeRefKey(ref),
       ],
       revalidate: await releaseBoundedRevalidate(cache.window),
     }
@@ -2082,7 +2078,7 @@ async function readFieldShapes(
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
   const fetch = async (ref: BlocksFieldShapeRef) => {
-    const key = refKey(ref);
+    const key = shapeRefKey(ref);
     if (known.has(key)) return known.get(key);
     let shapes: readonly BindingFieldShape[] | undefined;
     try {
@@ -2112,7 +2108,8 @@ async function readFieldShapes(
   for (const collection of listCollections(documents)) {
     await fetch({ collection });
   }
-  return { fieldsOf: ref => known.get(refKey(ref)) };
+  // Recorded, so the shapes read can be sent whole to an editor's canvas.
+  return recordedFieldShapes(known);
 }
 
 /**
@@ -2145,6 +2142,12 @@ function pageTimeZone(
 export interface BindingSourcesArgs {
   /** The documents drawn, as the read pipeline prepared them. */
   readonly documents: readonly BlockDocument[];
+  /**
+   * What the bindings read, when the caller has worked it out already: the
+   * editor's canvas works it out from the document it draws and sends only
+   * that. Absent, it is read from `documents`.
+   */
+  readonly demand?: BindingDemand;
   /** Whether the page's entry is a collection's entry or a Single. */
   readonly entrySource: "collection" | "single";
   /** The collection, or the Single, the page's entry belongs to. */
@@ -2189,7 +2192,7 @@ export async function readBindingSources(
 ): Promise<PageBindings | undefined> {
   // Prepared trees are already within the pipeline's caps, and a composed
   // tree may run deeper than a stored one, so no cap is applied again.
-  const demand = bindingDemand(args.documents);
+  const demand = args.demand ?? bindingDemand(args.documents);
   if (!demand.any) return undefined;
   const entryRef: BlocksFieldShapeRef =
     args.entrySource === "single"
