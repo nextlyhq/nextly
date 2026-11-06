@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
