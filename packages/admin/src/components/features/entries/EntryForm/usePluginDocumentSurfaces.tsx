@@ -14,11 +14,17 @@
  * @module components/features/entries/EntryForm/usePluginDocumentSurfaces
  */
 import { useQueryClient } from "@tanstack/react-query";
-import type { OverridableDocumentAction } from "nextly/config";
+import {
+  OVERRIDABLE_DOCUMENT_ACTIONS,
+  type OverridableDocumentAction,
+} from "nextly/config";
 import { useMemo, useRef, useState, type JSX } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import {
   refreshAfterEntryChange,
   refreshAfterEntryDelete,
@@ -47,11 +53,40 @@ const BACKED_OUT: DocumentActionOutcome = {
   message: "Cancelled.",
 };
 
-/** A replacement on screen: which action, what it draws, whom to answer. */
+/**
+ * A replacement on screen: which action, what it draws, and the one answer
+ * every caller of it is given.
+ */
 interface OpenReplacement {
   action: OverridableDocumentAction;
   component: string;
+  answered: Promise<DocumentActionOutcome>;
   answer: (outcome: DocumentActionOutcome) => void;
+}
+
+/** What another action is answered while a replacement is open. */
+const ANOTHER_OPEN: DocumentActionOutcome = {
+  ok: false,
+  reason: "busy",
+  message: "Finish the open action first.",
+};
+
+/**
+ * Why every overridable action is held before the plugin list is known: it
+ * may be hidden or replaced on this collection, and its built-in write must
+ * not run in the meantime. Said to the author on the row.
+ */
+const AWAITING_PLUGINS =
+  "Waiting for the admin to load what its plugins change here.";
+
+/** Every overridable action, held for `AWAITING_PLUGINS`. */
+function heldUntilPluginsLoad(): DocumentActionOverrides {
+  return Object.fromEntries(
+    OVERRIDABLE_DOCUMENT_ACTIONS.map(action => [
+      action,
+      { kind: "held", reason: AWAITING_PLUGINS },
+    ])
+  );
 }
 
 /**
@@ -107,6 +142,9 @@ export function usePluginDocumentSurfaces({
   onDeleted: (() => void) | undefined;
 }): PluginDocumentSurfaces {
   const { plugins } = useBranding();
+  // Until the list has arrived, an absent override says nothing: the plugin
+  // that overrides an action may simply not be known yet.
+  const { isPending, isUnavailable } = useBrandingStatus();
   const queryClient = useQueryClient();
   const surfaces = useMemo(
     () => documentSurfacesFor(plugins, collectionSlug),
@@ -132,17 +170,34 @@ export function usePluginDocumentSurfaces({
     refreshAfterEntryChange(queryClient, collectionSlug, entryId);
   };
 
-  const actionOverrides = overridesFor(
-    surfaces.actions,
-    (action, component) =>
-      // Answered when the component closes, with what it came to, so a caller
-      // running Delete learns whether the document is gone.
-      new Promise<DocumentActionOutcome>(answer => {
-        const next = { action, component, answer };
-        openNow.current = next;
-        setOpen(next);
-      })
-  );
+  const openReplacement = (
+    action: OverridableDocumentAction,
+    component: string
+  ): Promise<DocumentActionOutcome> => {
+    // A second run of the open action joins it: one component is on screen,
+    // so its callers share its answer. Another action waits for it to close.
+    const current = openNow.current;
+    if (current !== null) {
+      return current.action === action
+        ? current.answered
+        : Promise.resolve(ANOTHER_OPEN);
+    }
+    // Answered when the component closes, with what it came to, so a caller
+    // running Delete learns whether the document is gone.
+    let answer: (outcome: DocumentActionOutcome) => void = () => {};
+    const answered = new Promise<DocumentActionOutcome>(resolve => {
+      answer = resolve;
+    });
+    const next = { action, component, answered, answer };
+    openNow.current = next;
+    setOpen(next);
+    return answered;
+  };
+
+  const actionOverrides =
+    isPending || isUnavailable
+      ? heldUntilPluginsLoad()
+      : overridesFor(surfaces.actions, openReplacement);
 
   const close = (result?: DocumentChangeResult): void => {
     const closing = openNow.current;

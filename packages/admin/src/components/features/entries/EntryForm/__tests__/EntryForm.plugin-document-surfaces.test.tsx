@@ -29,11 +29,20 @@ import {
   type DocumentPanelSectionProps,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, deleteEntry, plugins } = vi.hoisted(() => ({
-  useDocumentLock: vi.fn(),
-  deleteEntry: vi.fn(),
-  plugins: { current: [] as unknown[] },
-}));
+const { useDocumentLock, deleteEntry, plugins, brandingStatus } = vi.hoisted(
+  () => ({
+    brandingStatus: {
+      current: {
+        isPending: false,
+        isUnavailable: false,
+        isBrandingUnavailable: false,
+      },
+    },
+    useDocumentLock: vi.fn(),
+    deleteEntry: vi.fn(),
+    plugins: { current: [] as unknown[] },
+  })
+);
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
@@ -86,6 +95,7 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
     typeof import("@admin/context/providers/BrandingProvider")
   >()),
   useBranding: () => ({ plugins: plugins.current }),
+  useBrandingStatus: () => brandingStatus.current,
 }));
 
 import { EntryForm } from "../EntryForm";
@@ -192,6 +202,11 @@ beforeEach(() => {
   window.localStorage.clear();
   queryClient = createTestQueryClient();
   plugins.current = [LAYOUTS_PLUGIN];
+  brandingStatus.current = {
+    isPending: false,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  };
   replacement.current = null;
   drawnIn.locale = null;
   drawnIn.actions = false;
@@ -263,6 +278,47 @@ describe("a plugin's document actions", () => {
     expect(drawnIn.actions).toBe(true);
   });
 
+  it("answers every caller of a replacement that is already open, once it closes", async () => {
+    // Two surfaces running Delete before the component closes share the one
+    // component on screen, so they share its answer.
+    let runs: Promise<unknown>[] = [];
+    function Runner() {
+      const actions = useDocumentActions();
+      runner.run = actions?.run;
+      return null;
+    }
+    const runner: { run?: (id: string) => Promise<unknown> } = {};
+    registerComponent("test/layouts#Runner", Runner as never);
+    plugins.current = [
+      {
+        ...LAYOUTS_PLUGIN,
+        panelSections: [
+          ...LAYOUTS_PLUGIN.panelSections,
+          {
+            slug: "layouts",
+            title: "Runner",
+            component: "test/layouts#Runner",
+          },
+        ],
+      },
+    ];
+    renderEditor("layouts");
+    await screen.findByText("Used by 2 pages");
+    await act(async () => {
+      runs = [runner.run!("delete"), runner.run!("delete")];
+      await Promise.resolve();
+    });
+    await screen.findByRole("dialog", { name: "Remove layout" });
+
+    act(() => replacement.current!.close("deleted"));
+
+    await expect(Promise.all(runs)).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+    ]);
+    unregisterComponent("test/layouts#Runner");
+  });
+
   it("leaves the document when the component says it deleted it", async () => {
     const onDelete = renderEditor("layouts");
     const del = (await openMenu()).find(
@@ -290,6 +346,36 @@ describe("a plugin's document actions", () => {
 
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Remove layout" })).toBeNull();
+  });
+});
+
+describe("before the admin knows what plugins change", () => {
+  // Until the plugin list has arrived, no collection's document can say
+  // whether a plugin hides or replaces its Delete or Unpublish, so neither may
+  // run its built-in write in the meantime.
+  it.each([
+    [
+      "while the plugin list is loading",
+      { isPending: true, isUnavailable: false },
+    ],
+    [
+      "when the plugin list never arrived",
+      { isPending: false, isUnavailable: true },
+    ],
+  ])("holds Delete and Unpublish %s, saying why", async (_name, status) => {
+    plugins.current = [];
+    brandingStatus.current = { ...status, isBrandingUnavailable: false };
+    renderEditor("layouts");
+    const items = await openMenu();
+    for (const id of ["delete", "unpublish"]) {
+      const row = items.find(item => item.dataset.action === id);
+      expect(row, id).toHaveAttribute("aria-disabled", "true");
+      expect(row).toHaveTextContent(/plugin/i);
+    }
+    // What no plugin may override stays usable.
+    const api = items.find(item => item.dataset.action === "view-api");
+    expect(api).not.toHaveAttribute("aria-disabled", "true");
+    expect(deleteEntry).not.toHaveBeenCalled();
   });
 });
 

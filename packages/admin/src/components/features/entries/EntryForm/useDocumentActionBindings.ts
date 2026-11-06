@@ -59,6 +59,12 @@ type BuiltInActionId =
  */
 export type DocumentActionOverride =
   | { kind: "hidden" }
+  /**
+   * Offered but not runnable, for `reason`: while the editor cannot yet tell
+   * whether a plugin hides or replaces the action, its built-in write must not
+   * run in the meantime.
+   */
+  | { kind: "held"; reason: string }
   | {
       kind: "replaced";
       label?: string;
@@ -588,13 +594,14 @@ export function useDocumentActionBindings({
   // verb runs, so the row, its control and `run` agree about them.
   const documentVerbs = withActionOverrides(builtInVerbs, actionOverrides);
 
-  const { reasons, refusalFor } = refusalReasons({
+  const { reasons: momentReasons, refusalFor } = refusalReasons({
     isSubmitting,
     isInvalid,
     isDirty,
     documentLocked,
     isPublishedEditState,
   });
+  const reasons = withHeldReasons(momentReasons, actionOverrides);
 
   // Saving means three different calls depending on where the work lands, a
   // fact about this host rather than the document: a drafts-enabled published
@@ -709,7 +716,7 @@ function withActionOverrides(
 ): EditorDocumentAction[] {
   return actions.flatMap(action => {
     const override = overrideOf(overrides, action.id);
-    if (override === undefined) return [action];
+    if (override === undefined || override.kind === "held") return [action];
     if (override.kind === "hidden") return [];
     return [
       override.label === undefined
@@ -730,6 +737,23 @@ function overrideOf(
 }
 
 /**
+ * The moment's reasons, with a held action's own reason where nothing more
+ * decisive already holds it: a colleague's lock or a save in flight still
+ * speaks first.
+ */
+function withHeldReasons(
+  reasons: Partial<Record<BuiltInActionId, string | undefined>>,
+  overrides: DocumentActionOverrides
+): Partial<Record<BuiltInActionId, string | undefined>> {
+  const result = { ...reasons };
+  for (const id of Object.keys(overrides) as BuiltInActionId[]) {
+    const override = overrideOf(overrides, id);
+    if (override?.kind === "held") result[id] = result[id] ?? override.reason;
+  }
+  return result;
+}
+
+/**
  * What each built-in action runs once a plugin's overrides apply. A hidden
  * action runs nothing, so it is not offered and `run` refuses it as not
  * offered; a replaced one runs the plugin's `open`, and only where the
@@ -744,7 +768,7 @@ function overriddenPerformers(
   const result = { ...performers };
   for (const id of Object.keys(result) as BuiltInActionId[]) {
     const override = overrideOf(overrides, id);
-    if (override === undefined) continue;
+    if (override === undefined || override.kind === "held") continue;
     if (override.kind === "hidden") delete result[id];
     else result[id] = override.open;
   }

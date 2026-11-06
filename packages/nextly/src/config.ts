@@ -277,6 +277,10 @@ export type {
   OverridableDocumentAction,
   PluginDocumentActionOverride,
 } from "./plugins/admin-contributions";
+// And the list those actions are, a value: the admin holds every one of them
+// while it cannot yet tell whether a plugin overrides it. The module imports
+// types only, so this adds the list and nothing behind it.
+export { OVERRIDABLE_DOCUMENT_ACTIONS } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which

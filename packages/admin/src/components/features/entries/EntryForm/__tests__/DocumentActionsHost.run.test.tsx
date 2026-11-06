@@ -457,6 +457,49 @@ describe("running an action a plugin overrides", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "refused" });
   });
 
+  it("refuses a held action with its reason, without running the built-in", async () => {
+    const onDelete = vi.fn(() => Promise.resolve({ ok: true as const }));
+    const runner = renderHost({
+      entry: published,
+      onDelete,
+      actionOverrides: {
+        delete: { kind: "held", reason: "Waiting for the plugins." },
+      },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message: "Waiting for the plugins.",
+    });
+  });
+
+  it("lets a colleague's lock speak before a held action's own reason", async () => {
+    const runner = renderHost({
+      entry: published,
+      onDelete: () => Promise.resolve({ ok: true as const }),
+      documentLocked: true,
+      actionOverrides: {
+        delete: { kind: "held", reason: "Waiting for the plugins." },
+      },
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await runner.run("delete");
+    });
+
+    expect(outcome).toMatchObject({
+      message: "This document is being edited elsewhere",
+    });
+  });
+
   it("replaces Unpublish without asking the built-in question first", async () => {
     const onUnpublish = vi.fn(() => Promise.resolve(saved));
     const open = vi.fn(() => Promise.resolve({ ok: true as const }));

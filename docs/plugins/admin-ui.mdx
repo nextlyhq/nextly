@@ -406,6 +406,12 @@ takes Unpublish away and routes Delete to the plugin's own dialog.
   the admin's own confirmation and write, so a dialog renders open. Running it
   with `run("delete")` opens your component too, and answers once it closes.
 
+Until the admin has loaded which plugins are installed, Delete and Unpublish are
+shown on every collection's document but can't be chosen, with the reason on the
+row. A plugin that hides or replaces one isn't known yet, so the built-in write
+must not run in the meantime. Running a replaced action that is already open
+joins it, and both callers get the same answer when it closes.
+
 Your component receives `DocumentActionReplacementProps` from
 `@nextlyhq/plugin-sdk/admin`:
 
