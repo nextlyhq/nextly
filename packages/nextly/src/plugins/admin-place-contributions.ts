@@ -78,7 +78,11 @@ const COLLECTION_PLACES = new Set(["collection.list", "collection.edit"]);
 /** Kinds that act on rows, whose rule judges each row. */
 const ROW_KINDS = new Set<AdminContributionKind>(["rowAction", "bulkAction"]);
 
-const ROUTE_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE"]);
+/**
+ * The methods an action's route may answer: a write's, since an action acts
+ * on rows, and a write is what the admin sends with its CSRF token.
+ */
+const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
 /** A field's name, or a dotted path into a group. */
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;

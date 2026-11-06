@@ -11,7 +11,14 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@nextlyhq/ui";
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
@@ -75,6 +82,7 @@ import {
   type ChosenForCollection,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import {
   chosenPluginFilters,
   listFiltersFor,
@@ -83,7 +91,7 @@ import {
   writePluginFilterParams,
 } from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
-import type { EntryVersions } from "./useEntrySelection";
+import type { EntryRow, EntryVersions } from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -202,6 +210,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // chosen among them (`?pf=<filter>:<value>`), each resolved by name against
   // what was declared, so a `pf` naming anything else is ignored.
   const { plugins } = useBranding();
+  // Plugins' declared row actions for this list, and the component one of
+  // them opened, drawn below in a dialog with the row it was run on.
+  const declaredActions = useDeclaredRowActions<EntryRow>(collectionSlug);
   const pluginFilters = useMemo(
     () => listFiltersFor(plugins, collectionSlug),
     [plugins, collectionSlug]
@@ -799,6 +810,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       ) : (
         <EntryTable
           ref={tableRef}
+          declaredRowActions={declaredActions.rowActions}
           collection={collectionForColumns}
           entries={entries}
           pagination={pagination}
@@ -848,6 +860,27 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         onConfirm={handleConfirmDelete}
         isLoading={bulkDelete.isPending}
       />
+
+      {/* A declared action that opens its plugin's component, with the row */}
+      <Dialog
+        open={declaredActions.opened !== null}
+        onOpenChange={open => {
+          if (!open) declaredActions.close();
+        }}
+      >
+        <DialogContent>
+          <DialogTitle>{declaredActions.opened?.label}</DialogTitle>
+          {declaredActions.opened ? (
+            <PluginSlot
+              path={declaredActions.opened.component}
+              props={{
+                rows: declaredActions.opened.rows,
+                onClose: declaredActions.close,
+              }}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

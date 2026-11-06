@@ -215,6 +215,16 @@ describe("contributedAdminContributions", () => {
       },
     ],
     [
+      "an action that reads rather than writes",
+      {
+        id: "acme-support.a",
+        kind: "rowAction",
+        place: "collection.list",
+        label: "A",
+        action: { run: { method: "GET", path: "/escalate" } },
+      },
+    ],
+    [
       "an action with an unknown method",
       {
         id: "acme-support.a",

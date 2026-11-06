@@ -147,11 +147,11 @@ async function boot(dialect: TestDialect): Promise<void> {
     ["mine closed", "closed", AGENT],
     ["boss open", "open", BOSS],
   ]) {
-    const created = (await current.nextly.create({
+    const created = await current.nextly.create({
       collection: TICKETS as never,
       data: { title, status, owner, codename: "c" } as never,
       overrideAccess: true,
-    } as never)) as { item: { id: string } };
+    } as never);
     ids[title] = String(created.item.id);
   }
 }

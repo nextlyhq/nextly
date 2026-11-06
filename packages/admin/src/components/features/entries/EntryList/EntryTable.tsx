@@ -146,6 +146,11 @@ export interface EntryTableProps {
   chosenPluginFilters?: ReadonlyMap<string, string>;
   /** Choose a plugin filter's option, or `null` to clear it. */
   onPluginFilterChange?: (name: string, value: string | null) => void;
+  /**
+   * Plugins' declared row actions, offered after the list's own, each on the
+   * rows its rule holds for.
+   */
+  declaredRowActions?: readonly RowAction<EntryRow>[];
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -253,6 +258,7 @@ export const EntryTable: ForwardRefExoticComponent<
     pluginFilters = [],
     chosenPluginFilters,
     onPluginFilterChange,
+    declaredRowActions,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -355,9 +361,10 @@ export const EntryTable: ForwardRefExoticComponent<
                 },
               ]
             : []),
+          ...(declaredRowActions ?? []),
         ];
       },
-    [onEdit, onDelete, offered.delete]
+    [onEdit, onDelete, offered.delete, declaredRowActions]
   );
 
   // -------------------------------------------------------------------------
