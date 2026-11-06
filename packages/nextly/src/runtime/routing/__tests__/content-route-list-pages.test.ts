@@ -153,7 +153,17 @@ describe("a paginated list's later pages", () => {
     );
   });
 
-  it.each(["0", "02", "-1", "1.5", "+2", "2.0", "two", "", "1234567890"])(
+  it.each([
+    "0",
+    "02",
+    "-1",
+    "1.5",
+    "+2",
+    "2.0",
+    "two",
+    "",
+    "99999999999999999999",
+  ])(
     "answers page %j as not found, reading nothing for the list",
     async segment => {
       const served = route();

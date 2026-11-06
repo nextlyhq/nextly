@@ -98,6 +98,9 @@ describe("a list's page segment", () => {
   it("reads a page number written the one way", () => {
     expect(listPageNumber("1")).toBe(1);
     expect(listPageNumber("42")).toBe(42);
+    // Any number held exactly is a page, so a count past nine digits has
+    // an address for every page it names.
+    expect(listPageNumber("1234567890")).toBe(1234567890);
     for (const other of [
       "0",
       "02",
@@ -107,7 +110,7 @@ describe("a list's page segment", () => {
       "1e3",
       " 2",
       "",
-      "1234567890",
+      "99999999999999999999",
     ]) {
       expect(listPageNumber(other)).toBeNull();
     }

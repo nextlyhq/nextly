@@ -691,6 +691,12 @@ export interface ListPageContext {
    * address for page 1.
    */
   readonly href: (page: number) => string;
+  /**
+   * True where the page already claimed the list's first read from its
+   * allowance (`queries`), in the order the route counted its pages in, so
+   * the list reads without claiming again.
+   */
+  readonly claimed?: boolean;
 }
 
 /** A context with nothing wired up: the standalone default. */

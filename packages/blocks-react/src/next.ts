@@ -515,21 +515,10 @@ function listPageSlug(slug: string, page: number | undefined): string {
  * Layout region shows on many pages, so a list in one never pages an
  * address. The one finding the route's count and the render share.
  */
-function pagedListOf(
-  config: BlocksPageConfig,
-  resolver: BlockResolver,
-  document: BlockDocument
-): PaginatedList | undefined {
-  const prepared = prepareDocument(document, {
-    resolver,
-    ...(config.limits === undefined ? {} : { limits: config.limits }),
-    ...(config.styleContext === undefined
-      ? {}
-      : { styleContext: config.styleContext }),
-  });
-  return prepared === null
+function pagedListOf(page: DrawnDocument): PaginatedList | undefined {
+  return page.prepared === null
     ? undefined
-    : paginatedList(prepared.presented.nodes);
+    : paginatedList(page.prepared.presented.nodes);
 }
 
 /**
@@ -2630,8 +2619,9 @@ function blocksRouteConfig(
     // own links do not name, nor refuses one they do.
     listPages: async (entry, context) => {
       const document = readDocument(entry, field, context);
-      const list = pagedListOf(config, resolver, document);
-      if (list === undefined) return null;
+      // Nothing is read for a page whose stored document splits no list
+      // into pages: composing it cannot add one its own nodes do not hold.
+      if (paginatedList(document.nodes) === undefined) return null;
       // Counted under the page's read allowance, spent in the render's own
       // order up to the list: the page's inputs (its components, its Layout's
       // regions, what its bindings read), then the terms its lists compare
@@ -2641,7 +2631,7 @@ function blocksRouteConfig(
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES
       );
-      const { bindings, presented } = await readPageInputs({
+      const { page, bindings, presented } = await readPageInputs({
         config,
         resolver,
         document,
@@ -2652,6 +2642,10 @@ function blocksRouteConfig(
         window: listWindow,
         budget,
       });
+      // The list as the render draws it: composed with its components'
+      // definitions, repaired and held to the caps.
+      const list = pagedListOf(page);
+      if (list === undefined) return null;
       const days = await listDayInputs({
         config,
         documents: presented,
@@ -2660,6 +2654,8 @@ function blocksRouteConfig(
         window: listWindow,
         context,
       });
+      // The list's first read, claimed where the render claims it: after
+      // the page's inputs and day terms, before any block is drawn.
       if (!budget.take()) return 1;
       const counted = await listEntryCount(
         list.props,
@@ -2728,9 +2724,6 @@ function blocksRouteConfig(
         // The published page draws the Lucide set, vendored with this package.
         resolveIcon: resolveLucideIcon,
         // The page of its list this address draws, and where the others are.
-        // A Single's route serves no later pages and gives no addresses for
-        // them, so its list shows one page.
-        listPage: listPageFor(pagedListOf(config, resolver, document), context),
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(
@@ -2789,11 +2782,29 @@ function blocksRouteConfig(
         window: listWindow,
         context,
       });
+      // The paginated list's first read, claimed now: after the page's inputs
+      // and day terms, before any block is drawn, which is the order the
+      // route counted its pages in. So a block drawn before the list cannot
+      // spend the read the count relied on, and the route and the page agree
+      // on whether the list reads at all. Only where the route serves later
+      // pages (a Single's gives no addresses, so its list shows one page and
+      // claims its own read); a list whose read cannot be claimed draws no
+      // links, as the route serves none of its later pages.
+      const pagedList = pagedListOf(page);
+      const listPage =
+        pagedList !== undefined &&
+        context.listPagePath !== undefined &&
+        budget.take()
+          ? listPageFor(pagedList, context)
+          : undefined;
       const shared: SharedRendererProps = {
-        context:
-          Object.keys(listDays).length === 0
-            ? pageContext
-            : { ...pageContext, ...listDays },
+        context: {
+          ...pageContext,
+          ...listDays,
+          ...(listPage === undefined
+            ? {}
+            : { listPage: { ...listPage, claimed: true } }),
+        },
         blocks: resolver,
         styleContext,
         blockFallback,

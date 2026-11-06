@@ -93,21 +93,23 @@ export function slugToStaticParam(value: unknown): { slug: string[] } | null {
 export const LIST_PAGE_SEGMENT = "page";
 
 /** A page number as an address writes it: a whole number from 1, no sign, no leading zero. */
-const LIST_PAGE_NUMBER = /^[1-9]\d{0,8}$/;
+const LIST_PAGE_NUMBER = /^[1-9]\d*$/;
 
 /**
  * The page number a path segment names, or null when it names none.
  *
  * Only one spelling per number is a page, so a page has one address: `02`,
  * `+2`, `2.0` and `0` are not pages, and the route answers them as not found
- * rather than serving a duplicate of `/page/2`. Nine digits at most, so the
- * number is always exact and a run of digits never reads as a page past any
- * list's end only after being parsed.
+ * rather than serving a duplicate of `/page/2`. Any number held exactly
+ * is a page number, so every page a list's count names has an address; a
+ * run of digits too long to hold exactly is none.
  *
  * @experimental Settles with list pagination.
  */
 export function listPageNumber(segment: string): number | null {
-  return LIST_PAGE_NUMBER.test(segment) ? Number(segment) : null;
+  if (!LIST_PAGE_NUMBER.test(segment)) return null;
+  const page = Number(segment);
+  return Number.isSafeInteger(page) ? page : null;
 }
 
 /**

@@ -1052,6 +1052,25 @@ describe("the list a page's address pages", () => {
     });
   });
 
+  it("finds one in another list's empty state, which is drawn once", () => {
+    const outer = list("outer", { collection: "posts" });
+    const nodes = [
+      {
+        ...outer,
+        slots: {
+          children: [],
+          empty: [list("fallback", { collection: "posts", paginate: true })],
+        },
+      },
+    ];
+    expect(paginatedList(nodes)?.id).toBe("fallback");
+    expect(
+      listQueryIssues(nodes).filter(issue =>
+        issue.code.startsWith("list-paginate")
+      )
+    ).toEqual([]);
+  });
+
   it("skips related entries, and finds none where nothing is split", () => {
     expect(
       paginatedList([
@@ -1086,6 +1105,8 @@ describe("how many pages a list has", () => {
   it("is never fewer than one, which shows the empty state", () => {
     expect(listPageCount(0, 0, 10)).toBe(1);
     expect(listPageCount(5, 10, 10)).toBe(1);
+  });
+});
 
 describe("outerListOf", () => {
   it("names the list whose entries hold a block, passing over an empty state", () => {

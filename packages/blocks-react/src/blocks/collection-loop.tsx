@@ -41,7 +41,12 @@ import { LIST_ACTION_ATTRIBUTE } from "../editor-markers";
 import { CONTENT } from "./categories";
 import { CONTAINER_CHILD_GAP } from "./container";
 import { ListPages } from "./list-pages";
-import { listPagesOf, readList, type ListOutcome } from "./list-read";
+import {
+  listPagesOf,
+  readList,
+  wholeCount,
+  type ListOutcome,
+} from "./list-read";
 
 export interface CollectionLoopProps {
   /** The collection queried, or the collection a related source's entries are in. */
@@ -185,19 +190,21 @@ export async function renderCollectionLoop({
     // still sees what they are building.
     return <div className={className}>{renderSlot("children")}</div>;
   }
-  // A loop inside a loop runs once per entry of the outer one, so depth in a
-  // document becomes multiplication in queries. Claiming from a shared
-  // allowance before reading is what keeps a page bounded; without one the
-  // renderer is not counting, which is the editor drawing a single block.
-  if (ctx.queries?.take() === false) {
-    return <div className={className} />;
-  }
   // The page this render draws, when the route pages this list: the one
   // list it names, so no other list on the page is paged by its address.
   const paging =
     props.paginate === true && ctx.listPage?.nodeId === node.id
       ? ctx.listPage
       : undefined;
+  // A loop inside a loop runs once per entry of the outer one, so depth in a
+  // document becomes multiplication in queries. Claiming from a shared
+  // allowance before reading is what keeps a page bounded; without one the
+  // renderer is not counting, which is the editor drawing a single block.
+  // The list a route pages had its first read claimed for it before any
+  // block was drawn, so it does not claim again.
+  if (paging?.claimed !== true && ctx.queries?.take() === false) {
+    return <div className={className} />;
+  }
   // The count of matching entries, as the read reports it, for the links.
   let matching: number | undefined;
   // Never throws: a page that cannot reach its data draws the list's empty
@@ -209,14 +216,10 @@ export async function renderCollectionLoop({
     {
       find: async query => {
         const result = await data.find(query);
-        // A provider's own answer, held to what a count can be: a whole
-        // number from 0. Anything else draws no links, rather than links to
-        // `/page/NaN` the route would never serve.
-        const total = result.total;
-        matching =
-          typeof total === "number" && Number.isSafeInteger(total) && total >= 0
-            ? total
-            : undefined;
+        // A provider's own answer, held to what a count can be, as the
+        // route's count holds it: anything else draws no links, rather than
+        // links to `/page/NaN` the route would never serve.
+        matching = wholeCount(result.total);
         return Array.isArray(result.items) ? [...result.items] : [];
       },
       claim: () => ctx.queries?.take() !== false,

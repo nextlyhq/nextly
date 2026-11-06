@@ -774,11 +774,27 @@ export async function listEntryCount(
     read.base,
     read.sort
   );
-  if (typeof total !== "number") return undefined;
+  // Held to a whole number from 0, as a list's own links hold it.
+  const counted = wholeCount(total);
+  if (counted === undefined) return undefined;
   return {
-    matching: total,
-    shown: Math.max(0, Math.min(total - read.offset, read.limit)),
+    matching: counted,
+    shown: Math.max(0, Math.min(counted - read.offset, read.limit)),
   };
+}
+
+/**
+ * A provider's total as a count may be: a whole number from 0, or undefined
+ * for anything else (`NaN`, `Infinity`, a fraction, a negative). The one
+ * reading the route's page count and a list's page links share, so a total
+ * neither trusts can never give one of them pages the other lacks.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function wholeCount(total: unknown): number | undefined {
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+    ? total
+    : undefined;
 }
 
 /**
