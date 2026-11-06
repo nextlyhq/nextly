@@ -2719,6 +2719,13 @@ export class SingleMutationService extends BaseService {
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
+        //
+        // The callback is the Single save's whole transaction: the lock, the
+        // held-edit split, the content, companion and component writes, the
+        // version, history, activity and outbox records, and the in-transaction
+        // phase. Its branching is that pipeline's own; it comes down by moving
+        // phases into units of their own, as `assemblesSaveDocuments` is.
+        // fallow-ignore-next-line complexity
         updatedRows = await this.adapter.transaction(async tx => {
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
