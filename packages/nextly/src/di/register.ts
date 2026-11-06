@@ -4334,7 +4334,14 @@ async function reconcileSingleTablesForBoot(
         const migrationSQL = schemaService.generateMigrationSQL(
           single.tableName,
           fields,
-          { isSingle: true, hasStatus, localized }
+          // Where its translatable columns live: its per-language table when it is translated, or
+          // for every Single under `experimental.perLanguageStorage`, as `completeSingleTable`
+          // registers it.
+          {
+            isSingle: true,
+            hasStatus,
+            localized: storesPerLanguage({ localized }),
+          }
         );
 
         const statements = migrationSQL

@@ -18,6 +18,10 @@ vi.mock("../../i18n/runtime/companion-readiness", () => ({
   resolveCompanionReadiness: vi.fn(async () => "ready"),
 }));
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { resolveCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
 
@@ -151,6 +155,30 @@ describe("ensureSingleRuntimeTable", () => {
     });
     expect(registered).toEqual([]);
     expect(tables.get("single_test_page")).toBe(sentinel);
+  });
+
+  // Under `experimental.perLanguageStorage` turning translation on or off keeps the values per
+  // language and changes only whether each language publishes on its own, which decides whether
+  // the companion has `_status`: that is a change of shape, whatever the version says.
+  it("registers again when a translation toggle changes how each language publishes, under the setting", async () => {
+    setPerLanguageStorage(true);
+    try {
+      const { adapter, registered } = makeAdapter();
+      await ensureSingleRuntimeTable(adapter, {
+        ...localizedMeta,
+        localized: false,
+        schemaVersion: 3,
+      });
+      const afterFirst = registered.length;
+      await ensureSingleRuntimeTable(adapter, {
+        ...localizedMeta,
+        localized: true,
+        schemaVersion: 3,
+      });
+      expect(registered.length).toBeGreaterThan(afterFirst);
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("uses schemaVersion as the signature when the row carries one", async () => {

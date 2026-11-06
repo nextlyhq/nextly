@@ -130,6 +130,61 @@ describe("generateMigration under per-language storage", () => {
     expect(sql).not.toContain(`"_status"`);
   });
 
+  // The mirror of a field joining: one leaving the companion of an untranslated Draft/Published
+  // collection moves back to the main table, and the rollback recreates its per-language rows
+  // without a `_status` the companion never had.
+  it("moves a field out of the companion of an untranslated Draft/Published collection without a status", async () => {
+    setPerLanguageStorage(true);
+    const run = (name: string, at: string, headline: Record<string, unknown>) =>
+      generateMigration({
+        name,
+        dialect: "sqlite",
+        migrationsDir,
+        // A move of existing values records their language, which the config declares.
+        defaultLocale: "en",
+        collections: [
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            status: true,
+            fields: [
+              headline,
+              { name: "summary", type: "text" },
+              { name: "views", type: "number" },
+            ],
+          } as MinimalConfigEntity,
+        ],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date(at),
+      });
+    await run("create_notes", "2026-10-29T12:00:00.000Z", {
+      name: "headline",
+      type: "text",
+    });
+    const before = new Set(
+      (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"))
+    );
+    await run("headline_leaves", "2026-10-30T12:00:00.000Z", {
+      name: "headline",
+      type: "text",
+      localized: false,
+    });
+    const added = (await readdir(migrationsDir)).filter(
+      f => f.endsWith(".sql") && !before.has(f)
+    );
+    const sql = (
+      await Promise.all(
+        added.map(f => readFile(resolve(migrationsDir, f), "utf-8"))
+      )
+    ).join("\n");
+    // The move is planned, so absence of `_status` below is not an empty file passing.
+    expect(sql).toContain(`"dc_notes_locales"`);
+    expect(sql).toContain(`"headline"`);
+    expect(sql).not.toContain(`"_status"`);
+  });
+
   // A file that seeds existing content records the language it is in, and a migration file must
   // not depend on whichever database the developer reached: with the setting on and no
   // `localization` block, the default is declared in the config or the file is refused.

@@ -22,6 +22,7 @@ import {
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
@@ -135,7 +136,9 @@ async function ownedTablesExist(
     // Read only to seed existing rows; deciding whether a table exists reads
     // neither this nor the builder, which shape its columns.
     defaultLocale: "en",
-    collectionLocalized: localized,
+    // It owns a companion where its translatable values are kept per language: translated, or
+    // any entity under `experimental.perLanguageStorage`.
+    collectionLocalized: storesPerLanguage({ localized }),
     builtBy: "codeFirst",
   });
   if (companion === null) return true;
