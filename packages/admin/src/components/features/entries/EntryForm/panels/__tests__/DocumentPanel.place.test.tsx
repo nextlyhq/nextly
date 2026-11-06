@@ -1,0 +1,250 @@
+/**
+ * Plugins' sections in the document panel: each stands where the server put
+ * it among the panel's own four, under its own label and behind its own
+ * boundary, told which document the page shows; one replacing a built-in
+ * section is drawn where that one was.
+ */
+import type { AdminContributionsMeta } from "nextly/config";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { render, screen, within } from "@admin/__tests__/utils";
+import { registerComponent } from "@admin/lib/plugins/component-registry";
+
+import { EntryLocaleProvider } from "../../../EntryLocaleContext";
+import type { DocumentPlace } from "../../document-place";
+import { DocumentPanel } from "../DocumentPanel";
+
+const meta = vi.hoisted(() => ({
+  contributions: undefined as AdminContributionsMeta | undefined,
+}));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ contributions: meta.contributions }),
+}));
+// Languages on, so all four of the panel's own sections are drawn.
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: true,
+    locales: [
+      { code: "en", label: "English" },
+      { code: "fr", label: "French" },
+    ],
+    defaultLocale: "en",
+    fallback: true,
+    getLocale: () => undefined,
+  }),
+}));
+vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
+  useReleasesContaining: () => ({
+    data: { items: [] },
+    isError: false,
+    isPending: false,
+  }),
+}));
+vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("../../../LanguagePanel", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../LanguagePanel")>()),
+  DocumentLanguagePanel: () => <div data-testid="language-panel" />,
+}));
+
+const SIGNED_IN = "11111111-1111-4111-8111-111111111111";
+
+const NOTES = "@acme/a/admin#Notes";
+registerComponent(NOTES, ((props: { context?: unknown; entry?: unknown }) => (
+  <pre data-testid="notes">
+    {JSON.stringify({ context: props.context, entry: props.entry })}
+  </pre>
+)) as never);
+const THROWS = "@acme/a/admin#Throws";
+registerComponent(THROWS, (() => {
+  throw new Error("the section failed");
+}) as never);
+
+function section(id: string, label: string, extra: object = {}) {
+  return {
+    plugin: "@acme/a",
+    id,
+    kind: "sidebarSection",
+    label,
+    component: NOTES,
+    ...extra,
+  };
+}
+
+const ENTRY = { id: "e1", createdAt: "2026-10-01T09:00:00Z" };
+
+const SHOWN = { userId: SIGNED_IN, collection: "posts", entryId: "e1" };
+
+/** The panel on a post's edit page, as the viewer `context` names, or none yet. */
+function panel(context: typeof SHOWN | null = SHOWN) {
+  const place: DocumentPlace = {
+    place: "collection.edit",
+    context,
+    entry: ENTRY,
+  };
+  return render(
+    <EntryLocaleProvider
+      value={{
+        locale: "fr",
+        rtl: false,
+        collectionLocalized: true,
+        isNonDefaultLocale: true,
+      }}
+    >
+      <DocumentPanel
+        place={place}
+        mode="edit"
+        entry={ENTRY}
+        hasStatus
+        documentStatus={{ status: "draft", hasWorkingDraft: false }}
+        releaseDocument={{
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: "e1",
+        }}
+      />
+    </EntryLocaleProvider>
+  );
+}
+
+/** The panel's sections, by the headings that name them, in order. */
+function sectionTitles(): string[] {
+  return screen
+    .getAllByRole("region")
+    .map(region => region.getAttribute("data-panel-section") ?? "");
+}
+
+function sections(...entries: object[]): void {
+  meta.contributions = {
+    "collection.edit": { sidebarSection: entries },
+  } as AdminContributionsMeta;
+}
+
+beforeEach(() => {
+  meta.contributions = undefined;
+});
+
+describe("plugins' sections in the document panel", () => {
+  it("with no contributions the panel draws its own four, in order", () => {
+    panel();
+    expect(sectionTitles()).toEqual([
+      "Status",
+      "Publishing",
+      "Language",
+      "Details",
+    ]);
+  });
+
+  it("a contributed section straight after `status`", () => {
+    sections(
+      { builtIn: "status" },
+      section("acme-a.notes", "Notes", { after: "status" }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    panel();
+
+    expect(sectionTitles()).toEqual([
+      "Status",
+      "Notes",
+      "Publishing",
+      "Language",
+      "Details",
+    ]);
+    // Drawn inside its own section, told the page's ids and its document.
+    const notes = within(screen.getByRole("region", { name: "Notes" }));
+    expect(JSON.parse(notes.getByTestId("notes").textContent ?? "")).toEqual({
+      context: { userId: SIGNED_IN, collection: "posts", entryId: "e1" },
+      entry: ENTRY,
+    });
+  });
+
+  it("a section replacing `language` stands where it was", () => {
+    // The server sends the replacement in the built-in's place and the
+    // built-in no more.
+    sections(
+      { builtIn: "status" },
+      { builtIn: "publishing" },
+      section("acme-a.languages", "Translations", { replaces: "language" }),
+      { builtIn: "details" }
+    );
+    panel();
+
+    expect(sectionTitles()).toEqual([
+      "Status",
+      "Publishing",
+      "Translations",
+      "Details",
+    ]);
+    expect(screen.queryByTestId("language-panel")).toBeNull();
+  });
+
+  it("a throwing section draws its own fallback, and the rest of the panel stays", () => {
+    sections(
+      { builtIn: "status" },
+      section("acme-a.broken", "Broken", { component: THROWS }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    panel();
+
+    expect(sectionTitles()).toEqual([
+      "Status",
+      "Broken",
+      "Publishing",
+      "Language",
+      "Details",
+    ]);
+    expect(
+      screen.getByRole("region", { name: "Broken" })
+    ).not.toHaveTextContent("the section failed");
+    expect(screen.getByTestId("language-panel")).toBeInTheDocument();
+  });
+
+  it("says under a section's heading that its component could not be found", () => {
+    sections(
+      { builtIn: "status" },
+      section("acme-a.missing", "Missing", {
+        after: "status",
+        component: "@acme/a/admin#NotRegistered",
+      }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    panel();
+
+    // The section stays, under its own heading, and says what happened in
+    // place of a body that never arrived.
+    expect(
+      within(screen.getByRole("region", { name: "Missing" })).getByRole(
+        "status"
+      )
+    ).toHaveTextContent("This part of the page couldn't be loaded.");
+  });
+
+  it("draws no plugin's section before the viewer is known", () => {
+    sections(
+      { builtIn: "status" },
+      section("acme-a.notes", "Notes", { after: "status" }),
+      { builtIn: "publishing" },
+      { builtIn: "language" },
+      { builtIn: "details" }
+    );
+    panel(null);
+
+    expect(screen.queryByTestId("notes")).toBeNull();
+    expect(sectionTitles()).toEqual([
+      "Status",
+      "Publishing",
+      "Language",
+      "Details",
+    ]);
+  });
+});

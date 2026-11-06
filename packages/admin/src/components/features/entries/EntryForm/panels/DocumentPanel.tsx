@@ -1,9 +1,12 @@
 "use client";
 
-import type React from "react";
+import { Fragment, type ReactElement, type ReactNode } from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import type { PlaceContributionProps } from "@admin/components/shared/target-slot";
+import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
+import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -13,6 +16,7 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
+import type { DocumentPlace } from "../document-place";
 import { DocumentIdCopy } from "../DocumentIdCopy";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
@@ -25,10 +29,20 @@ import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 // adds for the collection. Each section decides
 // whether it applies and draws nothing where it does not, so a document
 // without a lifecycle or languages reads the sections it has, in that order.
+//
+// They are the edit page's place's built-in sections, by those names, and
+// plugins' sections stand among them in the order the server sent: each a
+// section of the panel under its own label, its component behind its own
+// boundary, and one that replaces a built-in drawn where that one was. With
+// nothing contributed the panel draws exactly its own four. Sections a plugin
+// adds through the collection's document surfaces (`pluginSections`) follow
+// all of these, after Details.
 
 export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
 
 export interface DocumentPanelProps {
+  /** The edit page's place, whose side panel sections this draws. */
+  place: DocumentPlace;
   /** Form mode. Nothing is drawn before the document exists. */
   mode: EntryFormMode;
   /** Entry data with id and timestamps. */
@@ -69,6 +83,7 @@ export interface DocumentPanelProps {
 }
 
 export function DocumentPanel({
+  place,
   mode,
   entry,
   hasStatus,
@@ -81,7 +96,11 @@ export function DocumentPanel({
   publishAllDisabled = actionsDisabled,
   pluginSections = [],
   pluginSectionProps,
-}: DocumentPanelProps): React.ReactElement | null {
+}: DocumentPanelProps): ReactElement | null {
+  const sections = usePlaceContributions(place.place, "sidebarSection", {
+    context: place.context,
+    entry: place.entry,
+  });
   // Nothing to say until the document exists.
   if (mode === "create") return null;
 
@@ -91,14 +110,17 @@ export function DocumentPanel({
     | Record<string, { translated: boolean; status?: string }>
     | undefined;
 
-  return (
-    <div className="flex flex-col" data-testid="document-panel-sections">
-      {hasStatus && documentStatus ? (
+  const builtIns: Readonly<Record<string, ReactNode>> = {
+    status:
+      hasStatus && documentStatus ? (
         <StatusSection documentStatus={documentStatus} />
-      ) : null}
-      {/* A release publishes or unpublishes, so only a document with that
-          lifecycle has a schedule to read. */}
-      {hasStatus ? <PublishingSection document={releaseDocument} /> : null}
+      ) : null,
+    // A release publishes or unpublishes, so only a document with that
+    // lifecycle has a schedule to read.
+    publishing: hasStatus ? (
+      <PublishingSection document={releaseDocument} />
+    ) : null,
+    language: (
       <LanguageSection>
         <DocumentLanguagePanel
           translations={translations}
@@ -110,12 +132,43 @@ export function DocumentPanel({
           publishAllDisabled={publishAllDisabled}
         />
       </LanguageSection>
+    ),
+    details: (
       <PanelSection title="Details">
         <dl className="space-y-3">
           <IdRow id={entry?.id} />
           <TimestampRows entry={entry} />
         </dl>
       </PanelSection>
+    ),
+  };
+  const { context } = place;
+
+  return (
+    <div className="flex flex-col" data-testid="document-panel-sections">
+      {/* Keyed, so a built-in section keeps its state when contributed ones
+          arrive with the admin's metadata and the list around it grows. */}
+      {sections.map(item =>
+        "builtIn" in item ? (
+          <Fragment key={`builtIn:${item.builtIn}`}>
+            {builtIns[item.builtIn] ?? null}
+          </Fragment>
+        ) : context !== null && item.kind === "sidebarSection" ? (
+          <PanelSection key={item.id} title={item.label}>
+            {/* A component that cannot be found says so under the section's
+                heading, as a place's blocks and tabs do, rather than leaving
+                a bare heading. */}
+            <PluginSlot<PlaceContributionProps>
+              path={item.component}
+              fallback={<PlaceContributionFallback />}
+              props={{
+                context,
+                ...(place.entry === undefined ? {} : { entry: place.entry }),
+              }}
+            />
+          </PanelSection>
+        ) : null
+      )}
       {pluginSectionProps === undefined
         ? null
         : pluginSections.map(section => (
@@ -151,7 +204,7 @@ export function DocumentPanel({
  * its state and the actions that make sense of it. The panel's own header
  * names it on screen, so the section's heading is said only to a screen reader.
  */
-function LanguageSection({ children }: { children: React.ReactNode }) {
+function LanguageSection({ children }: { children: ReactNode }) {
   const { enabled, locales } = useLocalization();
   const { collectionLocalized } = useEntryLocale();
   // The panel's own rule for when it draws anything, so the section and its

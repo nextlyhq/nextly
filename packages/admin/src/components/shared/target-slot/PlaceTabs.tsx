@@ -36,6 +36,12 @@ const CONTENT_TAB = "content";
 export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
   /** The page's own content's tab label, in the interface language. */
   contentLabel: string;
+  /**
+   * Classes for the strip and the contributed tabs' panels, never the page's
+   * own content, which keeps its own layout: where the page insets its
+   * content, the strip and a plugin's panel line up with it.
+   */
+  className?: string;
   children: ReactNode;
 }
 
@@ -44,9 +50,10 @@ export function PlaceTabs<P extends AdminPlaceId>({
   context,
   entry,
   contentLabel,
+  className,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const delivered = usePlaceContributions(place, "tab", entry);
+  const delivered = usePlaceContributions(place, "tab", { context, entry });
   const [chosen, setChosen] = useState(CONTENT_TAB);
   const tabs =
     context === null
@@ -64,7 +71,11 @@ export function PlaceTabs<P extends AdminPlaceId>({
   return (
     <>
       {context === null || tabs.length === 0 ? null : (
-        <Tabs value={shown} onValueChange={setChosen}>
+        <Tabs
+          value={shown}
+          onValueChange={setChosen}
+          {...(className === undefined ? {} : { className })}
+        >
           <TabsList scrollable>
             {/* The page's content is not one of the strip's panels, since
                 wrapping it in one would change the page with no tab or
