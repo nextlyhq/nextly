@@ -200,7 +200,10 @@ describe("the filters plugins declare for the entry list", () => {
   });
 
   it("gives the admin exactly the filters that passed, on an enabled plugin only", () => {
-    const [enabled] = buildPluginAdminMeta([plugin("@acme/support", [OPEN])]);
+    const [enabled] = buildPluginAdminMeta(
+      [plugin("@acme/support", [OPEN])],
+      undefined
+    );
     expect(enabled?.listFilters).toEqual([
       {
         name: OPEN.name,
@@ -209,9 +212,10 @@ describe("the filters plugins declare for the entry list", () => {
         options: OPEN.options,
       },
     ]);
-    const [disabled] = buildPluginAdminMeta([
-      plugin("@acme/support", [OPEN], { enabled: false }),
-    ]);
+    const [disabled] = buildPluginAdminMeta(
+      [plugin("@acme/support", [OPEN], { enabled: false })],
+      undefined
+    );
     expect(disabled?.listFilters).toBeUndefined();
   });
 
