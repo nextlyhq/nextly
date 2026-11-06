@@ -255,20 +255,19 @@ describe("asking for a removal's hold", () => {
     expect(counted).toEqual([]);
   });
 
-  it("holds nothing for a caller whose publish right a filter limits, still asking again", async () => {
-    const filtered = { publishFiltered: true };
-    const same = route({ documents: 2, complete: true }, filtered);
-    const grown = route({ documents: 3, complete: true }, filtered);
+  it("refuses a caller whose publish right a filter limits, holding nothing", async () => {
+    const { ask, held, counted } = route(
+      { documents: 2, complete: true },
+      { publishFiltered: true }
+    );
 
-    const kept = await (await same.ask(BODY)).json();
-    const asked = await (await grown.ask(BODY)).json();
+    const error = await ask(BODY).catch((refused: unknown) => refused);
 
-    expect(kept.item.kind).toBe("held");
-    expect(asked.item).toEqual({
-      kind: "recount",
-      reach: { count: 3, complete: true },
-    });
-    expect([...same.held, ...grown.held]).toEqual([]);
+    // Such a right may not cover this component, and the SDK asks nothing
+    // about one named entry, so no hold is taken and no "held" is answered.
+    expect(NextlyError.isForbidden(error)).toBe(true);
+    expect(held).toEqual([]);
+    expect(counted).toEqual([]);
   });
 
   it("holds nothing for a localized store, which retires nothing", async () => {

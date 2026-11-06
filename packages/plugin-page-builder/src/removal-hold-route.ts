@@ -103,8 +103,12 @@ export function removalHoldRoutes(
         // component, and may publish the removal a hold is for, which the
         // route's update permission alone does not grant.
         await requireReadable(ctx, slug, body.id);
-        const publishes = await mayPublish(ctx, slug);
-        if (publishes === "none") {
+        // Asked with no entry named, a publish right a filter limits to some
+        // entries answers no. Such a caller may not be allowed to publish
+        // THIS component, and a hold fences other people's writes, so only a
+        // right that holds for every component may take one; the SDK asks
+        // nothing about one named entry.
+        if ((await ctx.caller?.can("publish", slug)) !== true) {
           throw NextlyError.forbidden({
             logContext: { reason: "removal-hold-cannot-publish", id: body.id },
           });
@@ -114,15 +118,6 @@ export function removalHoldRoutes(
         // removal there loses no value and nothing is held.
         if (await isLocalized(ctx, slug)) {
           return held(await count());
-        }
-        // A caller whose publish right some entries' filter limits may not be
-        // allowed to publish THIS component, and a hold fences other
-        // people's writes, so nothing is held for them: they are still asked
-        // again when the count has grown, and their publish is authorized at
-        // the write as every publish is.
-        if (publishes === "some") {
-          const counted = await count();
-          return countGrew(counted, body) ? recount(counted) : held(counted);
         }
         const hold = {
           properties: body.properties,
@@ -178,21 +173,6 @@ function recount(counted: UsageCount): Response {
       reach: { count: counted.documents, complete: counted.complete },
     }
   );
-}
-
-/**
- * Whether the caller may publish components: every one, only those some
- * filter matches, or none. Asked with no entry named, a filtered right
- * answers no, so it is told apart from one that holds for every entry.
- */
-async function mayPublish(
-  ctx: PluginRouteContext,
-  slug: string
-): Promise<"all" | "some" | "none"> {
-  if ((await ctx.caller?.can("publish", slug)) === true) return "all";
-  return (await ctx.caller?.can("publish", slug, { anyEntry: true })) === true
-    ? "some"
-    : "none";
 }
 
 /** The answer for a removal held, or one that needs no hold. */
