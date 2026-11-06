@@ -2571,7 +2571,10 @@ describe.each(getConfiguredTestDialects())(
           status: "published",
         };
 
-        for (const identity of [editor, checked(editor)]) {
+        // As one who may also unpublish, so only the whole-write judgment can
+        // refuse it: a writer without that permission would be refused by the
+        // lifecycle gate whatever this judged.
+        for (const identity of [owner, checked(owner)]) {
           const refusal = await rejectionOf(
             updateIfUnchanged(identity, {
               ...entry,
