@@ -5,7 +5,7 @@
  *
  * - An older build, whose folder lacks a migration a newer build applied,
  *   stops with `MIGRATION_MISSING` (exit code 3) naming it: `nextly migrate`,
- *   `migrate:down` and `migrate:baseline` alike.
+ *   `migrate:down`, `migrate:baseline` and `upgrade --reconcile-core` alike.
  * - An applied file whose down section was edited stops each of them with
  *   `MIGRATION_TAMPERED` (exit code 2), and an unresolved attempt stops each
  *   of them too.
@@ -60,6 +60,7 @@ import {
 } from "../migrate";
 import { baselineCore } from "../migrate-baseline";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
+import { runReconcileCore } from "../upgrade";
 
 /** Every table a lock keeps its row in: not part of what a run leaves behind. */
 const LOCK_TABLES = new Set([
@@ -161,6 +162,23 @@ describe.each(LOCK_DIALECTS)(
       });
     }
 
+    /** `nextly upgrade --reconcile-core`, wired as the command wires it. */
+    function reconcileCore() {
+      return runReconcileCore({
+        adapter: adapter as never,
+        confirmDestructive: () => Promise.resolve(true),
+        checkAppHistory: () =>
+          assertAppHistoryHolds({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            command: "nextly upgrade --reconcile-core",
+          }),
+      });
+    }
+
     /** `migrate:baseline`'s core. */
     function baseline() {
       return baselineCore({
@@ -246,7 +264,7 @@ describe.each(LOCK_DIALECTS)(
       context?: Record<string, unknown>;
     }) {
       const before = await databaseState();
-      for (const command of [migrate, migrateDown, baseline]) {
+      for (const command of [migrate, migrateDown, baseline, reconcileCore]) {
         expect(await refusal(command())).toMatchObject(expected);
         expect(await databaseState()).toEqual(before);
       }

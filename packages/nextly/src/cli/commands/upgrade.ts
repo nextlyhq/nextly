@@ -14,6 +14,8 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -30,11 +32,20 @@ import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError, failWithError } from "../errors";
 import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
-import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openCommandAdapter,
+  type CLIDatabaseAdapter,
+} from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
+import { loadConfig } from "../utils/config-loader";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 
-import { maybeForceUnlock } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  maybeForceUnlock,
+  migrateExitCode,
+} from "./migrate";
 import { dryRunRefusalOf } from "./migrate-create";
 import type {
   RunUpgradeOptions,
@@ -225,6 +236,13 @@ export interface RunReconcileCoreDeps {
   adapter: UpgradeAdapter;
   logger?: UpgradeLogger;
   confirmDestructive: (reasons: string[]) => Promise<boolean>;
+  /**
+   * The app history checks every command that changes core tables makes
+   * before its first write (`assertAppHistoryHolds`), asked under the lock
+   * before the reconcile. Required, so no caller reconciles past a history
+   * this build cannot account for.
+   */
+  checkAppHistory: () => Promise<void>;
 }
 
 /** Injected for tests; defaults to the real reconcileCore. */
@@ -252,6 +270,10 @@ export async function runReconcileCore(
     adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
+      // Before the reconcile changes core tables, under the lock no other run
+      // changes the ledger past: an older build stops with exit 3, an edited
+      // applied file with exit 2, an unresolved attempt as it says.
+      await deps.checkAppHistory();
       await reconcile({
         ...(await reconcileTarget(adapter)),
         // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
@@ -399,8 +421,29 @@ export async function upgradeAction(
     );
 
     if (cmdOptions.reconcileCore) {
+      // The migrations folder the history checks read, from the config as
+      // `nextly migrate` loads it; a config that cannot load refuses here,
+      // before the lock.
+      const configResult = await loadConfig({
+        configPath: globalOpts.config,
+        cwd: globalOpts.cwd,
+        debug: globalOpts.verbose,
+      });
+      const migrationsDir = resolve(
+        globalOpts.cwd ?? process.cwd(),
+        configResult.config.db.migrationsDir
+      );
       await runReconcileCore({
         adapter,
+        checkAppHistory: () =>
+          assertAppHistoryHolds({
+            adapter: adapter as unknown as CLIDatabaseAdapter,
+            db: adapter.getDrizzle(),
+            dialect: adapter.getCapabilities().dialect,
+            migrationsDir,
+            logger: context.logger,
+            command: "nextly upgrade --reconcile-core",
+          }),
         logger: {
           info: msg => context.logger.info(msg),
           warn: msg => context.logger.warn(msg),
@@ -438,8 +481,9 @@ export async function upgradeAction(
       );
     }
   } catch (error) {
-    // Set rather than exited, so the disconnect below still runs.
-    failWithError(context.logger, error);
+    // Set rather than exited, so the disconnect below still runs: 2 for an
+    // edited applied file, 3 for one the folder lacks.
+    failWithError(context.logger, error, migrateExitCode(error));
   } finally {
     await adapter.disconnect?.();
   }

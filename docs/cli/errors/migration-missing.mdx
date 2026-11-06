@@ -7,11 +7,15 @@ description: "A migration recorded as applied has no file in the migrations fold
 
 A migration recorded as applied has no file in the migrations folder.
 
-The database records the migration as applied, and no removal of it is recorded, but its file is not in the migrations folder. A build older than the database, or a file deleted by hand, does this.
+The database records the migration as applied, and no removal of it is recorded, but its file is not in the migrations folder. A build older than the database, or a file deleted by hand, does this. The same refusal names a migration the folder lacks that a newer build tried and did not finish, since the database may hold part of it.
+
+`nextly migrate` (and the boot migrate step), `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` all stop with exit code 3 before they change anything, core tables included. A plugin's modules are never counted.
 
 ## Fix
 
 - Restore the file from version control, or deploy the build that has it.
+- If the file was removed on purpose, record that: `nextly migrate:resolve --removed <file>`. The migration stays applied. If its file returns, it is never run again, and it is checked against its recorded checksum like any applied file.
+- For a migration a newer build tried and did not finish: deploy the build that has it and let it finish, or reverse what of it ran and record it with `nextly migrate:resolve --rolled-back <file> --file-missing`.
 - Then run `nextly migrate` again.
 
 See [Production migrations](/docs/guides/production-migrations).
@@ -19,8 +23,8 @@ See [Production migrations](/docs/guides/production-migrations).
 ## Example
 
 ```text
-✗ `20261020_120000_add_posts.sql` is recorded as applied, but its file is not in the migrations folder.
-  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
-  Next: Restore the file from version control, or deploy the build that has it, then run `nextly migrate` again.
+✗ The ledger records 1 applied migration this build's migrations folder lacks (`20261020_120000_add_posts.sql`), so `nextly migrate` ran nothing.
+  Why:  A newer build has migrated this database, or a file was removed from the folder after it ran.
+  Next: Deploy the build that holds the files, or put them back. If a file was removed on purpose, record that with `nextly migrate:resolve --removed <file>`: the migration stays applied, and is never run again if its file returns.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)
 ```

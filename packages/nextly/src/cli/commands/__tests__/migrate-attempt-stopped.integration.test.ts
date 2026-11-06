@@ -37,6 +37,10 @@ import {
 } from "../../../domains/schema/events/schema-events-repository";
 import { ensureSchemaEventsTable } from "../../../domains/schema/events/schema-events-ddl";
 import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
+import {
+  resolveDataLossConsent,
+  type DataLossConsent,
+} from "../../../domains/schema/migrate/data-loss-consent";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
@@ -102,8 +106,9 @@ describe.each(LOCK_DIALECTS)(
     }, 60_000);
 
     /** `nextly migrate`'s core in this process, waiting out a lapsing lock. */
-    function migrate() {
+    function migrate(consent?: DataLossConsent) {
       return migrateCore({
+        ...(consent === undefined ? {} : { consent }),
         extensionSchema: undefined,
         dialect,
         db: adapter.getDrizzle(),
@@ -362,7 +367,9 @@ describe.each(LOCK_DIALECTS)(
           [`DROP TABLE ${one}`],
           marked
         );
-        return migrate().then(
+        // Its INSERT reaches a table the database lacks, whose code cannot
+        // be read, so the run takes the consent without targets.
+        return migrate(resolveDataLossConsent({ flag: true, env: {} })).then(
           () => undefined,
           (error: unknown) => error
         );

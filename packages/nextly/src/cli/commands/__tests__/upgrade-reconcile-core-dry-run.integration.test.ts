@@ -106,6 +106,8 @@ describe.each(getConfiguredTestDialects())(
       await runReconcileCore(
         {
           adapter: adapter(),
+          // A database whose history the build holds: nothing to refuse.
+          checkAppHistory: () => Promise.resolve(),
           confirmDestructive: async reasons => {
             questions.push(reasons);
             return true;

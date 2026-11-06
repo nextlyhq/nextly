@@ -2119,7 +2119,7 @@ export async function migrateCore(
  *
  * A database with no ledger yet has no attempt to refuse on.
  */
-export async function refuseUnresolvedAppAttempts(args: {
+async function refuseUnresolvedAppAttempts(args: {
   adapter: CLIDatabaseAdapter;
   db: unknown;
   dialect: SupportedDialect;
@@ -2477,7 +2477,7 @@ function namedFiles(files: readonly string[]): string {
  * `missing`, applied, and `tried`, with an unresolved attempt a newer build
  * left, each said with its own reason and its own way out.
  */
-function appliedFilesMissing(
+export function appliedFilesMissing(
   command: string,
   missing: readonly string[],
   tried: readonly string[]

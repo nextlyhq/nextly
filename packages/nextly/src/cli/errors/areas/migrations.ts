@@ -491,6 +491,19 @@ export const MIGRATION_CODES = defineCodes({
         reason: PLAN_CHANGED_AFTER_CONSENT,
         describe: planChangedParts,
       },
+      // An app file read again to run whose text is not the one judged.
+      {
+        code: "INVALID_INPUT",
+        reason: "file-changed-after-judgement",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "The files are read again to run, and this one's text is not the text whose deletions the run judged under its lock.",
+            next,
+          };
+        },
+      },
     ],
   },
   DATA_LOSS_DECLINED: {
@@ -931,6 +944,20 @@ export const MIGRATION_CODES = defineCodes({
           return {
             what,
             why: "`nextly migrate:down` runs a migration's `-- DOWN` section, and this file's is empty.",
+            next,
+          };
+        },
+      },
+      // A migration whose file's removal was recorded: its down section is
+      // gone with the file.
+      {
+        code: "INVALID_INPUT",
+        reason: "down-file-removed",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "`nextly migrate:resolve --removed` recorded its file removed from the folder, so there is no `-- DOWN` section to run.",
             next,
           };
         },

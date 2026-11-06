@@ -55,6 +55,7 @@ describe("runReconcileCore", () => {
           getCapabilities: () => ({ dialect: "sqlite" }),
         },
         confirmDestructive: confirm,
+        checkAppHistory: () => Promise.resolve(),
       },
       { reconcileCore: reconcile }
     );
@@ -81,10 +82,32 @@ describe("runReconcileCore", () => {
             getCapabilities: () => ({ dialect: "sqlite" }),
           },
           confirmDestructive: () => Promise.resolve(true),
+          checkAppHistory: () => Promise.resolve(),
         },
         { reconcileCore: reconcile }
       )
     ).rejects.toMatchObject({ code: "NEXTLY_LEGACY_BOOKKEEPING_DETECTED" });
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("runs the app history checks before the core reconcile, which a refusal leaves unrun", async () => {
+    const reconcile = vi.fn();
+    const refusal = new Error("an applied migration the folder lacks");
+    await expect(
+      runReconcileCore(
+        {
+          adapter: {
+            tableExists: () => Promise.resolve(false),
+            getDrizzle: () => testDb.db,
+            dropTable: () => Promise.resolve(),
+            getCapabilities: () => ({ dialect: "sqlite" }),
+          },
+          confirmDestructive: () => Promise.resolve(true),
+          checkAppHistory: () => Promise.reject(refusal),
+        },
+        { reconcileCore: reconcile }
+      )
+    ).rejects.toBe(refusal);
     expect(reconcile).not.toHaveBeenCalled();
   });
 });
