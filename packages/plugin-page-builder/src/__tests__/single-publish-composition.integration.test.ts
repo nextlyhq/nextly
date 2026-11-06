@@ -185,8 +185,12 @@ describe.each(getConfiguredTestDialects())(
       // is live, with the component at the top, which fits as published too.
       const english = await singles.update(
         SLUG,
-        { content: document("page", [placing("i1", split)]), status: "draft" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        {
+          content: document("page", [placing("i1", split)]),
+          status: "draft",
+          _overwrite: true,
+        },
+        { locale: "en", overrideAccess: true }
       );
       expect(english.success, JSON.stringify(english)).toBe(true);
       const german = await singles.update(
@@ -194,8 +198,9 @@ describe.each(getConfiguredTestDialects())(
         {
           content: document("page", [placing("i1", split)]),
           status: "published",
+          _overwrite: true,
         },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { locale: "de", overrideAccess: true }
       );
       expect(german.success, JSON.stringify(german)).toBe(true);
       // A status-less edit of live German is held as its pending change, and
@@ -203,8 +208,8 @@ describe.each(getConfiguredTestDialects())(
       // under the main row's status, a draft's.
       const held = await singles.update(
         SLUG,
-        { content: threeDeep(split) },
-        { locale: "de", overrideAccess: true, _overwrite: true }
+        { content: threeDeep(split), _overwrite: true },
+        { locale: "de", overrideAccess: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
 
@@ -227,8 +232,8 @@ describe.each(getConfiguredTestDialects())(
       // Never published: the edit is the stored row itself, judged as a draft.
       const draft = await singles.update(
         SLUG,
-        { content: threeDeep(split), status: "draft" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { content: threeDeep(split), status: "draft", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       expect(draft.success, JSON.stringify(draft)).toBe(true);
 
@@ -251,8 +256,8 @@ describe.each(getConfiguredTestDialects())(
       const split = await componentDeeperWhenPublished(t);
       const shared = await singles.update(
         SLUG,
-        { content: threeDeep(split) },
-        { overrideAccess: true, _overwrite: true }
+        { content: threeDeep(split), _overwrite: true },
+        { overrideAccess: true }
       );
       expect(shared.success, JSON.stringify(shared)).toBe(true);
       // A Single created with no translated defaults has no translation row
@@ -279,16 +284,16 @@ describe.each(getConfiguredTestDialects())(
       const split = await componentDeeperWhenPublished(t);
       const draft = await singles.update(
         SLUG,
-        { content: threeDeep(split), status: "draft" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { content: threeDeep(split), status: "draft", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       );
       expect(draft.success, JSON.stringify(draft)).toBe(true);
 
       // `update` reports a refusal in its result rather than by throwing.
       const published = (await singles.update(
         SLUG,
-        { status: "published" },
-        { locale: "en", overrideAccess: true, _overwrite: true }
+        { status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
       )) as { success: boolean; errors?: unknown; error?: unknown };
 
       expect(published.success).toBe(false);

@@ -76,14 +76,14 @@ describe.each(getConfiguredTestDialects())(
       // preserve them by writing them back.
       await singles.update(
         SITE_STYLE_SLUG,
-        { tokens: TOKENS },
-        { overrideAccess: true, _overwrite: true }
+        { tokens: TOKENS, _overwrite: true },
+        { overrideAccess: true }
       );
       // The breakpoint manager saves, knowing nothing about the write above.
       await singles.update(
         SITE_STYLE_SLUG,
-        { breakpoints: BREAKPOINTS },
-        { overrideAccess: true, _overwrite: true }
+        { breakpoints: BREAKPOINTS, _overwrite: true },
+        { overrideAccess: true }
       );
 
       const stored = dataOf(
@@ -104,8 +104,8 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SITE_STYLE_SLUG,
-        { tokens: TOKENS },
-        { overrideAccess: true, _overwrite: true }
+        { tokens: TOKENS, _overwrite: true },
+        { overrideAccess: true }
       );
       const stored = dataOf(
         await singles.get(SITE_STYLE_SLUG, { overrideAccess: true })
@@ -128,13 +128,16 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SITE_STYLE_SLUG,
-        { tokens: TOKENS },
-        { overrideAccess: true, _overwrite: true }
+        { tokens: TOKENS, _overwrite: true },
+        { overrideAccess: true }
       );
       const refused = (await singles.update(
         SITE_STYLE_SLUG,
-        { breakpoints: { viewport: [{ id: "", label: "" }] } },
-        { overrideAccess: true, _overwrite: true }
+        {
+          breakpoints: { viewport: [{ id: "", label: "" }] },
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       )) as {
         success?: boolean;
         committed?: boolean;
@@ -158,13 +161,16 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SITE_STYLE_SLUG,
-        { tokens: TOKENS },
-        { overrideAccess: true, _overwrite: true }
+        { tokens: TOKENS, _overwrite: true },
+        { overrideAccess: true }
       );
       const refused = (await singles.update(
         SITE_STYLE_SLUG,
-        { breakpoints: { viewport: [{ id: "", label: "" }] } },
-        { overrideAccess: true, _overwrite: true }
+        {
+          breakpoints: { viewport: [{ id: "", label: "" }] },
+          _overwrite: true,
+        },
+        { overrideAccess: true }
       )) as { success?: boolean; committed?: boolean };
 
       // Asserted here rather than borrowed from the test above. Retention is

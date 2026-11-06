@@ -246,8 +246,8 @@ describeEachDialect("blocks field storage", dialect => {
 
     const written = await singles.update(
       "homepage",
-      { title: "Home", content: DOCUMENT },
-      { overrideAccess: true, _overwrite: true }
+      { title: "Home", content: DOCUMENT, _overwrite: true },
+      { overrideAccess: true }
     );
     expect((written as { success?: boolean }).success).toBe(true);
 
