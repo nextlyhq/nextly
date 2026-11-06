@@ -668,7 +668,11 @@ export class UserService {
    */
   async updateProfile(
     userId: string,
-    changes: { name?: string; image?: string },
+    changes: {
+      name?: string;
+      image?: string;
+      interfaceLanguage?: string | null;
+    },
     _context: RequestContext
   ): Promise<User> {
     this.logger.debug("Updating user profile", { userId, changes });

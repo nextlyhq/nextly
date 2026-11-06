@@ -32,7 +32,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import type { HostStep } from "../host-rewrite/contract";
+import type { HostStep, StoredForm } from "../host-rewrite/contract";
 import {
   resolveSiteStyle,
   siteBreakpoints,
@@ -106,25 +106,42 @@ function keptOf(removal: Removal): BreakpointSet | undefined {
 }
 
 /**
- * A style envelope without the removed breakpoints, in every state the
- * compiler writes: the same value when it holds none of them, so an untouched
- * envelope is the same object. A state left with nothing is dropped.
+ * What a strip took out of one style envelope: per state the engine knows,
+ * each removed breakpoint's value as it was stored.
  */
-function strippedEnvelope(styles: unknown, ids: ReadonlySet<string>): unknown {
-  if (!isPlainRecord(styles)) return styles;
+export type RemovedStyles = Record<string, Record<string, unknown>>;
+
+/**
+ * A style envelope split at the removed breakpoints, in every state the
+ * compiler writes: what stays (the same value when it holds none of them, so
+ * an untouched envelope is the same object; a state left with nothing is
+ * dropped) and what was taken out, `undefined` when nothing was.
+ */
+function splitEnvelope(
+  styles: unknown,
+  ids: ReadonlySet<string>
+): { kept: unknown; removed: RemovedStyles | undefined } {
+  if (!isPlainRecord(styles)) return { kept: styles, removed: undefined };
   let next: Record<string, unknown> | undefined;
+  let removed: RemovedStyles | undefined;
   for (const state of STYLE_STATES) {
     const byBreakpoint = styles[state];
     if (!isPlainRecord(byBreakpoint)) continue;
     const held = [...ids].filter(id => Object.hasOwn(byBreakpoint, id));
     if (held.length === 0) continue;
     const kept: Record<string, unknown> = { ...byBreakpoint };
-    for (const id of held) delete kept[id];
+    removed ??= {};
+    // Without a prototype, so an id of `__proto__` is an own key.
+    removed[state] = Object.create(null) as Record<string, unknown>;
+    for (const id of held) {
+      removed[state][id] = byBreakpoint[id];
+      delete kept[id];
+    }
     next ??= { ...styles };
     if (Object.keys(kept).length === 0) delete next[state];
     else next[state] = kept;
   }
-  return next ?? styles;
+  return { kept: next ?? styles, removed };
 }
 
 /** Whether a stored visibility keeps a per-device value under a removed id. */
@@ -155,62 +172,119 @@ function carriedVisibility(
   return { ...carried, devices };
 }
 
-/** One block without what it keeps under the removed breakpoints. */
-function strippedNode(
+/**
+ * What a strip took out of one block: its style values under the removed
+ * breakpoints, and, when its hides were carried, its visibility before and
+ * after, so an undo can tell whether it still stands as the strip left it.
+ */
+export interface NodeFragment {
+  readonly styles?: RemovedStyles;
+  readonly visibility?: { readonly before: unknown; readonly after: unknown };
+}
+
+/**
+ * What a strip took out of one stored document: each block's, by its id, and
+ * the page's own settings' style values. What an undo puts back.
+ */
+export interface DocumentFragment {
+  readonly nodes: Readonly<Record<string, NodeFragment>>;
+  readonly settingsStyles?: RemovedStyles;
+}
+
+/**
+ * One block split at the removed breakpoints: the block without what it
+ * keeps under them, and what that was; the same block, and no fragment, when
+ * it keeps nothing there.
+ */
+function splitNode(
   node: BlockNode,
   removal: Removal,
   kept: BreakpointSet | undefined
-): BlockNode {
-  const styles = strippedEnvelope(node.styles, removal.ids);
+): { node: BlockNode; fragment: NodeFragment | undefined } {
+  const styles = splitEnvelope(node.styles, removal.ids);
   const hides = hidesUnder(node.visibility, removal.ids);
-  if (styles === node.styles && !hides) return node;
+  if (styles.removed === undefined && !hides) {
+    return { node, fragment: undefined };
+  }
   const next: Record<string, unknown> = { ...node };
-  if (styles !== node.styles) {
-    if (isPlainRecord(styles) && Object.keys(styles).length === 0) {
+  let fragment: NodeFragment = {};
+  if (styles.removed !== undefined) {
+    fragment = { styles: styles.removed };
+    if (isPlainRecord(styles.kept) && Object.keys(styles.kept).length === 0) {
       delete next.styles;
     } else {
-      next.styles = styles;
+      next.styles = styles.kept;
     }
   }
   if (hides) {
     const visibility = carriedVisibility(node.visibility, removal, kept);
+    fragment = {
+      ...fragment,
+      visibility: { before: node.visibility, after: visibility },
+    };
     if (visibility === undefined) delete next.visibility;
     else next.visibility = visibility;
   }
-  return next as unknown as BlockNode;
+  return { node: next as unknown as BlockNode, fragment };
 }
 
 /**
- * A document without what it keeps under the removed breakpoints: every
- * block's styles and own hides, slots included, and its own settings'
- * styles. The same document when it keeps nothing there.
+ * A document split at the removed breakpoints: the document without what it
+ * keeps under them (every block's styles and own hides, slots included, and
+ * its own settings' styles; the same document when it keeps nothing there),
+ * and what was taken out, `undefined` when nothing was.
  */
+export function splitDocument(
+  document: BlockDocument,
+  removal: Removal
+): { document: BlockDocument; fragment: DocumentFragment | undefined } {
+  if (removal.ids.size === 0) return { document, fragment: undefined };
+  const kept = keptOf(removal);
+  // Without a prototype, so a block whose id is `__proto__` is an own key.
+  const nodeFragments = Object.create(null) as Record<string, NodeFragment>;
+  let changed = false;
+  const nodes = mapForest(document.nodes, node => {
+    const split = splitNode(node, removal, kept);
+    if (split.fragment !== undefined) {
+      changed = true;
+      nodeFragments[node.id] = split.fragment;
+    }
+    return split.node;
+  });
+  const settings: unknown = document.settings;
+  let nextSettings = settings;
+  let settingsStyles: RemovedStyles | undefined;
+  if (isPlainRecord(settings)) {
+    const split = splitEnvelope(settings.styles, removal.ids);
+    if (split.removed !== undefined) {
+      settingsStyles = split.removed;
+      nextSettings = { ...settings, styles: split.kept };
+    }
+  }
+  if (!changed && settingsStyles === undefined) {
+    return { document, fragment: undefined };
+  }
+  return {
+    document: {
+      ...document,
+      nodes: changed ? nodes : document.nodes,
+      ...(nextSettings === settings
+        ? {}
+        : { settings: nextSettings as BlockDocument["settings"] }),
+    },
+    fragment: {
+      nodes: nodeFragments,
+      ...(settingsStyles === undefined ? {} : { settingsStyles }),
+    },
+  };
+}
+
+/** A document without what it keeps under the removed breakpoints (`splitDocument`). */
 export function stripDocument(
   document: BlockDocument,
   removal: Removal
 ): BlockDocument {
-  if (removal.ids.size === 0) return document;
-  const kept = keptOf(removal);
-  let changed = false;
-  const nodes = mapForest(document.nodes, node => {
-    const next = strippedNode(node, removal, kept);
-    if (next !== node) changed = true;
-    return next;
-  });
-  const settings: unknown = document.settings;
-  let nextSettings = settings;
-  if (isPlainRecord(settings)) {
-    const styles = strippedEnvelope(settings.styles, removal.ids);
-    if (styles !== settings.styles) nextSettings = { ...settings, styles };
-  }
-  if (!changed && nextSettings === settings) return document;
-  return {
-    ...document,
-    nodes: changed ? nodes : document.nodes,
-    ...(nextSettings === settings
-      ? {}
-      : { settings: nextSettings as BlockDocument["settings"] }),
-  };
+  return splitDocument(document, removal).document;
 }
 
 /**
@@ -219,25 +293,26 @@ export function stripDocument(
  * every shared style has one.
  */
 export function stripClass(entry: unknown, ids: ReadonlySet<string>): unknown {
-  if (!isPlainRecord(entry)) return entry;
-  const styles = strippedEnvelope(entry.styles, ids);
-  return styles === entry.styles ? entry : { ...entry, styles };
+  return splitClass(entry, ids).entry;
 }
 
 /**
- * The stored shared styles without their values under the removed
- * breakpoints; the same list when none holds any.
+ * One stored shared style split at the removed breakpoints: the entry without
+ * its values under them (the same entry when it holds none), and those values.
  */
-export function stripClasses(
-  classes: readonly unknown[],
+export function splitClass(
+  entry: unknown,
   ids: ReadonlySet<string>
-): readonly unknown[] {
-  const next = classes.map(entry => stripClass(entry, ids));
-  return next.some((entry, index) => entry !== classes[index]) ? next : classes;
+): { entry: unknown; removed: RemovedStyles | undefined } {
+  if (!isPlainRecord(entry)) return { entry, removed: undefined };
+  const split = splitEnvelope(entry.styles, ids);
+  return split.removed === undefined
+    ? { entry, removed: undefined }
+    : { entry: { ...entry, styles: split.kept }, removed: split.removed };
 }
 
 /** Whether a stored value is a document: a record holding a list of nodes. */
-function isDocument(value: unknown): value is BlockDocument {
+export function isDocument(value: unknown): value is BlockDocument {
   return isPlainRecord(value) && Array.isArray(value.nodes);
 }
 
@@ -291,8 +366,12 @@ const UNREADABLE_VALUE =
  * version cannot interpret (an unknown format or kind, a broken envelope) is
  * refused and left when it keeps anything there, never stripped in part.
  */
-export function stripBreakpointsStep(removal: Removal): HostStep {
-  return doc => {
+export function stripBreakpointsStep(
+  removal: Removal,
+  /** Told what each value it rewrites loses, so that can be kept. */
+  remember?: (form: StoredForm, fragment: DocumentFragment) => void
+): HostStep {
+  return (doc, form) => {
     const document = readStoredJson(doc);
     if (!isDocument(document)) return { kind: "unchanged" };
     if (removedIdsIn(document, removal.ids).size === 0) {
@@ -301,9 +380,9 @@ export function stripBreakpointsStep(removal: Removal): HostStep {
     if (documentRefusal(document) !== undefined) {
       return { kind: "refuse", reason: UNREADABLE_VALUE };
     }
-    const stripped = stripDocument(document, removal);
-    return stripped === document
-      ? { kind: "unchanged" }
-      : { kind: "rewritten", value: stripped };
+    const split = splitDocument(document, removal);
+    if (split.fragment === undefined) return { kind: "unchanged" };
+    remember?.(form, split.fragment);
+    return { kind: "rewritten", value: split.document };
   };
 }

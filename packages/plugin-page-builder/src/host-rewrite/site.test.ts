@@ -4,9 +4,45 @@
  * stores a localized field group's values per language under a parent that is
  * not translated.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "@nextlyhq/plugin-sdk";
+
+/** The conditional writes the writer made, and a failure for the next one. */
+const stored = vi.hoisted(() => ({
+  writes: [] as { data: Record<string, unknown> }[],
+  failNext: undefined as unknown,
+}));
+
+// The stored read and the conditional write are core's, which a unit test
+// does not boot: the read answers every field as stored, an empty document,
+// on a live row with no public state and no pending draft, and the write is
+// recorded, or fails as the test says.
+vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readStoredFields: async (
+    _identity: unknown,
+    request: { fields: readonly string[] }
+  ) => ({
+    kind: "found",
+    values: Object.fromEntries(
+      request.fields.map(name => [
+        name,
+        { kind: "value", value: { nodes: [] } },
+      ])
+    ),
+    live: { publicState: null, workingDraft: false },
+  }),
+  updateIfUnchanged: async (
+    _identity: unknown,
+    update: { data: Record<string, unknown> }
+  ) => {
+    const failure = stored.failNext;
+    stored.failNext = undefined;
+    if (failure !== undefined) throw failure;
+    stored.writes.push(update);
+  },
+}));
 
 import {
   singleToWalk,
@@ -35,7 +71,7 @@ function siteWith(
     layouts: "layouts",
     hints: async () => [],
     componentId: "card",
-    identity: async () => ({ overrideAccess: false }),
+    identity: async () => ({ user: { id: "u1" } }),
   };
 }
 
@@ -240,15 +276,8 @@ describe("the version a host write sends", () => {
   });
 
   it("writes with the version the host was read at", async () => {
-    const updates: Record<string, unknown>[] = [];
-    const writer = siteHostWriter(
-      siteOver({
-        update: async (args: { data: Record<string, unknown> }) => {
-          updates.push(args.data);
-          return {};
-        },
-      })
-    );
+    stored.writes.length = 0;
+    const writer = siteHostWriter(siteOver({}));
     const result = await writer({
       host,
       value: { nodes: [] },
@@ -257,20 +286,17 @@ describe("the version a host write sends", () => {
       rev: "7",
     });
     expect(result).toEqual({ kind: "written" });
-    expect(updates).toEqual([{ content: { nodes: [] }, _rev: "7" }]);
+    expect(stored.writes.map(write => write.data)).toEqual([
+      { content: { nodes: [] }, _rev: "7" },
+    ]);
   });
 
   it("reports a write refused as made from an out-of-date version as changed", async () => {
-    const writer = siteHostWriter(
-      siteOver({
-        update: async () => {
-          throw new NextlyError({
-            code: "STALE_VERSION",
-            publicMessage: "This document changed since the version you gave.",
-          });
-        },
-      })
-    );
+    stored.failNext = new NextlyError({
+      code: "STALE_VERSION",
+      publicMessage: "This document changed since the version you gave.",
+    });
+    const writer = siteHostWriter(siteOver({}));
     const result = await writer({
       host,
       value: { nodes: [] },

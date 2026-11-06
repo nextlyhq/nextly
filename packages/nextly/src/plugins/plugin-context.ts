@@ -37,6 +37,11 @@ import type {
 } from "../domains/schema/extension/types";
 import type { SingleRegistryService } from "../domains/singles/services/single-registry-service";
 import type { VersionsService } from "../domains/versions/versions-service";
+import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
+import {
+  createPluginWebhooks,
+  type PluginWebhooksApi,
+} from "../domains/webhooks/plugin-record";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import { NextlyError } from "../errors/nextly-error";
 import type { EventBus, EventHandler, EventName } from "../events/event-bus";
@@ -104,6 +109,10 @@ import {
 } from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
+import {
+  createPluginReceivedWebhooks,
+  type PluginReceivedWebhooks,
+} from "./security/inbound-webhooks";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -660,6 +669,18 @@ export interface PluginContext {
   security: PluginSecurityApi;
 
   /**
+   * @experimental Recording this plugin's own webhook events, of the types it
+   * declares in `contributes.webhookEvents`, for delivery to the endpoints
+   * subscribed to them. Present on every context: a plugin that declares no
+   * types has every type refused by name.
+   *
+   * Required, like the context's other members: `createPluginContext` and
+   * `createTestNextly` provide it, and a context built by hand, such as a
+   * test double typed as `PluginContext`, adds a `webhooks` of its own.
+   */
+  webhooks: PluginWebhooksApi;
+
+  /**
    * @experimental This plugin's stored configuration.
    *
    * Present only when the plugin declares `contributes.settings`. Values are
@@ -725,6 +746,8 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
+  readonly webhooks: PluginReceivedWebhooks;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1327,6 +1350,10 @@ export const PLUGIN_SERVICE_NAMES = [
   // never whichever one the process container holds at the time.
   "jobRegistry",
   "jobsDatabase",
+  // The registration's fast webhook drain, or `null` where webhooks are not
+  // registered, so a plugin's committed event is offered to the drain of the
+  // instance that recorded it.
+  "webhookFastDrainScheduler",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1879,7 +1906,9 @@ export function createPluginContext(
                             ? JobRegistry
                             : T extends "jobsDatabase"
                               ? JobsPassDatabase
-                              : never,
+                              : T extends "webhookFastDrainScheduler"
+                                ? WebhookFastDrainScheduler | null
+                                : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2084,6 +2113,9 @@ export function createPluginContext(
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
+  // Whose secrets and webhook types this context reaches: the plugin's, or
+  // core's for a context built without one.
+  const owner = plugin?.name ?? "nextly";
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2218,6 +2250,9 @@ export function createPluginContext(
         logger,
       }),
       opaque: createOpaqueSecrets(),
+      // Pure, holding no state: the secrets come with each call, from
+      // wherever the plugin keeps them.
+      webhooks: createPluginReceivedWebhooks(),
       // Kept within this plugin's name. The adapter is read per call, as the
       // context can be built before the database connects, and through this
       // context's own resolver rather than the global container: a context
@@ -2225,7 +2260,7 @@ export function createPluginContext(
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
       secrets: createOneTimeSecrets({
-        owner: plugin?.name ?? "nextly",
+        owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
@@ -2233,6 +2268,14 @@ export function createPluginContext(
           secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
+    // Kept within this plugin's name, which decides the types it may record.
+    // The adapter is read per call and through this context's own resolver,
+    // as the secrets helper's is.
+    webhooks: createPluginWebhooks(
+      owner,
+      () => asSecretsAdapter(getServiceFn("adapter")),
+      () => getServiceFn("webhookFastDrainScheduler")
+    ),
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.

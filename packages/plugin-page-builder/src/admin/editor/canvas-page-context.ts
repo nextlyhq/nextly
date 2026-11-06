@@ -29,6 +29,7 @@ import {
   createStandaloneContext,
   type PageContext,
   type QueryBudget,
+  type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
@@ -38,6 +39,19 @@ import {
 import { useEffect, useMemo } from "react";
 
 import { canvasListReadsIn } from "../list-entries-client";
+
+/**
+ * An icon as the canvas draws it, from the set a published page draws with.
+ * The set is reached through a dynamic `import()`, so it is a chunk of its
+ * own, fetched when the canvas first draws an icon rather than with the
+ * editor; the set's own resolver loads its data once and keeps it.
+ */
+async function resolveCanvasIcon(id: string): Promise<ResolvedIcon | null> {
+  const { resolveLucideIcon } = await import(
+    "@nextlyhq/blocks-react/icons/lucide"
+  );
+  return resolveLucideIcon(id);
+}
 
 /** What a media item read through the admin gives a block to draw. */
 interface MediaItem {
@@ -78,9 +92,24 @@ function canvasQueryBudget(): CanvasQueryBudget {
 }
 
 /**
+ * The collection a document is an entry of, as its lists judge a related
+ * source: the collection's slug for an entry; `null` for a Single, whose
+ * page has no entry a related list could read, so the inspector refuses
+ * such a list as the save does; nothing while no document is known.
+ */
+export function listEntryCollectionOf(
+  identity: { readonly kind: string; readonly slug: string } | null
+): string | null | undefined {
+  if (identity === null) return undefined;
+  if (identity.kind === "single") return null;
+  return identity.kind === "collection" ? identity.slug : undefined;
+}
+
+/**
  * The canvas's page context: its images resolve through the admin's media
- * read, which caches each item by id and shares a read in flight, and its
- * lists read in `locale`, the language being edited.
+ * read, which caches each item by id and shares a read in flight, its icons
+ * from the published page's icon set, and its lists read in `locale`, the
+ * language being edited.
  */
 export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>,
@@ -97,8 +126,7 @@ export function useCanvasPageContext(
   // of its related entries reads the relation as a visitor reads the entry:
   // again, through the canvas's reader, never from the form's values.
   const identity = useDocumentIdentity();
-  const entryCollection =
-    identity?.kind === "collection" ? identity.slug : undefined;
+  const entryCollection = listEntryCollectionOf(identity) ?? undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
   // The language's one set of list reads, which the inspector's count shares.
@@ -107,6 +135,7 @@ export function useCanvasPageContext(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
+        resolveIcon: resolveCanvasIcon,
         ...lists.terms,
         data: lists.data,
         queries: budget,

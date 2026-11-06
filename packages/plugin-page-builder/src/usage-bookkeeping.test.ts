@@ -52,17 +52,22 @@ function fakeDatabase(matched: number) {
       return fn(tx);
     },
   };
-  return { db, calls, opened };
+  return { db, tx, calls, opened };
 }
 
 describe("the fence on a pass's writes", () => {
-  it("runs the write while its run is the current one", async () => {
-    const { db } = fakeDatabase(1);
-    let wrote = false;
-    await usageBookkeeping(db, "postgresql").fenced("token-1", async () => {
-      wrote = true;
+  it("runs the write while its run is the current one, in the checking transaction", async () => {
+    // The write is handed the transaction the fence checked in, so it
+    // commits with the check or not at all.
+    const { db, tx, opened } = fakeDatabase(1);
+    let wroteThrough: unknown;
+    await usageBookkeeping(db, "postgresql").fenced("token-1", async handle => {
+      wroteThrough = handle;
     });
-    expect(wrote).toBe(true);
+    expect({ same: wroteThrough === tx, transactions: opened.length }).toEqual({
+      same: true,
+      transactions: 1,
+    });
   });
 
   it("REFUSES the write of a run a newer one replaced, before it runs", async () => {
@@ -131,7 +136,30 @@ describe("marking the index dirty", () => {
 describe("the read health makes", () => {
   it("asks for ONE snapshot", async () => {
     const { db, opened } = fakeDatabase(1);
-    await usageBookkeeping(db, "postgresql").snapshot();
+    await usageBookkeeping(db, "postgresql").snapshot(async () => false);
     expect(opened).toEqual([{ isolation: "snapshot" }]);
+  });
+
+  it("reads the caller's probe of the index rows in that same snapshot", async () => {
+    // The probe asks whether any document could not be read whole. Read in
+    // another transaction, it could see a later run's rows beside this run's
+    // progress.
+    const { db, tx, opened } = fakeDatabase(1);
+    let probedThrough: unknown;
+    const snapshot = await usageBookkeeping(db, "postgresql").snapshot(
+      async handle => {
+        probedThrough = handle;
+        return "probed";
+      }
+    );
+    expect({
+      probed: snapshot.probed,
+      same: probedThrough === tx,
+      transactions: opened,
+    }).toEqual({
+      probed: "probed",
+      same: true,
+      transactions: [{ isolation: "snapshot" }],
+    });
   });
 });

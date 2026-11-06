@@ -54,6 +54,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "email_verified_via" TEXT,
       "password_updated_at" INTEGER,
       "image" TEXT,
+      "interface_language" TEXT,
       "password_hash" TEXT,
       "is_active" INTEGER NOT NULL DEFAULT 0,
       "deactivated_at" INTEGER,

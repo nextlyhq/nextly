@@ -49,7 +49,12 @@ import {
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
-import type { WebhookEvent, WebhookEventType, WebhookResource } from "./types";
+import type {
+  RecordedEventType,
+  WebhookEvent,
+  WebhookEventType,
+  WebhookResource,
+} from "./types";
 
 /**
  * Whether the changed resource opted out of webhook recording. Resolves the
@@ -69,7 +74,8 @@ function resourceRecordingEnabled(resource: WebhookResource): boolean {
 
 /** Arguments for recording one mutation as a durable outbox event. */
 export interface RecordMutationEventArgs {
-  type: WebhookEventType;
+  /** Core's type, or a plugin's once checked as its own. */
+  type: RecordedEventType;
   resource: WebhookResource;
   /**
    * The just-written document in READ SHAPE — JSON container fields already
@@ -168,11 +174,12 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
  * save can append several Single events (an update, a publish, one per
  * language swept) and the trail records the save, not the events.
  */
-const ACTIVITY_ACTIONS: Partial<Record<WebhookEventType, ActivityLogAction>> = {
-  "entry.created": "create",
-  "entry.updated": "update",
-  "entry.deleted": "delete",
-};
+const ACTIVITY_ACTIONS: ReadonlyMap<RecordedEventType, ActivityLogAction> =
+  new Map<WebhookEventType, ActivityLogAction>([
+    ["entry.created", "create"],
+    ["entry.updated", "update"],
+    ["entry.deleted", "delete"],
+  ]);
 
 /**
  * Record the mutation's activity entry, ahead of the outbox gates.
@@ -187,7 +194,7 @@ async function recordActivity(
   db: () => ActivityWriteDb,
   args: RecordMutationEventArgs
 ): Promise<void> {
-  const action = ACTIVITY_ACTIONS[args.type];
+  const action = ACTIVITY_ACTIONS.get(args.type);
   // Held in a const so the narrowing to an entry reaches the callback below.
   const resource = args.resource;
   if (!action || resource.kind !== "entry") return;
