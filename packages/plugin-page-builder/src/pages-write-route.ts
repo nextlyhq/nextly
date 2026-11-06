@@ -255,6 +255,27 @@ async function freeSlugs(
   return candidates.filter(candidate => !taken.has(candidate));
 }
 
+/** The longest address a page may be stored at (`db.slugPaths`). */
+const SLUG_PATH_MAX = 255;
+
+/** Room kept at the end of an address for a suffix that frees it (`-51`). */
+const SUFFIX_ROOM = 4;
+
+/**
+ * The slug a page made from `text` starts from: beneath `parent` where the
+ * page sits beneath another and the address leaves room for a name, cut so
+ * the whole address, its freeing suffix included, fits the column; at the
+ * top level otherwise.
+ */
+function nestedSlugBase(text: string, parent: string | undefined): string {
+  const own = slugBaseOf(text);
+  if (parent === undefined || parent === "") return own;
+  const room = SLUG_PATH_MAX - parent.length - 1 - SUFFIX_ROOM;
+  if (room < 1) return own;
+  const cut = own.slice(0, room).replace(/-+$/, "");
+  return cut === "" ? own : `${parent}/${cut}`;
+}
+
 /**
  * The address a stored page sits beneath: its slug up to the last `/`, or
  * nothing for a page at the top level or one whose slug was not read.
@@ -289,10 +310,7 @@ async function writeWithSlug(
 ): Promise<unknown> {
   const field = source.slugField;
   if (field === undefined) return write({});
-  const base =
-    parent === undefined || parent === ""
-      ? slugBaseOf(text)
-      : `${parent}/${slugBaseOf(text)}`;
+  const base = nestedSlugBase(text, parent);
   if (!field.unique) return write({ [field.name]: base });
   const free = await freeSlugs(source, field.name, base, writes);
   for (const slug of free.slice(0, WRITE_ATTEMPTS)) {
