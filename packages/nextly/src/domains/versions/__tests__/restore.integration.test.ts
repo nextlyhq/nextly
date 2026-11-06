@@ -430,17 +430,17 @@ describe("restoreVersion (integration)", () => {
       current.getService<SingleEntryService>("singleEntryService");
     await singles.update(
       "notice",
-      { heading: "EN" },
+      { heading: "EN", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
     await singles.update(
       "notice",
-      { heading: "DE one" },
+      { heading: "DE one", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
     await singles.update(
       "notice",
-      { heading: "DE two" },
+      { heading: "DE two", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -462,6 +462,7 @@ describe("restoreVersion (integration)", () => {
       entryId: deOne!.entryId,
       versionNo: deOne!.versionNo!,
       user: await storedSuperAdmin(current),
+      version: { _overwrite: true },
     });
 
     const headingIn = async (locale: string) =>

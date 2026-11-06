@@ -160,11 +160,13 @@ async function saveSingle(h: Handles, slug: string): Promise<void> {
   };
   const saved = await singles.update(
     slug,
-    slug === HOME ? { headline: "Welcome" } : { note: "Kept" },
+    {
+      ...(slug === HOME ? { headline: "Welcome" } : { note: "Kept" }),
+      _overwrite: true,
+    },
     {
       overrideAccess: true,
       user: { id: h.ownerId, name: "Owner", email: "owner@su.test" },
-      _overwrite: true,
     }
   );
   expect(saved.success).toBe(true);
