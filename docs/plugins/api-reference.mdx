@@ -875,14 +875,19 @@ own, on the rows whose `visibleWhen` holds. Other contributions arrive as data
 in the admin's metadata, and are not drawn yet.
 
 **Running an action.** An action that `open`s a component draws it with the
-rows it was run on. One that `run`s a route calls the plugin's own route,
+rows it was run on. In a bundled admin, that component resolves only once
+contribution components are collected into the generated import map; until
+then the action shows the slot's fallback. One that `run`s a route calls the plugin's own route,
 which must answer a write (`POST`, `PUT`, `PATCH` or `DELETE`) and must not be
 public or a route for the plugin's own kind of signed-in person. The request
 carries the action and its rows, with the CSRF token the admin sends with
 every write:
 
 ```json
-{ "action": "acme-support.escalate", "rows": [{ "collection": "tickets", "id": "42" }] }
+{
+  "action": "acme-support.escalate",
+  "rows": [{ "collection": "tickets", "id": "42" }]
+}
 ```
 
 **A route bound to an action is reachable only as that action.** Before its
