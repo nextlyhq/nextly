@@ -114,6 +114,10 @@ test.describe("an Accordion's titles and icon", () => {
     );
     await page.goto(`/${slug}`);
     const summary = page.locator(".nx-pb-page details > summary").first();
+    // Laid out before measured: a page's first request under Cache Components
+    // streams its content into a hidden container before moving it into place,
+    // where every box measures zero, so the row is read once it is shown.
+    await expect(summary).toBeVisible();
     await expect(summary.locator(`h3${TITLE}`)).toHaveText("What is included?");
     // A row with no browser marker: the title starts the line.
     const row = await summary.evaluate(element => {
