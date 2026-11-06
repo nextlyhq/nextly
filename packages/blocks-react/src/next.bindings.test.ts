@@ -1022,6 +1022,7 @@ describe("a page's blocks shown by their visibility conditions", () => {
     const nextly = instance(
       page(shownWhen("yes", "Shown", [[{ field: "title", op: "exists" }]]))
     );
+    runtime.reads = [];
     await renderedPage(createBlocksPage, base, nextly);
     expect(publicReads(nextly)).toEqual([
       expect.objectContaining({
@@ -1029,6 +1030,14 @@ describe("a page's blocks shown by their visibility conditions", () => {
         select: { id: true, title: true },
       }),
     ]);
+    // Cached under the collection's tags, so editing a field a condition
+    // checks refreshes the page and its show-or-hide with it.
+    const { nextlyTags } = await import("nextly/runtime");
+    expect(
+      runtime.reads.some(read =>
+        nextlyTags("pages").every(tag => read.tags.includes(tag))
+      )
+    ).toBe(true);
   });
 
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
