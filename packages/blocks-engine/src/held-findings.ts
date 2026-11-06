@@ -16,11 +16,17 @@ interface HeldFinding {
   readonly nodeId: string;
   readonly code: string;
   readonly message: string;
+  /**
+   * What the problem is about, apart from where it sits or how its message
+   * reads, when a message carries a place that can change without the
+   * problem changing; the message stands in when absent.
+   */
+  readonly identity?: string;
 }
 
 /** What makes two findings the same problem on the same block. */
 function signature(finding: HeldFinding): string {
-  return `${finding.nodeId}\u0000${finding.code}\u0000${finding.message}`;
+  return `${finding.nodeId}\u0000${finding.code}\u0000${finding.identity ?? finding.message}`;
 }
 
 /**

@@ -21,8 +21,10 @@ import {
   type ValidationIssue,
 } from "./validation";
 import {
+  CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_MAX,
+  CONDITION_REGISTRY,
   conditionIssues,
 } from "./visibility-conditions";
 
@@ -253,5 +255,91 @@ describe("a block's conditions at save", () => {
       onPost
     );
     expect(conditionCodes(issues)).toEqual([]);
+  });
+
+  it("refuses a source the registry decides on each visit, as the page would hide it", () => {
+    const perVisit = {
+      ...CONDITION_REGISTRY,
+      sources: { ...CONDITION_REGISTRY.sources, entry: "request" as const },
+    };
+    const found = conditionIssues(
+      page(box("a", [[{ field: "tier", op: "equals", value: "vip" }]])).nodes,
+      { fields, entryCollection: "posts", registry: perVisit }
+    );
+    expect(found.map(issue => `${issue.code} ${issue.severity}`)).toEqual([
+      "condition-not-static error",
+    ]);
+  });
+
+  it("refuses a condition on the entry of a page that has none, but not on a list's item there", () => {
+    const doc = page(
+      box("a", [[{ field: "tier", op: "exists" }]]),
+      list("l", "authors", [box("in", [[{ field: "name", op: "exists" }]])])
+    );
+    const onSingle: ValidationContext = {
+      ...shapeOnly,
+      listFields: fields,
+      bindingEntry: { single: "home" },
+    };
+    expect(conditionCodes(validate(doc, onSingle))).toEqual([
+      "condition-source-unavailable error /nodes/0/visibility/conditions",
+    ]);
+  });
+
+  it("judges a block in a list's empty state against the page's entry, not the item", () => {
+    const empty = {
+      ...list("l", "authors", []),
+      slots: {
+        children: [],
+        empty: [box("e", [[{ field: "tier", op: "equals", value: "vip" }]])],
+      },
+    };
+    expect(conditionCodes(validate(page(empty), onPost))).toEqual([]);
+    const wrong = {
+      ...empty,
+      slots: {
+        children: [],
+        empty: [box("e", [[{ field: "verified", op: "is_true" }]])],
+      },
+    };
+    expect(conditionCodes(validate(page(wrong), onPost))).toEqual([
+      "condition-field-unknown error /nodes/0/slots/empty/0/visibility/conditions/0/0",
+    ]);
+  });
+
+  it("warns, rather than refuses, a field path the stored page already held", () => {
+    const doc = page(box("a", [[{ field: "author.name", op: "exists" }]]));
+    expect(conditionCodes(validate(doc, { ...onPost, stored: [doc] }))).toEqual(
+      ["condition-malformed warning /nodes/0/visibility/conditions"]
+    );
+  });
+
+  it("keeps a held problem a warning when a group added beside it renames its place", () => {
+    const held = { field: "internalScore", op: "exists" };
+    const stored = page(box("a", [[held]]));
+    const edited = page(
+      box("a", [[held], [{ field: "tier", op: "equals", value: "vip" }]])
+    );
+    expect(
+      conditionCodes(validate(edited, { ...onPost, stored: [stored] }))
+    ).toEqual([
+      "condition-field-protected warning /nodes/0/visibility/conditions/0/0",
+    ]);
+    // A different value on the same field is a new problem, not the held one.
+    const changed = page(box("a", [[{ ...held, op: "not_exists" }]]));
+    expect(
+      conditionCodes(validate(changed, { ...onPost, stored: [stored] }))
+    ).toEqual([
+      "condition-field-protected error /nodes/0/visibility/conditions/0/0",
+    ]);
+  });
+
+  it("names only codes a schema or host decides as field codes", () => {
+    expect([...CONDITION_FIELD_CODES].sort()).toEqual([
+      "condition-field-protected",
+      "condition-field-unknown",
+      "condition-source-unavailable",
+      "condition-unsuited",
+    ]);
   });
 });

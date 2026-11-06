@@ -85,7 +85,6 @@ import { isConditionGated } from "./visibility";
 import {
   CONDITION_ISSUE_CODES,
   conditionIssues,
-  conditionsReadable,
 } from "./visibility-conditions";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -2327,16 +2326,6 @@ function validateVisibility(
         message:
           "visibility.conditions must be an OR-array of AND-arrays of {field, op, value?}.",
       });
-    } else if (!conditionsReadable(vis.conditions)) {
-      // Well formed to the older check, but a condition names ONE top-level
-      // field: a path or a quoted name is not one the evaluator can read.
-      state.issues.push({
-        path: pointer(visPath, "conditions"),
-        code: "condition-malformed",
-        severity: "error",
-        message:
-          'Each condition names one field of the entry or list item, such as "title", not a path. Choose one field.',
-      });
     }
   }
   if (vis.devices !== undefined) {
@@ -3370,16 +3359,18 @@ function schemaJudgement(
   maxNodes: number
 ): {
   readonly fields?: ListFieldSource;
-  readonly entryCollection?: string;
+  readonly entryCollection?: string | null;
   readonly stored?: readonly BlockDocument[];
   readonly maxNodes: number;
 } {
   const entry = ctx.bindingEntry;
   return {
     ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
-    ...(entry !== undefined && "collection" in entry
-      ? { entryCollection: entry.collection }
-      : {}),
+    // A Single's page is no collection's entry: its renderer has no entry
+    // to read a relation of, or to check a condition against.
+    ...(entry === undefined
+      ? {}
+      : { entryCollection: "collection" in entry ? entry.collection : null }),
     ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
     maxNodes,
   };

@@ -27,6 +27,7 @@ import {
   COLLECTION_LIST_TYPE,
   isListDay,
   isListFieldName,
+  LIST_ENTRY_SLOT,
   listDayAfter,
   listFieldKind,
   readListQuery,
@@ -759,38 +760,67 @@ function wholeProblem(
   input: ConditionInput,
   registry: ConditionRegistry
 ): ConditionProblem | undefined {
-  if (groups === undefined) {
-    return {
-      code: "condition-malformed",
-      path: CONDITIONS_PATH,
-      message:
-        "This block's conditions can't be read, so it is left out of the page. Set its conditions again.",
-    };
-  }
+  if (groups === undefined) return MALFORMED;
+  return (
+    countProblem(groups) ??
+    sourceProblem(input.source, registry) ??
+    (input.subject === undefined ? missingSource(input.source) : undefined)
+  );
+}
+
+/** The problem of conditions that cannot be read as single-field groups. */
+const MALFORMED: ConditionProblem = {
+  code: "condition-malformed",
+  path: CONDITIONS_PATH,
+  message:
+    "This block's conditions can't be read, so it is left out of the page. Each condition names one field of the entry or list item, such as \"title\", not a path.",
+};
+
+/**
+ * The problems that belong to a node's conditions as a whole, before any one
+ * is judged, asked alike by the evaluator and by the save, so the save
+ * refuses exactly what the page would hide.
+ */
+function countProblem(
+  groups: readonly (readonly StoredCondition[])[]
+): ConditionProblem | undefined {
   const count = groups.reduce((sum, group) => sum + group.length, 0);
-  if (count > CONDITION_MAX) {
-    return {
-      code: "condition-too-many",
-      path: CONDITIONS_PATH,
-      message: `This block has ${String(count)} conditions, and a block may have ${String(CONDITION_MAX)}, so it is left out of the page. Remove some.`,
-    };
-  }
-  const record = input.source === "item" ? "list item" : "entry";
-  if (registry.sources[input.source] !== "static") {
-    return {
-      code: "condition-not-static",
-      path: CONDITIONS_PATH,
-      message: `This block's conditions check the ${record}, which is decided on each visit, so the block is left out of the page.`,
-    };
-  }
-  if (input.subject === undefined) {
-    return {
-      code: "condition-source-unavailable",
-      path: CONDITIONS_PATH,
-      message: `This block's conditions check the ${record}, and this page has no ${record} to check, so the block is left out.`,
-    };
-  }
-  return undefined;
+  return count > CONDITION_MAX
+    ? {
+        code: "condition-too-many",
+        path: CONDITIONS_PATH,
+        message: `This block has ${String(count)} conditions, and a block may have ${String(CONDITION_MAX)}, so it is left out of the page. Remove some.`,
+      }
+    : undefined;
+}
+
+/** The words for the record a source reads. */
+function recordOf(source: ConditionSource): string {
+  return source === "item" ? "list item" : "entry";
+}
+
+/** Why a source cannot be decided when the page is built, if it cannot. */
+function sourceProblem(
+  source: ConditionSource,
+  registry: ConditionRegistry
+): ConditionProblem | undefined {
+  return registry.sources[source] === "static"
+    ? undefined
+    : {
+        code: "condition-not-static",
+        path: CONDITIONS_PATH,
+        message: `This block's conditions check the ${recordOf(source)}, which is decided on each visit, so the block is left out of the page.`,
+      };
+}
+
+/** The problem of conditions on a record the page does not have. */
+function missingSource(source: ConditionSource): ConditionProblem {
+  const record = recordOf(source);
+  return {
+    code: "condition-source-unavailable",
+    path: CONDITIONS_PATH,
+    message: `This block's conditions check the ${record}, and this page has no ${record} to check, so the block is left out.`,
+  };
 }
 
 const HIDDEN_BY_DEFAULT: ConditionEvaluation = { shown: false, issues: [] };
@@ -941,8 +971,14 @@ export function canonicalConditions(conditions: unknown): {
 export interface ConditionJudgement {
   /** The schema; absent, conditions are judged by their operators only. */
   readonly fields?: ListFieldSource;
-  /** The collection of the entry the page shows, for a block outside a list. */
-  readonly entryCollection?: string;
+  /**
+   * The collection of the entry the page shows, for a block outside a list.
+   * `null` when the page is known to be no collection's entry (a Single's),
+   * so a condition on its entry can never be checked and is refused; absent
+   * when the page is not known, and such a condition is judged by its
+   * operator alone.
+   */
+  readonly entryCollection?: string | null;
   /**
    * The document's stored forms. A problem one of them already holds, on the
    * same block, is a warning: a condition stored before a field was hidden
@@ -961,72 +997,149 @@ interface ConditionFinding {
   readonly nodeId: string;
   readonly code: ConditionIssueCode;
   readonly message: string;
+  /** What the problem is about, apart from where it sits or how it reads. */
+  readonly identity: string;
 }
 
 /**
- * Whether stored conditions are readable as groups of single-field
- * conditions, for the validator's older shape check to tell a field path
- * apart from the shapes it already refuses.
+ * The codes only the schema or the page's host can decide, so a caller that
+ * judges a document by its shape first, and against the schema after, can
+ * tell the second judgement's own findings apart.
  *
  * @experimental Settles with the editor's condition controls.
  */
-export function conditionsReadable(conditions: unknown): boolean {
-  return readGroups(conditions) !== undefined;
+export const CONDITION_FIELD_CODES: ReadonlySet<string> =
+  new Set<ConditionIssueCode>([
+    "condition-field-unknown",
+    "condition-field-protected",
+    "condition-unsuited",
+    "condition-source-unavailable",
+  ]);
+
+/** Where a block's conditions read: its source, and that source's collection. */
+interface ConditionScope {
+  readonly source: ConditionSource;
+  /** `null` when the page has no such record; `undefined` when not known. */
+  readonly collection: string | null | undefined;
+}
+
+/**
+ * Whether stored conditions are well formed to the validator's older shape
+ * check, an OR-array of AND-arrays of `{field, op}` with string members,
+ * which reports every other shape as `invalid-visibility`.
+ */
+function looselyShaped(conditions: unknown): boolean {
+  return (
+    Array.isArray(conditions) &&
+    // Array.from reads a hole as undefined, which `every` would skip.
+    Array.from(conditions).every(
+      group =>
+        Array.isArray(group) &&
+        Array.from(group).every(
+          condition =>
+            isPlainRecord(condition) &&
+            typeof condition.field === "string" &&
+            typeof condition.op === "string"
+        )
+    )
+  );
+}
+
+/**
+ * A stable text for a stored value, so the same condition stored again is
+ * the same problem however its label or place reads.
+ */
+function valueIdentity(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return describeValue(value);
+  }
+}
+
+/** Every problem of one node's conditions, judged at save. */
+function nodeProblems(
+  groups: readonly (readonly StoredCondition[])[],
+  scope: ConditionScope,
+  judgement: ConditionJudgement
+): { problem: ConditionProblem; identity: string }[] {
+  const registry = judgement.registry ?? CONDITION_REGISTRY;
+  // The same whole-node checks the evaluator makes, so the save refuses what
+  // the page would hide.
+  const whole =
+    countProblem(groups) ??
+    sourceProblem(scope.source, registry) ??
+    (scope.collection === null ? missingSource(scope.source) : undefined);
+  if (whole !== undefined) return [{ problem: whole, identity: "" }];
+  const fields =
+    typeof scope.collection === "string"
+      ? judgement.fields?.fieldsOf(scope.collection)
+      : undefined;
+  return groups.flat().flatMap(stored => {
+    const judged = judgeCondition(stored, fields, registry);
+    if (judged === undefined || !isProblem(judged)) return [];
+    const identity = `${stored.field}\u0000${String(stored.op)}\u0000${valueIdentity(stored.value)}`;
+    return [{ problem: judged, identity }];
+  });
 }
 
 /** The findings about one gated node's conditions, judged at save. */
 function nodeFindings(
   node: Readonly<Record<string, unknown>>,
   path: string,
-  collection: string | undefined,
+  scope: ConditionScope,
   judgement: ConditionJudgement
 ): ConditionFinding[] {
   const envelope = node.visibility;
-  const groups = isPlainRecord(envelope)
-    ? readGroups(envelope.conditions)
-    : undefined;
-  // An unreadable shape is the validator's older shape check's to report.
-  if (groups === undefined) return [];
-  const registry = judgement.registry ?? CONDITION_REGISTRY;
-  const fields =
-    collection === undefined
-      ? undefined
-      : judgement.fields?.fieldsOf(collection);
-  const count = groups.reduce((sum, group) => sum + group.length, 0);
-  const problems: ConditionProblem[] =
-    count > CONDITION_MAX
-      ? [
-          {
-            code: "condition-too-many",
-            path: CONDITIONS_PATH,
-            message: `This block has ${String(count)} conditions, and a block may have ${String(CONDITION_MAX)}. Remove some.`,
-          },
-        ]
-      : groups.flat().flatMap(stored => {
-          const judged = judgeCondition(stored, fields, registry);
-          return judged !== undefined && isProblem(judged) ? [judged] : [];
-        });
+  const conditions = isPlainRecord(envelope) ? envelope.conditions : undefined;
+  // A shape the older check refuses is reported there as invalid-visibility.
+  if (!looselyShaped(conditions)) return [];
+  const groups = readGroups(conditions);
+  const found =
+    groups === undefined
+      ? [{ problem: MALFORMED, identity: "" }]
+      : nodeProblems(groups, scope, judgement);
   const nodeId = typeof node.id === "string" ? node.id : "";
-  return problems.map(problem => ({
+  return found.map(({ problem, identity }) => ({
     nodeId,
     code: problem.code,
     message: problem.message,
     path: `${path}${problem.path}`,
+    identity,
   }));
 }
 
-/** One node on the walk's stack, with the collection its conditions read. */
+/** One node on the walk's stack, with where its conditions read. */
 interface ConditionVisit {
   readonly node: unknown;
   readonly path: string;
-  readonly collection: string | undefined;
+  readonly scope: ConditionScope;
+}
+
+/**
+ * Where a child in `slot` of `node` reads. Only a list's per-entry slot is
+ * drawn once per entry, so only it reads the list's item; its empty state,
+ * like every other slot, reads what the list itself reads.
+ */
+function scopeIn(
+  node: Readonly<Record<string, unknown>>,
+  slot: string,
+  scope: ConditionScope
+): ConditionScope {
+  if (node.type !== COLLECTION_LIST_TYPE || slot !== LIST_ENTRY_SLOT) {
+    return scope;
+  }
+  return {
+    source: "item",
+    collection: readListQuery(node.props).query.collection,
+  };
 }
 
 /** The children of a node's slots, last first, for a stack to visit in order. */
 function childVisits(
   node: Readonly<Record<string, unknown>>,
   path: string,
-  collection: string | undefined
+  scope: ConditionScope
 ): ConditionVisit[] {
   const slots = node.slots;
   if (!isPlainRecord(slots)) return [];
@@ -1034,11 +1147,12 @@ function childVisits(
   for (const name of Object.keys(slots).reverse()) {
     const children = slots[name];
     if (!Array.isArray(children)) continue;
+    const inner = scopeIn(node, name, scope);
     for (let index = children.length - 1; index >= 0; index -= 1) {
       visits.push({
         node: children[index],
         path: pointer(pointer(`${path}/slots`, name), index),
-        collection,
+        scope: inner,
       });
     }
   }
@@ -1047,8 +1161,8 @@ function childVisits(
 
 /**
  * Every finding about the conditions in a forest, in document order. A block
- * inside a list reads the list's item, every other block the page's entry.
- * Iterative and bounded, reading only plain records.
+ * in a list's per-entry slot reads the list's item, every other block the
+ * page's entry. Iterative and bounded, reading only plain records.
  */
 function walkConditionFindings(
   nodes: readonly unknown[],
@@ -1056,12 +1170,16 @@ function walkConditionFindings(
 ): ConditionFinding[] {
   const findings: ConditionFinding[] = [];
   let left = judgement.maxNodes ?? Number.MAX_SAFE_INTEGER;
+  const page: ConditionScope = {
+    source: "entry",
+    collection: judgement.entryCollection,
+  };
   const stack: ConditionVisit[] = [];
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     stack.push({
       node: nodes[index],
       path: pointer("/nodes", index),
-      collection: judgement.entryCollection,
+      scope: page,
     });
   }
   for (
@@ -1070,17 +1188,12 @@ function walkConditionFindings(
     visit = stack.pop()
   ) {
     left -= 1;
-    const { node, path } = visit;
+    const { node, path, scope } = visit;
     if (!isPlainRecord(node)) continue;
     if (isConditionGated(node)) {
-      findings.push(...nodeFindings(node, path, visit.collection, judgement));
+      findings.push(...nodeFindings(node, path, scope, judgement));
     }
-    // A list's children are drawn once per item, so they read its item.
-    const inner =
-      node.type === COLLECTION_LIST_TYPE
-        ? readListQuery(node.props).query.collection
-        : visit.collection;
-    stack.push(...childVisits(node, path, inner));
+    stack.push(...childVisits(node, path, scope));
   }
   return findings;
 }

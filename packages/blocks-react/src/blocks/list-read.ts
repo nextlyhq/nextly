@@ -309,7 +309,7 @@ async function entryRelatedIds(
   if (ctx.entry === null) {
     return {
       problem:
-        "This page shows no entry, so it has no related entries to list.",
+        "This page isn't an entry in a collection, so it has no related entries to show.",
     };
   }
   const id = ctx.entry.id;

@@ -1313,6 +1313,7 @@ export {
   COLLECTION_LIST_TYPE,
   isListDay,
   isListFilterOp,
+  LIST_ENTRY_SLOT,
   listDayAfter,
   LIST_FIELD_CODES,
   LIST_FILTER_OPS,
@@ -1322,6 +1323,8 @@ export {
   LIST_FIELD_KINDS,
   LIST_KIND_OPS,
   LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
   LIST_MAX_VALUES,
   isListFieldKind,
   listFieldKind,
@@ -1329,6 +1332,7 @@ export {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  outerListOf,
   readListQuery,
 } from "./list-query";
 
@@ -1336,6 +1340,7 @@ export {
 // classes, the evaluator the renderer asks, and their save-time judgement.
 export {
   canonicalConditions,
+  CONDITION_FIELD_CODES,
   CONDITION_ISSUE_CODES,
   CONDITION_KIND_OPS,
   CONDITION_MAX,
