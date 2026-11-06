@@ -1155,6 +1155,14 @@ export interface PinnedExpectation {
   readonly expect: StoredExpectation;
   /** Set once the expectation held under the row lock of the write's own transaction. */
   checked: boolean;
+  /**
+   * The write is made whole or not at all: its field-access pass refuses it
+   * rather than leave out, or keep as stored, any field it writes (see
+   * {@link fieldAccessPass}). Set for a write made under field rules.
+   */
+  readonly whole?: boolean;
+  /** Set once the write's field-access pass judged it whole. */
+  judgedWhole?: boolean;
 }
 
 /**
@@ -1178,6 +1186,54 @@ export function expectStoredValue(
 }
 
 /**
+ * Run `pass`, a write path's one field-access pass over `data` (the data as
+ * its hooks left it), for the write called with `context`.
+ *
+ * Field access takes out of an ordinary update, silently, a field the writer
+ * may not update, and keeps a denied value inside a container as stored, then
+ * writes the rest. A conditional write registered as whole (`whole`) must not
+ * land so: it would be reported as made while the field it rewrites never
+ * changed. So for that write, any field of `data` the pass took out or changed
+ * refuses it with `FORBIDDEN`, before anything is written. The refusal comes
+ * from the very pass that would have dropped the field, after every hook, so
+ * a hook cannot make it judge other data than the write's. Every other write
+ * runs the pass alone, exactly as before.
+ */
+export async function fieldAccessPass(
+  context: Record<string, unknown> | undefined,
+  document: ExpectedDocument,
+  data: Record<string, unknown>,
+  pass: () => Promise<void>
+): Promise<void> {
+  const pin = context === undefined ? undefined : expectations.get(context);
+  if (pin?.whole !== true || !sameDocument(pin.document, document)) {
+    await pass();
+    return;
+  }
+  const sent = new Map(
+    Object.entries(data).map(([name, value]) => [name, JSON.stringify(value)])
+  );
+  await pass();
+  const cut = [...sent]
+    .filter(
+      ([name, value]) => !(name in data) || JSON.stringify(data[name]) !== value
+    )
+    .map(([name]) => name);
+  if (cut.length > 0) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "conditional-write-field-refused",
+        kind: document.kind,
+        slug: document.slug,
+        ...(document.id === undefined ? {} : { id: document.id }),
+        fields: cut,
+      },
+    });
+  }
+  pin.judgedWhole = true;
+}
+
+/**
  * Refuse, by throwing, a write whose caller registered an expectation for
  * `context` that no longer holds; nothing happens for any other write. Called
  * by a write path inside its transaction, once it holds the entry's row lock
@@ -1197,6 +1253,19 @@ export async function holdStoredExpectation(
 ): Promise<void> {
   const pin = context === undefined ? undefined : expectations.get(context);
   if (pin === undefined || !sameDocument(pin.document, document)) return;
+  // A write that must be made whole, whose path never ran its field-access
+  // pass through `fieldAccessPass`, was never judged whole: refused under the
+  // lock, so it rolls back rather than landing unjudged.
+  if (pin.whole === true && pin.judgedWhole !== true) {
+    refused.refusal = NextlyError.internal({
+      logContext: {
+        reason: "conditional-write-fields-not-judged",
+        kind: document.kind,
+        slug: document.slug,
+      },
+    });
+    throw refused.refusal;
+  }
   refused.refusal = await storedExpectationRefusal(
     pin,
     {

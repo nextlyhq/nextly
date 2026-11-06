@@ -316,6 +316,17 @@ describe.each(getConfiguredTestDialects())(
         nextly: ">=0.0.0",
         contributes: { fieldTypes: [DOC_TYPE] },
         init(ctx) {
+          // A site's update hook that seals the body it is sent, which the
+          // body's own update rule then refuses: what the rule judges is the
+          // data as the hook left it.
+          ctx.hooks.on("beforeUpdate", "hookgated", hook => {
+            const data = hook.data as Record<string, unknown> | undefined;
+            if (data === undefined || !("body" in data)) return data;
+            return {
+              ...data,
+              body: { ...(data.body as Record<string, unknown>), sealed: true },
+            };
+          });
           // A site's collection-level read hook that removes a field from
           // every ordinary read.
           for (const slug of ["hooked", "worded"]) {
@@ -440,6 +451,23 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A body whose update rule refuses a sealed value, which only the
+            // collection's own update hook seals.
+            slug: "hookgated",
+            fields: [
+              { name: "title", type: "text" },
+              {
+                name: "body",
+                type: "doc",
+                access: {
+                  update: ({ data }: { data?: Record<string, unknown> }) =>
+                    (data?.body as { sealed?: unknown } | undefined)?.sealed !==
+                    true,
+                },
+              },
+            ],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -513,6 +541,7 @@ describe.each(getConfiguredTestDialects())(
         "grouped",
         "guarded",
         "locked",
+        "hookgated",
         "staged",
         "stagedwords",
       ];
@@ -2234,6 +2263,52 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("refuses a write whose own update hook leaves it a field the field update rule refuses, and writes nothing", async () => {
+        const id = await created("hookgated", { title: "t", body: { v: 0 } });
+        const entry = { collection: "hookgated", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "hookgated",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: the data as sent passes the rule, and the hook's sealed
+        // body does not, so the ordinary update drops the body silently and
+        // writes the title.
+        await t.nextly.update({
+          collection: "hookgated",
+          id,
+          data: { title: "ordinary", body: { v: "ordinary" } },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
       it("refuses a write a field update rule would leave its field out of, whoever read it, and writes nothing", async () => {
         const id = await created("locked", { title: "t", body: { v: 0 } });
         const entry = { collection: "locked", id };
@@ -2262,28 +2337,31 @@ describe.each(getConfiguredTestDialects())(
           value: { v: 0 },
         });
 
-        // The field written, or only expected; as the caller alone, or with
-        // the expectation the system's.
+        // As the caller alone, or with the expectation the system's.
         for (const identity of [editor, checked(editor)]) {
-          for (const data of [
-            { title: "conditional", body: { v: "conditional" } },
-            { title: "conditional" },
-          ]) {
-            const refusal = await rejectionOf(
-              updateIfUnchanged(identity, {
-                ...entry,
-                data,
-                expect: { field: "body", form: "published", hash },
-              })
-            );
-            expect(NextlyError.isForbidden(refusal)).toBe(true);
-          }
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
         }
         expect(await titleOf()).toBe("ordinary");
         expect(await systemValue(entry, "body")).toEqual({
           kind: "value",
           value: { v: 0 },
         });
+
+        // CONTROL: a field the write only expects is not written, so no rule
+        // takes it out; what it writes lands, judged whole.
+        await updateIfUnchanged(checked(editor), {
+          ...entry,
+          data: { title: "expected only" },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await titleOf()).toBe("expected only");
 
         // CONTROL: the system, which no field rule judges, writes the field.
         await updateIfUnchanged(SYSTEM, {

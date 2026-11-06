@@ -329,10 +329,17 @@ describe("a working draft that moves between the live read and the draft read", 
     id: "n1",
     path: ["content"],
   };
-  const reader = () =>
+  /** The reader over a row whose version each read gives in turn, or none. */
+  const reader = (versions: string[] = []) =>
     siteHostReader({
       ...siteWith({ fields: [] }),
-      nextly: async () => ({ findByID: async () => ({ id: "n1" }) }) as never,
+      nextly: async () =>
+        ({
+          findByID: async () => {
+            const rev = versions.length > 1 ? versions.shift() : versions[0];
+            return { id: "n1", ...(rev === undefined ? {} : { _rev: rev }) };
+          },
+        }) as never,
     });
   /** A found stored read of `content`, holding `text`, in this lifecycle. */
   const found = (text: string, workingDraft: boolean) => ({
@@ -370,6 +377,37 @@ describe("a working draft that moves between the live read and the draft read", 
     expect(stored.forms).toEqual(["published", "draft"]);
     expect(read.draft).toEqual({ kind: "value", value: { text: "draft" } });
     expect(read.published).toEqual({ kind: "value", value: { text: "live" } });
+  });
+
+  it("reads the host again when the row's version moved between the live read and the draft read", async () => {
+    // A draft published and a new one saved between the reads: both report a
+    // draft pending in the same state, and only the version tells.
+    script(
+      found("live", true),
+      found("new draft", true),
+      found("live now", true),
+      found("new draft", true)
+    );
+
+    const read = await reader(["1", "2"])(host);
+
+    expect(stored.forms).toEqual(["published", "draft", "published", "draft"]);
+    expect(read.published).toEqual({
+      kind: "value",
+      value: { text: "live now" },
+    });
+    expect(read.draft).toEqual({ kind: "value", value: { text: "new draft" } });
+    expect(read.rev).toBe("2");
+  });
+
+  it("CONTROL: keeps a pair read over one version, and sends that version", async () => {
+    script(found("live", true), found("draft", true));
+
+    const read = await reader(["5"])(host);
+
+    expect(stored.forms).toEqual(["published", "draft"]);
+    expect(read.draft).toEqual({ kind: "value", value: { text: "draft" } });
+    expect(read.rev).toBe("5");
   });
 
   it("reads the host again when the document is gone by the draft read", async () => {

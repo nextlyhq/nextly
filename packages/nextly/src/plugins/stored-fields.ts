@@ -54,7 +54,6 @@ import { singleDocumentEditable } from "../domains/singles/services/single-docum
 import { fieldsCarryingReadRules } from "../domains/versions/component-read-access";
 import { NextlyError } from "../errors";
 import { resolveStatusFilter } from "../lib/status-filter";
-import { applyFieldWriteAccess } from "../shared/lib/field-level-registry";
 
 import type { PluginStoredValue } from "./contributions";
 import type { PluginRouteIdentity } from "./routes/route-types";
@@ -427,10 +426,10 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  *
  * The update is the ordinary one, made as the person `identity` names under
  * access rules: refused where they may not update the document (or publish
- * it, where `data` publishes), and refused with `FORBIDDEN` where a field
- * update rule would leave out of it any field it writes or the field it
- * expects, which an ordinary update would drop silently and write the rest
- * without. Made as the system, it is an
+ * it, where `data` publishes), and refused with `FORBIDDEN` where the
+ * update's field-access pass, after its hooks, would leave out of it, or keep
+ * as stored, any field it writes: an ordinary update drops such a field
+ * silently and writes the rest. Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
  * lock, against the value as committed then; where it no longer hashes to
@@ -469,26 +468,26 @@ export async function updateIfUnchanged(
   // The read half first: a precondition, so before anything is written. Made
   // as whoever read the expectation, which is the caller unless the system
   // read it for them.
-  const read = await readStoredFields(checker, {
+  await readStoredFields(checker, {
     ...targetOf(document),
     fields: [expected.field],
     form: expected.form,
     ...inLocale,
   });
-  // Also a precondition: a person's write is made whole or not at all.
-  if (person !== undefined) {
-    await refuseDroppedFields(person, document, language.locale, {
-      data: named.data,
-      field: expected.field,
-      stored: read.kind === "found" ? read.values[expected.field] : undefined,
-    });
-  }
 
   // The expectation travels with this one write: registered against a
   // context object no other call is handed, which the write path receives
   // as its own and its hooks only as a copy.
   const context: Record<string, unknown> = {};
-  const pin = { document, expect: expected, checked: false };
+  // A person's write is judged by field rules, which an ordinary update lets
+  // drop a field silently: theirs is made whole or refused, by the update's
+  // own field-access pass. The system's is judged by none.
+  const pin = {
+    document,
+    expect: expected,
+    checked: false,
+    ...(person === undefined ? {} : { whole: true }),
+  };
   expectStoredValue(context, pin);
   // As the person under access rules, or as the system, which the Direct
   // API's own `overrideAccess: true` call is.
@@ -533,81 +532,6 @@ export async function updateIfUnchanged(
       },
     });
   }
-}
-
-/**
- * Refuse, with `FORBIDDEN`, a person's conditional write that the field update
- * rules would not make whole: one whose data, or the field it expects, holds a
- * field those rules would take out or keep at its stored value.
- *
- * An ordinary update does that silently, removing a top-level field the
- * writer may not update and keeping a nested one as stored, and writes the
- * rest. A conditional write that landed so would be reported as made while
- * its field never changed, so it is refused before anything is written. The
- * rules are asked through `applyFieldWriteAccess`, the one judgment the update
- * itself makes, over a copy of what the write sends, in the language the
- * update is judged in; the expected field, where the data leaves it out, is
- * judged as written back with the value read. Anything the rules change in
- * that copy refuses the write.
- */
-async function refuseDroppedFields(
-  person: PluginRouteIdentity,
-  document: ReturnType<typeof documentOf>,
-  locale: string | undefined,
-  write: {
-    readonly data: Record<string, unknown>;
-    readonly field: string;
-    readonly stored: PluginStoredValue | undefined;
-  }
-): Promise<void> {
-  const sent: Record<string, unknown> =
-    write.field in write.data
-      ? write.data
-      : {
-          ...write.data,
-          [write.field]:
-            write.stored?.kind === "value" ? write.stored.value : null,
-        };
-  let judged: Record<string, unknown>;
-  try {
-    judged = structuredClone(sent);
-  } catch {
-    // A value that cannot be copied cannot be judged apart from the write.
-    throw NextlyError.invalidInput({
-      message: "A conditional write's data must be plain values.",
-    });
-  }
-  const before = new Map(
-    Object.entries(judged).map(([name, value]) => [name, JSON.stringify(value)])
-  );
-  await withRuleLanguage(registeredWriteLanguagesFor(locale), () =>
-    applyFieldWriteAccess({
-      kind: document.kind,
-      slug: document.slug,
-      data: judged,
-      operation: "update",
-      user: person.user,
-      ...(person.authenticatedScope === undefined
-        ? {}
-        : { authenticatedScope: person.authenticatedScope }),
-      overrideAccess: false,
-      ...(document.kind === "collection" ? { id: document.id } : {}),
-    })
-  );
-  const dropped = [...before].filter(
-    ([name, value]) =>
-      !(name in judged) || JSON.stringify(judged[name]) !== value
-  );
-  if (dropped.length === 0) return;
-  throw NextlyError.forbidden({
-    logContext: {
-      reason: "conditional-write-field-refused",
-      kind: document.kind,
-      slug: document.slug,
-      userId: person.user.id,
-      fields: dropped.map(([name]) => name),
-    },
-  });
 }
 
 /**

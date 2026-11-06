@@ -2474,29 +2474,38 @@ export class SingleMutationService extends BaseService {
           locale,
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
-      await keepDeniedAtStoredOnUpdate({
-        data: currentData,
-        stored: await storedFieldGroupsIn(options.locale),
-        storedIn: {
-          locales: storedLocales,
-          read: locale => storedFieldGroupsIn(locale),
-        },
-        fields: fieldConfigs,
-        source: this.fieldGroupDataService,
-        access: singleWriteAccess,
-        ownRules: document =>
-          applyFieldWriteAccess({
-            kind: "single",
-            slug,
-            data: document,
-            operation: "update",
-            user: options.user,
-            authenticatedScope: options.authenticatedScope,
-            overrideAccess: options.overrideAccess,
-            id: documentId,
-            grants: writeGrants,
-          }),
-      });
+      const storedForAccess = await storedFieldGroupsIn(options.locale);
+      // A conditional write that must be made whole is refused by this same
+      // pass instead, where it would take out or keep any field it writes.
+      await storedFieldRead.fieldAccessPass(
+        options.context,
+        { kind: "single", slug },
+        currentData,
+        () =>
+          keepDeniedAtStoredOnUpdate({
+            data: currentData,
+            stored: storedForAccess,
+            storedIn: {
+              locales: storedLocales,
+              read: locale => storedFieldGroupsIn(locale),
+            },
+            fields: fieldConfigs,
+            source: this.fieldGroupDataService,
+            access: singleWriteAccess,
+            ownRules: document =>
+              applyFieldWriteAccess({
+                kind: "single",
+                slug,
+                data: document,
+                operation: "update",
+                user: options.user,
+                authenticatedScope: options.authenticatedScope,
+                overrideAccess: options.overrideAccess,
+                id: documentId,
+                grants: writeGrants,
+              }),
+          })
+      );
       await runFieldHooks({
         kind: "single",
         slug,

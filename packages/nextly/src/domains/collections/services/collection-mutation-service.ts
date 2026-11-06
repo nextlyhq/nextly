@@ -416,7 +416,11 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
-import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
+import {
+  entryWriteContext,
+  fieldAccessPass,
+  holdStoredExpectation,
+} from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -13396,23 +13400,36 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
-        data: finalData,
-        storedId: String(existingEntry.id),
-        collectionName: params.collectionName,
-        stored: await this.storedForCarryForward({
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          tableName,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          locale: params.locale,
-          overrideAccess: params.overrideAccess,
-        }),
-        tableName,
+      // A conditional write that must be made whole is refused by this same
+      // pass instead, where it would take out or keep any field it writes.
+      const storedForAccess = await this.storedForCarryForward({
+        row: existingEntry as Record<string, unknown>,
         fields,
-        params,
+        tableName,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        overrideAccess: params.overrideAccess,
       });
+      await fieldAccessPass(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData,
+        () =>
+          this.keepDeniedFieldsAtStored({
+            data: finalData,
+            storedId: String(existingEntry.id),
+            collectionName: params.collectionName,
+            stored: storedForAccess,
+            tableName,
+            fields,
+            params,
+          })
+      );
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).

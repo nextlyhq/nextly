@@ -523,10 +523,14 @@ export function siteHostReader(
       host.path.length === 0
         ? await scannedFields(site, host)
         : host.path.slice(0, 1);
-    const forms = await storedForms(host, fields);
-    // The row's version, the one thing taken from a Direct API read: the
-    // write sends it back, so a save since the read refuses it.
-    const rev = documentVersionOf(await readRow(await site.nextly(), host));
+    // The row's version, the one thing taken from a Direct API read. Read
+    // before the stored reads and after them: a save between them moves it,
+    // so the forms are read again. The write sends the one read first, so a
+    // save since refuses it.
+    const nextly = await site.nextly();
+    const { rev, ...forms } = await storedForms(host, fields, async () =>
+      documentVersionOf(await readRow(nextly, host))
+    );
     return { ...forms, ...(rev === undefined ? {} : { rev }) };
   };
 }
@@ -561,7 +565,8 @@ export async function documentHasWorkingDraft(
 
 /**
  * How many times a host's forms are read from the start when its working
- * draft is published or discarded between the live read and the draft read.
+ * draft is published or discarded, or the row saved, between the live read
+ * and the draft read.
  */
 const FORM_READS = 3;
 
@@ -575,10 +580,12 @@ const FORM_READS = 3;
  */
 async function storedForms(
   host: HostAddress,
-  fields: readonly string[]
-): Promise<Omit<HostRead, "rev">> {
+  fields: readonly string[],
+  /** The row's version now, `undefined` from a server that issues none. */
+  revision: () => Promise<string | undefined>
+): Promise<HostRead> {
   for (let attempt = 0; attempt < FORM_READS; attempt += 1) {
-    const forms = await storedFormsOnce(host, fields);
+    const forms = await storedFormsOnce(host, fields, revision);
     if (forms !== undefined) return forms;
   }
   throw new NextlyError({
@@ -589,21 +596,29 @@ async function storedForms(
 }
 
 /**
- * One reading of a host's stored forms, or `undefined` where the working
- * draft the live read found was gone, or the live row moved, by the draft
+ * One reading of a host's stored forms, with the row's version read before
+ * it, or `undefined` where the row moved between the live read and the draft
  * read.
  *
- * The draft read falls back to the live row once no working draft is pending,
- * so a draft discarded or published after the live read answers the live
- * value in the draft's place. Taken as the draft, that value would be saved
- * as one, recreating a draft its author just discarded. Only a draft read
- * that itself reports the draft still pending, over the same live state, is
- * the draft; anything else is read again.
+ * The two reads are two snapshots, so the row can change between them. The
+ * draft read falls back to the live row once no working draft is pending, so
+ * a draft discarded or published after the live read answers the live value
+ * in the draft's place; taken as the draft, it would be saved as one,
+ * recreating a draft its author just discarded. And a draft published, then
+ * a new one saved, leaves both reads reporting a pending draft in the same
+ * state, pairing the new draft with a live value no longer live. The row's
+ * version covers its lifecycle and its held draft, so it is read before the
+ * live read and again after the draft read: only a pair over one version,
+ * whose draft read still reports the draft pending in the same live state, is
+ * the host's; anything else is read again.
  */
 async function storedFormsOnce(
   host: HostAddress,
-  fields: readonly string[]
-): Promise<Omit<HostRead, "rev"> | undefined> {
+  fields: readonly string[],
+  revision: () => Promise<string | undefined>
+): Promise<HostRead | undefined> {
+  const before = await revision();
+  const rev = before === undefined ? {} : { rev: before };
   const live = await readStored(host, fields, "published");
   if (live.kind === "absent") {
     return { published: { kind: "absent" }, draft: null, liveState: null };
@@ -614,6 +629,7 @@ async function storedFormsOnce(
       published: hostValue(live, host, fields),
       draft: null,
       liveState: lifecycle.publicState,
+      ...rev,
     };
   }
   const draft = await readStored(host, fields, "draft");
@@ -622,10 +638,12 @@ async function storedFormsOnce(
   if (!now.workingDraft || now.publicState !== lifecycle.publicState) {
     return undefined;
   }
+  if ((await revision()) !== before) return undefined;
   return {
     published: hostValue(live, host, fields),
     draft: hostValue(draft, host, fields),
     liveState: lifecycle.publicState,
+    ...rev,
   };
 }
 
