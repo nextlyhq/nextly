@@ -119,8 +119,8 @@ const ENTRY_ADDRESS_FIELD = "slug";
  * entry's part of its address is its `slug` text field, so a collection
  * without one has nothing to serve an entry at. The page builder's own
  * collections are refused: a page is served as itself, and the stores pages
- * are built from are never served at all. So is a collection the site keeps
- * for its own bookkeeping.
+ * are built from are never served at all. So is a collection kept out of the
+ * admin, as a plugin's private bookkeeping is.
  */
 export async function templateCollectionProblem(
   collection: string,
@@ -131,8 +131,14 @@ export async function templateCollectionProblem(
     return `"${collection}" belongs to the page builder, and its documents are not drawn with a template.`;
   }
   const record = await read(collection);
-  if (record === null || record.internal === true) {
+  if (record === null) {
     return `There is no collection "${collection}" to give a template.`;
+  }
+  // A plugin's private collection is recorded as hidden from the admin, which
+  // is the one trace of it the registry keeps; a collection kept out of the
+  // admin is no one's content to design an entry page for.
+  if (record.internal === true || recordOf(record.admin)?.hidden === true) {
+    return `The collection "${collection}" is kept out of the admin, so its entries are not drawn with a template.`;
   }
   return hasAddressField(record)
     ? null

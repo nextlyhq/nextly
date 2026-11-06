@@ -21,7 +21,10 @@
  * @experimental Settles when collection templates ship.
  * @module templates/template-actions-route
  */
-import { templateActionSchema } from "@nextlyhq/builder/ops";
+import {
+  templateActionJsonSchema,
+  templateActionSchema,
+} from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
@@ -41,6 +44,7 @@ import {
   parsedWith,
   readJsonBody,
   readOrNull,
+  requestJsonSchema,
   type ActionAnswer,
   type CompositionRouteContext,
 } from "../composition-route-kit";
@@ -72,6 +76,11 @@ const TemplateActionEnvelope = z.strictObject({
   action: z.unknown(),
   dryRun: z.boolean().optional(),
 });
+
+/** The JSON Schema of a template action request, as the route parses it. */
+export function templateActionRequestJsonSchema(): Record<string, unknown> {
+  return requestJsonSchema(TemplateActionEnvelope, templateActionJsonSchema());
+}
 
 /**
  * A template action request read from outside input: a route body, or what a
@@ -225,10 +234,17 @@ async function publishTemplate(
 ): Promise<ActionAnswer<TemplateActionResult>> {
   const templates = guard.templatesCollection;
   // Asked of any template: whether the caller may publish THIS one is the
-  // write's to decide, made as the caller against the row.
-  const by = await actingCaller(ctx, [["publish", templates]], {
-    anyEntry: true,
-  });
+  // write's to decide, made as the caller against the row. Reading it is
+  // asked too, since the action reads the template it publishes as the
+  // caller, to send its version back with the write.
+  const by = await actingCaller(
+    ctx,
+    [
+      ["read", templates],
+      ["publish", templates],
+    ],
+    { anyEntry: true }
+  );
   const stored = await readOrNull(async () =>
     (await getCachedNextly()).findByID({
       collection: templates,
@@ -362,7 +378,17 @@ function mayReadAsCaller(
     )) !== null;
 }
 
-/** A new template's name when the action gives none: after its collection. */
+/** The longest title a template action takes or makes. */
+const TITLE_MAX = 255;
+
+/** What a default title adds after the collection's name. */
+const TITLE_SUFFIX = " template";
+
+/**
+ * A new template's name when the action gives none: after its collection,
+ * held to the length a given title is, so a long collection label is cut
+ * rather than stored differently on each dialect.
+ */
 async function defaultTitle(
   ctx: TemplateActionsContext,
   collection: string
@@ -377,7 +403,10 @@ async function defaultTitle(
     typeof labels?.singular === "string" && labels.singular.trim() !== ""
       ? labels.singular.trim()
       : collection;
-  return `${singular} template`;
+  return `${[...singular]
+    .slice(0, TITLE_MAX - TITLE_SUFFIX.length)
+    .join("")
+    .trimEnd()}${TITLE_SUFFIX}`;
 }
 
 /** A refusal of the action as a whole, with the reasons given. */

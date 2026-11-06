@@ -108,9 +108,11 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "slug", unique: true }),
             ],
           }),
-          // Content with nowhere to serve an entry at: no slug field.
+          // A plugin-private collection: kept out of the admin, and so no
+          // content to design an entry page for.
           defineCollection({
             slug: "notes",
+            internal: true,
             fields: [text({ name: "title" })],
           }),
         ],
@@ -295,8 +297,7 @@ describe.each(getConfiguredTestDialects())(
       for (const [collection, message] of [
         [
           "notes",
-          'The collection "notes" has no text field named "slug", so its entries ' +
-            "have no address to be served at. Add one, then give it a template.",
+          'The collection "notes" is kept out of the admin, so its entries are not drawn with a template.',
         ],
         [
           "pages",
@@ -372,8 +373,7 @@ describe.each(getConfiguredTestDialects())(
       expect(dryRefused.body.item).toMatchObject({
         dryRun: true,
         refusals: [
-          'The collection "notes" has no text field named "slug", so its entries ' +
-            "have no address to be served at. Add one, then give it a template.",
+          'The collection "notes" is kept out of the admin, so its entries are not drawn with a template.',
         ],
       });
 

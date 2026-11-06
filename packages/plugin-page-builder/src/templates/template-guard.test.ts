@@ -135,9 +135,11 @@ describe("which collections may have a template", () => {
       schemaDefinition: { fields: [{ name: "slug", type: "text" }] },
     },
     notes: { slug: "notes", fields: [{ name: "slug", type: "textarea" }] },
+    // A plugin's private collection, as the registry records it: hidden,
+    // with the slug field every code-first collection is given.
     bookkeeping: {
       slug: "bookkeeping",
-      internal: true,
+      admin: { hidden: true },
       fields: [{ name: "slug", type: "text" }],
     },
   };
@@ -156,7 +158,7 @@ describe("which collections may have a template", () => {
       'There is no collection "ghosts" to give a template.'
     );
     expect(await templateCollectionProblem("bookkeeping", read, own)).toBe(
-      'There is no collection "bookkeeping" to give a template.'
+      'The collection "bookkeeping" is kept out of the admin, so its entries are not drawn with a template.'
     );
     expect(await templateCollectionProblem("notes", read, own)).toBe(
       'The collection "notes" has no text field named "slug", so its entries ' +
