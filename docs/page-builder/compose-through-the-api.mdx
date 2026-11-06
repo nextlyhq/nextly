@@ -173,6 +173,33 @@ variant made or changed), `warnings`, and, when a removed field emptied variants
 `prunedVariants`. A refused edit answers `422` with the planner's reason as the error
 code, such as `label-taken`.
 
+## Give a collection its template
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/actions
+Content-Type: application/json
+
+{ "action": { "kind": "create-template", "collection": "posts" }, "dryRun": true }
+```
+
+A template is a builder document of kind `template`, stored in the page builder's
+`templates` collection, that draws each entry of the collection it names. A collection
+has one template, whatever its state: a second is refused when it is created, naming the
+first by its title, or by its id to someone who may not read it.
+
+| `kind`             | Fields                                  | Rights on templates         |
+| ------------------ | --------------------------------------- | --------------------------- |
+| `create-template`  | `collection`, and `title` and `publish` | **create**, and **publish** |
+| `publish-template` | `id`                                    | **read** and **publish**    |
+
+A template is created as a draft unless `publish` is set, and named after its collection
+unless `title` is given. A collection may have a template when it is content the admin
+shows and has a `slug` text field, its entries' part of their address. The page
+builder's own collections may not. A template's collection cannot be changed while that
+collection exists. A refused action answers `409` for a collection that already has a
+template and `422` for one that cannot have one; a dry run answers either as `refusals`.
+The answer holds the `template` as the write stored it.
+
 ## Other routes with a dry run
 
 - `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
@@ -206,7 +233,8 @@ const plan = planDefinitionAction(definition, action, {
 });
 ```
 
-`pageActionJsonSchema()` and `definitionActionJsonSchema()` give the same schemas as
+`pageActionJsonSchema()`, `definitionActionJsonSchema()` and `templateActionJsonSchema()`
+give the same schemas as
 JSON Schema, for a tool that registers them as inputs. The editor's planners are
 published there too: `planInsertPattern`, `planSaveAsPattern`, `planSaveAsComponent`,
 `planExposeProperty`, `planAddVariant` and the rest.
@@ -230,6 +258,9 @@ const composition = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[
 ] as CompositionService;
 
 const manifest = await composition.manifest(ctx);
+await composition.templateAction(ctx, {
+  action: { kind: "create-template", collection: "posts" },
+});
 const { message, item } = await composition.pageAction(ctx, {
   page: { collection: "pages", id: pageId },
   action: { kind: "choose-variant", instanceId, variant: "v-dark" },

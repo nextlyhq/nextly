@@ -92,6 +92,7 @@ export const CORE_PALETTE_ORDER: readonly string[] = [
   "core/image",
   "core/gallery",
   "core/embed",
+  "core/icon",
   // Interactive
   "core/button",
   "core/accordion",

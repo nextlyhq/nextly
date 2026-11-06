@@ -81,6 +81,10 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+import type {
+  InTransactionHandlerSet,
+  InTransactionPhaseInput,
+} from "../../../hooks/in-transaction-phase";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -1692,6 +1696,34 @@ function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
   return { ...draft, _isWorkingDraft: true };
 }
 
+/** The handler set of a write no in-transaction handler is registered for. */
+const NO_IN_TRANSACTION_HANDLERS: InTransactionHandlerSet = Object.freeze([]);
+
+/**
+ * What an update wrote, as an in-transaction handler is shown it: the pending
+ * draft, marked, when the edit was held as one, else the document the write
+ * left. One answer for both update paths.
+ */
+function writtenByUpdate(
+  updated: Record<string, unknown>,
+  draft: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  return draft ? markedDraft(draft) : updated;
+}
+
+/**
+ * What an update replaced, as an in-transaction handler is shown it: on a save
+ * that accumulated onto a working draft, that prior draft, marked, as the
+ * activity record and `afterUpdate` compare against; else the document before
+ * the write. One answer for both update paths.
+ */
+function replacedByUpdate<T>(
+  previous: T,
+  priorDraft: Record<string, unknown> | undefined
+): T | Record<string, unknown> {
+  return priorDraft ? markedDraft(priorDraft) : previous;
+}
+
 /**
  * The update's patch without the stamp the write adds to it: `updatedAt` is
  * set by the write, never sent, so a validator is not shown it as sent.
@@ -2512,10 +2544,14 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
       /** The locale this create's translatable values were written in, if any. */
       localeTag?: string;
+      /** The in-transaction handlers this write took, which will be run. */
+      inTransactionHandlers: InTransactionHandlerSet;
     }
   ): Promise<{
     eventRecorded: boolean;
     revalidationIntent: RevalidationIntent | undefined;
+    /** The created document in read shape, as the outbox event carries it. */
+    document: Record<string, unknown>;
   }> {
     const entryId = args.entry.id as string;
 
@@ -2550,7 +2586,10 @@ export class CollectionMutationService extends BaseService {
       // A curated `webhooks.emit` consumes the assembled document too — its
       // allowlist may include a component/m2m field — so assemble relations
       // even when the raw entry.* recording is opted out for this collection.
-      getWebhookEmitSpec("collection", args.collectionName) !== undefined;
+      getWebhookEmitSpec("collection", args.collectionName) !== undefined ||
+      // An in-transaction handler is handed the whole document, as on the
+      // create that opens its own transaction.
+      args.inTransactionHandlers.length > 0;
     const { documentParts: createdParts, document: createdDocument } =
       await this.readTxDocumentParts(tx, {
         collectionName: args.collectionName,
@@ -2670,6 +2709,7 @@ export class CollectionMutationService extends BaseService {
 
     return {
       eventRecorded,
+      document: createdDocument,
       revalidationIntent: buildEntryRevalidationIntent(
         args.collectionName,
         readRevalidateConfig(args.collection),
@@ -7526,6 +7566,10 @@ export class CollectionMutationService extends BaseService {
         data: componentFieldData,
         locale: params.locale,
       });
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -7847,6 +7891,18 @@ export class CollectionMutationService extends BaseService {
             ]
           );
         }
+
+        // Last in the transaction: the entry, its field groups, version,
+        // history and outbox event are all written, so a handler sees them
+        // and what it writes commits or rolls back with them.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "create",
+          id: entry.id as string,
+          data: createdDocument,
+          user: params.user,
+          context: sharedContext,
+        });
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -8891,6 +8947,178 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The hooks an update runs before anything is validated, in order:
+   * `beforeOperation` (which may replace the data), then the code-registered
+   * and the stored (admin-configured) `beforeUpdate` hooks, each handed the
+   * data the one before it left. Returns the data they leave; a hook that
+   * throws refuses the update. One implementation for an update and for a
+   * move of every language's status, so the two run the same hooks in the
+   * same order.
+   */
+  private async beforeUpdateHooks(args: {
+    collectionName: string;
+    entryId: string;
+    body: Record<string, unknown>;
+    /** The entry as stored, which `beforeUpdate` compares against. */
+    existingEntry: Record<string, unknown>;
+    user?: UserContext;
+    storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+    sharedContext: Record<string, unknown>;
+    requestFacts: ReturnType<typeof resolveRequestFacts>;
+  }): Promise<Record<string, unknown>> {
+    // Can modify the operation's arguments (id, data) or throw to abort.
+    const beforeOpArgs =
+      await this.hookService.hookRegistry.executeBeforeOperation({
+        collection: args.collectionName,
+        operation: "update",
+        args: { id: args.entryId, data: args.body },
+        user: args.user
+          ? { id: args.user.id, email: args.user.email }
+          : undefined,
+        context: args.sharedContext,
+        req: args.requestFacts,
+      });
+    const currentData =
+      (beforeOpArgs as BeforeOperationArgs)?.data ?? args.body;
+    const fromCode = await this.hookService.hookRegistry.execute(
+      "beforeUpdate",
+      this.hookService.buildHookContext({
+        collection: args.collectionName,
+        operation: "update" as const,
+        data: currentData,
+        originalData: args.existingEntry,
+        user: args.user,
+        context: args.sharedContext,
+        req: args.requestFacts,
+      })
+    );
+    const afterCodeHooks = (fromCode ?? currentData) as Record<string, unknown>;
+    // The stored hooks run after the code-registered ones, on what they left.
+    const fromStored = await this.hookService.storedHookExecutor.execute(
+      "beforeUpdate",
+      args.storedHooks,
+      this.hookService.buildPrebuiltHookContext({
+        collection: args.collectionName,
+        operation: "update",
+        data: afterCodeHooks,
+        queryDatabase: this.queryDatabaseFn,
+        user: args.user,
+        sharedContext: args.sharedContext,
+        req: args.requestFacts,
+      })
+    );
+    return (fromStored.data ?? afterCodeHooks) as Record<string, unknown>;
+  }
+
+  /**
+   * The hooks a status change of one language (`updateEntry` with a body of
+   * `status` alone) runs before it writes, run once for a move of every
+   * language: `beforeOperation`, the code and stored `beforeUpdate`, the
+   * fields' `beforeValidate`, the code and stored `beforeChange`, then the
+   * fields' `beforeChange`, in that order, each handed `{ status }` against
+   * the entry as stored. A hook that throws refuses the move before its
+   * transaction opens, so nothing changes in any language, and the refusal
+   * leaves the service as the same hook's refusal of one language does.
+   *
+   * Run outside the transaction, as `updateEntry` runs them: the transaction
+   * retries its closure on a version conflict, and a hook's effects outside
+   * this process could not be withdrawn by that retry's rollback.
+   *
+   * The move writes each language's status and nothing else, so what a hook
+   * makes of `data` is not written. A hook that takes `status` away or names
+   * another one is answered as a conflict rather than ignored: the write
+   * would otherwise report a move the hook had decided against.
+   */
+  private async lifecycleBeforeHooks(
+    direction: LifecycleDirection,
+    args: {
+      params: AllLocalesLifecycleParams;
+      /** The entry as stored, which a status change's hooks compare against. */
+      existingEntry: Record<string, unknown>;
+      collection: unknown;
+    }
+  ): Promise<
+    | { answer: CollectionServiceResult }
+    | {
+        ready: {
+          sharedContext: Record<string, unknown>;
+          requestFacts: ReturnType<typeof resolveRequestFacts>;
+          storedHooks: ReturnType<CollectionHookService["getStoredHooks"]>;
+        };
+      }
+  > {
+    const { params, existingEntry } = args;
+    const storedHooks = this.hookService.getStoredHooks(
+      args.collection as Record<string, unknown>
+    );
+    // One context for every hook of the move, before and after it, as an
+    // update shares one between its phases.
+    const sharedContext: Record<string, unknown> = { ...params.context };
+    const requestFacts = resolveRequestFacts(params.request);
+    const body: Record<string, unknown> = { status: direction.nextStatus };
+
+    const data = await this.beforeUpdateHooks({
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      body,
+      existingEntry,
+      user: params.user,
+      storedHooks,
+      sharedContext,
+      requestFacts,
+    });
+    await runFieldHooks({
+      kind: "collection",
+      slug: params.collectionName,
+      phase: "beforeValidate",
+      data,
+      operation: "update",
+      user: params.user,
+    });
+    await this.hookService.runBeforeChange({
+      collection: params.collectionName,
+      operation: "update",
+      data,
+      originalData: existingEntry,
+      storedHooks,
+      queryDatabase: this.queryDatabaseFn,
+      user: params.user,
+      sharedContext,
+      req: requestFacts,
+    });
+    await runFieldHooks({
+      kind: "collection",
+      slug: params.collectionName,
+      phase: "beforeChange",
+      data,
+      operation: "update",
+      user: params.user,
+    });
+    // An own `status: undefined` names no status, as an update reads it.
+    stripUndefinedStatus(data);
+    if (data.status !== direction.nextStatus) {
+      return {
+        answer: errorToServiceResult(
+          NextlyError.conflict({
+            reason: "state",
+            message:
+              `Moving every language to '${direction.nextStatus}' was ` +
+              `refused: after the collection's hooks ran, the write no ` +
+              `longer carries that status. Nothing was changed.`,
+            logContext: {
+              cause: "every-language-lifecycle-status-changed-by-hook",
+              collection: params.collectionName,
+            },
+          }),
+          { defaultMessage: "Failed to change every language's status" },
+          this.dialect
+        ),
+      };
+    }
+    return { ready: { sharedContext, requestFacts, storedHooks } };
+  }
+
+  /**
    * Move every language of an entry to `direction`'s status at once: the
    * main `status` and — when the collection has per-locale status — every
    * companion row's `_status`, in a single transaction.
@@ -8981,6 +9209,19 @@ export class CollectionMutationService extends BaseService {
         versionCheck,
         languagesTable
       );
+
+      // The hooks a status change of one language runs, run once for the
+      // move of every language: after the caller is known to be allowed to
+      // make it, and before anything is written, so a plugin's guard refuses
+      // this as it refuses that. A refusal thrown here is answered by the
+      // catch below with the hook's own status and message.
+      const hooks = await this.lifecycleBeforeHooks(direction, {
+        params,
+        existingEntry: existingEntry as Record<string, unknown>,
+        collection: publishCollection,
+      });
+      if ("answer" in hooks) return hooks.answer;
+      const { sharedContext, requestFacts, storedHooks } = hooks.ready;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -10082,52 +10323,76 @@ export class CollectionMutationService extends BaseService {
           });
         }
 
-        // The update hooks a publish of each promoted language alone runs, with
-        // its durable document: the collection's code-registered and stored
-        // `afterUpdate` hooks, then the fields' `afterChange`. A publish that
-        // puts a pending change live writes content, not only a status, so an
-        // integration that skips the earlier working-draft save sees it here.
-        if (promotedForHooks.length > 0) {
-          const storedHooks = this.hookService.getStoredHooks(
-            publishCollection as Record<string, unknown>
-          );
-          const requestFacts = resolveRequestFacts(undefined);
-          for (const promoted of promotedForHooks) {
-            const sharedContext: Record<string, unknown> = {};
-            await this.hookService.hookRegistry.execute(
-              "afterUpdate",
-              this.hookService.buildHookContext({
-                collection: params.collectionName,
-                operation: "update" as const,
-                data: promoted.data,
-                originalData: promoted.originalData ?? undefined,
-                user: params.user,
-                context: sharedContext,
-                req: requestFacts,
-              })
-            );
-            await this.hookService.storedHookExecutor.execute(
-              "afterUpdate",
-              storedHooks,
-              this.hookService.buildPrebuiltHookContext({
-                collection: params.collectionName,
-                operation: "update",
-                data: promoted.data,
-                queryDatabase: this.queryDatabaseFn,
-                user: params.user,
-                sharedContext,
-                req: requestFacts,
-              })
-            );
-            await runFieldHooks({
-              kind: "collection",
-              slug: params.collectionName,
-              phase: "afterChange",
-              data: promoted.data,
-              operation: "update",
+        // The update hooks this move runs once it is durable: the
+        // collection's code-registered and stored `afterUpdate` hooks, then
+        // the fields' `afterChange`, sharing the context its before hooks
+        // ran with. A publish that put pending changes live runs them for
+        // each such language, with its durable document, as a publish of
+        // that language alone runs them: it wrote content, not only a
+        // status, so an integration that skips the earlier working-draft
+        // save sees it here. Any other move runs them once, with the entry
+        // as the move left it, as a status change of one language does.
+        // Never both: the languages a promotion reported are the write.
+        //
+        // A move that put nothing live changed the statuses and no field, so
+        // the fields' `afterChange` runs only for `status`, as a write runs
+        // that phase only for the fields it touched (`updateEntryWrite`): the
+        // row it is handed carries every shared field, and a handler that
+        // mails or re-indexes on a change would act on an unchanged value.
+        // The whole row is still handed over, so a handler that does run can
+        // read its siblings.
+        const afterRuns: {
+          data: Record<string, unknown>;
+          originalData: Record<string, unknown> | null;
+          touched?: ReadonlySet<string>;
+        }[] =
+          promotedForHooks.length > 0
+            ? promotedForHooks
+            : [
+                {
+                  data: publishedParentRow ?? {
+                    ...(existingEntry as Record<string, unknown>),
+                    status: direction.nextStatus,
+                  },
+                  originalData: existingEntry as Record<string, unknown>,
+                  touched: new Set(["status"]),
+                },
+              ];
+        for (const run of afterRuns) {
+          await this.hookService.hookRegistry.execute(
+            "afterUpdate",
+            this.hookService.buildHookContext({
+              collection: params.collectionName,
+              operation: "update" as const,
+              data: run.data,
+              originalData: run.originalData ?? undefined,
               user: params.user,
-            });
-          }
+              context: sharedContext,
+              req: requestFacts,
+            })
+          );
+          await this.hookService.storedHookExecutor.execute(
+            "afterUpdate",
+            storedHooks,
+            this.hookService.buildPrebuiltHookContext({
+              collection: params.collectionName,
+              operation: "update",
+              data: run.data,
+              queryDatabase: this.queryDatabaseFn,
+              user: params.user,
+              sharedContext,
+              req: requestFacts,
+            })
+          );
+          await runFieldHooks({
+            kind: "collection",
+            slug: params.collectionName,
+            phase: "afterChange",
+            data: run.data,
+            operation: "update",
+            user: params.user,
+            only: run.touched,
+          });
         }
 
         // emit the post-commit "updated" reaction event so cache
@@ -13324,64 +13589,18 @@ export class CollectionMutationService extends BaseService {
       // same thing about the caller and none of them re-reads a header.
       const requestFacts = resolveRequestFacts(params.request);
 
-      // Execute beforeOperation hooks FIRST (before operation-specific hooks)
-      // Can modify operation arguments (id, data) or throw to abort
-      const beforeOpArgs =
-        await this.hookService.hookRegistry.executeBeforeOperation({
-          collection: params.collectionName,
-          operation: "update",
-          args: { id: params.entryId, data: body },
-          user: params.user
-            ? { id: params.user.id, email: params.user.email }
-            : undefined,
-          context: sharedContext,
-          req: requestFacts,
-        });
-
-      // Use modified data if returned by beforeOperation
-      const currentData = (beforeOpArgs as BeforeOperationArgs)?.data ?? body;
-
-      // Execute beforeUpdate hooks (code-registered)
-      // Hooks run before validation and can modify the incoming data
-      const beforeContext = this.hookService.buildHookContext({
-        collection: params.collectionName,
-        operation: "update" as const,
-        data: currentData,
-        originalData: existingEntry,
+      // `beforeOperation`, then the code and stored `beforeUpdate` hooks: the
+      // hooks before validation, which can modify the incoming data.
+      let finalData = await this.beforeUpdateHooks({
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        body,
+        existingEntry,
         user: params.user,
-        context: sharedContext,
-        req: requestFacts,
+        storedHooks,
+        sharedContext,
+        requestFacts,
       });
-
-      const modifiedData = await this.hookService.hookRegistry.execute(
-        "beforeUpdate",
-        beforeContext
-      );
-      const dataAfterCodeHooks = (modifiedData ?? currentData) as Record<
-        string,
-        unknown
-      >;
-
-      // Execute stored beforeUpdate hooks (UI-configured)
-      // Runs after code hooks, can further modify data
-      const storedBeforeResult =
-        await this.hookService.storedHookExecutor.execute(
-          "beforeUpdate",
-          storedHooks,
-          this.hookService.buildPrebuiltHookContext({
-            collection: params.collectionName,
-            operation: "update",
-            data: dataAfterCodeHooks,
-            queryDatabase: this.queryDatabaseFn,
-            user: params.user,
-            sharedContext,
-            req: requestFacts,
-          })
-        );
-      let finalData = (storedBeforeResult.data ?? dataAfterCodeHooks) as Record<
-        string,
-        unknown
-      >;
 
       // Password fields store bcrypt hashes, never the submitted value.
       // Runs after hooks (so hooks see the plaintext they may validate
@@ -13984,6 +14203,11 @@ export class CollectionMutationService extends BaseService {
       // with the merged draft's. Never written in place, only rebound, so the
       // reference is the caller's split for every attempt.
       const baseLocalizedUpdate = localizedUpdate;
+      // The in-transaction handlers, asked once for this write: a
+      // retried attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         recorded = false;
         // Reset the payloads the promote fold rebinds, so a retried attempt
@@ -14792,6 +15016,11 @@ export class CollectionMutationService extends BaseService {
           )
         );
 
+        // What the in-transaction phase is handed: the document this attempt
+        // leaves, set below once the row is re-read. Undefined when the row
+        // is gone: then nothing was written, and the phase is not run.
+        let writtenDocument: Record<string, unknown> | undefined;
+
         // Capture a version snapshot of the post-update document atomically
         // with the write when the collection opts into versioning. The parent
         // is re-read fresh here (not the pre-transaction `existingEntry`) so a
@@ -15131,6 +15360,12 @@ export class CollectionMutationService extends BaseService {
             // draft edit records no public event: the live document did not
             // change.
             const updatedDocument = assembleDocument(documentParts);
+            // A held edit left the live row as it was, so what this write
+            // produced is the pending draft, marked as the hooks see it.
+            writtenDocument = writtenByUpdate(
+              updatedDocument,
+              workingDraftDocument
+            );
             if (!storeAsWorkingDraft) {
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
@@ -15449,6 +15684,22 @@ export class CollectionMutationService extends BaseService {
           // As asked: a wildcard write moved every language, and answers
           // for them all.
           locale: rawParams.locale,
+        });
+
+        // Last in the transaction, and so again on each retried attempt,
+        // which is why every handler's writes go through this `tx`: a
+        // discarded attempt's roll back with it.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: writtenDocument,
+          originalData: replacedByUpdate(
+            previousDocument,
+            priorWorkingDraftDocument
+          ),
+          user: params.user,
+          context: sharedContext,
         });
       }, versionConflictRetries());
       // The transaction committed (skipped if the retry ultimately threw), so
@@ -17459,6 +17710,10 @@ export class CollectionMutationService extends BaseService {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
         mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -17591,6 +17846,17 @@ export class CollectionMutationService extends BaseService {
           previous: null,
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
+        });
+
+        // Last in the transaction, with the removed document: a handler that
+        // throws keeps the entry, and what it writes goes with the delete.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "delete",
+          id: params.entryId,
+          data: deletedDocument,
+          user: params.user,
+          context: sharedContext,
         });
       });
       // Set only after the transaction resolves: `deletedRow` is true exactly
@@ -18211,10 +18477,16 @@ export class CollectionMutationService extends BaseService {
         return entry;
       });
 
+      // The in-transaction handlers, asked once for this write: the same set
+      // decides how much of the document is assembled and which handlers run.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       // Junction rows, the version snapshot, the outbox event and the
       // revalidation intent, all on the caller's transaction.
       const createEffects = await this.recordCreateSideEffects(tx, {
         collectionName: params.collectionName,
+        inTransactionHandlers,
         tableName,
         entry: entry as Record<string, unknown>,
         collection,
@@ -18229,6 +18501,19 @@ export class CollectionMutationService extends BaseService {
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
+
+      // Last of the write itself, on the caller's transaction, before the
+      // after-hooks this path runs inside it. Run whether or not hooks are:
+      // see `runInTransactionPhase`. A handler's failure is thrown, not
+      // softened, so the caller's transaction keeps nothing of this entry.
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "create",
+        id: (entry as { id: string }).id,
+        data: createEffects.document,
+        user: params.user,
+        context: sharedContext,
+      });
 
       // Execute afterCreate hooks (unless skipped)
       if (options.runHooks) {
@@ -18348,6 +18633,52 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * The in-transaction handlers a write runs, asked of the registry once per
+   * write. The write keeps the set and uses it both to decide how much of the
+   * document to assemble and to run the phase, so a handler registered in
+   * between waits for the next write instead of being handed a document
+   * assembled for none.
+   */
+  private inTransactionHandlersFor(
+    collection: string
+  ): InTransactionHandlerSet {
+    const registry = this.hookService.hookRegistry;
+    return registry.hasInTransaction(collection)
+      ? registry.inTransactionRunners(collection)
+      : NO_IN_TRANSACTION_HANDLERS;
+  }
+
+  /**
+   * The in-transaction phase for one write, run last on the write's own
+   * transaction (see `hooks/in-transaction-phase`), with the handlers the
+   * write took ({@link inTransactionHandlersFor}).
+   *
+   * A write no handler was registered for loads nothing and does exactly
+   * what it did before the phase existed. It runs whether or not the write
+   * runs its hooks: what a handler writes keeps a plugin's rows in step with
+   * the entry, as the version and the outbox event do, and those are recorded
+   * under `skipHooks` too.
+   */
+  private async runInTransactionPhase(
+    tx: TransactionContext,
+    handlers: InTransactionHandlerSet,
+    input: Omit<InTransactionPhaseInput, "data" | "originalData"> & {
+      /** Undefined when the write found no row: nothing was written. */
+      data: Record<string, unknown> | undefined;
+      originalData?: Record<string, unknown> | null;
+    }
+  ): Promise<void> {
+    if (input.data === undefined || handlers.length === 0) return;
+    const { runInTransactionPhase } = await import(
+      "../../../hooks/in-transaction-phase"
+    );
+    await runInTransactionPhase(handlers, tx, {
+      ...input,
+      originalData: input.originalData ?? undefined,
+    });
   }
 
   /**
@@ -19321,9 +19652,17 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         actorForWrite(params.actor, params.user)
       );
+      // An in-transaction handler is handed the whole document and the one
+      // before it, as on the update that opens its own transaction. Asked
+      // once: the same set decides the assembly here and runs below.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      const handsInTransaction = inTransactionHandlers.length > 0;
       const needsRelations =
         !!versionsConfig?.enabled ||
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
       // The `previous` document is carried by the outbox event and by the
       // trail's changed-field names, never by the version snapshot: a
@@ -19331,6 +19670,7 @@ export class CollectionMutationService extends BaseService {
       // paying a second full relational walk whose result is discarded.
       const previousNeedsRelations =
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
@@ -19702,6 +20042,21 @@ export class CollectionMutationService extends BaseService {
       if (workingDraftDocument) {
         written._isWorkingDraft = true;
       }
+
+      // Last of the write itself, on the caller's transaction, handed the
+      // documents the outbox event carries; see the create path.
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "update",
+        id: entryId,
+        data: writtenByUpdate(updatedDocument, workingDraftDocument),
+        originalData: replacedByUpdate(
+          previousDocument,
+          priorWorkingDraftDocument
+        ),
+        user: params.user,
+        context: sharedContext,
+      });
 
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
@@ -20221,6 +20576,20 @@ export class CollectionMutationService extends BaseService {
         ),
         actor: actorForWrite(params.actor, params.user),
       });
+      // Last of the write itself, still inside the window whose failure is
+      // thrown: a handler that refuses the delete keeps the entry.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "delete",
+        id: entryId,
+        data: deletedDocument,
+        user: params.user,
+        context: sharedContext,
+      });
+
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;

@@ -600,6 +600,7 @@ describe("the blocks entry", () => {
       "form",
       "gallery",
       "heading",
+      "icon",
       "image",
       "list",
       // Added deliberately: the editor's count of a list's matching entries,
