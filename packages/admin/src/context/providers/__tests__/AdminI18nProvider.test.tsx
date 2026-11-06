@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { render, screen } from "@admin/__tests__/utils";
+import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { usePluginTranslate, useT } from "@admin/lib/i18n/I18nProvider";
 
 const branding = vi.hoisted(() => ({
@@ -15,6 +16,56 @@ const branding = vi.hoisted(() => ({
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => branding,
 }));
+
+/** What `GET /me` answers for the signed-in person, and every path asked. */
+const me = vi.hoisted(() => ({
+  interfaceLanguage: null as string | null,
+  asked: [] as string[],
+}));
+
+vi.mock("@admin/hooks/useApi", () => ({
+  useApi: () => ({
+    api: {
+      protected: {
+        get: async (path: string) => {
+          me.asked.push(path);
+          return {
+            id: "u1",
+            name: "Ada",
+            email: "ada@example.com",
+            interfaceLanguage: me.interfaceLanguage,
+          };
+        },
+      },
+    },
+  }),
+}));
+
+afterEach(() => {
+  me.interfaceLanguage = null;
+  me.asked = [];
+  vi.restoreAllMocks();
+});
+
+/** A plugin whose cart title the admin has in English and French. */
+const SHOP_IN_TWO_LANGUAGES = [
+  {
+    name: "@acme/shop",
+    translations: {
+      en: { "acme-shop.cart.title": "Cart" },
+      fr: { "acme-shop.cart.title": "Panier" },
+    },
+  },
+];
+
+function CartTitle() {
+  const pluginT = usePluginTranslate();
+  return <p>{pluginT("acme-shop.cart.title")}</p>;
+}
+
+function browserLanguage(language: string) {
+  vi.spyOn(navigator, "language", "get").mockReturnValue(language);
+}
 
 import { AdminI18nProvider } from "../AdminI18nProvider";
 
@@ -64,5 +115,103 @@ describe("AdminI18nProvider", () => {
       screen.getByRole("heading", { name: "Something went wrong" })
     ).toBeTruthy();
     expect(screen.getByText("acme-shop.cart.title")).toBeTruthy();
+  });
+});
+
+describe("AdminI18nProvider, each person's own interface language", () => {
+  it("the stored language wins over the browser's", async () => {
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    browserLanguage("en-US");
+    me.interfaceLanguage = "fr";
+
+    render(
+      <AdminI18nProvider signedIn>
+        <CartTitle />
+      </AdminI18nProvider>
+    );
+
+    expect(await screen.findByText("Panier")).toBeTruthy();
+    expect(me.asked).toEqual(["/me"]);
+  });
+
+  it("null follows the browser", async () => {
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    browserLanguage("fr-FR");
+    me.interfaceLanguage = null;
+
+    render(
+      <AdminI18nProvider signedIn>
+        <CartTitle />
+      </AdminI18nProvider>
+    );
+
+    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
+    expect(screen.getByText("Panier")).toBeTruthy();
+  });
+
+  it("a stored language with no catalog falls back to the browser's, then English", async () => {
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    me.interfaceLanguage = "de";
+
+    browserLanguage("fr-FR");
+    const first = render(
+      <AdminI18nProvider signedIn>
+        <CartTitle />
+      </AdminI18nProvider>
+    );
+    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
+    expect(screen.getByText("Panier")).toBeTruthy();
+    first.unmount();
+
+    browserLanguage("es-ES");
+    render(
+      <AdminI18nProvider signedIn>
+        <CartTitle />
+      </AdminI18nProvider>
+    );
+    await vi.waitFor(() => expect(me.asked).toEqual(["/me", "/me"]));
+    expect(screen.getByText("Cart")).toBeTruthy();
+  });
+
+  it("asks for no stored language on a signed-out screen", async () => {
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    browserLanguage("en-US");
+    me.interfaceLanguage = "fr";
+
+    render(
+      <AdminI18nProvider signedIn={false}>
+        <CartTitle />
+      </AdminI18nProvider>
+    );
+
+    expect(screen.getByText("Cart")).toBeTruthy();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(me.asked).toEqual([]);
+  });
+
+  it("editing French content leaves the interface language alone", async () => {
+    // The language an entry is being edited in is the content's, held by the
+    // editor; the interface keeps the person's own, here the browser's.
+    branding.plugins = SHOP_IN_TWO_LANGUAGES;
+    browserLanguage("en-US");
+    me.interfaceLanguage = null;
+
+    render(
+      <AdminI18nProvider signedIn>
+        <EntryLocaleProvider
+          value={{
+            locale: "fr",
+            rtl: false,
+            collectionLocalized: true,
+            isNonDefaultLocale: true,
+          }}
+        >
+          <CartTitle />
+        </EntryLocaleProvider>
+      </AdminI18nProvider>
+    );
+
+    await vi.waitFor(() => expect(me.asked).toEqual(["/me"]));
+    expect(screen.getByText("Cart")).toBeTruthy();
   });
 });

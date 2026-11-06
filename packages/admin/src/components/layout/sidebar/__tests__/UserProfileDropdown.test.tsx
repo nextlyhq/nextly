@@ -1,0 +1,128 @@
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { render, screen } from "@admin/__tests__/utils";
+import { AdminI18nProvider } from "@admin/context/providers/AdminI18nProvider";
+
+import { UserProfileDropdown } from "../UserProfileDropdown";
+
+/** The installed plugins: one with French strings, so French is offered. */
+vi.mock("@admin/context/providers/BrandingProvider", () => ({
+  useBranding: () => ({
+    plugins: [
+      {
+        name: "@acme/shop",
+        translations: {
+          en: { "acme-shop.cart.title": "Cart" },
+          fr: { "acme-shop.cart.title": "Panier" },
+        },
+      },
+    ],
+  }),
+}));
+
+vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
+
+/** The signed-in person as the server holds them, and what was written. */
+const me = vi.hoisted(() => ({
+  interfaceLanguage: null as string | null,
+  written: [] as Array<[string, unknown]>,
+}));
+
+vi.mock("@admin/hooks/useApi", () => ({
+  useApi: () => ({
+    api: {
+      protected: {
+        get: async () => ({
+          id: "u1",
+          name: "Ada",
+          email: "ada@example.com",
+          interfaceLanguage: me.interfaceLanguage,
+        }),
+        patch: async (path: string, body: { interfaceLanguage: unknown }) => {
+          me.written.push([path, body]);
+          me.interfaceLanguage = body.interfaceLanguage as string | null;
+          return { message: "Profile updated.", item: {} };
+        },
+      },
+    },
+  }),
+}));
+
+afterEach(() => {
+  me.interfaceLanguage = null;
+  me.written = [];
+  vi.restoreAllMocks();
+});
+
+function renderMenu() {
+  vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+  return render(
+    <AdminI18nProvider signedIn>
+      <UserProfileDropdown
+        user={{ id: "u1", name: "Ada", email: "ada@example.com" }}
+        onLogout={() => {}}
+      />
+    </AdminI18nProvider>
+  );
+}
+
+async function openMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "User profile menu" }));
+}
+
+describe("the user menu's interface language", () => {
+  it("lists Follow the browser and every catalog's language, each named in itself", async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    expect(await screen.findByText("Interface language")).toBeTruthy();
+    const choices = screen
+      .getAllByRole("menuitemradio")
+      .map(item => item.textContent);
+    expect(choices).toEqual(["Follow the browser", "English", "Français"]);
+    expect(
+      screen
+        .getByRole("menuitemradio", { name: "Follow the browser" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  it("saves the choice through /me, and the menu then shows it chosen", async () => {
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: "Français" })
+    );
+
+    await vi.waitFor(() =>
+      expect(me.written).toEqual([["/me", { interfaceLanguage: "fr" }]])
+    );
+    await openMenu(user);
+    await vi.waitFor(() =>
+      expect(
+        screen
+          .getByRole("menuitemradio", { name: "Français" })
+          .getAttribute("aria-checked")
+      ).toBe("true")
+    );
+  });
+
+  it("following the browser again clears the stored language", async () => {
+    me.interfaceLanguage = "fr";
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: "Follow the browser" })
+    );
+
+    await vi.waitFor(() =>
+      expect(me.written).toEqual([["/me", { interfaceLanguage: null }]])
+    );
+  });
+});
