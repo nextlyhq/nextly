@@ -35,6 +35,7 @@ export type {
   NamedQueryHost,
   NamedQueryLookup,
   NamedQueryRunData,
+  ListPageContext,
   PageBindings,
   PageContext,
   PageIssue,

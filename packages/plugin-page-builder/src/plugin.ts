@@ -54,7 +54,10 @@ import {
   type BreakpointRemovalService,
   type RemovalInstall,
 } from "./breakpoint-removal/service";
-import { countRemovalOnSite } from "./breakpoint-removal/site-counter";
+import {
+  countRemovalOnSite,
+  nameDocumentsOnSite,
+} from "./breakpoint-removal/site-counter";
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
@@ -128,6 +131,7 @@ import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import { registerFencedWriteReport } from "./host-rewrite/after-commit";
+import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
 import { progressStore } from "./host-rewrite/progress";
 import {
@@ -1604,6 +1608,16 @@ export const pageBuilder = (
   // The open removal as the write path's locks read it: before `init`, the
   // read throws, and a lock then accepts nothing extra.
   const openBreakpointRemoval = () => removalService().openRemoval();
+  // The site as a removal's count and an undo's report read it.
+  const removalSite = () => ({
+    site: () => rewriteInstall?.site ?? null,
+    naming: async () => {
+      const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+      return getCachedNextly();
+    },
+    componentCollection: rewriteInstall?.store.collection,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  });
   // How the breakpoints routes count a removal and carry it out.
   const breakpointRemoval = {
     defaults: configStyle,
@@ -1630,20 +1644,15 @@ export const pageBuilder = (
       deadline?: Date
     ) =>
       countRemovalOnSite(
-        {
-          site: () => rewriteInstall?.site ?? null,
-          naming: async () => {
-            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-            return getCachedNextly();
-          },
-          componentCollection: rewriteInstall?.store.collection,
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
-        },
+        removalSite(),
         routeCtx,
         removed,
         classes,
         ...(deadline === undefined ? [] : [deadline])
       ),
+    // The documents an undo could not put back, named as the person asking.
+    names: (hosts: readonly HostAddress[], routeCtx: BreakpointsRouteContext) =>
+      nameDocumentsOnSite(removalSite(), routeCtx, hosts),
     // A save counts for the audit, then walks, this long at most before it
     // answers with the run to carry on.
     cascade: {

@@ -1342,11 +1342,13 @@ export {
   isListFieldKind,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   namesListSource,
   listRelationTarget,
   listSortText,
   outerListOf,
+  paginatedList,
   readListQuery,
 } from "./list-query";
 // Named queries: a collection list's custom source, declared by a developer
@@ -1442,6 +1444,7 @@ export type {
   ListFilter,
   ListFilterOp,
   ListFilterScalar,
+  ListPageCode,
   ListQuery,
   ListQueryJudgement,
   ListQueryProblem,
@@ -1449,4 +1452,5 @@ export type {
   ListRelation,
   ListShapeCode,
   ListSortKey,
+  PaginatedList,
 } from "./list-query";

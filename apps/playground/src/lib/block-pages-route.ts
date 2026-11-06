@@ -43,6 +43,9 @@ export const blockPagesRoute: BlocksPageConfig = {
   collections: ["block-pages"],
   field: "content",
   nextly: siteReader,
+  // Where the route's catch-all is mounted, so a paginated list's links and
+  // its `/page/1` redirect name `/blocks/...` rather than the site root.
+  mountPath: MOUNT,
   // Stated even though it is this site's default language, because the read is
   // not the only thing it feeds: it is also what a `draft` decision compares a
   // preview token against, and a token always names a resolved locale rather

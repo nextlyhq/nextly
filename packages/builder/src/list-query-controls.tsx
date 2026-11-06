@@ -36,6 +36,7 @@ import {
   LIST_MAX_FILTERS,
   LIST_MAX_SORT_KEYS,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   locateNode,
   outerListOf,
@@ -67,6 +68,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
 } from "@nextlyhq/ui";
 import {
   ChevronDown,
@@ -122,6 +124,7 @@ export const LIST_QUERY_PROPS = [
   "sort",
   "limit",
   "offset",
+  "paginate",
 ] as const;
 
 /** What the group is drawn with: the Content tab's group context. */
@@ -2392,7 +2395,31 @@ function codedIssues(issues: Issues, prop: string, code: string): string[] {
     .map(issue => issue.message);
 }
 
-/** The How many group: the number of items, and the entries to skip. */
+/**
+ * What splitting into pages makes of the count: "24 entries match, so 3
+ * pages of 10.", or what a switch turned on will do when nothing is counted.
+ */
+function pagesWords(
+  counted: ListEntriesCount | undefined,
+  values: Readonly<Record<string, unknown>>,
+  limitFallback: unknown
+): string {
+  const stored = values.limit ?? limitFallback;
+  const limit = typeof stored === "number" && stored >= 1 ? stored : 10;
+  const each = `${String(limit)} ${limit === 1 ? "entry" : "entries"}`;
+  if (counted === undefined) {
+    return `Shows ${each} on each page, at /page/2, /page/3 and on.`;
+  }
+  const offset = typeof values.offset === "number" ? values.offset : 0;
+  const pages = listPageCount(counted.matching, offset, limit);
+  const match =
+    counted.matching === 1
+      ? "1 entry matches"
+      : `${String(counted.matching)} entries match`;
+  return `${match}, so ${pages === 1 ? "1 page" : `${String(pages)} pages`} of ${each}.`;
+}
+
+/** The How many group: the number of items, the entries to skip, and pages. */
 /**
  * How many entries the list's query matches and how many it shows, counted
  * once per query: drawn again with the same query, nothing is read again,
@@ -2489,7 +2516,57 @@ function HowManyGroup({
           commit({ offset: offset === 0 ? undefined : offset })
         }
       />
+      <PagesField
+        id={`${id}-pages`}
+        on={values.paginate === true}
+        disabled={disabled}
+        problem={issuesAt(issues, ["paginate"])[0]}
+        hint={
+          values.paginate === true
+            ? pagesWords(counted, values, limitFallback)
+            : undefined
+        }
+        // Off stores nothing, as a list that never paginated holds nothing.
+        onChange={on => commit({ paginate: on ? true : undefined })}
+      />
     </section>
+  );
+}
+
+/**
+ * Whether the list is split into pages, each at its own address: a switch,
+ * with what it makes of the count under it while on, or why the page cannot
+ * serve it.
+ */
+function PagesField({
+  id,
+  on,
+  disabled,
+  problem,
+  hint,
+  onChange,
+}: {
+  id: string;
+  on: boolean;
+  disabled: boolean;
+  problem: string | undefined;
+  hint: string | undefined;
+  onChange: (on: boolean) => void;
+}): React.JSX.Element {
+  const errorId = `${id}-error`;
+  return (
+    <div className="nx-inspector__field" data-content-control="paginate">
+      <Label htmlFor={id}>Split into pages</Label>
+      <Switch
+        id={id}
+        checked={on}
+        disabled={disabled}
+        aria-invalid={problem === undefined ? undefined : true}
+        aria-describedby={problem === undefined ? undefined : errorId}
+        onCheckedChange={onChange}
+      />
+      <BoundFoot errorId={errorId} problem={problem} hint={hint} />
+    </div>
   );
 }
 
@@ -2571,6 +2648,9 @@ function useListQueryReading(
       listQueryIssues(document.nodes, {
         ...(fieldSource === undefined ? {} : { fields: fieldSource }),
         ...(entryCollection === undefined ? {} : { entryCollection }),
+        // So a component's or a Layout region's list is told at once that it
+        // can't be split into pages, as its save would be.
+        documentKind: document.kind,
       }).filter(issue => issue.nodeId === nodeId && issue.severity === "error"),
     [document, nodeId, fieldSource, entryCollection]
   );

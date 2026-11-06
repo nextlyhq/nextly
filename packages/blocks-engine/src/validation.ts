@@ -681,6 +681,11 @@ export function validateDocument(
         ...(ctx.namedQueries === undefined
           ? {}
           : { namedQueries: ctx.namedQueries }),
+        // So a list in a component or a Layout region, which shows on many
+        // pages, is refused a split into pages of its own.
+        ...(typeof envelope.kind === "string"
+          ? { documentKind: envelope.kind }
+          : {}),
       }).map(withoutNodeId),
       // Each block's visibility conditions, judged as its lists are: the
       // operator always, the field against the entry's or the list item's
