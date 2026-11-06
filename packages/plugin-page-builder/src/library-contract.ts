@@ -689,6 +689,46 @@ export interface SiteBreakpointRemoval {
   readonly runId: string;
   readonly finished: boolean;
   readonly left: number;
+  /** For a run undoing a removal: what it undoes, and what stayed out. */
+  readonly undo?: SiteBreakpointUndo;
+}
+
+/**
+ * Where an undo of a breakpoint removal is asked for: `POST` with the
+ * removal's id ({@link SiteBreakpointRemovalRequest}), under the same
+ * permission as the save. Only the newest removal can be undone, once, within
+ * 30 days. The breakpoints it removed are defined again, and every value it
+ * took out goes back where nothing has been set since; its walk is carried on
+ * through {@link SITE_BREAKPOINT_REMOVAL_ROUTE_PATH} like a removal's.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
+
+/**
+ * One document an undo could not put every value back into: `changed` since
+ * the removal (a value set again, a block deleted), or `gone` (the document,
+ * or the draft the value was taken from).
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoSkipped {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  readonly id?: string;
+  readonly values: number;
+  readonly reason: "changed" | "gone";
+}
+
+/**
+ * What an undo did: the removal it undoes and, once its walk is finished,
+ * each document it could not put every value back into.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndo {
+  readonly undoes: string;
+  readonly skipped?: readonly SiteBreakpointUndoSkipped[];
 }
 
 /**

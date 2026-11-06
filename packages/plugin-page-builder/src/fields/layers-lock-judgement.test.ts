@@ -20,7 +20,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 
+import type { StoredFragment } from "../breakpoint-removal/fragments";
 import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
+import { fragmentsForValue } from "../breakpoint-removal/restore";
 import type { Removal } from "../breakpoint-removal/strip";
 
 import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
@@ -293,13 +295,19 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
 
   it("accepts the locked block stripped of exactly the removed breakpoint", async () => {
     expect(
-      await judged(lockedStyled("dark", false), async () => removingMobile)
+      await judged(lockedStyled("dark", false), async () => ({
+        kind: "strip",
+        removal: removingMobile,
+      }))
     ).toEqual([]);
   });
 
   it("refuses the strip with anything else changed on the locked block", async () => {
     expect(
-      await judged(lockedStyled("light", false), async () => removingMobile)
+      await judged(lockedStyled("light", false), async () => ({
+        kind: "strip",
+        removal: removingMobile,
+      }))
     ).toHaveLength(1);
   });
 
@@ -329,8 +337,59 @@ describe("layersLockIssues while a breakpoint removal is open", () => {
     expect(
       await judged(
         lockedStyled("dark", false),
-        async () => removingMobile,
+        async () => ({ kind: "strip", removal: removingMobile }),
         inTransaction
+      )
+    ).toHaveLength(1);
+  });
+  /** What removing Mobile kept of the hero, for the page's field `field`. */
+  const keptOfHero = (field: string): StoredFragment => ({
+    runId: "removal",
+    host: { kind: "collection", slug: "pages", id: "p1", path: [field] },
+    form: "published",
+    fragment: {
+      nodes: { hero: { styles: { base: { mobile: { color: "#222222" } } } } },
+    },
+    keptAt: new Date(),
+  });
+  /** An undo of that removal, open: it puts back what the rows kept. */
+  const undoing =
+    (rows: readonly StoredFragment[]): OpenRemovalReader =>
+    async () => ({
+      kind: "restore",
+      fragmentsFor: fragmentsForValue(rows, undefined),
+    });
+  const strippedStored = writeTo(async () => ({
+    kind: "value",
+    value: lockedStyled("dark", false),
+  }));
+
+  it("accepts the locked block with exactly what the undone removal kept put back", async () => {
+    expect(
+      await judged(
+        lockedStyled("dark", true),
+        undoing([keptOfHero("content")]),
+        strippedStored
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses the restore with anything else changed on the locked block", async () => {
+    expect(
+      await judged(
+        lockedStyled("light", true),
+        undoing([keptOfHero("content")]),
+        strippedStored
+      )
+    ).toHaveLength(1);
+  });
+
+  it("refuses a restore of what was kept for another field", async () => {
+    expect(
+      await judged(
+        lockedStyled("dark", true),
+        undoing([keptOfHero("aside")]),
+        strippedStored
       )
     ).toHaveLength(1);
   });

@@ -25,6 +25,7 @@ import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import {
   documentKeyOf,
+  formKey,
   type HostAddress,
   type HostForm,
   type StoredForm,
@@ -133,18 +134,6 @@ export function fragmentStore(
         .where(lt(columns().createdAt, before));
     },
   };
-}
-
-/** A host and form as one key: what the step saw is what the writer writes. */
-function formKey(host: HostAddress, form: HostForm): string {
-  return JSON.stringify([
-    host.kind,
-    host.slug,
-    host.id ?? "",
-    host.path,
-    host.locale ?? "",
-    form,
-  ]);
 }
 
 /** What the strip refused when it had no fragment to keep for a write. */

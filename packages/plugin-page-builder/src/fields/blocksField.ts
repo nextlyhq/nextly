@@ -31,8 +31,9 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import {
+  acceptedForms,
+  lockTargetOf,
   openRemovalFor,
-  strippedForms,
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
@@ -187,6 +188,7 @@ function judgedByRules(
       issues,
       stored.forms,
       args.write,
+      args.path,
       composition?.()?.openBreakpointRemoval
     );
     // A stored value this cannot read may already hold every placement
@@ -211,22 +213,24 @@ function judgedByRules(
  * slot lets a document keep. While a breakpoint removal is open, a
  * `contentOnly` break that remains is judged once more with the stored forms
  * stripped of the removed breakpoints' values as well, so the removal's own
- * strip is kept and nothing beyond it is (`breakpoint-removal/lock-acceptance`).
+ * strip is kept and nothing beyond it is; while its undo is open, with what
+ * the removal kept put back (`breakpoint-removal/lock-acceptance`).
  */
 async function judgedAgainstStored<T extends { readonly code?: string }>(
   judge: (stored?: readonly BlockDocument[]) => T[],
   issues: T[],
   stored: readonly BlockDocument[],
   write: PluginFieldValidateArgs["write"],
+  path: string,
   openRemoval: OpenRemovalReader | undefined
 ): Promise<T[]> {
   if (stored.length === 0) return issues;
   const again = judge(stored);
   if (!again.some(issue => issue.code === CONTENT_ONLY_BREAK)) return again;
-  const removal = await openRemovalFor(openRemoval, write);
-  if (removal === null) return again;
-  const stripped = strippedForms(stored, removal);
-  return stripped.length === 0 ? again : judge([...stored, ...stripped]);
+  const work = await openRemovalFor(openRemoval, write);
+  if (work === null || write === undefined) return again;
+  const accepted = acceptedForms(stored, work, lockTargetOf(write, path));
+  return accepted.length === 0 ? again : judge([...stored, ...accepted]);
 }
 
 /**

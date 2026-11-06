@@ -47,7 +47,7 @@ import { ServiceContainer } from "nextly";
 import { group, text } from "nextly/config";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   FRAGMENTS_KEPT_DAYS,
@@ -70,7 +70,9 @@ import { documentHasWorkingDraft } from "../host-rewrite/site";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { breakpointRemovalFragments } from "../schema/tables";
+import { BREAKPOINT_REMOVAL_UNDONE_AUDIT } from "../site-breakpoint-undo";
 import { BREAKPOINT_REMOVED_AUDIT } from "../site-settings";
+import type { SiteStyleData } from "../site-style";
 import {
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
@@ -263,7 +265,7 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<{
+    async function boot(siteStyle?: SiteStyleData): Promise<{
       t: TestNextly;
       svc: BreakpointRemovalService;
       fragments: () => {
@@ -276,7 +278,7 @@ describe.each(getConfiguredTestDialects())(
       jobPass: () => Promise<unknown>;
       owner: string;
     }> {
-      const plugin = pageBuilder();
+      const plugin = pageBuilder(siteStyle === undefined ? {} : { siteStyle });
       const probe: Probe = {};
       current = await createTestNextly({
         dialect,
@@ -588,13 +590,14 @@ describe.each(getConfiguredTestDialects())(
     const carryOn = (cookie: string, runId: string) =>
       post(cookie, ["site", "breakpoints", "removal"], { runId });
 
-    /** The removal's audit rows. */
+    /** The removal's audit rows, or another kind's. */
     async function auditRows(
-      t: TestNextly
+      t: TestNextly,
+      kind: string = BREAKPOINT_REMOVED_AUDIT
     ): Promise<Array<Record<string, unknown>>> {
       const rows = await t.adapter.select<{ metadata: unknown }>("audit_log", {
         where: {
-          and: [{ column: "kind", op: "=", value: BREAKPOINT_REMOVED_AUDIT }],
+          and: [{ column: "kind", op: "=", value: kind }],
         },
       });
       return rows.map(
@@ -1705,6 +1708,414 @@ describe.each(getConfiguredTestDialects())(
           context: { ...SITE_SETTINGS_WRITE_CONTEXT },
         })
       ).rejects.toMatchObject({ code: "STALE_VERSION" });
+    });
+
+    /** Undo a removal through its route, as the person managing the site. */
+    const undo = (cookie: string, runId: string) =>
+      post(cookie, ["site", "breakpoints", "removal", "undo"], { runId });
+
+    /** The run a save or an undo answered with. */
+    const runIdOf = (answer: { body: Record<string, unknown> }): string =>
+      (
+        (answer.body.item as Record<string, unknown>).removal as {
+          runId: string;
+        }
+      ).runId;
+
+    /** A live row's whole stored document, as a page reads it. */
+    async function contentOf(
+      t: TestNextly,
+      collection: string,
+      id: string,
+      draft = false
+    ): Promise<unknown> {
+      const row = (await t.nextly.findByID({
+        collection,
+        id,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+        ...(draft ? { draft: true } : {}),
+      })) as unknown as Record<string, unknown>;
+      return asDocument(row.content);
+    }
+
+    describe("undoing a removal", () => {
+      it("puts back exactly what it took out, locked blocks and styles included, and audits it", async () => {
+        const { t, svc, cookie } = await boot();
+        const original = doc("page", [
+          heading("a", styledAtMobile),
+          heading("locked", { ...styledAtMobile, locked: true }),
+          heading("hidden", { visibility: { devices: { mobile: false } } }),
+        ]);
+        const live = await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          status: "published",
+          content: original,
+        });
+        const draftOnly = await create(t, "pages", {
+          title: "Draft",
+          slug: "draft",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const component = await create(t, "components", {
+          title: "Promo",
+          slug: "promo",
+          status: "published",
+          content: doc("component", [heading("x", styledAtMobile)]),
+        });
+        const classesBefore = await storedClasses(t);
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // CONTROL: the removal stripped them.
+        expect((await nodesOf(t, "pages", live))[0]).toEqual(
+          heading("a", styledAfter)
+        );
+
+        const undone = await undo(cookie, removed);
+
+        expect(undone.status).toBe(200);
+        const item = undone.body.item as Record<string, unknown>;
+        expect(item.breakpoints).toEqual({
+          viewport: [TABLET, MOBILE],
+          container: [],
+        });
+        expect(item.removal).toMatchObject({
+          finished: true,
+          left: 0,
+          undo: { undoes: removed, skipped: [] },
+        });
+        expect(await contentOf(t, "pages", live)).toEqual(asDocument(original));
+        expect((await nodesOf(t, "pages", draftOnly))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+        expect((await nodesOf(t, "components", component))[0]).toEqual(
+          heading("x", styledAtMobile)
+        );
+        // The shared styles, the locked one still locked.
+        expect(await storedClasses(t)).toEqual(classesBefore);
+        // The undo's run is done, and the removal no longer claims Mobile.
+        const run = runIdOf(undone);
+        expect(await svc.runById(run)).toMatchObject({
+          open: false,
+          undoes: removed,
+        });
+        expect(await svc.runById(removed)).toMatchObject({
+          removedIds: [],
+          readdedIds: ["mobile"],
+        });
+        expect(await auditRows(t, BREAKPOINT_REMOVAL_UNDONE_AUDIT)).toEqual([
+          {
+            runId: run,
+            undoes: removed,
+            breakpointIds: "mobile",
+            breakpointLabels: "Mobile",
+          },
+        ]);
+      });
+
+      it("keeps a value set since, and reports each page it could not put everything back into, and why", async () => {
+        const { t, cookie } = await boot();
+        const edited = await create(t, "pages", {
+          title: "Edited",
+          slug: "edited",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const trimmed = await create(t, "pages", {
+          title: "Trimmed",
+          slug: "trimmed",
+          content: doc("page", [
+            heading("a", styledAtMobile),
+            heading("b", styledAtMobile),
+          ]),
+        });
+        const deleted = await create(t, "pages", {
+          title: "Deleted",
+          slug: "deleted",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // Since the removal: a value set again under Mobile, a block
+        // deleted, and a page deleted.
+        const reset = {
+          styles: {
+            base: {
+              tablet: { color: "#444444" },
+              mobile: { color: "#999999" },
+            },
+          },
+        };
+        await plant(t, edited, doc("page", [heading("a", reset)]));
+        await t.nextly.update({
+          collection: "pages",
+          id: trimmed,
+          data: { content: doc("page", [heading("a", styledAfter)]) },
+          overrideAccess: true,
+        });
+        await t.nextly.delete({
+          collection: "pages",
+          id: deleted,
+          overrideAccess: true,
+        });
+
+        const undone = await undo(cookie, removed);
+
+        expect(undone.status).toBe(200);
+        // The author's value stays; the one they did not touch comes back.
+        expect((await nodesOf(t, "pages", edited))[0]).toEqual(
+          heading("a", {
+            styles: {
+              ...reset.styles,
+              hover: { mobile: { color: "#333333" } },
+            },
+          })
+        );
+        expect((await nodesOf(t, "pages", trimmed))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+        const { undo: report } = (undone.body.item as Record<string, unknown>)
+          .removal as { undo: { skipped: Array<Record<string, unknown>> } };
+        const byId = new Map(report.skipped.map(entry => [entry.id, entry]));
+        expect(byId.get(edited)).toMatchObject({
+          values: 1,
+          reason: "changed",
+        });
+        expect(byId.get(trimmed)).toMatchObject({
+          values: 2,
+          reason: "changed",
+        });
+        expect(byId.get(deleted)).toMatchObject({ values: 2, reason: "gone" });
+        expect(report.skipped).toHaveLength(3);
+        expect(String(undone.body.message)).toContain("except 5 values");
+      });
+
+      it("puts a pending draft's values back, and the live row it left keeps its own", async () => {
+        const { t, svc, cookie } = await boot();
+        const withDraft = await create(t, "pages", {
+          title: "Pending",
+          slug: "pending",
+          status: "published",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        await t.nextly.update({
+          collection: "pages",
+          id: withDraft,
+          data: {
+            content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          },
+          overrideAccess: true,
+        });
+        const saved = await save(cookie, [TABLET]);
+        expect(
+          (saved.body.item as Record<string, unknown>).removal
+        ).toMatchObject({
+          left: 1,
+        });
+        const removed = runIdOf(saved);
+
+        const undone = await undo(cookie, removed);
+
+        expect(undone.status).toBe(200);
+        expect((await nodesOf(t, "pages", withDraft, true))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+        expect((await nodesOf(t, "pages", withDraft))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+        // Still a pending draft over the live row, each with its own blocks.
+        expect(await nodesOf(t, "pages", withDraft, true)).toHaveLength(2);
+        expect(await nodesOf(t, "pages", withDraft)).toHaveLength(1);
+        // The removal claims nothing now: Mobile is a breakpoint again.
+        expect(await svc.runById(removed)).toMatchObject({ removedIds: [] });
+      });
+
+      it("leaves a live row a draft was made over since for its author, counting nothing skipped", async () => {
+        const { t, cookie } = await boot();
+        const live = await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          status: "published",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // A draft over the stripped live row, made after the removal.
+        await t.nextly.update({
+          collection: "pages",
+          id: live,
+          data: {
+            content: doc("page", [heading("a", styledAfter), heading("b")]),
+          },
+          overrideAccess: true,
+        });
+
+        const undone = await undo(cookie, removed);
+
+        expect(undone.status).toBe(200);
+        expect(
+          (undone.body.item as Record<string, unknown>).removal
+        ).toMatchObject({
+          finished: true,
+          left: 1,
+          undo: { undoes: removed, skipped: [] },
+        });
+        // The live row waits for its author; the draft is theirs.
+        expect((await nodesOf(t, "pages", live))[0]).toEqual(
+          heading("a", styledAfter)
+        );
+        expect(await nodesOf(t, "pages", live, true)).toEqual([
+          heading("a", styledAfter),
+          heading("b"),
+        ]);
+      });
+
+      it("takes out the override a removal stored of a code style, so the code's values apply again", async () => {
+        const code = {
+          id: "c-code",
+          slug: "code",
+          label: "Code",
+          orderIndex: 5,
+          locked: true,
+          styles: {
+            base: { base: { color: "#000000" }, mobile: { color: "#777777" } },
+          },
+        };
+        const { t, cookie } = await boot({ classes: [code] } as SiteStyleData);
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // CONTROL: the removal stored the code's style without Mobile.
+        expect((await storedClasses(t)).get("c-code")).toMatchObject({
+          locked: true,
+          styles: { base: { base: { color: "#000000" } } },
+        });
+
+        expect((await undo(cookie, removed)).status).toBe(200);
+
+        expect((await storedClasses(t)).has("c-code")).toBe(false);
+      });
+
+      it("carries an undo its route did not finish on through the removal route", async () => {
+        const { t, svc, cookie } = await boot();
+        const live = await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // An undo opened, its set stored, and nothing walked yet.
+        const opened = await svc.undo(removed, "user:test");
+        await svc.retire(["mobile"]);
+        await t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: { breakpoints: { viewport: [TABLET, MOBILE], container: [] } },
+          overrideAccess: true,
+          context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+        });
+        await svc.publish(opened.id);
+
+        const carried = await carryOn(cookie, opened.id);
+
+        expect(carried.status).toBe(200);
+        expect(carried.body.item as Record<string, unknown>).toMatchObject({
+          runId: opened.id,
+          finished: true,
+          left: 0,
+          undo: { undoes: removed, skipped: [] },
+        });
+        expect((await nodesOf(t, "pages", live))[0]).toEqual(
+          heading("a", styledAtMobile)
+        );
+      });
+
+      it("refuses an undo of a removal that is not the newest, or undone already, or past its window", async () => {
+        const { t, svc, cookie } = await boot();
+        await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const first = runIdOf(await save(cookie, [TABLET]));
+        expect(
+          (
+            await post(cookie, ["site", "breakpoints"], {
+              breakpoints: { viewport: [TABLET, MOBILE], container: [] },
+            })
+          ).status
+        ).toBe(200);
+        const second = runIdOf(await save(cookie, [MOBILE]));
+        // An older removal.
+        const older = await undo(cookie, first);
+        expect(older.status).toBe(409);
+        expect(older.body).toMatchObject({
+          error: {
+            message: expect.stringContaining("can no longer be undone"),
+          },
+        });
+        // CONTROL: the newest one, once.
+        expect((await undo(cookie, second)).status).toBe(200);
+        // Refused as undone already, before its breakpoints are looked at.
+        const twice = await undo(cookie, second);
+        expect(twice.status).toBe(409);
+        expect(twice.body).toMatchObject({
+          error: {
+            message: expect.stringContaining("can no longer be undone"),
+          },
+        });
+        // Nothing is left open by a refusal.
+        expect(await svc.openRun()).toBeNull();
+        // Past its 30 days, read from when it was made.
+        const third = runIdOf(await save(cookie, [TABLET]));
+        const now = Date.now();
+        const later = vi
+          .spyOn(Date, "now")
+          .mockReturnValue(
+            now + (FRAGMENTS_KEPT_DAYS + 1) * 24 * 60 * 60 * 1000
+          );
+        try {
+          await expect(svc.undo(third, "user:test")).rejects.toMatchObject({
+            code: "CONFLICT",
+          });
+        } finally {
+          later.mockRestore();
+        }
+        expect(await svc.openRun()).toBeNull();
+      });
+
+      it("refuses, and drops, an undo whose breakpoints no longer fit the set", async () => {
+        const { svc, cookie } = await boot();
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // A breakpoint ending at Mobile's width, added since.
+        const phone = { id: "phone", label: "Phone", maxWidth: 600 };
+        expect(
+          (
+            await post(cookie, ["site", "breakpoints"], {
+              breakpoints: { viewport: [TABLET, phone], container: [] },
+            })
+          ).status
+        ).toBe(200);
+
+        const clashing = await undo(cookie, removed);
+
+        expect(clashing.status).toBe(409);
+        expect(clashing.body).toMatchObject({
+          error: { message: expect.stringContaining("same width as “Phone”") },
+        });
+        expect(await svc.openRun()).toBeNull();
+        expect(await svc.runById(removed)).toMatchObject({
+          removedIds: ["mobile"],
+        });
+        // Mobile defined again by hand: the undo has nothing to define.
+        expect(
+          (
+            await post(cookie, ["site", "breakpoints"], {
+              breakpoints: { viewport: [TABLET, MOBILE], container: [] },
+            })
+          ).status
+        ).toBe(200);
+        const again = await undo(cookie, removed);
+        expect(again.status).toBe(409);
+        expect(again.body).toMatchObject({
+          error: { message: expect.stringContaining("breakpoints again") },
+        });
+      });
     });
   }
 );

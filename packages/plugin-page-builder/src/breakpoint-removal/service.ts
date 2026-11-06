@@ -36,11 +36,26 @@ import {
   type DocumentSite,
   type RewriteSite,
 } from "../host-rewrite/site";
+import type { SiteBreakpointUndoSkipped } from "../library-contract";
 import type { SiteStyleData } from "../site-style";
 
-import { fragmentCapture, fragmentStore, type FragmentRow } from "./fragments";
+import {
+  fragmentCapture,
+  fragmentStore,
+  FRAGMENTS_KEPT_DAYS,
+  type FragmentRow,
+  type StoredFragment,
+} from "./fragments";
+import type { OpenWork } from "./lock-acceptance";
+import {
+  fragmentSource,
+  fragmentsForValue,
+  restoreStep,
+  skippedDocuments,
+} from "./restore";
 import {
   removalRunStore,
+  removedEver,
   WRITTEN_BACK,
   type BreakpointRun,
   type HoldingRun,
@@ -51,6 +66,25 @@ import {
   stripBreakpointsStep,
   type Removal,
 } from "./strip";
+
+/** One day, in milliseconds. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** What an undo that cannot be made is told. */
+const CANNOT_UNDO =
+  "This removal can no longer be undone: only the newest removal can be, once, for 30 days.";
+
+/**
+ * The refusal of an undo, with why in the log: not a done removal, a newer
+ * removal since, undone already, or nothing kept any more.
+ */
+function cannotUndo(reason: string, runId: string): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: CANNOT_UNDO,
+    logContext: { reason: `breakpoint-undo-${reason}`, runId },
+  });
+}
 
 /** The name the service is contributed under. */
 export const BREAKPOINT_REMOVAL_SERVICE = "breakpointRemoval";
@@ -95,19 +129,20 @@ export interface BreakpointRemovalService {
    */
   holding(): Promise<HoldingRun[]>;
   /**
-   * The open removal as a lock judges a write against it, or `null` when none
-   * is open. Throws when the runs cannot be read: a caller accepting a write
-   * on its answer accepts nothing then.
+   * The open removal, or undo, as a lock judges a write against it, or `null`
+   * when none is open. Throws when the runs cannot be read: a caller
+   * accepting a write on its answer accepts nothing then.
    */
-  openRemoval(): Promise<Removal | null>;
+  openRemoval(): Promise<OpenWork | null>;
   /**
    * The open removal with every id it removed, for the one write that stores
    * the set without them: the site still defines them while that write is
    * judged, since it is the write that removes them, so judging it by the
-   * ids defined now would leave nothing to accept. `null` when none is open;
-   * throws when the runs cannot be read.
+   * ids defined now would leave nothing to accept. An open undo as
+   * `openRemoval` answers it. `null` when none is open; throws when the runs
+   * cannot be read.
    */
-  openRemovalAsSaved(): Promise<Removal | null>;
+  openRemovalAsSaved(): Promise<OpenWork | null>;
   /**
    * Carry on whatever removal is owed a walk, within `budget`: the open one;
    * or else a done one a write brought values back to while another was open
@@ -135,6 +170,23 @@ export interface BreakpointRemovalService {
   discardFragment(id: string): Promise<void>;
   /** Delete what removals took out before `before`: past their undo window. */
   purgeFragments(before: Date): Promise<void>;
+  /**
+   * Open a run putting removal `runId` back, refusing (409) unless it can be
+   * undone: it is a removal and done, it is the newest removal, it was not
+   * undone already, and it was made within the 30 days what it took out is
+   * kept for. The run takes the one open slot, preparing until its set is
+   * stored (`publish`); walking it puts each kept value back (`restore`).
+   */
+  undo(runId: string, startedBy: string): Promise<BreakpointRun>;
+  /** What removal `runId` kept of what it took out, newest first. */
+  kept(runId: string): Promise<StoredFragment[]>;
+  /**
+   * What undo `undoRunId` could not put back, per document, read once its
+   * walk is finished. A document it left (a live row under a pending draft)
+   * counts only what will not go back once it can be written: a value not
+   * back yet is one that will be.
+   */
+  undoSkipped(undoRunId: string): Promise<SiteBreakpointUndoSkipped[]>;
 }
 
 /** What the installed plugin hands the service. */
@@ -244,6 +296,41 @@ async function resolvedDraftRun(
 /** The left reason a published page with a pending draft is recorded with. */
 export const PENDING_DRAFT: LeftReason = "pending-draft";
 
+/** A walk's budget as the rewrite takes it: only what is set. */
+function budgetOf(budget: WalkBudget): WalkBudget {
+  return {
+    ...(budget.maxDocuments === undefined
+      ? {}
+      : { maxDocuments: budget.maxDocuments }),
+    ...(budget.deadline === undefined ? {} : { deadline: budget.deadline }),
+  };
+}
+
+/**
+ * Walk an undo: only the documents its removal kept something for, each
+ * value given back what was kept of it (`restoreStep`). Its writes are made as
+ * the system, as the strip's were, and keep nothing: there is nothing an
+ * undo takes out.
+ */
+async function walkRestore(
+  installed: RemovalInstall,
+  store: ReturnType<typeof removalRunStore>,
+  run: { readonly runId: string; readonly undoes: string },
+  budget: WalkBudget
+): Promise<RewriteReport> {
+  const rows = await fragmentStore(installed.db).forRun(run.undoes);
+  return rewriteHosts(
+    {
+      fence: store,
+      progress: progressStore(installed.db, installed.dialect),
+      source: fragmentSource(rows),
+      read: siteHostReader(installed.site),
+      write: systemHostWriter(installed.site),
+    },
+    { runId: run.runId, step: restoreStep(rows), ...budgetOf(budget) }
+  );
+}
+
 /** The service over the installed plugin, resolved per call. */
 export function breakpointRemovalService(
   install: () => RemovalInstall
@@ -264,6 +351,16 @@ export function breakpointRemovalService(
     // refused, and nothing it strips could be put back.
     if (run.preparing) return NOT_WALKED;
     const installed = install();
+    // An undo walks only what its removal kept, putting it back.
+    if (run.undoes !== null) {
+      if (!run.open && !(await store.reopen(runId))) return NOTHING_LEFT;
+      return walkRestore(
+        installed,
+        store,
+        { runId, undoes: run.undoes },
+        budget
+      );
+    }
     const removal = await removalNow(run, installed);
     if (removal.ids.size === 0) {
       // Every breakpoint it removed is defined again (or its set was never
@@ -291,12 +388,29 @@ export function breakpointRemovalService(
       {
         runId,
         step: stripBreakpointsStep(removal, capture.remember),
-        ...(budget.maxDocuments === undefined
-          ? {}
-          : { maxDocuments: budget.maxDocuments }),
-        ...(budget.deadline === undefined ? {} : { deadline: budget.deadline }),
+        ...budgetOf(budget),
       }
     );
+  };
+  // An open undo as the locks judge it: what its removal kept, per value,
+  // and of the shared styles with every id the removal took out.
+  const restoreWork = async (undoes: string): Promise<OpenWork> => {
+    const installed = install();
+    const rows = await fragmentStore(installed.db).forRun(undoes);
+    const undone = await runs().runById(undoes);
+    const site = rows.find(row => row.host === null);
+    return {
+      kind: "restore",
+      fragmentsFor: fragmentsForValue(rows, installed.site.defaultLocale()),
+      ...(site?.form === "site"
+        ? {
+            classes: {
+              fragment: site.fragment,
+              ids: undone === null ? new Set<string>() : removedEver(undone),
+            },
+          }
+        : {}),
+    };
   };
   return {
     openRun: () => runs().openRun(),
@@ -321,11 +435,15 @@ export function breakpointRemovalService(
     holding: () => runs().holding(),
     openRemoval: async () => {
       const run = await runs().openRun();
-      return run === null ? null : removalNow(run, install());
+      if (run === null) return null;
+      if (run.undoes !== null) return restoreWork(run.undoes);
+      return { kind: "strip", removal: await removalNow(run, install()) };
     },
     openRemovalAsSaved: async () => {
       const run = await runs().openRun();
-      return run === null ? null : removalOf(run, install().defaults);
+      if (run === null) return null;
+      if (run.undoes !== null) return restoreWork(run.undoes);
+      return { kind: "strip", removal: removalOf(run, install().defaults) };
     },
     walk,
     carryOn: async budget => {
@@ -353,6 +471,39 @@ export function breakpointRemovalService(
     },
     retire: ids => runs().retire(ids),
     publish: runId => runs().publish(runId),
+    undo: async (runId, startedBy) => {
+      const store = runs();
+      const all = await store.runs();
+      const run = all.find(candidate => candidate.id === runId);
+      // Preconditions, before anything is opened.
+      if (run === undefined || run.open || run.undoes !== null) {
+        throw cannotUndo("not-a-done-removal", runId);
+      }
+      const newest = all
+        .filter(candidate => candidate.undoes === null)
+        .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))[0];
+      if (newest?.id !== runId) throw cannotUndo("a-newer-removal", runId);
+      if (all.some(candidate => candidate.undoes === runId)) {
+        throw cannotUndo("already-undone", runId);
+      }
+      // Within the days what it took out is kept for, read from its id. Rows
+      // are kept after the run opens, so they outlive this window, never the
+      // other way round.
+      const at = openedAt(runId);
+      if (at === undefined || Date.now() - at >= FRAGMENTS_KEPT_DAYS * DAY_MS) {
+        throw cannotUndo("past-its-window", runId);
+      }
+      return store.open([], { stored: null, emitted: null }, startedBy, runId);
+    },
+    kept: runId => fragmentStore(install().db).forRun(runId),
+    undoSkipped: async undoRunId => {
+      const run = await runs().runById(undoRunId);
+      if (run === null || run.undoes === null) return [];
+      return skippedDocuments(
+        await fragmentStore(install().db).forRun(run.undoes),
+        siteHostReader(install().site)
+      );
+    },
     keepFragment: row => fragmentStore(install().db).keep(row),
     discardFragment: id => fragmentStore(install().db).discard(id),
     purgeFragments: before => fragmentStore(install().db).purge(before),
