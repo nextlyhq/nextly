@@ -157,7 +157,10 @@ A write through `usePluginRouteMutation` refreshes the reads it names in
 the change as soon as the write succeeds. `writePluginRoute` refreshes nothing.
 Neither reaches another browser tab. Each tab keeps its own copy of what it read,
 so a list open in another tab of the admin still shows what it read before the
-write, and refreshes when it is next opened or the tab is reloaded.
+write. Reloading that tab reads it again. Opening the page again reads it again
+only once its copy is older than the read's `staleTime`, five minutes by default,
+since the admin doesn't re-read on switching tabs. Pass `staleTime: 0` to
+`usePluginRoute` for a read that is fetched afresh each time its page opens.
 
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an

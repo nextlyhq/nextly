@@ -741,11 +741,13 @@ When someone else holds it, the claim is still answered `200`, not refused:
 "Someone else is editing" is an answer to show, not an error, so a held document never comes
 back as `409`. The claim token is given only to the caller whose claim succeeded.
 
-`ownerLabel` is what the admin calls the holder, and it is never empty. A person is named by their
+`ownerLabel` is what the admin calls the holder. A person is named by their
 name, or by their email when they have no name. An API key is named as a key, by the name of the
 person who made it ("Ana Silva's API key"), or as "An API key" when that person has no name. A
-claim with nothing to name it by reads "Someone". `ownerId` is the user's id, which for an API key
-is the id of the person who made it.
+claim with nothing to name it by reads "Someone". A claim taken before Nextly named its holders
+has `ownerLabel: null` until it is released or lapses, so read it as possibly `null`; the admin
+shows it as "Someone". `ownerId` is the user's id, which for an API key is the id of the person
+who made it.
 
 Two options ride on the claim:
 
