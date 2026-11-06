@@ -182,7 +182,7 @@ describe("the canvas's runs of a named query", () => {
 
   it("never runs a query in the browser: its lookup's run refuses", async () => {
     const host = canvasNamedHost(SOURCES, vi.fn(), undefined);
-    const definition = host.definitionOf?.("events.upcoming");
+    const definition = host.definitionOf("events.upcoming");
     await expect(
       definition?.run({
         params: {},
@@ -197,7 +197,7 @@ describe("the canvas's runs of a named query", () => {
         signal: new AbortController().signal,
       })
     ).rejects.toThrow("runs on the server");
-    expect(host.definitionOf?.("events.gone")).toBeUndefined();
+    expect(host.definitionOf("events.gone")).toBeUndefined();
   });
 });
 

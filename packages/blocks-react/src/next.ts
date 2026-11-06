@@ -37,6 +37,7 @@ import {
   type DocumentLimits,
   type LayoutRegion,
   type ListQuery,
+  type NamedQueryDefinition,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -93,6 +94,7 @@ import {
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
+  NAMED_QUERY_SERVICE,
 } from "./context";
 import type {
   BindingIssuesHandler,
@@ -599,6 +601,62 @@ function publicReaderFor(
   };
 }
 
+/**
+ * The most tags a named query's cached result carries: Next keeps 128 per
+ * cache entry, and nextly's reads keep to it (`readTags`).
+ */
+const NAMED_QUERY_CACHE_TAGS = 128;
+
+/** This process's own identity, for a deployment that names none. */
+const PROCESS_IDENTITY = `process:${globalThis.crypto.randomUUID()}`;
+
+/**
+ * Which deployment this code is: the one the platform names
+ * (`NEXT_DEPLOYMENT_ID`, which Next sets from its `deploymentId`, or
+ * Vercel's), else this process's own identity. A named query's cached
+ * result is kept under it, because a deployment can change what `run`
+ * computes (an imported helper, a constant) without changing a character of
+ * its source: a result is never served across deployments. With no
+ * deployment named, it is never served across processes either, which
+ * costs a fresh run after a restart and never serves stale rows.
+ */
+function deploymentIdentity(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string {
+  const named = [
+    env.NEXT_DEPLOYMENT_ID,
+    env.VERCEL_DEPLOYMENT_ID,
+    env.VERCEL_GIT_COMMIT_SHA,
+  ].find(value => value !== undefined && value.trim() !== "");
+  return named === undefined ? PROCESS_IDENTITY : `deployment:${named}`;
+}
+
+/**
+ * The named queries the route's own Nextly instance registered, read from
+ * its page builder's service: each site its own, so two sites served from
+ * one process never resolve each other's queries. Nothing for an instance
+ * without the page builder, whose lists' queries are then not set up.
+ */
+function instanceNamedQueries(
+  config: BlocksPageConfig
+): (name: string) => NamedQueryDefinition | undefined {
+  return name => {
+    const instance = readerFor(config) as { readonly plugins?: unknown };
+    const plugins = instance.plugins;
+    if (typeof plugins !== "object" || plugins === null) return undefined;
+    const service = (
+      plugins as Record<string, Record<string, unknown> | undefined>
+    )[NAMED_QUERY_SERVICE.plugin]?.[NAMED_QUERY_SERVICE.service];
+    const definitionOf = (service as { definitionOf?: unknown } | undefined)
+      ?.definitionOf;
+    return typeof definitionOf === "function"
+      ? (definitionOf as (name: string) => NamedQueryDefinition | undefined)(
+          name
+        )
+      : undefined;
+  };
+}
+
 /** How long a cached "today" may live before it is asked again, in seconds. */
 const TODAY_LIFETIME = 60;
 
@@ -639,6 +697,7 @@ function namedQueryHostFor(args: {
   const reader = publicReaderFor(config, locale, window);
   let today: Promise<string> | undefined;
   return {
+    definitionOf: instanceNamedQueries(config),
     reader: {
       ...reader,
       siteSettings: async () => {
@@ -671,19 +730,31 @@ function namedQueryHostFor(args: {
     // query's reader reads through the frame's own door.
     frame: name => openNamedQueryFrame(name),
     cache: async ({ declaration, key, read }) => {
+      const tags = [
+        ...(declaration.reads.collections ?? []).flatMap(slug =>
+          nextlyTags(slug)
+        ),
+        ...(declaration.reads.singles ?? []).flatMap(slug =>
+          nextlySingleTags(slug)
+        ),
+        ...(declaration.reads.site === true ? nextlySiteSettingsTags() : []),
+      ];
+      // A result is kept only when every source it declares can expire it.
+      // The cache keeps a bounded number of tags per entry, and a read past
+      // the bound would stay cached after a write to a source left off. The
+      // registry bounds a query's reads below this; this holds it whatever
+      // a tag costs.
+      if (new Set(tags).size > NAMED_QUERY_CACHE_TAGS) return await read();
       const route = await releaseBoundedRevalidate(window);
       const own = declaration.revalidate;
       return await cachedFind(read, {
-        tags: [
-          ...(declaration.reads.collections ?? []).flatMap(slug =>
-            nextlyTags(slug)
-          ),
-          ...(declaration.reads.singles ?? []).flatMap(slug =>
-            nextlySingleTags(slug)
-          ),
-          ...(declaration.reads.site === true ? nextlySiteSettingsTags() : []),
+        tags,
+        keyParts: [
+          "nextly-named-query",
+          config.cacheScope ?? "",
+          deploymentIdentity(),
+          ...key,
         ],
-        keyParts: ["nextly-named-query", config.cacheScope ?? "", ...key],
         revalidate:
           own === undefined
             ? route

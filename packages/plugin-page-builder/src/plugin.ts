@@ -1,17 +1,21 @@
 import {
   allBlocks,
-  allNamedQueries,
+  createNamedQueryRegistry,
   breakpointContexts,
-  getNamedQuery,
   DEFAULT_LIMITS,
   namedQueryDeclaration,
   type DocumentLimits,
   type NamedClass,
   type NamedQueryDefinition,
+  type NamedQueryRegistry,
+  type NamedQuerySource,
   type RemotePattern,
   type RetiredExposures,
 } from "@nextlyhq/blocks-engine";
-import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
+import {
+  COMPONENT_DOCUMENT_FIELD,
+  NAMED_QUERY_SERVICE,
+} from "@nextlyhq/blocks-react";
 import {
   definePlugin,
   NextlyError,
@@ -1250,6 +1254,14 @@ export const pageBuilder = (
    * and every pass resolves the API itself.
    */
   let installed: BackfillHost | null = null;
+  // This page builder's named queries, rebuilt on each boot: its own, so two
+  // sites booted in one process never resolve each other's.
+  let namedQueries: NamedQueryRegistry = createNamedQueryRegistry();
+  const namedQuerySource: NamedQuerySource = {
+    declarationOf: name => namedQueries.declarationOf(name),
+  };
+  const namedQueryDeclarations = () =>
+    namedQueries.all().map(namedQueryDeclaration);
 
   /**
    * What the default-Layout repair needs from the installed plugin: the
@@ -1614,7 +1626,7 @@ export const pageBuilder = (
       registerDeclaredBlocks(ctx);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
-      registerNamedQueriesAtBoot(ctx, opts.namedQueries);
+      namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
@@ -1743,6 +1755,8 @@ export const pageBuilder = (
         // collection's declared fields from its record, and the ones the
         // public may read as a published page's bindings are judged. Read per
         // write, so a field hidden a moment ago is refused at the next save.
+        // This site's named queries, for a list whose source is one.
+        namedQueries: namedQuerySource,
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
@@ -2081,7 +2095,14 @@ export const pageBuilder = (
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
             templates: { guard: requireTemplateGuard },
+            namedQueries: namedQueryDeclarations,
           }),
+        // This site's named queries, for its published pages' renderer: the
+        // query a list names, run function included, from this instance's
+        // own registry.
+        [NAMED_QUERY_SERVICE.service]: () => ({
+          definitionOf: (name: string) => namedQueries.definitionOf(name),
+        }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -2340,6 +2361,7 @@ export const pageBuilder = (
         manifestRoute({
           store: componentStoreOf(opts),
           limits: () => opts.limits ?? DEFAULT_LIMITS,
+          namedQueries: namedQueryDeclarations,
         }),
         // Detach, duplicate and update a pattern, each with a dry run.
         ...componentActionRoutes({
@@ -2361,12 +2383,12 @@ export const pageBuilder = (
         loopCollectionsRoute(componentStoreOf(opts)),
         // The site's named queries, without their run functions: what the
         // editor offers as a list's custom sources.
-        namedQueriesRoute(() => allNamedQueries().map(namedQueryDeclaration)),
+        namedQueriesRoute(namedQueryDeclarations),
         // A collection list's entries on the canvas, read as a visitor reads
         // them, for a collection the author may read.
         // A list whose source is a named query runs it here, on the server,
         // where its run function lives.
-        listEntriesRoute(getNamedQuery),
+        listEntriesRoute(name => namedQueries.definitionOf(name)),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),

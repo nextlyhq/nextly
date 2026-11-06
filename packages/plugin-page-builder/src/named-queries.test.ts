@@ -6,14 +6,14 @@
  * without its run function.
  */
 import {
-  allNamedQueries,
-  clearNamedQueries,
   defineNamedQuery,
   judgeNamedParams,
   param,
-  registerNamedQueries,
 } from "@nextlyhq/blocks-engine";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { NAMED_QUERY_SERVICE } from "@nextlyhq/blocks-react";
+import { describe, expect, it, vi } from "vitest";
+
+import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 
 import {
   namedQueryItem,
@@ -84,19 +84,36 @@ function declaring(name: string, value: unknown) {
   };
 }
 
-afterEach(() => clearNamedQueries());
-
 describe("named queries at boot", () => {
-  it("registers the site's and each plugin's into an emptied registry", () => {
-    registerNamedQueries([{ ...upcoming, name: "stale.query" }]);
+  it("registers the site's and each plugin's into a registry of the boot's own", () => {
     const { ctx } = bootContext([
       declaring("@acme/venues", { namedQueries: [fromPlugin] }),
     ]);
-    registerNamedQueriesAtBoot(ctx, [upcoming]);
-    expect(allNamedQueries().map(query => query.name)).toEqual([
+    const registry = registerNamedQueriesAtBoot(ctx, [upcoming]);
+    expect(registry.all().map(query => query.name)).toEqual([
       "events.upcoming",
       "venues.all",
     ]);
+  });
+
+  it("keeps two sites' queries apart in one process", () => {
+    const siteA = registerNamedQueriesAtBoot(bootContext([]).ctx, [upcoming]);
+    const siteB = registerNamedQueriesAtBoot(bootContext([]).ctx, [
+      { ...upcoming, label: "Site B's events" },
+      fromPlugin,
+    ]);
+    // Booting the second site leaves the first's as it was.
+    expect(siteA.declarationOf("events.upcoming")?.label).toBe(
+      "Upcoming events"
+    );
+    expect(siteA.definitionOf("venues.all")).toBeUndefined();
+    expect(siteB.declarationOf("events.upcoming")?.label).toBe(
+      "Site B's events"
+    );
+  });
+
+  it("serves the queries under the name a published route reads them by", () => {
+    expect(NAMED_QUERY_SERVICE.plugin).toBe(PAGE_BUILDER_PLUGIN_NAME);
   });
 
   it("names both sources when a plugin takes the site's name", () => {
@@ -224,6 +241,35 @@ describe("a named query's declaration, as the editor and the API read it", () =>
     expect(judged(Number.MAX_SAFE_INTEGER + 2)).toBe(1);
   });
 
+  it("bounds a whole-number input to the safe range, within its own bounds", () => {
+    const schemaOf = (within: ReturnType<typeof param.number>) =>
+      (
+        namedQueryParamsSchema({ ...fromPlugin, params: { within } }) as {
+          properties: { within: Record<string, unknown> };
+        }
+      ).properties.within;
+    expect(schemaOf(param.number({ label: "N", integer: true }))).toEqual({
+      title: "N",
+      type: "integer",
+      minimum: Number.MIN_SAFE_INTEGER,
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
+    expect(
+      schemaOf(param.number({ label: "N", integer: true, min: 1, max: 9 }))
+    ).toMatchObject({ minimum: 1, maximum: 9 });
+    // The save refuses just past the bound the schema states.
+    const judged = (value: number) =>
+      judgeNamedParams(
+        {
+          ...fromPlugin,
+          params: { n: param.number({ label: "N", integer: true }) },
+        },
+        { n: value }
+      ).problems.length;
+    expect(judged(Number.MAX_SAFE_INTEGER)).toBe(0);
+    expect(judged(Number.MAX_SAFE_INTEGER + 1)).toBe(1);
+  });
+
   it("names a declared collection visitors can read nothing of, with its fields, judging each once", async () => {
     // `events` is the rows' collection of none of these but the plugin's
     // `venues`; visitors read nothing of `events`, and all of `venues`.
@@ -264,10 +310,26 @@ describe("a named query's declaration, as the editor and the API read it", () =>
     expect(answer.meta.total).toBe(3);
   });
 
-  it("leaves out a collection whose fields could not be read, rather than calling it hidden", async () => {
+  it("warns of a collection whose fields could not be read, rather than saying all is well", async () => {
     const answer = await readNamedQueries({
       queries: () => [upcoming],
       listFields: () => Promise.reject(new Error("no record")),
+    });
+    // Nothing is known of its fields, so none is named.
+    expect(answer.items[0]?.readsHidden).toEqual([
+      { collection: "events", label: "events", fields: [] },
+    ]);
+  });
+
+  it("does not call a collection hidden whose own fields visitors cannot read, but whose entries they can", async () => {
+    const answer = await readNamedQueries({
+      queries: () => [upcoming],
+      listFields: () =>
+        Promise.resolve({
+          declared: new Set(["id", "createdAt", "secret"]),
+          // The id and timestamps a visitor still reads.
+          readable: [{ name: "id", type: "text" }],
+        }),
     });
     expect(answer.items[0]?.readsHidden).toEqual([]);
   });

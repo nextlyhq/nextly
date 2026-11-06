@@ -27,7 +27,6 @@
  * @module blocks/named-read
  */
 import {
-  getNamedQuery,
   isPlainRecord,
   judgeNamedParams,
   NAMED_QUERY_TEXT,
@@ -266,6 +265,10 @@ async function execute(
 ): Promise<NamedQueryRunData> {
   const declaration = namedQueryDeclaration(definition);
   let reads = 0;
+  // Closed once the run is over, on time or not: work `run` left going (it
+  // ignored its signal, say) makes no read after the page has moved on.
+  let closed = false;
+  const timeout = namedQueryTimeout(declaration);
   // One frame per run: the query runs inside it, and only its reader reads,
   // through the frame's own door.
   const frame = host.frame?.(definition.name);
@@ -273,13 +276,18 @@ async function execute(
     declaration,
     host.reader,
     () => {
+      if (closed) {
+        throw new NamedQueryRunError(
+          "timeout",
+          `The named query "${definition.name}" read after its run was over.`
+        );
+      }
       if (!claim()) return false;
       reads += 1;
       return true;
     },
     frame === undefined ? undefined : operation => frame.read(operation)
   );
-  const timeout = namedQueryTimeout(declaration);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const call = () =>
@@ -304,6 +312,9 @@ async function execute(
     );
   } finally {
     clearTimeout(timer);
+    closed = true;
+    // Told to stop, whatever it still has going.
+    controller.abort();
   }
   const rows = checkedRows(result, declaration, args.window);
   const shape = await rowFields(declaration, host);
@@ -319,14 +330,15 @@ async function execute(
 }
 
 /**
- * Where a host's named queries are looked up: its own lookup, or the
- * engine's registry. The one answer the run and the binding checks of its
- * rows share, so a list's items are judged against the query that made them.
+ * Where a host's named queries are looked up: its own lookup, which knows
+ * the queries of the site it renders, or none without a host. The one answer
+ * the run and the binding checks of its rows share, so a list's items are
+ * judged against the query that made them.
  */
 export function namedQueryLookup(
   host: Pick<NamedQueryHost, "definitionOf"> | undefined
 ): (name: string) => NamedQueryDefinition | undefined {
-  return host?.definitionOf ?? getNamedQuery;
+  return host?.definitionOf ?? (() => undefined);
 }
 
 /** What an error is, for a log: its code or its class, never its words. */
@@ -580,23 +592,49 @@ function replayClaims(count: number, claim: () => boolean): boolean {
 }
 
 /**
- * This render's run of a key: the one made already, or the one `make`
- * starts, kept by the render's allowance (see `runsThisRender`). A failed
- * run is not kept: an allowance an editor holds for its life would otherwise
- * answer every later draw with the same failure.
+ * The render's day, read inside the same containment as the run: a failure
+ * to resolve it draws the empty state, never fails the page.
  */
-function memoised(
+async function renderDay(
+  host: NamedQueryHost,
+  declaration: NamedQueryDeclaration,
+  at: {
+    readonly host: NamedQueryHost;
+    readonly name: string;
+    readonly nodeId: string;
+  }
+): Promise<string | NamedListOutcome> {
+  try {
+    return await host.today();
+  } catch (error) {
+    const ref = referenceFor(at.name, at.nodeId);
+    return failed("threw", NAMED_QUERY_TEXT.threw(declaration.label, ref), {
+      ...at,
+      ref,
+      error,
+    });
+  }
+}
+
+/**
+ * A run this render already started under `key`, or `start`'s, kept with
+ * the render's allowance (`owner`) for the rest of the render. Nothing is
+ * kept for a render with no allowance. A failed run is not kept either: an
+ * allowance an editor holds for its life would otherwise answer every later
+ * draw with the same failure.
+ */
+function renderRun(
   owner: QueryBudget | undefined,
   key: string,
-  make: () => Promise<NamedQueryRunData>
+  start: () => Promise<NamedQueryRunData>
 ): Promise<NamedQueryRunData> {
-  if (owner === undefined) return make();
+  if (owner === undefined) return start();
   const runs =
     runsThisRender.get(owner) ?? new Map<string, Promise<NamedQueryRunData>>();
   runsThisRender.set(owner, runs);
   const held = runs.get(key);
   if (held !== undefined) return held;
-  const pending = make();
+  const pending = start();
   runs.set(key, pending);
   pending.catch(() => {
     if (runs.get(key) === pending) runs.delete(key);
@@ -671,7 +709,9 @@ export async function readNamedList(
     return failed("unknown", NAMED_QUERY_TEXT.removed(named.name), at);
   }
   const declaration = namedQueryDeclaration(definition);
-  const today = await host.today();
+  const day = await renderDay(host, declaration, at);
+  if (typeof day !== "string") return day;
+  const today = day;
   const judged = judgeNamedParams(declaration, named.params, {
     today,
     atRun: true,
@@ -705,7 +745,7 @@ export async function readNamedList(
       claim
     );
   };
-  const pending = memoised(ctx.queries, key.join("\u0000"), () =>
+  const pending = renderRun(ctx.queries, key.join("\u0000"), () =>
     host.cache === undefined
       ? read()
       : host.cache({

@@ -29,7 +29,6 @@
  */
 import {
   calendarDayIn,
-  getNamedQuery,
   isNamedQueryName,
   isNamedQueryParamKey,
   LIST_LIMIT_MAX,
@@ -451,10 +450,8 @@ function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
  * A POST because a read carries a query, never because it writes.
  */
 export function listEntriesRoute(
-  /** The registered named query of a name: the engine's registry. */
-  definitionOf: (
-    name: string
-  ) => NamedQueryDefinition | undefined = getNamedQuery
+  /** The registered named query of a name: this instance's own registry. */
+  definitionOf: (name: string) => NamedQueryDefinition | undefined
 ): {
   method: "POST";
   path: string;

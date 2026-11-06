@@ -2,13 +2,11 @@
  * Named queries' declarations: the boot's checks, the process registry, and
  * the one judgement of a list's stored inputs the save and the run share.
  */
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
-  allNamedQueries,
-  clearNamedQueries,
+  createNamedQueryRegistry,
   defineNamedQuery,
-  getNamedQuery,
   judgeNamedParams,
   NAMED_QUERY_TEXT,
   namedQueryDeclaration,
@@ -16,8 +14,6 @@ import {
   namedQueryProblem,
   namedQueryTimeout,
   param,
-  registeredNamedQueries,
-  registerNamedQueries,
   type NamedQueryDefinition,
 } from "./named-query";
 import { namedQueryHiddenReads, type ListFields } from "./list-query";
@@ -64,8 +60,6 @@ function withPart(part: Record<string, unknown>): unknown {
   return { ...events, ...part };
 }
 
-afterEach(() => clearNamedQueries());
-
 describe("a named query's declaration", () => {
   it("types run's inputs by their declarations", () => {
     defineNamedQuery({
@@ -91,6 +85,24 @@ describe("a named query's declaration", () => {
 
   it("accepts a well-formed definition", () => {
     expect(namedQueryProblem(events).problem).toBeUndefined();
+    // As many reads as a cached result can carry, and a choice value as
+    // long as a list can store: the bounds themselves.
+    expect(
+      namedQueryProblem({
+        ...events,
+        params: {
+          c: param.choice({
+            label: "C",
+            options: [{ value: "x".repeat(200), label: "Long" }],
+          }),
+        },
+        reads: {
+          collections: Array.from({ length: 63 }, (_, i) => `c${String(i)}`),
+          site: true,
+        },
+        rows: { collection: "c0" },
+      }).problem
+    ).toBeUndefined();
   });
 
   it.each([
@@ -130,6 +142,30 @@ describe("a named query's declaration", () => {
         },
       },
       "default does not fit",
+    ],
+    [
+      "more reads than a cached result can carry tags for",
+      {
+        reads: {
+          collections: Array.from({ length: 64 }, (_, i) => `c${String(i)}`),
+          site: true,
+        },
+        rows: { collection: "c0" },
+        params: {},
+      },
+      "65 reads; at most 64",
+    ],
+    [
+      "a choice value no list could store",
+      {
+        params: {
+          c: param.choice({
+            label: "C",
+            options: [{ value: "x".repeat(201), label: "Long" }],
+          }),
+        },
+      },
+      "longer than 200 characters",
     ],
     [
       "a choice with no options",
@@ -181,38 +217,52 @@ describe("a named query's declaration", () => {
   });
 });
 
-describe("the named query registry", () => {
+describe("a named query registry", () => {
   it("registers all or nothing, naming the definition refused", () => {
+    const registry = createNamedQueryRegistry();
     expect(() =>
-      registerNamedQueries([events, withPart({ name: "Bad" }) as never], {
+      registry.register([events, withPart({ name: "Bad" }) as never], {
         source: "@acme/events",
       })
     ).toThrow(/named query "Bad" from "@acme\/events"/);
-    expect(allNamedQueries()).toEqual([]);
+    expect(registry.all()).toEqual([]);
   });
 
   it("names both sources when two register one name", () => {
-    registerNamedQueries([events], { source: "@acme/events" });
+    const registry = createNamedQueryRegistry();
+    registry.register([events], { source: "@acme/events" });
     expect(() =>
-      registerNamedQueries([events], { source: "@acme/other" })
+      registry.register([events], { source: "@acme/other" })
     ).toThrow(/registered by "@acme\/events".*again by "@acme\/other"/);
     expect(() =>
-      registerNamedQueries([
+      registry.register([
         { ...events, name: "twice" },
         { ...events, name: "twice" },
       ])
     ).toThrow(/registered twice/);
   });
 
-  it("answers a registered query, its declaration without run, and clears", () => {
-    registerNamedQueries([events]);
-    expect(getNamedQuery("events.upcoming")).toBe(events);
-    const declaration =
-      registeredNamedQueries().declarationOf("events.upcoming");
+  it("answers a registered query, and its declaration without run", () => {
+    const registry = createNamedQueryRegistry();
+    registry.register([events]);
+    expect(registry.definitionOf("events.upcoming")).toBe(events);
+    const declaration = registry.declarationOf("events.upcoming");
     expect(declaration?.label).toBe("Upcoming events");
     expect(declaration !== undefined && "run" in declaration).toBe(false);
-    clearNamedQueries();
-    expect(getNamedQuery("events.upcoming")).toBeUndefined();
+  });
+
+  it("keeps each registry's queries its own", () => {
+    const tenantA = createNamedQueryRegistry();
+    const tenantB = createNamedQueryRegistry();
+    tenantA.register([events]);
+    tenantB.register([{ ...events, label: "B's events" }]);
+    expect(tenantA.declarationOf("events.upcoming")?.label).toBe(
+      "Upcoming events"
+    );
+    expect(tenantB.declarationOf("events.upcoming")?.label).toBe("B's events");
+    expect(createNamedQueryRegistry().definitionOf("events.upcoming")).toBe(
+      undefined
+    );
   });
 
   it("holds a definition of typed inputs as one of any inputs", () => {

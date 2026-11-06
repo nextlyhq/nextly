@@ -27,6 +27,12 @@ const NAMED_QUERY_NAME_MAX = 64;
 export const NAMED_QUERY_MAX_PARAMS = 12;
 /** The longest text one input may hold, stored or typed. */
 export const NAMED_QUERY_TEXT_MAX = 200;
+/**
+ * The most collections, Singles and site settings one query may declare.
+ * Each becomes a tag on the query's cached result, and well under the 128
+ * a cache entry keeps, with room for the page's own.
+ */
+const NAMED_QUERY_MAX_READS = 64;
 /** How long a run may take when its query names no time of its own. */
 export const NAMED_QUERY_DEFAULT_TIMEOUT_MS = 5000;
 /** The longest a query may ask to run. */
@@ -883,6 +889,13 @@ function choiceShapeProblem(
   ) {
     return `${at} declares no options of { value, label }`;
   }
+  // A list stores the chosen value as an input's literal, which holds at
+  // most NAMED_QUERY_TEXT_MAX characters: a longer value no list could save.
+  if (
+    param.options.some(option => option.value.length > NAMED_QUERY_TEXT_MAX)
+  ) {
+    return `${at} declares an option value longer than ${String(NAMED_QUERY_TEXT_MAX)} characters, which no list can store`;
+  }
   const values = new Set(param.options.map(option => option.value));
   return values.size === options.length
     ? undefined
@@ -1012,6 +1025,16 @@ function readsProblem(reads: unknown): string | undefined {
   if (reads.site !== undefined && typeof reads.site !== "boolean") {
     return "its reads.site is not true or false";
   }
+  // Each declared read tags the query's cached result, and a cache entry
+  // keeps a bounded number of tags: past it, a write to a source left off
+  // would not refresh the page.
+  const count =
+    new Set(reads.collections ?? []).size +
+    new Set(reads.singles ?? []).size +
+    (reads.site === true ? 1 : 0);
+  if (count > NAMED_QUERY_MAX_READS) {
+    return `it declares ${String(count)} reads; at most ${String(NAMED_QUERY_MAX_READS)} are allowed, so each can refresh the page`;
+  }
   return undefined;
 }
 
@@ -1131,30 +1154,38 @@ interface NamedQueryEntry {
   readonly source: string;
 }
 
-const globalForQueries = globalThis as unknown as {
-  __nextly_namedQueries?: Map<string, NamedQueryEntry>;
-};
-
-/** The process registry, kept on `globalThis` as the block registry is. */
-function queryStore(): Map<string, NamedQueryEntry> {
-  globalForQueries.__nextly_namedQueries ??= new Map();
-  return globalForQueries.__nextly_namedQueries;
-}
-
 /**
- * Register named queries. All-or-nothing per call, as `registerBlocks` is:
- * every definition is checked before any is stored, and a name taken twice
- * names both sources. Returns the reads `options.known` did not know, each
- * named with its query, for the caller to log.
+ * The named queries one site registers: one registry per page builder, so
+ * two sites served from one process (one per tenant, say) never resolve each
+ * other's queries. Answers as a {@link NamedQuerySource}, each declaration
+ * without `run`.
  *
  * @experimental
  */
-export function registerNamedQueries(
+export interface NamedQueryRegistry extends NamedQuerySource {
+  /**
+   * Register definitions. All-or-nothing per call, as `registerBlocks` is:
+   * every definition is checked before any is stored, and a name taken
+   * twice names both sources. Returns the reads `options.known` did not
+   * know, each named with its query, for the caller to log.
+   */
+  register(
+    definitions: readonly NamedQueryDefinition[],
+    options?: { readonly source?: string; readonly known?: NamedQueryKnown }
+  ): { readonly unknownReads: readonly string[] };
+  /** The registered query of that name, run function included. */
+  definitionOf(name: string): NamedQueryDefinition | undefined;
+  /** Every registered query, in registration order. */
+  all(): readonly NamedQueryDefinition[];
+}
+
+/** Every definition checked, refused naming the source, before any is kept. */
+function checkedBatch(
   definitions: readonly NamedQueryDefinition[],
-  options: { readonly source?: string; readonly known?: NamedQueryKnown } = {}
-): { readonly unknownReads: readonly string[] } {
-  const source = options.source ?? "app";
-  const store = queryStore();
+  store: ReadonlyMap<string, NamedQueryEntry>,
+  options: { readonly source: string; readonly known?: NamedQueryKnown }
+): string[] {
+  const { source } = options;
   const seen = new Set<string>();
   const unknownReads: string[] = [];
   for (const definition of definitions) {
@@ -1183,51 +1214,34 @@ export function registerNamedQueries(
       ...judged.unknownReads.map(read => `"${definition.name}" reads "${read}"`)
     );
   }
-  for (const definition of definitions) {
-    store.set(definition.name, { definition, source });
-  }
-  return { unknownReads };
+  return unknownReads;
 }
 
 /**
- * The registered query of that name, run function included: the renderer's
- * lookup. `undefined` for a name nothing registered.
+ * A new, empty registry of named queries.
  *
  * @experimental
  */
-export function getNamedQuery(name: string): NamedQueryDefinition | undefined {
-  return queryStore().get(name)?.definition;
-}
-
-/**
- * Every registered query, in registration order.
- *
- * @experimental
- */
-export function allNamedQueries(): NamedQueryDefinition[] {
-  return [...queryStore().values()].map(entry => entry.definition);
-}
-
-/**
- * Empty the registry: the page builder rebuilds it on each boot.
- *
- * @experimental
- */
-export function clearNamedQueries(): void {
-  queryStore().clear();
-}
-
-/**
- * The registry as a {@link NamedQuerySource}, each answer without `run`.
- *
- * @experimental
- */
-export function registeredNamedQueries(): NamedQuerySource {
+export function createNamedQueryRegistry(): NamedQueryRegistry {
+  const store = new Map<string, NamedQueryEntry>();
   return {
+    register: (definitions, options = {}) => {
+      const source = options.source ?? "app";
+      const unknownReads = checkedBatch(definitions, store, {
+        source,
+        ...(options.known === undefined ? {} : { known: options.known }),
+      });
+      for (const definition of definitions) {
+        store.set(definition.name, { definition, source });
+      }
+      return { unknownReads };
+    },
+    definitionOf: name => store.get(name)?.definition,
     declarationOf: name => {
-      const found = getNamedQuery(name);
+      const found = store.get(name)?.definition;
       return found === undefined ? undefined : namedQueryDeclaration(found);
     },
+    all: () => [...store.values()].map(entry => entry.definition),
   };
 }
 

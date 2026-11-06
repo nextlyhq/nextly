@@ -7,7 +7,10 @@
  * below them faked, so what is asserted is what reaches the database layer.
  */
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  NamedQueryDeclaration,
+} from "@nextlyhq/blocks-engine";
 import type { PublicReader, PublicReadQuery } from "nextly/runtime";
 import type { ReactElement } from "react";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -46,6 +49,7 @@ import {
   createDefaultDataProvider,
   type BlocksPublicReader,
   type BlocksQuery,
+  type NamedQueryHost,
 } from "./context";
 import {
   createBlocksPage,
@@ -239,5 +243,108 @@ describe("the public reader's shape, written out in this package", () => {
     // The route hands nextly's reader to a provider factory written against
     // this package's, so nextly's must be usable wherever this one is asked.
     expectTypeOf<PublicReader>().toExtend<BlocksPublicReader>();
+  });
+});
+
+describe("a routed page's named queries", () => {
+  /** A declaration reading `count` collections. */
+  function declaration(count = 1): NamedQueryDeclaration {
+    return {
+      name: "events.upcoming",
+      label: "Upcoming events",
+      reads: {
+        collections: Array.from({ length: count }, (_, i) => `c${String(i)}`),
+      },
+      rows: { collection: "c0" },
+    };
+  }
+
+  /** The named-query host the route built for one render. */
+  async function hostOf(
+    nextly: ReturnType<typeof instance> & { plugins?: unknown }
+  ): Promise<NamedQueryHost> {
+    const context = await renderContext(
+      { collections: ["pages"], field: "content", revalidate: 60 },
+      nextly
+    );
+    if (context.namedQueries === undefined) {
+      throw new Error("the page has no named-query host");
+    }
+    return context.namedQueries;
+  }
+
+  /** The run as a list stores it, which a published page's cache ignores. */
+  const ASKED = { params: {}, window: { limit: 1, offset: 0 } } as const;
+
+  /** The key parts a kept result was cached under, for one deployment. */
+  async function keyPartsIn(deployment: string): Promise<unknown> {
+    vi.stubEnv("NEXT_DEPLOYMENT_ID", deployment);
+    try {
+      const host = await hostOf(instance());
+      cached.calls.length = 0;
+      await host.cache?.({
+        declaration: declaration(),
+        key: ["events.upcoming", "same-run-source"],
+        read: () => Promise.resolve({ rows: [], reads: 0 }),
+        asked: ASKED,
+      });
+      return (cached.calls[0] as { keyParts?: unknown } | undefined)?.keyParts;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it("keeps a result per deployment, whatever the run's source", async () => {
+    const first = await keyPartsIn("dep-1");
+    const second = await keyPartsIn("dep-2");
+    expect(first).toContain("deployment:dep-1");
+    expect(second).toContain("deployment:dep-2");
+    expect(first).not.toEqual(second);
+  });
+
+  it("keeps no result whose declared reads the cache could not all tag", async () => {
+    const host = await hostOf(instance());
+    const read = vi.fn(() => Promise.resolve({ rows: [], reads: 0 }));
+    cached.calls.length = 0;
+    await host.cache?.({
+      declaration: declaration(129),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(cached.calls).toEqual([]);
+    // Within the bound, every declared read tags it.
+    await host.cache?.({
+      declaration: declaration(3),
+      key: ["k"],
+      read,
+      asked: ASKED,
+    });
+    expect((cached.calls[0] as { tags: string[] }).tags).toHaveLength(3);
+  });
+
+  it("resolves a query from the route's own instance, and from no other", async () => {
+    const definition = {
+      ...declaration(),
+      run: () => Promise.resolve({ rows: [] }),
+    };
+    const withQueries = {
+      ...instance(),
+      plugins: {
+        "@nextlyhq/plugin-page-builder": {
+          namedQueries: {
+            definitionOf: (name: string) =>
+              name === "events.upcoming" ? definition : undefined,
+          },
+        },
+      },
+    };
+    expect((await hostOf(withQueries)).definitionOf("events.upcoming")).toBe(
+      definition
+    );
+    expect(
+      (await hostOf(instance())).definitionOf("events.upcoming")
+    ).toBeUndefined();
   });
 });

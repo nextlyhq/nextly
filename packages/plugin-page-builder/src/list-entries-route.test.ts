@@ -110,7 +110,7 @@ describe("a canvas list's read", () => {
       { query: { collection: "posts", where: { a: 1 } } },
     ]) {
       await expect(
-        listEntriesRoute().handler(request(body), ctx)
+        listEntriesRoute(() => undefined).handler(request(body), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
@@ -135,7 +135,7 @@ describe("a canvas list's read", () => {
     expect(keys.join(",").length).toBeGreaterThan(1000);
     for (const sort of [keys.join(","), keys]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error => NextlyError.isCode(error, "FORBIDDEN"));
     }
     expect(can).toHaveBeenCalledTimes(2);
@@ -152,7 +152,7 @@ describe("a canvas list's read", () => {
     ];
     for (const sort of pastBounds) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
@@ -164,7 +164,7 @@ describe("a canvas list's read", () => {
     join.mockRestore();
     for (const sort of ["-a.b", ["title", "x y"]]) {
       await expect(
-        listEntriesRoute().handler(request(sort), ctx)
+        listEntriesRoute(() => undefined).handler(request(sort), ctx)
       ).rejects.toSatisfy(error =>
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
