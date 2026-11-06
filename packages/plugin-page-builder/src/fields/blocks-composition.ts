@@ -98,6 +98,7 @@ import {
 } from "./layers-lock-wording";
 import {
   composedListQueryIssues,
+  listSettingOf,
   type ListFieldsReader,
 } from "./list-query-judgement";
 import {
@@ -735,10 +736,11 @@ async function judgeOwnComposition(args: {
 
 /**
  * Refuse a list a placed component holds that the page, as composed, makes
- * name a field the schema refuses, as the page's own lists are refused: a
- * placement's value or variant can change a list's source, filters or sort,
- * and the published page reads the composed list. Judged only where the
- * schema can be read; a problem the stored page already composed to is kept.
+ * one the canvas and the published page refuse: a placement's value or
+ * variant can change a list's source, filters, sort or bounds, and both read
+ * the composed list. Its shape is judged always, and the fields it names
+ * where the schema can be read; a problem the stored page already composed
+ * to is kept.
  */
 async function judgeComposedLists(args: {
   document: BlockDocument;
@@ -755,13 +757,12 @@ async function judgeComposedLists(args: {
   report: Report;
 }): Promise<void> {
   const fieldsOf = args.setup.listFields;
-  if (fieldsOf === undefined) return;
   const found = await composedListQueryIssues(
     args.composed,
     args.document,
-    args.write,
+    listSettingOf(args.write),
     {
-      fieldsOf,
+      ...(fieldsOf === undefined ? {} : { fieldsOf }),
       maxNodes: args.setup.limits.maxNodes,
       // The stored forms composed as this page is, so a list they already
       // composed to keeps its problem as a warning.

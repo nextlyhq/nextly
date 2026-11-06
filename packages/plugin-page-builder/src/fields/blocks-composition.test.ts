@@ -1124,6 +1124,35 @@ describe("a page's placed lists, judged as the page composes them", () => {
       )
     ).toEqual([]);
   });
+
+  it("refuses a placement value giving a component's list a sort no list reads, as the canvas does", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+    });
+    // Text a text exposure takes, and a sort no list may store: only the
+    // composed list holds it, so only the composition can refuse it.
+    for (const options of [{ listFields }, {}]) {
+      const issues = await judge(
+        placed({ order: "-a.b" }),
+        write(readStored, "pages", "p1"),
+        options
+      );
+      expect(codes(issues)).toEqual(["list-sort-invalid"]);
+      expect(issues[0]!.message).toContain('"cards"');
+    }
+  });
+
+  it("keeps a sort the stored page already composed to, however it reads", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: placed({ order: "-a.b" }) } },
+    });
+    expect(
+      await judge(placed({ order: "-a.b" }), write(readStored, "pages", "p1"), {
+        listFields,
+      })
+    ).toEqual([]);
+  });
 });
 
 describe("a component save judged inside the documents that use it", () => {
