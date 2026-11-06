@@ -13,7 +13,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement, ReactNode } from "react";
+import { startTransition, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -689,6 +689,80 @@ describe("a plugin's replacement over time", () => {
         queryKey: ["entries", "detail", "layouts", "l1"],
       })
     );
+  });
+
+  it("leaves the entry on a deletion reported from it in another language", async () => {
+    // Deleting removes the entry in every language, so the deletion is the
+    // one now shown too, whichever language its section was drawn in.
+    const onDelete = vi.fn();
+    const element = (locale: string) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={entry}
+        mode="edit"
+        locale={locale}
+        onDelete={onDelete}
+      />
+    );
+    const view = render(element("en"), { wrapper: Providers });
+    await screen.findByText("Used by 2 pages");
+    const inEnglish = section.current!;
+
+    view.rerender(element("es"));
+    act(() => inEnglish.documentChanged("deleted"));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges a late report by the editor on screen, not by a render that has not landed", async () => {
+    // Moving to another entry inside a transition that suspends leaves the
+    // first entry on screen while the next is being drawn. A report from the
+    // first entry's section is still about the document shown, so a
+    // deletion leaves it; an identity moved while rendering would drop it.
+    const SUSPENDS = "test/layouts#SuspendingUsage";
+    let resume: () => void = () => {};
+    const waiting = new Promise<void>(done => {
+      resume = done;
+    });
+    function SuspendingUsage(props: DocumentPanelSectionProps) {
+      if (props.entryId === "l2") throw waiting;
+      section.current = props;
+      return <p>Used by 2 pages</p>;
+    }
+    registerComponent(SUSPENDS, SuspendingUsage as never);
+    plugins.current = [
+      {
+        ...LAYOUTS_PLUGIN,
+        panelSections: [
+          { slug: "layouts", title: "Used by", component: SUSPENDS },
+        ],
+      },
+    ];
+    const onDelete = vi.fn();
+    const element = (current: object) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={current as never}
+        mode="edit"
+        onDelete={onDelete}
+      />
+    );
+    const view = render(element(entry as object), { wrapper: Providers });
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+
+    act(() => {
+      startTransition(() => {
+        view.rerender(element({ ...(entry as object), id: "l2" }));
+      });
+    });
+    // Still the first entry on screen: the next one has not landed.
+    expect(section.current?.entryId).toBe("l1");
+    act(() => forFirst.documentChanged("deleted"));
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    resume();
+    unregisterComponent(SUSPENDS);
   });
 
   it("arms no own-change expectation from a section drawn in another language", async () => {

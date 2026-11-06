@@ -20,6 +20,7 @@ import {
 } from "nextly/config";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -352,8 +353,9 @@ function useReplacementRequests({
 }
 
 /**
- * A section's report, bound to the document it was drawn for: the entry, in
- * the language it was drawn in, in this editor while it is mounted. A section
+ * A section's report, bound to the document it was drawn for: the entry,
+ * in this editor while it is mounted, and for a change the language it was
+ * drawn in too (a deletion removes the entry in every language). A section
  * keeps the props it was drawn with, so a report can arrive once another
  * document is on screen, or once this editor is gone. Then the reported
  * document's own caches are still refreshed, since what the plugin did to it
@@ -373,11 +375,13 @@ function useBoundSectionReport({
 }): (result: DocumentChangeResult) => void {
   const queryClient = useQueryClient();
   const shown = { collectionSlug, entryId, locale: locale ?? null };
-  // The document on screen now, and whether this editor still is: its
-  // cleanup ends it, so a report kept past an unmount is never this one's.
+  // The document on screen, as the editor last COMMITTED it, and whether this
+  // editor still is: set as the commit lands, not while rendering, so a
+  // render React abandons cannot move it; its cleanup ends it, so a report
+  // kept past an unmount is never this one's. The first render's value holds
+  // until then: an editor whose first render is abandoned is never mounted.
   const shownNow = useRef<typeof shown | null>(shown);
-  shownNow.current = shown;
-  useEffect(() => {
+  useLayoutEffect(() => {
     shownNow.current = { collectionSlug, entryId, locale: locale ?? null };
     return () => {
       shownNow.current = null;
@@ -385,11 +389,16 @@ function useBoundSectionReport({
   }, [collectionSlug, entryId, locale]);
   return result => {
     const now = shownNow.current;
-    const stillShown =
+    // Deleting removes the entry in every language, so a deletion reported
+    // from the entry in another language still leaves it. A change is the
+    // language's own: only one reported in the language on screen is taken
+    // for the author's, since it arms the expectation on that language.
+    const sameEntry =
       now !== null &&
       now.collectionSlug === shown.collectionSlug &&
-      now.entryId === shown.entryId &&
-      now.locale === shown.locale;
+      now.entryId === shown.entryId;
+    const stillShown =
+      sameEntry && (result === "deleted" || now.locale === shown.locale);
     if (stillShown) {
       documentChanged(result);
       return;
