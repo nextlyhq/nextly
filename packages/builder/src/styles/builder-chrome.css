@@ -9446,10 +9446,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   font-size: var(--nx-builder-font-size);
 }
 
+/* Wrapped, never cut: an API group's condition reads whole. */
 .nx-show-when__line {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .nx-show-when__or {
@@ -9461,6 +9460,25 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 .nx-show-when__keep {
   align-self: flex-start;
+}
+
+/* A condition wraps to two lines rather than cutting off its rule: a long
+   field name must never hide the operator and value an author has to read,
+   least of all on the row the page can't check. */
+.nx-show-when .nx-list-filter__line {
+  height: auto;
+  min-height: 28px;
+  padding-block: 0.25rem;
+}
+
+.nx-show-when .nx-list-filter__sentence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 /* A refused value spans its row when the row has no label column. */

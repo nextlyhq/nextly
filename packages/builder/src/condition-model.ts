@@ -66,17 +66,23 @@ export function conditionFieldsOf(
 ): readonly ConditionField[] {
   const listed = new Set(collection.fields.map(field => field.name));
   const others = (collection.readable ?? []).flatMap(
-    (shape): ConditionField[] =>
-      listed.has(shape.name) || conditionFieldKind(shape) !== "other"
-        ? []
-        : [
-            {
-              name: shape.name,
-              label: shape.label ?? shape.name,
-              kind: "other",
-              kindWords: otherKindWords(shape),
-            },
-          ]
+    (shape): ConditionField[] => {
+      if (listed.has(shape.name)) return [];
+      // Of the kind the save judges it by: a field no list offers may still
+      // be a scalar, such as an entry's id, with that kind's operators.
+      const kind = conditionFieldKind(shape);
+      return [
+        {
+          name: shape.name,
+          label: shape.label ?? shape.name,
+          kind,
+          ...(kind === "other" ? { kindWords: otherKindWords(shape) } : {}),
+          ...(kind === "entry" && typeof shape.relationTo === "string"
+            ? { relationTo: shape.relationTo }
+            : {}),
+        },
+      ];
+    }
   );
   return [...collection.fields, ...others];
 }
@@ -272,7 +278,7 @@ export function conditionLine(sentence: ConditionSentence): string {
  */
 export function completedCondition(
   draft: DraftCondition,
-  field: Pick<ConditionField, "label"> | undefined
+  field: Pick<ConditionField, "label" | "kind"> | undefined
 ): { readonly condition: Condition } | { readonly missing: string } {
   if (draft.field === undefined || field === undefined) {
     return { missing: "Choose a field, or remove this condition." };
@@ -283,7 +289,12 @@ export function completedCondition(
   if (!takesValue(draft.op)) {
     return { condition: { field: draft.field, op: draft.op } };
   }
-  if (draft.value === undefined || draft.value === "") {
+  // Empty text is a value text equality compares with, as the save reads
+  // it; every other comparison needs something to compare.
+  const emptyAllowed =
+    field.kind === "text" &&
+    (draft.op === "equals" || draft.op === "not_equals");
+  if (draft.value === undefined || (draft.value === "" && !emptyAllowed)) {
     return {
       missing: `Choose a value for ${field.label}, or remove this condition.`,
     };

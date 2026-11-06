@@ -24,12 +24,19 @@ const POSTS: LoopCollection = {
     { name: "title", label: "Title", kind: "text" },
     { name: "rating", label: "Reading time", kind: "number" },
     { name: "featured", label: "Featured", kind: "boolean" },
+    { name: "author", label: "Author", kind: "entry", relationTo: "authors" },
   ],
-  declared: ["id", "title", "rating", "featured", "tags", "secret"],
+  declared: ["id", "title", "rating", "featured", "author", "tags", "secret"],
   readable: [
     { name: "title", label: "Title", type: "text" },
     { name: "rating", label: "Reading time", type: "number" },
     { name: "featured", label: "Featured", type: "checkbox" },
+    {
+      name: "author",
+      label: "Author",
+      type: "relationship",
+      relationTo: "authors",
+    },
     // Several entries: no list filters by it, and a condition may ask
     // whether it has a value.
     {
@@ -42,9 +49,15 @@ const POSTS: LoopCollection = {
   ],
 };
 
+const AUTHORS: Readonly<Record<string, string>> = { a1: "Ada", a2: "Grace" };
+
 const services: ContentServices = {
   listLoopCollections: async () => [POSTS],
   entryCollection: "posts",
+  findEntries: async query =>
+    (query.ids ?? []).flatMap(id =>
+      AUTHORS[id] === undefined ? [] : [{ id, title: AUTHORS[id] }]
+    ),
 };
 
 let editorRef: EditorState | null = null;
@@ -200,5 +213,41 @@ describe("Show when", () => {
     await shown(withConditions([[{ field: "tags", op: "exists" }]]));
     // CONTROL: named as the admin names it, not "not offered here".
     expect(screen.getByTitle("Tags has a value")).toBeTruthy();
+  });
+
+  it("reads a group with a hole in it as conditions it can't show", async () => {
+    const sparse: unknown[] = [];
+    sparse[1] = { field: "title", op: "exists" };
+    await shown(withConditions([sparse]));
+    expect(
+      screen.getByRole("button", { name: "Remove conditions" })
+    ).toBeTruthy();
+  });
+
+  it("offers the lone yes-or-no operator to repair a row holding another", async () => {
+    // An operator conditions don't have reads as not chosen yet.
+    await shown(withConditions([[{ field: "featured", op: "bogus" }]]));
+    act(() => {
+      screen.getByTitle("Featured").click();
+    });
+    const compare = screen.getByRole("combobox", {
+      name: "How Featured is compared",
+    }) as HTMLButtonElement;
+    expect(compare.disabled).toBe(false);
+  });
+
+  it("names related entries by their titles in groups set through the API", async () => {
+    await shown(
+      withConditions([
+        [{ field: "author", op: "equals", value: "a1" }],
+        [{ field: "author", op: "equals", value: "a2" }],
+      ])
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const text = document.querySelector(".nx-show-when__groups")?.textContent;
+    expect(text).toContain("Ada");
+    expect(text).toContain("Grace");
   });
 });

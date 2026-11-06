@@ -126,6 +126,7 @@ describe("the fields a condition can check", () => {
       label: "Posts",
       fields: [{ name: "title", label: "Title", kind: "text" }],
       readable: [
+        { name: "id", label: "ID", type: "text" },
         { name: "title", label: "Title", type: "text" },
         {
           name: "tags",
@@ -142,12 +143,14 @@ describe("the fields a condition can check", () => {
       fields.map(field => [field.name, field.kind, field.kindWords])
     ).toEqual([
       ["title", "text", undefined],
+      // A scalar no list offers keeps its own kind and operators.
+      ["id", "text", undefined],
       ["tags", "other", "Several entries"],
       ["cover", "other", "Media"],
       ["opensAt", "other", "Time of day"],
     ]);
     // Named by its name when no label came with it.
-    expect(fields[2]?.label).toBe("cover");
+    expect(fields[3]?.label).toBe("cover");
     expect(conditionChoices("other").map(choice => choice.op)).toEqual([
       "exists",
       "not_exists",
@@ -183,5 +186,18 @@ describe("a number too large to hold", () => {
     ).toEqual({
       condition: { field: "rating", op: "greater_than", value: 5 },
     });
+  });
+});
+
+describe("empty text", () => {
+  it("is a value text equality compares with, and nothing else takes", () => {
+    expect(
+      completedCondition({ field: "title", op: "equals", value: "" }, title)
+    ).toEqual({ condition: { field: "title", op: "equals", value: "" } });
+    // CONTROL: contains needs text to look for, as the save says.
+    expect(
+      "missing" in
+        completedCondition({ field: "title", op: "contains", value: "" }, title)
+    ).toBe(true);
   });
 });

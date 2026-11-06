@@ -161,7 +161,9 @@ function storedGroups(
   if (!Array.isArray(groups)) return undefined;
   const read: Condition[][] = [];
   for (const group of groups as unknown[]) {
-    if (!Array.isArray(group) || !group.every(isConditionRecord)) {
+    // Every position read, holes included: `every` skips a hole, which would
+    // reach the rows as a condition that isn't there.
+    if (!Array.isArray(group) || !Array.from(group).every(isConditionRecord)) {
       return undefined;
     }
     read.push(group);
@@ -290,7 +292,14 @@ function ConditionOperatorPicker({
   return (
     <Select
       value={draft.op === undefined ? "" : choiceKey(draft.op)}
-      disabled={disabled || choices.length === 1}
+      // A lone choice is still offered when the row holds another operator,
+      // so a stored one the field doesn't take can be repaired here.
+      disabled={
+        disabled ||
+        (choices.length === 1 &&
+          draft.op !== undefined &&
+          choices[0]?.key === choiceKey(draft.op))
+      }
       onValueChange={key => {
         const choice = choices.find(each => each.key === key);
         if (choice === undefined) return;
@@ -435,11 +444,13 @@ function StoredGroups({
   groups,
   fields,
   disabled,
+  entryTitle,
   onKeepFirst,
 }: {
   groups: readonly (readonly Condition[])[];
   fields: readonly ConditionField[];
   disabled: boolean;
+  entryTitle: (id: string) => string | undefined;
   onKeepFirst: () => void;
 }): React.JSX.Element {
   return (
@@ -453,9 +464,12 @@ function StoredGroups({
             {index === 0 ? null : <span className="nx-show-when__or">or</span>}
             <div className="nx-show-when__group">
               {group.map((condition, at) => {
+                // Related entries by their titles, as an open row names them,
+                // so two groups on different entries read apart.
                 const sentence = conditionSentence(
                   toDraft(condition),
-                  fields.find(each => each.name === condition.field)
+                  fields.find(each => each.name === condition.field),
+                  entryTitle
                 );
                 return (
                   <span key={at} className="nx-show-when__line">
@@ -696,6 +710,7 @@ function GroupBody({
         groups={groups}
         fields={one.fields}
         disabled={one.disabled}
+        entryTitle={one.entryTitle}
         onKeepFirst={() => one.writes.write(stored)}
       />
     );
@@ -755,10 +770,18 @@ export function ShowWhen({
   const groups = node === undefined ? [] : storedGroups(node);
   const stored = groups?.[0] ?? [];
   const state = useSentenceRows<Condition, DraftCondition>(stored, toDraft, {});
+  // Every condition shown: the rows being edited, or each API group's.
+  const shownConditions =
+    groups !== undefined && groups.length > 1
+      ? groups.flat().map(each => ({ field: each.field, value: each.value }))
+      : state.rows.map(row => ({
+          field: row.draft.field,
+          value: row.draft.value,
+        }));
   const entryTitle = useEntryTitles(
     services?.findEntries,
     listFields,
-    state.rows.map(row => ({ field: row.draft.field, value: row.draft.value }))
+    shownConditions
   );
   if (source === undefined) return null;
 
