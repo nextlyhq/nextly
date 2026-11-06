@@ -174,12 +174,11 @@ describe("the entry a page's conditions read", () => {
     expect(subject.entry?.values).toEqual({ title: "Hello" });
   });
 
-  it("is nothing on a Single's page, which has no entry, as the save judges it", () => {
+  it("is nothing when the public's fields of the entry aren't known", () => {
     expect(
       entrySubjectOf({
         entry: { title: "Hello" },
-        entryRef: { single: "home" },
-        fieldShapes: shapes,
+        entryRef: { collection: "posts" },
       })
     ).toEqual({});
   });

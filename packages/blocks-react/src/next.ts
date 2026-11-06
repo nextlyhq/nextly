@@ -2487,8 +2487,11 @@ async function readPageInputs(args: {
     effectiveLimits(config)
   );
   const page = drawn(config, args.resolver, document, definitions);
-  // A Single's page has no entry for its conditions (see `entrySubjectOf`),
-  // so they read nothing of it; asked once, for the reads and the skip alike.
+  // Whether the page's conditions have an entry to judge. A Single's page has
+  // none, as the editor and the save say, so its entry-scoped conditions fail
+  // closed with nothing read, and its conditioned blocks are never kept for
+  // the reads: neither their fields nor what they bind is asked for. The ONE
+  // place this is decided; the reads, the skip and the decision follow it.
   const conditionsReadEntry = args.entrySource === "collection";
   // Whether the page reads anything is asked of it with every conditioned
   // block kept, as its reads are taken below: a conditioned block's bindings
@@ -2496,14 +2499,16 @@ async function readPageInputs(args: {
   // so metadata must read the Layout before them just as the render does.
   // Only metadata asks, and the kept page it prepares is reused for the reads.
   const keptPage =
-    args.regionsOnlyWhenBound === true && holdsBackConditions(page.prepared)
+    conditionsReadEntry &&
+    args.regionsOnlyWhenBound === true &&
+    holdsBackConditions(page.prepared)
       ? keptForReading(page)
       : undefined;
   const pageReading = keptPage ?? page;
   const skipRegions =
     args.regionsOnlyWhenBound === true &&
     (pageReading.prepared === null ||
-      !readsAnything(pageReading.prepared.presented, conditionsReadEntry));
+      !readsAnything(pageReading.prepared.presented));
   const { regions, regionDefinitions } = await layoutRegions({
     config,
     provider: skipRegions ? undefined : args.layoutsProvider,
@@ -2524,7 +2529,9 @@ async function readPageInputs(args: {
   // A page holding conditioned blocks is read with all of them kept: a block
   // that may show asks for what it binds, and its conditions name the entry
   // fields they check. Read once, then decided against what was read.
-  const conditioned = parts.some(part => holdsBackConditions(part.prepared));
+  const conditioned =
+    conditionsReadEntry &&
+    parts.some(part => holdsBackConditions(part.prepared));
   // The page kept for metadata's question above is the same reading: not
   // prepared a second time.
   const reading = conditioned
@@ -2542,7 +2549,7 @@ async function readPageInputs(args: {
     reader: publicReaderFor(config, context.locale, args.window),
     budget,
     window: args.window,
-    ...(conditioned && conditionsReadEntry
+    ...(conditioned
       ? { conditions: conditionDemand(readingDocs.flatMap(doc => doc.nodes)) }
       : {}),
   });
@@ -2568,14 +2575,10 @@ async function readPageInputs(args: {
  * entry field a condition checks. A list's item conditions read nothing more
  * than the list does.
  */
-function readsAnything(
-  presented: BlockDocument,
-  conditionsReadEntry: boolean
-): boolean {
+function readsAnything(presented: BlockDocument): boolean {
   return (
     bindingDemand([presented]).any ||
-    (conditionsReadEntry &&
-      conditionDemand(presented.nodes).entryFields.size > 0)
+    conditionDemand(presented.nodes).entryFields.size > 0
   );
 }
 

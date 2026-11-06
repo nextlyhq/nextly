@@ -311,19 +311,15 @@ export function entryConditionedIn(document: BlockDocument): Set<string> {
   return held;
 }
 
-/**
- * The page's entry as a condition reads it, when the public may read it.
- * Nothing for a Single's page, which has no entry for conditions to read.
- */
+/** The page's entry as a condition reads it, when the public may read it. */
 export function entrySubjectOf(bindings: PageBindings | undefined): {
   entry?: ConditionSubject;
 } {
   const values = bindings?.entry;
   const ref = bindings?.entryRef;
-  // A Single's page has no entry for its conditions to read, as the save
-  // judges it: its fields are the Single's, read for its bindings, and a
-  // condition on the page is one no entry can answer, so it fails closed.
-  if (ref === undefined || "single" in ref) return {};
+  // Whether the page has an entry to judge is the route's to decide, before
+  // it reads: a Single's page never reaches here (see `readPageInputs`).
+  if (ref === undefined) return {};
   const readable = bindings?.fieldShapes?.fieldsOf(ref);
   if (values === undefined || values === null || readable === undefined) {
     return {};

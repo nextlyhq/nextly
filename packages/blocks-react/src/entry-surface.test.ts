@@ -266,10 +266,10 @@ const SOURCE_MODULES: ReadonlyArray<{
     // `pruneNodes` is the shared walk the three passes share so their identity
     // behaviour cannot diverge. It is a shape, not a policy, and a consumer
     // reaching for it is writing a fourth pass this package cannot account for.
-    // `entrySubjectOf` is the route's reading of its own read bindings: which
-    // entry a page's conditions judge, and that a Single's page has none. It
-    // lives beside the gate so the rule sits with the evaluator, and only the
-    // `./next` route, which made that read, has the bindings to hand it.
+    // `entrySubjectOf` is the route's reading of its own read bindings: the
+    // entry a page's conditions judge. It lives beside the gate so the rule
+    // sits with the evaluator, and only the `./next` route, which made that
+    // read, has the bindings to hand it.
     internal: [
       "drawsNothing",
       "entrySubjectOf",

@@ -1206,6 +1206,27 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(runtime.pipelineRuns).toBe(3);
   });
 
+  it("prepares a conditioned page three times for its metadata too, reusing the page kept for its question", async () => {
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          shownWhen("yes", "Shown", [
+            [{ field: "title", op: "equals", value: "Public" }],
+          ])
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Page",
+      }),
+    });
+    runtime.pipelineRuns = 0;
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    // The page kept to ask whether it reads anything is the one its reads
+    // are taken from: a fourth preparation would be the same work again.
+    expect(runtime.pipelineRuns).toBe(3);
+  });
+
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { html } = await renderedPage(

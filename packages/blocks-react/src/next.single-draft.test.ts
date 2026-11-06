@@ -117,6 +117,15 @@ describe("a Single blocks page holding a conditioned block", () => {
                 type: "core/heading",
                 version: 1,
                 props: { text: "Members only", level: "h1" },
+                // Bound to another Single: never read, since the block can
+                // never show on a Single's page.
+                bindings: {
+                  text: {
+                    $bind: "tagline",
+                    source: "single",
+                    sourceKey: "home",
+                  },
+                },
                 visibility: {
                   conditions: [[{ field: "title", op: "exists" }]],
                 },
@@ -138,8 +147,9 @@ describe("a Single blocks page holding a conditioned block", () => {
       }),
     });
     await route.generateMetadata();
-    // The route's own read, and no public read of the Single for a
-    // condition that can never be judged against it.
+    // The route's own read: no public read of the Single for a condition that
+    // can never be judged against it, nor of the Single the block binds.
     expect(calls).toHaveLength(1);
+    expect(calls.map(call => call.slug)).toEqual(["homepage"]);
   });
 });
