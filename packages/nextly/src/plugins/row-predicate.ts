@@ -113,7 +113,7 @@ function verdict(predicate: RowPredicate, row: unknown): Verdict {
     const inner = verdict(predicate.not, row);
     return inner === "unknown" ? "unknown" : !inner;
   }
-  return leafVerdict(predicate as Record<string, unknown>, row);
+  return leafVerdict(predicate, row);
 }
 
 /**

@@ -27,14 +27,14 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { collectPluginTranslations } from "./plugin-translations";
+import { collectPluginRoutes } from "./routes/collect-routes";
+import { isRouteError } from "./routes/route-error";
 import {
   collectionContributors,
   renamedSlug,
   servedCollectionSlug,
 } from "./served-collection-slug";
-import { collectPluginTranslations } from "./plugin-translations";
-import { collectPluginRoutes } from "./routes/collect-routes";
-import { isRouteError } from "./routes/route-error";
 import { settingsPermissionOf } from "./settings-permission";
 import { validatedClientConfig } from "./validate-client-config";
 import {
