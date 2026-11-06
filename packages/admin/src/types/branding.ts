@@ -1,4 +1,5 @@
 import type {
+  AdminContributionsMeta,
   PluginListFilterDeclaration,
   PublishedContentSource,
 } from "nextly/config";
@@ -295,6 +296,13 @@ export interface AdminBranding {
    * `useBrandingStatus()` before concluding anything from a plugin missing here.
    */
   plugins?: PluginMetadata[];
+
+  /**
+   * Each admin place's contributions, by kind, in order, as this reader may
+   * see them: the signed-in half's every place but the login page's, the
+   * public half's the login page's alone.
+   */
+  contributions?: AdminContributionsMeta;
 
   /**
    * Public client configuration, readable before a session exists.

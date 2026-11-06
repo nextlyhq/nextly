@@ -26,6 +26,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   readListQuery,
   regionDocument,
+  resolveDocumentSeo,
   safeTimeZone,
   type BindingDemand,
   type BindingFieldShape,
@@ -735,7 +736,12 @@ async function derivePageSeo(
    * The document as the caller already prepared it for its reads, so the
    * pipeline runs once for this invocation.
    */
-  preparation: PreparedDocument | undefined
+  preparation: PreparedDocument | undefined,
+  /**
+   * Where the document's own metadata bindings that could not be used are
+   * reported. They are no node's, so the render's report never holds them.
+   */
+  reportIssues?: BindingIssuesHandler
 ): Promise<DerivedPageSeo> {
   const resolver = blocks ?? registeredBlocks();
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
@@ -743,6 +749,13 @@ async function derivePageSeo(
   // where a present-but-undefined key erases a canonical they already knew.
   const path = emitPath(slug);
   const canonical = path === null ? {} : { canonical: path };
+
+  // One binding pass for the blocks and the document's own metadata, so a
+  // bound title segment and a bound heading read the same value.
+  const run =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(bindings, locale, resolver);
 
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
@@ -761,9 +774,7 @@ async function derivePageSeo(
       ...(definitions === undefined || definitions.size === 0
         ? {}
         : { definitions }),
-      ...(bindings === undefined
-        ? {}
-        : { bindings: pageBindingRun(bindings, locale, resolver) }),
+      ...(run === undefined ? {} : { bindings: run }),
     },
     preparation
   );
@@ -776,11 +787,23 @@ async function derivePageSeo(
   // whose conditions held for the entry describes the page, one a list's item
   // decides does not, since no one item speaks for the page.
   const held = heldConditionsOf(preparation);
-  const { image: imageCandidates, ...text } = deriveSeoFromDocument(
+  const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
     node => conditionAllows(node, {}, { held })
   );
+  // What the document states for the page as a whole wins over what its
+  // blocks offer, field by field; its image is tried first, and a block's
+  // still answers when it yields no picture.
+  const own = resolveDocumentSeo(prepared, run);
+  if (own.issues.length > 0) reportIssues?.(own.issues);
+  const text = {
+    ...derived,
+    ...(own.title === undefined ? {} : { title: own.title }),
+    ...(own.description === undefined ? {} : { description: own.description }),
+  };
+  const imageCandidates =
+    own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];
   const image = await firstUsableImage(
     imageCandidates,
     resolveMedia,
@@ -2694,7 +2717,8 @@ function blocksRouteConfig(
               inputs.definitions,
               inputs.bindings,
               context.locale,
-              inputs.page.prepared ?? undefined
+              inputs.page.prepared ?? undefined,
+              bindingIssueLog(context)
             );
             return metadata(entry, context, derived);
           },

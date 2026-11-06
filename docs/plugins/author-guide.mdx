@@ -133,7 +133,7 @@ something newer.
 | `ctx.services` | Managed data access — **secure by default** (acts as the ambient user, RBAC on). Pass `{ as: "system" }` to elevate. Validation/hooks/events always run. |
 | `ctx.db` | Typed, owner-checked access to your declared tables — **unmanaged** (no validation, hooks or events). `ctx.db.raw` is the Drizzle builder escape hatch; `execute`/`run` need `capabilities.db.rawSql` and the app's `db.rawSqlPlugins` listing. |
 | `ctx.dialect` | The database this installation runs on (`@experimental`). |
-| `ctx.hooks` | In-transaction hooks — can **modify or abort** an operation. |
+| `ctx.hooks` | Hooks — can **modify or abort** an operation before it writes, or write **inside its transaction** (`onInTransaction`). |
 | `ctx.events` | Post-commit event bus — **observe-only, best-effort** (may be dropped). React/notify here. |
 | `ctx.filters` / `ctx.actions` | Typed seams to transform values / run ordered side-effects. |
 | `ctx.self` | Your entities' **resolved** slugs after any host `.rename()`. Always reference your own entities through this. |
@@ -142,6 +142,33 @@ something newer.
 | `ctx.nextlyVersion` | The running core version (feature detection). |
 
 **Hooks vs events:** need to change or block an operation → use a **hook**; need to react after it commits → use an **event**.
+
+### When each hook runs
+
+A write offers four timings, in this order:
+
+| When | What runs | How often |
+|---|---|---|
+| Before the write | `beforeOperation`, `beforeCreate` / `beforeUpdate` / `beforeDelete`, `beforeChange` | once |
+| In the transaction | `ctx.hooks.onInTransaction` handlers (`@experimental`) | once per attempt, so possibly more than once |
+| After the commit | `afterCreate` / `afterUpdate` / `afterDelete`, and the collection events | once |
+| After | field `afterChange` hooks | once |
+
+An **in-transaction** handler runs last inside the write's own transaction: after the entry, its field groups, its version and its outbox event are written, and before the commit. It is handed the write and your `db`, bound to that transaction, so a row you write there commits or rolls back **with** the entry:
+
+```ts
+init(ctx) {
+  ctx.hooks.onInTransaction(ctx.self.collections.orders, async ({ operation, id, db }) => {
+    if (operation === "create") await db.insert(orderLedger, { orderId: id });
+  });
+}
+```
+
+- It runs for create, update and delete on collections, for publishing or withdrawing every language, and for a Single's update and publish. Register a Single's handler as `single:<slug>`; a Single is only ever updated. `"*"` registers for every collection and Single.
+- It runs once per entry in a batch, and even when the write skips its hooks: what it writes is integrity, not a reaction.
+- **Throwing aborts the write** and nothing of it is kept. The caller gets the error's own status: throw a `NextlyError` (`NextlyError.validation(...)`, `NextlyError.forbidden(...)`) to answer with one; any other error answers 500. In a batch that shares one transaction, a handler that throws aborts the whole batch, whatever `stopOnError` says.
+- **It may run more than once.** When the write loses a version-conflict race, the attempt is rolled back and tried again, and your handler runs again with it; only the attempt that commits keeps its writes. So write only through the `db` you are handed. A network call, an email or a write through the outer `ctx.db` is not undone with a discarded attempt: in development Nextly warns, once per plugin, when a handler makes an outbound HTTP call. Do that work after the commit, in an `after*` hook or an event.
+- Keep it short: the entry's row stays locked while it runs.
 
 **Never hardcode your own slugs** in `init`. Use `ctx.self` so your plugin keeps working when an integrator renames an entity:
 

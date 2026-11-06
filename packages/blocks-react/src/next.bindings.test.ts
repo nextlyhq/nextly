@@ -382,6 +382,71 @@ describe("a routed page's bindings", () => {
     expect(title).toBe("Public");
   });
 
+  it("metadata takes the document's own title, joined from literal and bound segments, over its blocks'", async () => {
+    runtime.site = {
+      applicationName: "Acme",
+      siteUrl: null,
+      logoUrl: null,
+      timezone: null,
+    };
+    const document = JSON.parse(
+      JSON.stringify({
+        ...boundPage({ $bind: "title" }),
+        settings: {
+          seo: {
+            title: [
+              { $bind: "title" },
+              " | ",
+              { $bind: "applicationName", source: "site" },
+            ],
+            description: ["About ", { $bind: "title" }],
+          },
+        },
+      })
+    ) as BlockDocument;
+    let derived: { title?: string; description?: string } = {};
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: instance(document) as never,
+      metadata: (_entry, _context, seo) => {
+        derived = seo;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    // The entry's value as the public reads it, not the trusted row's.
+    expect(derived.title).toBe("Public | Acme");
+    expect(derived.description).toBe("About Public");
+  });
+
+  it("reports a metadata binding the route could not use, naming the page", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const document = JSON.parse(
+      JSON.stringify({
+        ...boundPage({ $bind: "title" }),
+        settings: { seo: { title: ["Hello ", { $bind: "not a path" }] } },
+      })
+    ) as BlockDocument;
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: instance(document) as never,
+      metadata: () => ({}),
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(
+      warn.mock.calls.some(
+        ([message]) =>
+          String(message).includes('page "about"') &&
+          String(message).includes("binding-malformed")
+      )
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
   it("a page whose slots nest deeper than the call stack still renders", async () => {
     // Stored content that bypassed validation: a chain far past the caps the
     // read pipeline repairs to, holding a binding at the top.

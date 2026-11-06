@@ -46,15 +46,15 @@
  *
  * ## What this does not reach
  *
- * A write that skips hooks (a batch with `skipHooks`), and core's
- * all-languages lifecycle (`POST …/entries/:id/unpublish-all` and
- * `publish-all`), which runs no collection hooks at all: it can unpublish a
- * Layout, the default or one pages use, past every check here. Closing that
- * needs core to run the collection's hooks there; until then it is a known
- * limit of every guard a plugin registers. What follows from it is repaired
- * afterwards: the default repair points an unusable default at a published
- * Layout, and the removal sweep drops an unpublish tombstone whose Layout an
- * all-languages publish put back (`settle.ts`).
+ * A write that skips hooks (a batch with `skipHooks`): it can unpublish a
+ * Layout, the default or one pages use, past every check here, a known limit
+ * of every guard a plugin registers. Core's all-languages lifecycle
+ * (`POST …/entries/:id/unpublish-all` and `publish-all`) runs the collection's
+ * hooks as a status change of one language does, so it meets these checks.
+ * What a hook-less write leaves is repaired afterwards: the default repair
+ * points an unusable default at a published Layout, and the removal sweep
+ * drops an unpublish tombstone whose Layout such a write published again
+ * (`settle.ts`).
  *
  * @module layout-removal/layout-removal-guard
  */

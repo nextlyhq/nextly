@@ -96,6 +96,39 @@ describe("a write's collection lists, judged by the server", () => {
     ).toEqual([]);
   });
 
+  it("judges a component's list of the entry's related entries by its shape, since the pages placing it are the entries", async () => {
+    // The component store is a collection too, and holds no such relation.
+    const STORE: ListFields = {
+      declared: new Set(["id", "title", "content"]),
+      readable: [{ name: "id", type: "text" }],
+    };
+    const fieldsOf = vi.fn(async (collection: string) =>
+      collection === "nx_pb_components" ? STORE : FIELDS[collection]
+    );
+    const asComponent = { ...relatedToEntry, kind: "component" };
+    expect(
+      await newListQueryIssues(
+        asComponent,
+        args({ slug: "nx_pb_components", locale: "fr" }),
+        "Content",
+        { fieldsOf }
+      )
+    ).toEqual([]);
+    // Still judged in the write's language, and never against the store.
+    expect(fieldsOf.mock.calls).toEqual([["categories", "fr"]]);
+    // CONTROL: the same document as a page of that collection is refused.
+    expect(
+      (
+        await newListQueryIssues(
+          relatedToEntry,
+          args({ slug: "nx_pb_components" }),
+          "Content",
+          { fieldsOf }
+        )
+      ).map(issue => issue.code)
+    ).toEqual(["list-field-unknown"]);
+  });
+
   it("asks for each collection's fields in the language the write is judged in", async () => {
     const fieldsOf = vi.fn(async (collection: string) => FIELDS[collection]);
     await newListQueryIssues(
@@ -108,6 +141,72 @@ describe("a write's collection lists, judged by the server", () => {
       ["posts", "fr"],
       ["categories", "fr"],
     ]);
+  });
+});
+
+describe("a problem the stored page may already hold", () => {
+  // A list sorted by a field visitors can't see, on a posts page.
+  const hidden = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "l1",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "categories", sort: "featured" },
+        slots: { children: [] },
+      },
+    ],
+  };
+  const fieldsOf = async (collection: string) => FIELDS[collection];
+
+  it("is kept, not refused, where the stored page cannot be read", async () => {
+    const onUnjudged = vi.fn();
+    expect(
+      await newListQueryIssues(hidden, args({}), "Content", {
+        fieldsOf,
+        storedForms: async () => ({ forms: [], readable: false }),
+        onUnjudged,
+      })
+    ).toEqual([]);
+    expect(onUnjudged).toHaveBeenCalledWith(1);
+    // CONTROL: nothing stored (a create), the problem is the write's own.
+    expect(
+      (
+        await newListQueryIssues(hidden, args({}), "Content", {
+          fieldsOf,
+          storedForms: async () => ({ forms: [], readable: true }),
+        })
+      ).map(issue => issue.code)
+    ).toEqual(["list-field-protected"]);
+  });
+});
+
+describe("the schema a judgement reads", () => {
+  it("reads the fields of no more lists than the judgement visits", async () => {
+    // Five lists, each of its own collection, and a judgement bounded at two.
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: ["c1", "c2", "c3", "c4", "c5"].map(collection => ({
+        id: collection,
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection, sort: "title" },
+        slots: { children: [] },
+      })),
+    };
+    const fieldsOf = vi.fn(async (): Promise<ListFields> => POSTS);
+    await newListQueryIssues(page, args({}), "Content", {
+      fieldsOf,
+      maxNodes: 2,
+    });
+    expect(fieldsOf.mock.calls.map(call => call[0])).toEqual(["c1", "c2"]);
+    // CONTROL: unbounded, every list's collection is read.
+    fieldsOf.mockClear();
+    await newListQueryIssues(page, args({}), "Content", { fieldsOf });
+    expect(fieldsOf).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -255,5 +354,17 @@ describe("a write's visibility conditions, judged by the server", () => {
         )
       ).map(issue => issue.code)
     ).toEqual(["condition-field-unknown"]);
+  });
+
+  it("leaves a problem unjudged when the stored page can't be read", async () => {
+    // A language whose store is not ready: the stored page may already hold
+    // the problem, so nothing can tell it from a new one.
+    const value = conditioned([[{ field: "internalScore", op: "exists" }]]);
+    expect(
+      await newConditionIssues(value, args({}), "Content", {
+        fieldsOf,
+        storedForms: async () => ({ readable: false, forms: [] }),
+      })
+    ).toEqual([]);
   });
 });
