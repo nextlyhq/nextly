@@ -37,12 +37,43 @@
  */
 import type { BindingFieldShape } from "./binding-rules";
 import { bindingKindOf } from "./binding-vocabulary";
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { isPlainRecord } from "./plain-record";
+import { locateNode } from "./tree";
 
 /** The block a list query belongs to. */
 export const COLLECTION_LIST_TYPE = "core/collection-loop";
+
+/**
+ * The slot a list draws once per entry, with that entry as the item. Its
+ * other slot, the empty state, is drawn with no entry of its own, so a list
+ * inside it has the item around the outer list, as the renderer draws it.
+ */
+export const LIST_ENTRY_SLOT = "children";
+
+/**
+ * The list whose entry is the item where `id` sits, nearest first: the list
+ * whose per-entry slot holds it, at any depth, passing over a list it sits
+ * in the empty state of. `undefined` outside every list's entries. The one
+ * answer, as {@link listQueryIssues} judges a related list's outer item, for
+ * an editor offering related sources where the block sits.
+ */
+export function outerListOf(
+  nodes: BlockNode[],
+  id: string
+): BlockNode | undefined {
+  let at = locateNode(nodes, id);
+  // Bounded by the document's depth: each step moves one parent out.
+  while (at?.parent !== undefined) {
+    const parent = at.parent;
+    if (parent.type === COLLECTION_LIST_TYPE && at.slot === LIST_ENTRY_SLOT) {
+      return parent;
+    }
+    at = locateNode(nodes, parent.id);
+  }
+  return undefined;
+}
 
 /**
  * The operators a filter row may use, as the Direct API spells them. Closed:
@@ -139,6 +170,7 @@ export type ListFieldCode =
   | "list-field-unfilterable"
   | "list-filter-unsuited"
   | "list-relation-unsuitable"
+  | "list-relation-no-entry"
   | "list-too-deep";
 
 /** Every code a list query is judged with, each described for authors. */
@@ -159,13 +191,15 @@ export const LIST_ISSUE_CODES: {
   "list-field-protected":
     "A list filters or sorts by a field visitors may not see.",
   "list-field-unsortable":
-    "A list sorts by a field that holds more than one value.",
+    "A list sorts by a field it cannot order by: one holding more than one value, a relation, or no one value to compare.",
   "list-field-unfilterable":
-    "A list filters by a field that holds more than one value.",
+    "A list filters by a field it cannot compare: one holding more than one value, or no one value to compare.",
   "list-filter-unsuited":
     "A list's filter compares a field with an operator or a value its kind does not take.",
   "list-relation-unsuitable":
     "A list's related source is not a to-many relation to its collection.",
+  "list-relation-no-entry":
+    "A list shows related entries of the page's entry on a page that is not an entry of a collection.",
   "list-too-deep":
     "A list shows related entries of a list that already shows related entries.",
 };
@@ -561,8 +595,14 @@ export interface ListFieldSource {
 export interface ListQueryJudgement {
   /** The schema; absent, lists are judged by their shape and nesting only. */
   readonly fields?: ListFieldSource;
-  /** The collection of the entry the page shows, for an `entry` relation. */
-  readonly entryCollection?: string;
+  /**
+   * The collection of the entry the page shows, for an `entry` relation.
+   * `null` when the page is known to be no collection's entry (a Single's),
+   * whose renderer has no entry to read a relation of, so such a list is
+   * refused; absent when the page is not known, and such a list is judged by
+   * its shape alone.
+   */
+  readonly entryCollection?: string | null;
   /**
    * The document's stored forms. A problem one of them already holds, on the
    * same block, is a warning rather than an error: a list stored before a
@@ -632,7 +672,9 @@ function namedFieldFinding(
   const uses = named.use === "filter" ? "filters by" : "sorts by";
   const judged = readableField(named.field, fields, { uses, collection });
   if (!("shape" in judged)) return judged;
-  if (judged.shape.hasMany !== true) return undefined;
+  if (judged.shape.hasMany !== true) {
+    return kindFinding(named, listFieldKind(judged.shape));
+  }
   // A field holding several values has no one value to order by, and its
   // operators read it as one value, so `in` on a has-many relation matches
   // nothing on any database rather than "includes any of".
@@ -645,6 +687,38 @@ function namedFieldFinding(
         code: "list-field-unfilterable",
         message: `This list filters by "${named.field}", which holds more than one value. A list cannot filter by such a field yet.`,
       };
+}
+
+/**
+ * The finding about a field of one value a list names, by its kind: the
+ * editor offers a filter only on a field with a kind (`listFieldKind`) and a
+ * sort only on a sortable one (`listKindSortable`), and the save holds every
+ * other writer to the same offer. Without it, a sort on a relation or a
+ * filter on a time of day saves, and the reader refuses it or compares a
+ * stored form no author chose.
+ */
+function kindFinding(
+  named: { readonly field: string; readonly use: "filter" | "sort" },
+  kind: ListFieldKind | undefined
+): { code: ListFieldCode; message: string } | undefined {
+  if (kind === undefined) {
+    return named.use === "sort"
+      ? {
+          code: "list-field-unsortable",
+          message: `This list sorts by "${named.field}", which holds a value a list cannot order by, such as a time of day, rich text or media. Choose another field.`,
+        }
+      : {
+          code: "list-field-unfilterable",
+          message: `This list filters by "${named.field}", which holds a value a list cannot compare, such as a time of day, rich text or media. Choose another field.`,
+        };
+  }
+  if (named.use === "sort" && !listKindSortable(kind)) {
+    return {
+      code: "list-field-unsortable",
+      message: `This list sorts by "${named.field}", which links to another entry, so it has no order an author could mean. Choose another field.`,
+    };
+  }
+  return undefined;
 }
 
 /** The judgement of the fields a list filters and sorts by. */
@@ -826,9 +900,14 @@ const KIND_VALUE_RULES: Readonly<
     fits: isListDay,
     need: { holds: "a date", choose: "a day, written YYYY-MM-DD" },
   },
+  // Every operator but `exists` compares the number with the value, so
+  // each takes a number (a list of them for membership): text or a yes or
+  // no is compared, or refused, differently by each database.
   number: {
-    applies: ordersValues,
-    fits: value => typeof value === "number",
+    applies: op => op !== "exists",
+    fits: value =>
+      typeof value === "number" ||
+      (Array.isArray(value) && value.every(each => typeof each === "number")),
     need: { holds: "a number", choose: "a number" },
   },
   boolean: {
@@ -851,6 +930,16 @@ function kindValueNeed(
 }
 
 /**
+ * A stored value as a finding names it: text quoted, so the text "5" is not
+ * read as the number 5.
+ */
+function valueWords(value: unknown): string {
+  return typeof value === "string"
+    ? `"${describeValue(value)}"`
+    : describeValue(value);
+}
+
+/**
  * Why a filter row does not suit its field's kind, or nothing when it does:
  * an operator the kind does not take, or a value of the wrong sort for it.
  * Without this, a day-shaped value on a text field would be read as a date
@@ -868,7 +957,7 @@ function kindProblem(
   const need = kindValueNeed(kind, row.op, row.value);
   return need === undefined
     ? undefined
-    : `${where}, which holds ${need.holds}, with ${describeValue(row.value)}. Choose ${need.choose}.`;
+    : `${where}, which holds ${need.holds}, with ${valueWords(row.value)}. Choose ${need.choose}.`;
 }
 
 /**
@@ -916,21 +1005,36 @@ function relationSource(
   relation: ListRelation,
   outer: EnclosingList | undefined,
   judgement: ListQueryJudgement
-): { collection: string | undefined } | { problem: string; deep: boolean } {
+):
+  | { collection: string | undefined }
+  | {
+      problem: string;
+      code:
+        | "list-relation-invalid"
+        | "list-too-deep"
+        | "list-relation-no-entry";
+    } {
   if (relation.of === "entry") {
+    if (judgement.entryCollection === null) {
+      return {
+        problem:
+          "This list shows related entries of this page's entry, but this page is not an entry of a collection, so it has none. Choose a collection.",
+        code: "list-relation-no-entry",
+      };
+    }
     return { collection: judgement.entryCollection };
   }
   if (outer === undefined) {
     return {
       problem:
         "This list shows related entries of the outer item, but it is not inside another list. Choose a collection, or move this list into a list.",
-      deep: false,
+      code: "list-relation-invalid",
     };
   }
   if (outer.query.relation !== undefined) {
     return {
       problem: `Too deep for a related field. This list is inside a list that already shows each ${outer.query.relation.of === "entry" ? "entry's" : "item's"} ${outer.query.relation.field}, and related entries go one level deep. Choose a collection, or move this list out of that list.`,
-      deep: true,
+      code: "list-too-deep",
     };
   }
   return { collection: outer.query.collection };
@@ -986,7 +1090,7 @@ function relationFindings(
       {
         path: at("relation"),
         nodeId,
-        code: source.deep ? "list-too-deep" : "list-relation-invalid",
+        code: source.code,
         message: source.problem,
       },
     ];
@@ -1053,6 +1157,43 @@ interface Visit {
   readonly outer: EnclosingList | undefined;
 }
 
+/** Push a slot's children onto the walk's stack, first child on top. */
+function pushChildren(
+  stack: Visit[],
+  list: readonly unknown[],
+  base: string,
+  outer: EnclosingList | undefined
+): void {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    stack.push({ node: list[index], path: pointer(base, index), outer });
+  }
+}
+
+/**
+ * Push each slot of a visited node, with the list whose entry is the item
+ * there: `entryScope` (the node's own list, when it is one) in the slot a
+ * list draws per entry, and the list around the node everywhere else, since
+ * a list's other slots are drawn with the item around the list itself.
+ */
+function pushSlots(
+  stack: Visit[],
+  visit: Visit & { readonly node: Readonly<Record<string, unknown>> },
+  entryScope: EnclosingList | undefined
+): void {
+  const slots = visit.node.slots;
+  if (!isPlainRecord(slots)) return;
+  for (const name of Object.keys(slots).reverse()) {
+    const children = slots[name];
+    if (!Array.isArray(children)) continue;
+    pushChildren(
+      stack,
+      children,
+      pointer(`${visit.path}/slots`, name),
+      name === LIST_ENTRY_SLOT ? entryScope : visit.outer
+    );
+  }
+}
+
 /**
  * Every finding about the lists in a forest, in document order. Iterative,
  * bounded by `maxNodes`, and reading only plain records, because a stored
@@ -1065,39 +1206,19 @@ function walkFindings(
   const findings: Finding[] = [];
   const budget = { left: judgement.maxNodes ?? Number.MAX_SAFE_INTEGER };
   const stack: Visit[] = [];
-  const pushChildren = (
-    list: readonly unknown[],
-    base: string,
-    outer: EnclosingList | undefined
-  ) => {
-    for (let index = list.length - 1; index >= 0; index -= 1) {
-      stack.push({
-        node: list[index],
-        path: pointer(base, index),
-        outer,
-      });
-    }
-  };
-  pushChildren(nodes, "/nodes", undefined);
+  pushChildren(stack, nodes, "/nodes", undefined);
   for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
     if (budget.left <= 0) break;
     budget.left -= 1;
     const { node, path } = visit;
     if (!isPlainRecord(node)) continue;
-    let outer = visit.outer;
+    let entryScope = visit.outer;
     if (node.type === COLLECTION_LIST_TYPE) {
-      const judged = findingsFor(node, path, outer, judgement);
+      const judged = findingsFor(node, path, visit.outer, judgement);
       findings.push(...judged.findings);
-      outer = judged.list;
+      entryScope = judged.list;
     }
-    const slots = node.slots;
-    if (!isPlainRecord(slots)) continue;
-    for (const name of Object.keys(slots).reverse()) {
-      const children = slots[name];
-      if (Array.isArray(children)) {
-        pushChildren(children, pointer(`${path}/slots`, name), outer);
-      }
-    }
+    pushSlots(stack, { ...visit, node }, entryScope);
   }
   return findings;
 }
@@ -1147,7 +1268,10 @@ export function listQueryIssues(
   }));
 }
 
-/** The codes only a schema can decide, so a caller judging twice can tell them apart. */
+/**
+ * The codes only the schema or the page's host can decide, so a caller
+ * judging twice can tell them apart.
+ */
 export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-unknown",
   "list-field-protected",
@@ -1155,4 +1279,5 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-field-unfilterable",
   "list-filter-unsuited",
   "list-relation-unsuitable",
+  "list-relation-no-entry",
 ]);

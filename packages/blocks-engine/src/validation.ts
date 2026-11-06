@@ -32,17 +32,17 @@ import {
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import {
-  LIST_ISSUE_CODES,
-  listQueryIssues,
-  type ListFieldSource,
-} from "./list-query";
-import {
   DEFAULT_LIMITS,
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
   MAX_NODES,
 } from "./limits";
 import type { DocumentLimits } from "./limits";
+import {
+  LIST_ISSUE_CODES,
+  listQueryIssues,
+  type ListFieldSource,
+} from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
@@ -653,9 +653,13 @@ export function validateDocument(
       // judgement also carries is left to the editor that asks for it.
       ...listQueryIssues(envelope.nodes, {
         ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
-        ...(entry !== undefined && "collection" in entry
-          ? { entryCollection: entry.collection }
-          : {}),
+        // A Single's page is no collection's entry: its renderer has no
+        // entry to read a relation of.
+        ...(entry === undefined
+          ? {}
+          : {
+              entryCollection: "collection" in entry ? entry.collection : null,
+            }),
         ...(ctx.stored === undefined ? {} : { stored: ctx.stored }),
         maxNodes: survey.limits.maxNodes,
       }).map(({ nodeId: _nodeId, ...issue }) => issue)

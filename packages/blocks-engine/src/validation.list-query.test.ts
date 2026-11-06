@@ -19,6 +19,7 @@ import {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  outerListOf,
   readListQuery,
   type ListFields,
   type ListFieldSource,
@@ -60,6 +61,9 @@ const FIELDS: Readonly<Record<string, ListFields>> = {
       },
       { name: "author", type: "relationship", relationTo: "authors" },
       { name: "tags", type: "text", hasMany: true },
+      { name: "views", type: "number" },
+      { name: "startsAt", type: "date", timeOnly: true },
+      { name: "body", type: "richText" },
     ],
     ["internalScore", "editorNotes"]
   ),
@@ -415,6 +419,71 @@ describe("a collection list's query at save", () => {
     expect(issues.map(issue => issue.code)).toEqual(["list-field-unsortable"]);
   });
 
+  it("refuses a filter or a sort on a field no list offers, as the editor offers none", () => {
+    // A time of day and rich text have no one value a list compares, and a
+    // relation orders by its stored id, so the editor offers none of them.
+    const judged = (props: Record<string, unknown>) =>
+      listIssues(
+        validate(page(list("l", { collection: "posts", ...props })), withSchema)
+      ).map(issue => [issue.code, issue.message]);
+    expect(judged({ sort: "author" })).toEqual([
+      [
+        "list-field-unsortable",
+        'This list sorts by "author", which links to another entry, so it has no order an author could mean. Choose another field.',
+      ],
+    ]);
+    expect(
+      judged({
+        filters: [{ field: "startsAt", op: "exists", value: true }],
+        sort: "body",
+      })
+    ).toEqual([
+      [
+        "list-field-unfilterable",
+        'This list filters by "startsAt", which holds a value a list cannot compare, such as a time of day, rich text or media. Choose another field.',
+      ],
+      [
+        "list-field-unsortable",
+        'This list sorts by "body", which holds a value a list cannot order by, such as a time of day, rich text or media. Choose another field.',
+      ],
+    ]);
+    // The editor's own offer is still accepted.
+    expect(
+      judged({
+        filters: [{ field: "author", op: "equals", value: "a1" }],
+        sort: "-views,title",
+      })
+    ).toEqual([]);
+  });
+
+  it("refuses a number filter compared with anything but a number", () => {
+    const judged = (filters: unknown[]) =>
+      listIssues(
+        validate(page(list("l", { collection: "posts", filters })), withSchema)
+      ).map(issue => [issue.code, issue.message]);
+    expect(
+      judged([
+        { field: "views", op: "equals", value: "5" },
+        { field: "views", op: "not_equals", value: true },
+      ])
+    ).toEqual([
+      [
+        "list-filter-unsuited",
+        'Filter 1 compares "views", which holds a number, with "5". Choose a number.',
+      ],
+      [
+        "list-filter-unsuited",
+        'Filter 2 compares "views", which holds a number, with true. Choose a number.',
+      ],
+    ]);
+    expect(
+      judged([
+        { field: "views", op: "equals", value: 5 },
+        { field: "views", op: "exists", value: false },
+      ])
+    ).toEqual([]);
+  });
+
   describe("related sources", () => {
     const entryContext: ValidationContext = {
       ...withSchema,
@@ -480,6 +549,84 @@ describe("a collection list's query at save", () => {
           path: "/nodes/0/slots/children/0/slots/children/0/props/relation",
         }),
       ]);
+    });
+
+    it("judges a list in another's empty state by the item that list sits in, as it draws", () => {
+      // A list's empty state is drawn with no entry of its own, so a list
+      // there shows the related entries of the item around the outer list,
+      // never of an entry the outer list did not find.
+      const inEmpty = (inner: Record<string, unknown>, around?: unknown) => {
+        const outer = {
+          ...list("cats", { collection: "categories" }),
+          slots: { children: [], empty: [list("inner", inner)] },
+        };
+        return listIssues(
+          validate(
+            page(
+              around === undefined
+                ? outer
+                : list("posts", { collection: "posts" }, [outer])
+            ),
+            withSchema
+          )
+        ).map(issue => [issue.code, issue.path]);
+      };
+      const featured = {
+        collection: "posts",
+        relation: { of: "item", field: "featuredPosts" },
+      };
+      expect(inEmpty(featured)).toEqual([
+        ["list-relation-invalid", "/nodes/0/slots/empty/0/props/relation"],
+      ]);
+      // Inside a list of posts, the item is a post, which has no
+      // featuredPosts, and its categories are what the empty state reads.
+      expect(inEmpty(featured, "posts")).toEqual([
+        [
+          "list-field-unknown",
+          "/nodes/0/slots/children/0/slots/empty/0/props/relation",
+        ],
+      ]);
+      expect(
+        inEmpty(
+          {
+            collection: "categories",
+            relation: { of: "item", field: "categories" },
+          },
+          "posts"
+        )
+      ).toEqual([]);
+    });
+
+    it("refuses the entry's relation on a page that is no collection's entry", () => {
+      const issues = listIssues(
+        validate(
+          page(
+            list("cats", {
+              collection: "categories",
+              relation: { of: "entry", field: "categories" },
+            })
+          ),
+          { ...withSchema, bindingEntry: { single: "home" } }
+        )
+      );
+      expect(issues.map(issue => [issue.code, issue.message])).toEqual([
+        [
+          "list-relation-no-entry",
+          "This list shows related entries of this page's entry, but this page is not an entry of a collection, so it has none. Choose a collection.",
+        ],
+      ]);
+      // Not knowing the page is still judged by shape alone.
+      expect(
+        listQueryIssues(
+          [
+            list("cats", {
+              collection: "categories",
+              relation: { of: "entry", field: "categories" },
+            }),
+          ],
+          { fields }
+        )
+      ).toEqual([]);
     });
 
     it("refuses an item relation outside any list", () => {
@@ -715,5 +862,24 @@ describe("listQueryIssues", () => {
     expect(issues.map(issue => [issue.nodeId, issue.code])).toEqual([
       ["wrong", "list-limit-invalid"],
     ]);
+  });
+});
+
+describe("outerListOf", () => {
+  it("names the list whose entries hold a block, passing over an empty state", () => {
+    const inner = list("inner", { collection: "categories" });
+    const nodes = [
+      list("posts", { collection: "posts" }, [
+        {
+          ...list("cats", { collection: "categories" }),
+          slots: { children: [inner], empty: [list("none", {})] },
+        },
+      ]),
+    ] as never;
+    expect(outerListOf(nodes, "inner")?.id).toBe("cats");
+    // The empty state is drawn with the item around its list.
+    expect(outerListOf(nodes, "none")?.id).toBe("posts");
+    expect(outerListOf(nodes, "cats")?.id).toBe("posts");
+    expect(outerListOf(nodes, "posts")).toBeUndefined();
   });
 });

@@ -1302,6 +1302,7 @@ export {
   COLLECTION_LIST_TYPE,
   isListDay,
   isListFilterOp,
+  LIST_ENTRY_SLOT,
   LIST_FIELD_CODES,
   LIST_FILTER_OPS,
   LIST_ISSUE_CODES,
@@ -1317,6 +1318,7 @@ export {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  outerListOf,
   readListQuery,
 } from "./list-query";
 export type {
