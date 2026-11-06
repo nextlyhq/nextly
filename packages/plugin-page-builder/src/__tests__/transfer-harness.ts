@@ -242,6 +242,7 @@ export async function sourceSite(t: TestNextly): Promise<SourceSite> {
         },
       ],
       breakpoints: SOURCE_BREAKPOINTS,
+      _overwrite: true,
     },
   });
   const media = await t.nextly.media.upload({

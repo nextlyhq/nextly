@@ -247,7 +247,7 @@ const WRITES: Write[] = [
       const result = await entriesOf(t).updateEntryInTransaction(
         tx,
         { collectionName: slug, entryId: id, user: USER },
-        data
+        { ...data, _overwrite: true }
       );
       return { id, ok: result.success, detail: result };
     },
@@ -281,7 +281,7 @@ const WRITES: Write[] = [
       const result = await entriesOf(t).updateEntriesInTransaction(
         tx,
         { collectionName: slug, user: USER },
-        [{ id, data }]
+        [{ id, data: { ...data, _overwrite: true } }]
       );
       return {
         id,

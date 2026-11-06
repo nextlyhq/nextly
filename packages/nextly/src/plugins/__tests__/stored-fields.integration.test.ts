@@ -517,7 +517,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection,
           id,
-          data,
+          data: { ...data, _overwrite: true },
           user: editor.user,
           overrideAccess: false,
         } as never)
@@ -629,7 +629,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "drafted",
           id,
-          data: { body: { v: "draft" } },
+          data: { body: { v: "draft" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         return id;
@@ -778,7 +778,7 @@ describe.each(getConfiguredTestDialects())(
       it("refuses a conditional write to a Single whose value changed since it was read, and lands one that did not", async () => {
         await t.nextly.updateSingle({
           slug: "site",
-          data: { body: { v: 0 } },
+          data: { body: { v: 0 }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const site = { single: "site" };
@@ -794,7 +794,7 @@ describe.each(getConfiguredTestDialects())(
 
         await t.nextly.updateSingle({
           slug: "site",
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const refusal = await rejectionOf(
@@ -868,7 +868,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await bodyOf("firstrace")).toEqual({ kind: "absent" });
         await t.nextly.updateSingle({
           slug: "firstrace",
-          data: { body: { v: "author" } },
+          data: { body: { v: "author" }, _overwrite: true },
           overrideAccess: true,
         } as never);
 
@@ -903,7 +903,11 @@ describe.each(getConfiguredTestDialects())(
       /** As another writer: a save of the Single, judged by no expectation. */
       const authorSavesSingle = (slug: string, data: Record<string, unknown>) =>
         writerOf.run("author", () =>
-          t.nextly.updateSingle({ slug, data, overrideAccess: true } as never)
+          t.nextly.updateSingle({
+            slug,
+            data: { ...data, _overwrite: true },
+            overrideAccess: true,
+          } as never)
         );
 
       /**
@@ -1023,7 +1027,11 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "hooked",
           id,
-          data: { body: { v: "draft" }, extra: { e: "draft" } },
+          data: {
+            body: { v: "draft" },
+            extra: { e: "draft" },
+            _overwrite: true,
+          },
           overrideAccess: true,
         } as never);
         const entry = { collection: "hooked", id };
@@ -1074,7 +1082,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "worded",
           id,
           locale: "de",
-          data: { body: { v: "de" } },
+          data: { body: { v: "de" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const entry = { collection: "worded", id };
@@ -1146,7 +1154,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "germanless",
           id,
           locale: "de",
-          data: { body: { v: "de" } },
+          data: { body: { v: "de" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const entry = { collection: "germanless", id };
@@ -1247,7 +1255,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "worded",
           id,
           locale: "de",
-          data: { body: { v: "de" }, note: { n: "de" } },
+          data: { body: { v: "de" }, note: { n: "de" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const entry = { collection: "worded", id };
@@ -1365,7 +1373,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "stagedwords",
           id,
           locale: "de",
-          data: { body: { v: "de" }, status: "draft" },
+          data: { body: { v: "de" }, status: "draft", _overwrite: true },
           overrideAccess: true,
         } as never);
         const ask = (locale: string) =>
@@ -1427,7 +1435,11 @@ describe.each(getConfiguredTestDialects())(
               t.nextly.update({
                 collection: "stagedwords",
                 id,
-                data: { body: { v: "draft" }, status: "draft" },
+                data: {
+                  body: { v: "draft" },
+                  status: "draft",
+                  _overwrite: true,
+                },
                 overrideAccess: true,
               } as never)
             )
@@ -1502,7 +1514,7 @@ describe.each(getConfiguredTestDialects())(
           collection: "worded",
           id,
           locale: "de",
-          data: { body: { v: "de" } },
+          data: { body: { v: "de" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         const entry = { collection: "worded", id };
@@ -1558,7 +1570,7 @@ describe.each(getConfiguredTestDialects())(
         const id = await created("pages", { title: "t", body: { v: 0 } });
         await t.nextly.updateSingle({
           slug: "site",
-          data: { body: { v: "site" } },
+          data: { body: { v: "site" }, _overwrite: true },
           overrideAccess: true,
         } as never);
         // Plain JavaScript, or an object passed on unchecked, can name both.

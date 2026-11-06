@@ -178,7 +178,7 @@ describe("localized write without a companion table (integration)", () => {
           overrideAccess: true,
           locale: "es",
         },
-        { title: "Cómo crear un blog" }
+        { title: "Cómo crear un blog", _overwrite: true }
       );
 
     // The write must not report success, and it must be OUR refusal rather than
@@ -216,7 +216,7 @@ describe("localized write without a companion table (integration)", () => {
           overrideAccess: true,
           locale: "en",
         },
-        { title: "First (edited)" }
+        { title: "First (edited)", _overwrite: true }
       );
 
     expect(updated.success).toBe(true);
@@ -338,7 +338,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "es",
           },
-          { title: "Traducción" }
+          { title: "Traducción", _overwrite: true }
         );
 
       expect(translated.success).toBe(false);
@@ -383,7 +383,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "en",
           },
-          { title: "Edited" }
+          { title: "Edited", _overwrite: true }
         );
 
       expect(updated.success).toBe(false);
@@ -431,7 +431,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "en",
           },
-          { title: "Edited", author: "Grace" }
+          { title: "Edited", author: "Grace", _overwrite: true }
         );
 
       expect(updated.success).toBe(false);

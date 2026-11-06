@@ -149,7 +149,7 @@ async function seed(
       overrideAccess: true,
       locale: "de",
     },
-    { title: "deutsch", status }
+    { title: "deutsch", status, _overwrite: true }
   );
   return id;
 }
@@ -192,7 +192,7 @@ const everyLanguage = (
       user: { id: AUTHOR },
       overrideAccess: false,
     } as never,
-    { status }
+    { status, _overwrite: true }
   );
 
 describe.each(getConfiguredTestDialects())(
@@ -282,8 +282,14 @@ describe("a publish of every language over REST", () => {
     const others = await seed(t, POSTS, OTHER);
     const before = await stored(t, POSTS, others);
 
-    expect(await rest("POST", [...entry(own), "publish-all"], {})).toBe(200);
-    expect(await rest("POST", [...entry(others), "publish-all"], {})).toBe(403);
+    expect(
+      await rest("POST", [...entry(own), "publish-all"], { _overwrite: true })
+    ).toBe(200);
+    expect(
+      await rest("POST", [...entry(others), "publish-all"], {
+        _overwrite: true,
+      })
+    ).toBe(403);
     expect(
       ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
         ?.status
@@ -297,10 +303,14 @@ describe("a publish of every language over REST", () => {
     const others = await seed(t, POSTS, OTHER, "published");
     const before = await stored(t, POSTS, others);
 
-    expect(await rest("POST", [...entry(own), "unpublish-all"], {})).toBe(200);
-    expect(await rest("POST", [...entry(others), "unpublish-all"], {})).toBe(
-      403
-    );
+    expect(
+      await rest("POST", [...entry(own), "unpublish-all"], { _overwrite: true })
+    ).toBe(200);
+    expect(
+      await rest("POST", [...entry(others), "unpublish-all"], {
+        _overwrite: true,
+      })
+    ).toBe(403);
     expect(
       ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
         ?.status
@@ -315,10 +325,20 @@ describe("a publish of every language over REST", () => {
     const before = await stored(t, POSTS, others);
 
     expect(
-      await rest("PATCH", entry(own), { status: "published" }, "?locale=*")
+      await rest(
+        "PATCH",
+        entry(own),
+        { status: "published", _overwrite: true },
+        "?locale=*"
+      )
     ).toBe(200);
     expect(
-      await rest("PATCH", entry(others), { status: "published" }, "?locale=*")
+      await rest(
+        "PATCH",
+        entry(others),
+        { status: "published", _overwrite: true },
+        "?locale=*"
+      )
     ).toBe(403);
     expect(
       ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
