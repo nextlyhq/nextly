@@ -103,6 +103,57 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("the Single editor's document panel", () => {
+  // The docked rail carries the language panel whenever the panel is docked,
+  // so the Single's pending shared change is said there too, not only in the
+  // inline panel the docked layout hides.
+  it("says in the docked panel while the Single's shared fields hold unpublished changes", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    const withShared = (pending: boolean) =>
+      ({
+        id: "s1",
+        title: "Hello",
+        status: "published",
+        _sharedChangesPending: pending,
+        _translations: {
+          en: { translated: true, status: "published" },
+          de: { translated: true, status: "published" },
+        },
+      }) as never;
+    const { unmount } = render(
+      <SingleForm
+        schema={schema}
+        document={withShared(true)}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(
+      within(dockedPanel()!).getByRole("status", {
+        name: "Shared changes pending",
+      })
+    ).toBeInTheDocument();
+    unmount();
+
+    // The control: the same docked panel without a pending shared change.
+    render(
+      <SingleForm
+        schema={schema}
+        document={withShared(false)}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(dockedPanel()).toBeInTheDocument();
+    expect(
+      within(dockedPanel()!).queryByRole("status", {
+        name: "Shared changes pending",
+      })
+    ).toBeNull();
+  });
+
   it("reads Status, Publishing and Details beside the fields, addressing the Single's releases by its slug", () => {
     renderEditor();
     const sections = within(dockedPanel()!)

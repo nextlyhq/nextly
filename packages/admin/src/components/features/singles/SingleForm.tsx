@@ -449,6 +449,7 @@ function SingleFormLanguagePanel({
   locale,
   onLocaleChange,
   panelDocked,
+  sharedChangesPending,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -460,6 +461,8 @@ function SingleFormLanguagePanel({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
   panelDocked: boolean;
+  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
+  sharedChangesPending: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
@@ -474,6 +477,7 @@ function SingleFormLanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
+        sharedChangesPending={sharedChangesPending}
       />
     </div>
   );
@@ -1411,6 +1415,11 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending:
+      (document as { _sharedChangesPending?: boolean })
+        ._sharedChangesPending === true,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -1867,6 +1876,13 @@ export function SingleForm({
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
                                   panelDocked={panel.docked}
+                                  sharedChangesPending={
+                                    (
+                                      document as {
+                                        _sharedChangesPending?: unknown;
+                                      }
+                                    )._sharedChangesPending === true
+                                  }
                                   {...(singleTranslations === undefined
                                     ? {}
                                     : { translations: singleTranslations })}

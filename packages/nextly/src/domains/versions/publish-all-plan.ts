@@ -23,6 +23,11 @@ import { resolveLocaleChain } from "../i18n/resolve-locale";
 import type { CompanionSchema } from "../i18n/runtime/companion-io";
 
 import {
+  combinedDraft,
+  draftsKeptByPart,
+  SHARED_DRAFT_SLOT,
+} from "./part-drafts";
+import {
   differingFields,
   editedSharedFields,
   outOfDateSharedFields,
@@ -50,7 +55,7 @@ export async function pendingChangesInSaveOrder(
   ref: VersionRef
 ): Promise<PendingChange[]> {
   const repo = new VersionsRepository(db);
-  const drafts = await repo.findAllWorkingDrafts(ref);
+  const drafts = withSharedPart(await repo.findAllWorkingDrafts(ref));
   if (drafts.length < 2) return drafts;
   const newest = await repo.newestVersionNoByLocale(
     ref,
@@ -58,6 +63,27 @@ export async function pendingChangesInSaveOrder(
   );
   const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
   return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+}
+
+/**
+ * Under per-language storage, each language's change as the document it puts
+ * live: its own values with the shared draft's (`part-drafts`), so every
+ * language publishes the shared changes with it and no language's change
+ * stands for them alone. The shared draft stays a change of its own, first,
+ * so a document whose only changes are shared still puts them live. Without
+ * per-language storage the drafts are returned as stored.
+ */
+function withSharedPart(drafts: PendingChange[]): PendingChange[] {
+  if (!draftsKeptByPart()) return drafts;
+  const shared = drafts.find(draft => draft.locale === SHARED_DRAFT_SLOT);
+  if (!shared) return drafts;
+  const languages = drafts
+    .filter(draft => draft.locale !== SHARED_DRAFT_SLOT)
+    .map(draft => ({
+      ...draft,
+      snapshot: combinedDraft({}, { shared, language: draft }),
+    }));
+  return [shared, ...languages];
 }
 
 /** How a document carries its languages' statuses. */
@@ -190,7 +216,12 @@ export async function judgeSharedValues(
 ): Promise<SharedVerdict> {
   const { live, shared, views, byHand } = document;
   const outOfDate = new Map<string | null, readonly string[]>();
-  for (const draft of pending) {
+  // Kept by part (`part-drafts`), no change can be behind live on a shared
+  // value: the shared draft is the shared change itself, and each language's
+  // change carries the shared draft's values rather than a copy of the live
+  // ones it began from. So none records a base to be judged against, and none
+  // is out of date, as a language's own publish judges it.
+  for (const draft of draftsKeptByPart() ? [] : pending) {
     const fields = await outOfDateSharedFields(tx, {
       ref,
       locale: draft.locale,
@@ -225,10 +256,12 @@ export async function judgeSharedValues(
   // each language's component also holds its own translated values, so it
   // goes live as that language saved it.
   const merged = shared.filter(name => !byHand.has(name));
-  const { state, unordered } = await mergedSharedState(tx, ref, pending, {
-    live,
-    shared: merged,
-  });
+  const { state, unordered } = draftsKeptByPart()
+    ? partDraftsSharedState(pending, live, merged)
+    : await mergedSharedState(tx, ref, pending, {
+        live,
+        shared: merged,
+      });
   return { outOfDate, unmergeable, unordered, merged, state };
 }
 
@@ -670,6 +703,27 @@ function latestEdit(edits: readonly SharedEdit[]): SharedEdit | null {
 }
 
 /** A pending change carrying the one shared state a publish of every language leaves. */
+/**
+ * The one shared state a publish of every language leaves, kept by part
+ * (`part-drafts`): the live shared values with the shared draft's laid over
+ * them. The shared draft is the only change that edits a shared value, so
+ * there is no edit to order against another, and none is unordered.
+ */
+function partDraftsSharedState(
+  pending: readonly PendingChange[],
+  live: Record<string, unknown>,
+  shared: readonly string[]
+): { state: Record<string, unknown>; unordered: string[] } {
+  const sharedDraft = pending.find(draft => draft.locale === SHARED_DRAFT_SLOT);
+  const edited = sharedDraft ? snapshotRecord(sharedDraft.snapshot) : {};
+  return {
+    state: Object.fromEntries(
+      shared.map(name => [name, name in edited ? edited[name] : live[name]])
+    ),
+    unordered: [],
+  };
+}
+
 function withSharedState(
   draft: PendingChange,
   shared: readonly string[],
