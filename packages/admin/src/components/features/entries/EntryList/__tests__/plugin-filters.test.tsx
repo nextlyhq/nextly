@@ -217,6 +217,14 @@ describe("the entry list with a plugin's filter", () => {
     render(<EntryList collectionSlug="tickets" />);
 
     expect(lastRead().where).toBeUndefined();
+    // Nor is it counted as a choice: no filter shows as active.
+    expect(
+      (
+        tableProps.mock.calls.at(-1)?.[0] as {
+          chosenPluginFilters?: ReadonlyMap<string, string>;
+        }
+      ).chosenPluginFilters?.size
+    ).toBe(0);
   });
 
   it("offers no filter declared for other collections", () => {
