@@ -45,6 +45,10 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/postgres";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/postgres";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/postgres";
+export {
+  nextlyPluginEvents,
+  nextlyPluginEventDeliveries,
+} from "../plugin-events/postgres";
 export { nextlyLimitStore } from "../limit-store/postgres";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/postgres";
 export { nextlySpentChallenges } from "../spent-challenges/postgres";
