@@ -706,6 +706,16 @@ export interface SiteBreakpointRemoval {
 export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
 
 /**
+ * The code an undo is refused with (409) when its breakpoints no longer fit
+ * the set: one is a breakpoint again, would end at another's width, or its
+ * axis is full. Editing the breakpoints is the way on; any other refusal is
+ * answered by reading Settings again.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_DOES_NOT_FIT = "BREAKPOINT_UNDO_DOES_NOT_FIT";
+
+/**
  * Values an undo could not put back into one document, for one reason (a
  * document may be listed once per reason):
  * - `changed`: something else was set there after the removal;

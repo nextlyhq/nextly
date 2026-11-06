@@ -433,13 +433,18 @@ export function useBreakpointRemoval({
             removals: removalsNow.current ?? [],
             undoable: undoableNow.current ?? null,
           };
-          if (JSON.stringify(there) !== JSON.stringify(shown)) reread();
+          // Changed elsewhere: Settings, and the style the canvas draws with,
+          // which an undo or a removal another tab made has changed too.
+          if (JSON.stringify(there) !== JSON.stringify(shown)) {
+            reread();
+            refreshStyle();
+          }
         },
         () => undefined
       );
     }, WATCH_MS);
     return () => clearInterval(timer);
-  }, [reread]);
+  }, [reread, refreshStyle]);
 
   /** Where a stored removal goes next: done, settled, or followed. */
   const afterSave = (

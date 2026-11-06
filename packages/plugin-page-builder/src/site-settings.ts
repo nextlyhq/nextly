@@ -1124,7 +1124,18 @@ export async function namedUndo(
         path: [],
       })
     );
-  const names = await removal.names(hosts, ctx);
+  // Best effort: the undo is made whatever naming finds, so a failed lookup
+  // answers its documents unnamed rather than failing a finished undo.
+  let names: ReadonlyMap<string, string>;
+  try {
+    names = await removal.names(hosts, ctx);
+  } catch (error) {
+    removal.cascade?.logError?.(
+      "[page-builder] the documents an undo could not put back could not be named.",
+      { error }
+    );
+    names = new Map();
+  }
   return {
     ...undo,
     skipped: skipped.map(entry => {
@@ -1199,13 +1210,33 @@ async function removalStatuses(
     for (const held of shown) {
       removals.push(await removalStatusOf(held, removal.defaults, service));
     }
-    return { removals, undoable: await undoableOf(service, removal.defaults) };
+    return { removals, undoable: await undoableOr(service, removal, null) };
   } catch (error) {
     cascade.logError?.(
       "[page-builder] the breakpoint removals could not be read for Settings.",
       { error }
     );
     return undefined;
+  }
+}
+
+/**
+ * The removal on offer, or `fallback` when it cannot be read: the offer is
+ * optional, and never costs Settings the runs it guards editing by.
+ */
+async function undoableOr(
+  service: BreakpointRemovalService,
+  removal: BreakpointRemoval,
+  fallback: null
+): Promise<SiteBreakpointUndoable | null> {
+  try {
+    return await undoableOf(service, removal.defaults);
+  } catch (error) {
+    removal.cascade?.logError?.(
+      "[page-builder] the breakpoint removal to undo could not be read for Settings.",
+      { error }
+    );
+    return fallback;
   }
 }
 
@@ -1220,14 +1251,9 @@ async function undoableOf(
     runId: found.run.id,
     ids: [...removedEver(found.run)],
     labels: removedLabels(found.run, defaults),
-    removedAt: new Date(runOpenedAt(found.run.id)).toISOString(),
+    removedAt: found.removedAt.toISOString(),
     until: found.until.toISOString(),
   };
-}
-
-/** When a run was opened, read from its UUIDv7 id. */
-function runOpenedAt(runId: string): number {
-  return Number.parseInt(runId.replace(/-/g, "").slice(0, 12), 16);
 }
 
 /** The names of every breakpoint a removal took out, as the author knew them. */

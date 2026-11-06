@@ -951,6 +951,31 @@ describe("undoing a breakpoint removal in Settings", () => {
       screen.getByText(
         "This removal can't be undone: it was undone already. Nothing was changed."
       )
+    ).toBeTruthy(); // Not the breakpoints: reading Settings again is the way on.
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Edit breakpoints" })
+    ).toBeNull();
+  });
+
+  it("offers editing the breakpoints when they no longer fit, opening the editor", async () => {
+    siteRead = { ...siteRead, undoable: OFFERED };
+    undoAnswer = async () => {
+      throw Object.assign(
+        new Error(
+          "“Mobile” would end at the same width as “Phone”, so this removal can't be undone. Change or remove “Phone” first."
+        ),
+        { code: "BREAKPOINT_UNDO_DOES_NOT_FIT" }
+      );
+    };
+    show();
+    await undoMobile();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit breakpoints" })
+    );
+    // The editor is open on the set, in one click.
+    expect(
+      await screen.findByRole("button", { name: "Save breakpoints" })
     ).toBeTruthy();
   });
 

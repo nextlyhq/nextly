@@ -572,6 +572,8 @@ function SiteSettings({
   // A step that asks or works has the tab to itself: a removal's first, then
   // an undo's.
   const takesOver = removal.takesOver || undo.takesOver;
+  // Counted up to open the breakpoint editor from a step, once it gives way.
+  const [editRequest, setEditRequest] = useState(0);
   // The editor's own save is hidden under a removal's steps while they ask
   // before saving: then leaving waits only on a request a step has out, and
   // a confirmation on screen can be left, asking first as a draft is.
@@ -612,6 +614,7 @@ function SiteSettings({
           undo={undo}
           current={manager.value}
           onClose={onClose}
+          onEditBreakpoints={() => setEditRequest(value => value + 1)}
         />
         {/* Kept mounted under a step, so Back returns to the draft as it was. */}
         <div hidden={takesOver}>
@@ -623,6 +626,7 @@ function SiteSettings({
               ? {}
               : { blocked: removal.blocked })}
             tags={undo.putBack}
+            editRequest={editRequest}
             onEditingChange={editing => {
               onEditingBreakpoints(editing);
               removal.editing(editing);
@@ -649,11 +653,13 @@ function BreakpointSteps({
   undo,
   current,
   onClose,
+  onEditBreakpoints,
 }: {
   removal: BreakpointRemoval;
   undo: BreakpointUndo;
   current: BreakpointSet;
   onClose: () => void;
+  onEditBreakpoints: () => void;
 }): JSX.Element {
   if (removal.takesOver) {
     return (
@@ -665,7 +671,15 @@ function BreakpointSteps({
       />
     );
   }
-  if (undo.takesOver) return <UndoStepPanel undo={undo} onClose={onClose} />;
+  if (undo.takesOver) {
+    return (
+      <UndoStepPanel
+        undo={undo}
+        onClose={onClose}
+        onEditBreakpoints={onEditBreakpoints}
+      />
+    );
+  }
   const shownRun =
     removal.step.kind === "done" || removal.step.kind === "left"
       ? removal.step.runId

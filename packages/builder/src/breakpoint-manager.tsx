@@ -76,6 +76,11 @@ export interface BreakpointManagerProps {
    * done to it ("put back"), said for as long as the host passes it.
    */
   tags?: ReadonlyMap<string, string>;
+  /**
+   * Counted up by the host to open the editor, as Edit breakpoints does: a
+   * step that ends with editing as the way on opens it in one click.
+   */
+  editRequest?: number;
 }
 
 /**
@@ -93,27 +98,60 @@ function editUnavailable(
     : "Your site's saved styles could not be read, so editing them here could overwrite them.";
 }
 
+/** One breakpoint in the list: its device glyph, name and range, and a tag. */
+function DeviceRow({
+  device,
+  tag,
+}: {
+  device: ReturnType<typeof deviceOptions>[number];
+  /** What the host says of it just now ("put back"), when anything. */
+  tag: string | undefined;
+}): React.JSX.Element {
+  const Glyph = tierIcon(
+    device.id === BASE_BREAKPOINT ? undefined : device.preview
+  );
+  return (
+    <li className="flex items-center gap-2 px-3 py-2 text-sm">
+      <Glyph
+        className="size-4 shrink-0 text-muted-foreground"
+        aria-hidden="true"
+      />
+      <span className="font-medium">{device.label}</span>
+      <span className="text-muted-foreground">{device.range}</span>
+      {tag === undefined ? null : (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+          {tag}
+        </span>
+      )}
+    </li>
+  );
+}
+
 /**
- * The button that opens the breakpoint dialog, and the dialog.
- * @experimental
+ * Open the editor when the host asks (`editRequest` counted up), once per
+ * request, and only when it may be opened.
  */
-export function BreakpointManager({
-  value,
-  onSave,
-  status,
-  onEditingChange,
-  onSavingChange,
-  blocked,
-  tags,
-}: BreakpointManagerProps): React.JSX.Element {
-  const ready = status === "ready" && blocked === undefined;
-  const [editing, setEditingState] = React.useState(false);
-  const setEditing = (next: boolean): void => {
-    setEditingState(next);
-    onEditingChange?.(next);
-  };
-  // Whether this section's last save succeeded, to say so beside it.
-  const [saved, setSaved] = React.useState(false);
+function useEditRequest(
+  editRequest: number | undefined,
+  ready: boolean,
+  open: () => void
+): void {
+  const asked = React.useRef(editRequest ?? 0);
+  React.useEffect(() => {
+    if (editRequest === undefined || editRequest === asked.current) return;
+    asked.current = editRequest;
+    if (ready) open();
+  });
+}
+
+/**
+ * The set to show and edit: `value`, or the set this surface last wrote until
+ * the read catches up (see the comment inside), with `hold` to record a write.
+ */
+function useHeldWrite(value: BreakpointSet): {
+  readonly shown: BreakpointSet;
+  readonly hold: (wrote: BreakpointSet) => void;
+} {
   /*
    * The set this surface last wrote, held until the read catches up.
    *
@@ -170,7 +208,37 @@ export function BreakpointManager({
   React.useEffect(() => {
     if (readArrived) setPendingWrite(undefined);
   }, [readArrived]);
-  const authored = authoredBreakpoints(stillStale ? pendingWrite.wrote : value);
+  return {
+    shown: stillStale ? pendingWrite.wrote : value,
+    hold: wrote => setPendingWrite({ wrote, sawAtSave: value }),
+  };
+}
+
+/**
+ * The button that opens the breakpoint dialog, and the dialog.
+ * @experimental
+ */
+export function BreakpointManager({
+  value,
+  onSave,
+  status,
+  onEditingChange,
+  onSavingChange,
+  blocked,
+  tags,
+  editRequest,
+}: BreakpointManagerProps): React.JSX.Element {
+  const ready = status === "ready" && blocked === undefined;
+  const [editing, setEditingState] = React.useState(false);
+  const setEditing = (next: boolean): void => {
+    setEditingState(next);
+    onEditingChange?.(next);
+  };
+  useEditRequest(editRequest, ready, () => setEditing(true));
+  // Whether this section's last save succeeded, to say so beside it.
+  const [saved, setSaved] = React.useState(false);
+  const held = useHeldWrite(value);
+  const authored = authoredBreakpoints(held.shown);
 
   const persist = async (
     next: BreakpointSet
@@ -183,13 +251,13 @@ export function BreakpointManager({
     // Held only on success. A refused write changed nothing, so there is no
     // newer set for the read to catch up to.
     if (outcome === undefined) {
-      setPendingWrite({ wrote: next, sawAtSave: value });
+      held.hold(next);
       setSaved(true);
     }
     return outcome;
   };
 
-  const shown = stillStale ? pendingWrite.wrote : value;
+  const shown = held.shown;
 
   if (editing) {
     // Mounted only while editing, so the draft is seeded from the set at the
@@ -209,29 +277,13 @@ export function BreakpointManager({
   return (
     <div className="space-y-3" data-breakpoint-manager="">
       <ul className="divide-y divide-border rounded-md border border-border">
-        {deviceOptions(shown).map(device => {
-          const Glyph = tierIcon(
-            device.id === BASE_BREAKPOINT ? undefined : device.preview
-          );
-          return (
-            <li
-              key={device.id}
-              className="flex items-center gap-2 px-3 py-2 text-sm"
-            >
-              <Glyph
-                className="size-4 shrink-0 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <span className="font-medium">{device.label}</span>
-              <span className="text-muted-foreground">{device.range}</span>
-              {tags?.get(device.id) === undefined ? null : (
-                <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {tags.get(device.id)}
-                </span>
-              )}
-            </li>
-          );
-        })}
+        {deviceOptions(shown).map(device => (
+          <DeviceRow
+            key={device.id}
+            device={device}
+            tag={tags?.get(device.id)}
+          />
+        ))}
       </ul>
       <div className="flex items-center gap-3">
         <Button

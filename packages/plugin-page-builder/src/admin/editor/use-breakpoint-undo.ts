@@ -19,11 +19,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type {
-  SiteBreakpointRemoval,
-  SiteBreakpointRemovalStatus,
-  SiteBreakpointUndoable,
-  SiteBreakpointUndoSkipped,
+import {
+  SITE_BREAKPOINT_UNDO_DOES_NOT_FIT,
+  type SiteBreakpointRemoval,
+  type SiteBreakpointRemovalStatus,
+  type SiteBreakpointUndoable,
+  type SiteBreakpointUndoSkipped,
 } from "../../library-contract";
 import {
   carryOnBreakpointRemoval,
@@ -59,6 +60,11 @@ export type UndoStep =
       readonly kind: "refused";
       readonly labels: readonly string[];
       readonly message: string;
+      /**
+       * Whether its breakpoints no longer fit the set, which editing them
+       * resolves; otherwise reading Settings again shows where things stand.
+       */
+      readonly fit: boolean;
     };
 
 /** What the undo is handed. */
@@ -85,6 +91,8 @@ export interface BreakpointUndo {
   readonly ask: (target: SiteBreakpointUndoable) => void;
   /** Back to the list, from the confirmation or a refusal. */
   readonly back: () => void;
+  /** Back to the list from a refusal, reading Settings and the style again. */
+  readonly reload: () => void;
   /** Put back, from the confirmation. */
   readonly confirm: () => void;
   /** Told when editing starts, so a finished undo's row gives way to it. */
@@ -101,6 +109,15 @@ export interface BreakpointUndo {
 const FOLLOW_MS = 1000;
 /** How long to wait after a call carrying an undo on failed. */
 const FOLLOW_AFTER_TROUBLE_MS = 5000;
+
+/** Whether a refusal says the breakpoints no longer fit the set. */
+function doesNotFit(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === SITE_BREAKPOINT_UNDO_DOES_NOT_FIT
+  );
+}
 
 /** A refusal's own words, or a plain fallback. */
 function reasonOf(error: unknown): string {
@@ -231,6 +248,7 @@ export function useBreakpointUndo({
           kind: "refused",
           labels: target.labels,
           message: reasonOf(error),
+          fit: doesNotFit(error),
         });
       }
     );
@@ -249,6 +267,11 @@ export function useBreakpointUndo({
     back: () => {
       if (own.kind === "confirm" && own.sending) return;
       setOwn({ kind: "idle" });
+    },
+    reload: () => {
+      setOwn({ kind: "idle" });
+      reread();
+      refreshStyle();
     },
     confirm,
     editing: now => {

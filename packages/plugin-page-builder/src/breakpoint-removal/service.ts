@@ -225,6 +225,8 @@ export interface BreakpointRemovalService {
    */
   undoable(): Promise<{
     readonly run: BreakpointRun;
+    /** When it was made, as its window is judged from. */
+    readonly removedAt: Date;
     readonly until: Date;
   } | null>;
   /** What removal `runId` kept of the shared styles; `null` for nothing. */
@@ -481,7 +483,9 @@ async function undoJudged(
   installed: RemovalInstall,
   all: readonly BreakpointRun[],
   runId: string
-): Promise<{ refusal: NextlyError } | { refusal?: undefined; ends: number }> {
+): Promise<
+  { refusal: NextlyError } | { refusal?: undefined; at: number; ends: number }
+> {
   const run = all.find(candidate => candidate.id === runId);
   if (run === undefined || run.open || run.undoes !== null) {
     return { refusal: cannotUndo("not-a-done-removal", runId) };
@@ -503,7 +507,7 @@ async function undoJudged(
   }
   const ends = at + FRAGMENTS_KEPT_DAYS * DAY_MS;
   if (Date.now() >= ends) return { refusal: pastItsWindow(runId, ends) };
-  return { ends };
+  return { at, ends };
 }
 
 /**
@@ -707,7 +711,11 @@ export function breakpointRemovalService(
       if (newest === undefined) return null;
       const judged = await undoJudged(installed, all, newest.id);
       return judged.refusal === undefined
-        ? { run: newest, until: new Date(judged.ends) }
+        ? {
+            run: newest,
+            removedAt: new Date(judged.at),
+            until: new Date(judged.ends),
+          }
         : null;
     },
     keptSharedStyles: runId => fragmentStore(install().db).sharedStyles(runId),

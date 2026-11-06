@@ -36,10 +36,13 @@ import type { BreakpointUndo } from "./use-breakpoint-undo";
 export function UndoStepPanel({
   undo,
   onClose,
+  onEditBreakpoints,
 }: {
   undo: BreakpointUndo;
   /** Close Settings: an undo carries on without it. */
   onClose: () => void;
+  /** Open the breakpoint editor: the way on from breakpoints that no longer fit. */
+  onEditBreakpoints: () => void;
 }): JSX.Element | null {
   const title = useRef<HTMLHeadingElement>(null);
   const kind = undo.step.kind;
@@ -107,6 +110,21 @@ export function UndoStepPanel({
         <Button type="button" variant="outline" onClick={undo.back}>
           Back
         </Button>
+        {step.fit ? (
+          <Button
+            type="button"
+            onClick={() => {
+              undo.back();
+              onEditBreakpoints();
+            }}
+          >
+            Edit breakpoints
+          </Button>
+        ) : (
+          <Button type="button" onClick={undo.reload}>
+            Reload
+          </Button>
+        )}
       </RefusedStep>
     );
   }
