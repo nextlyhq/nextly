@@ -5638,16 +5638,20 @@
    beside it, then what it is or does at the end. Two classes, to keep the
    Shared styles list's own spacing from the line. */
 .nx-shared-styles__uses.nx-vars-refusal__uses li {
+  flex-wrap: wrap;
   align-items: baseline;
   padding-block: 4px;
   border-top: 1px solid var(--nx-border);
 }
 
+/* The name keeps its width: what it does goes to the next line rather than
+   cutting the name short. A name too long for the line alone is still cut. */
 .nx-vars-refusal__place {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
+  max-width: 100%;
 }
 
 /* What kind of place a shared style or a block default is: a small label. */
@@ -5662,8 +5666,10 @@
   border-radius: var(--radius-sm);
 }
 
-/* What a place does with the variable, wrapped rather than cut. */
+/* What a place does with the variable, at the line's end, or on a line of
+   its own when the name leaves no room. */
 .nx-vars-refusal__uses .nx-shared-styles__meta {
+  margin-inline-start: auto;
   text-align: end;
 }
 
