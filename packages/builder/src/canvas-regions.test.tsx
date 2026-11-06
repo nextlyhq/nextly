@@ -290,6 +290,10 @@ describe("the regions of a page's Layout on the canvas", () => {
     const box = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: HTMLElement) {
+        // The canvas, as tall as the window: what of it is on screen.
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
         if (this.classList.contains("nx-canvas-region")) {
           return DOMRect.fromRect({
             x: 0,
@@ -310,6 +314,9 @@ describe("the regions of a page's Layout on the canvas", () => {
       cleanup();
       // CONTROL: the same header with room below keeps it outside.
       box.mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
         if (this.classList.contains("nx-canvas-region")) {
           return DOMRect.fromRect({ x: 0, y: 0, width: 1280, height: 48 });
         }

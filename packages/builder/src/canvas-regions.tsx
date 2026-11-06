@@ -55,6 +55,14 @@ import {
   regionMarkPlacement,
   type RegionMarkPlacement,
 } from "./canvas-region-placement";
+import {
+  canvasContentRect,
+  canvasRootFrom,
+  onScreenBandOf,
+  screenScrollers,
+  scrollEventTarget,
+} from "./geometry-dom";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /** One region of the page's Layout, as the host hands it to the canvas. */
 export interface CanvasRegion {
@@ -323,16 +331,24 @@ function useMarkPlace(
         measure();
       });
     };
-    // Both documents: the page scrolls in the frame's, and the canvas around
-    // the frame, which scrolls sideways at 100%, in the editor's.
+    // What moves the part on screen: the canvas's scroller and, around a
+    // frame, the editor's (`screenScrollers`), and either window's size.
+    const root = rootOf(frame.current);
+    const scrollers = root === null ? [] : screenScrollers(root, canvas.frame);
+    for (const scroller of scrollers) {
+      scrollEventTarget(scroller).addEventListener("scroll", later, {
+        passive: true,
+      });
+    }
     const documents = inputDocuments(canvas);
     for (const doc of documents) {
-      doc.addEventListener("scroll", later, { capture: true, passive: true });
       doc.defaultView?.addEventListener("resize", later);
     }
     return () => {
+      for (const scroller of scrollers) {
+        scrollEventTarget(scroller).removeEventListener("scroll", later);
+      }
       for (const doc of documents) {
-        doc.removeEventListener("scroll", later, { capture: true });
         doc.defaultView?.removeEventListener("resize", later);
       }
       if (pending !== 0) {
@@ -346,61 +362,39 @@ function useMarkPlace(
 /** Outside, at the inset: where a mark sits before anything is measured. */
 const AT_REST: MarkPlace = { placement: "outside", left: REGION_MARK_INSET };
 
-/** The mark's place from the boxes as drawn, or nothing before they are. */
+/** The canvas root a region is drawn in, or `null` before it is. */
+function rootOf(region: HTMLElement | null): HTMLElement | null {
+  return region === null ? null : canvasRootFrom(region, CANVAS_ROOT_CLASS);
+}
+
+/**
+ * The mark's place from the boxes as drawn, or nothing before they are: the
+ * region's and the mark's boxes and the part of the canvas on screen, all in
+ * the canvas's content coordinates, read through the one geometry module.
+ */
 function markPlaceOf(
   region: HTMLElement | null,
   mark: HTMLElement | null,
   area: RegionArea,
   canvas: CanvasFrame
 ): MarkPlace | undefined {
-  const view = region?.ownerDocument.defaultView;
-  if (region === null || mark === null || view === null || view === undefined) {
-    return undefined;
-  }
-  const box = region.getBoundingClientRect();
-  const size = mark.getBoundingClientRect();
+  const root = rootOf(region);
+  if (region === null || mark === null || root === null) return undefined;
+  const box = canvasContentRect(region, root);
+  const size = canvasContentRect(mark, root);
+  const band = onScreenBandOf(root, canvas.frame);
   return {
     placement: regionMarkPlacement({
       area: area === "footer" ? "footer" : "header",
-      edge: box,
+      edge: { top: box.y - band.y, bottom: box.y + box.height - band.y },
       height: size.height,
-      viewport: view.innerHeight,
+      viewport: band.height,
     }),
     left: regionMarkLeft({
-      region: box,
-      visible: visibleSpanOf(canvas, view),
+      region: { left: box.x, right: box.x + box.width },
+      visible: { left: band.x, right: band.x + band.width },
       width: size.width,
     }),
-  };
-}
-
-/**
- * The part of the canvas's page on screen across, in the page's own pixels.
- * In a frame painted at a scale, the frame's box clipped by every scrolling
- * box around it in the editor's document, brought into the frame's pixels;
- * with no frame, the page's window.
- */
-function visibleSpanOf(
-  canvas: CanvasFrame,
-  view: Window
-): { left: number; right: number } {
-  const element = canvas.frame;
-  if (element === null) return { left: 0, right: view.innerWidth };
-  const painted = element.getBoundingClientRect();
-  let left = painted.left;
-  let right = painted.right;
-  for (let box = element.parentElement; box !== null; box = box.parentElement) {
-    const overflow =
-      box.ownerDocument.defaultView?.getComputedStyle(box).overflowX;
-    if (overflow === undefined || overflow === "visible") continue;
-    const clip = box.getBoundingClientRect();
-    left = Math.max(left, clip.left);
-    right = Math.min(right, clip.right);
-  }
-  const scale = canvas.scale > 0 ? canvas.scale : 1;
-  return {
-    left: (left - painted.left) / scale,
-    right: (right - painted.left) / scale,
   };
 }
 
