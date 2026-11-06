@@ -1545,7 +1545,21 @@ export class CollectionMetadataService extends BaseService {
       clearRegistryRowCache();
       throw this.deleteFailed(error, ordered);
     }
-    for (const { slug, collection } of ordered) {
+    // Every junction of the collections deleted together goes in the first
+    // file, before any of their tables: a junction links two of them, and
+    // dropping either table first would leave its rows pointing at nothing.
+    const junctions = ordered.map(({ collection }) =>
+      this.collectionService.junctionStatements(
+        collection.tableName,
+        collection.fields ?? [],
+        []
+      )
+    );
+    const allJunctions = {
+      up: junctions.flatMap(j => j.up),
+      down: junctions.flatMap(j => j.down),
+    };
+    for (const [index, { slug, collection }] of ordered.entries()) {
       await writeCollectionSave(
         deps,
         {
@@ -1553,11 +1567,10 @@ export class CollectionMetadataService extends BaseService {
           previous: definitionOfRow(slug, collection),
           entity: null,
           change: "delete",
-          junctions: this.collectionService.junctionStatements(
-            collection.tableName,
-            collection.fields ?? [],
-            []
-          ),
+          removedTogether: ordered
+            .map(other => other.slug)
+            .filter(other => other !== slug),
+          junctions: index === 0 ? allJunctions : { up: [], down: [] },
         },
         { historyChecked: true, keepFilesOnFailure: true }
       );

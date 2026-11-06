@@ -165,6 +165,12 @@ export interface CollectionSave {
     | { column: string; kind: "fill"; value: unknown }
     | { column: string; kind: "delete_nonconforming" }
   >;
+  /**
+   * The other collections deleted with this one: gone from the definition
+   * the save writes, so the links between them do not hold this one's delete
+   * back. Each still gets a migration of its own.
+   */
+  removedTogether?: readonly string[];
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
@@ -338,7 +344,10 @@ async function planSave(
   const table = uiToMinimal(collectionOf(save), "dc_").tableName;
   return {
     current,
-    next: withCollection(current, save.slug, save.entity),
+    next: (save.removedTogether ?? []).reduce(
+      (manifest, slug) => withCollection(manifest, slug, null),
+      withCollection(current, save.slug, save.entity)
+    ),
     table,
     adoption: await adoptionFor(deps, save, current, table),
   };
