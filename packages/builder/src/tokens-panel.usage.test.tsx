@@ -297,6 +297,13 @@ describe("removing a variable in use", () => {
     render(<Hosted usage={usage} onChange={onChange} classes={[CARD]} />);
     const editor = await openEditor(/^Brand.*Used in 14 places$/);
     expect(within(editor).getByText("Used in 14 places")).toBeDefined();
+    // The row stays drawn as chosen while its editor is open, though its
+    // tooltip marks `data-state` as well.
+    expect(
+      document
+        .querySelector(".nx-vars__row[data-open]")
+        ?.getAttribute("aria-label")
+    ).toMatch(/^Brand/);
     const remove = within(editor).getByRole("button", { name: "Remove" });
     // Not disabled: pressing it is how the author learns why.
     expect(remove.hasAttribute("disabled")).toBe(false);

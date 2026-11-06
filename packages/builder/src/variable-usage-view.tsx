@@ -262,53 +262,91 @@ function UseRow({
   if (use.kind === "block-default") {
     // A block type's own default style: named, with nowhere to open.
     return (
-      <>
-        <span className="nx-shared-styles__use-title">{use.title}</span>
-        <span className="nx-shared-styles__meta">
-          {" · block default style"}
-        </span>
-      </>
+      <Place name={<Named title={use.title} />} chip="block default style" />
     );
   }
   if (use.kind === "shared-style") {
     const open = usage.access.openSharedStyle;
     return (
-      <>
-        {open === undefined ? (
-          <span className="nx-shared-styles__use-title">{use.title}</span>
-        ) : (
-          <button
-            type="button"
-            className="nx-vars__link nx-shared-styles__use-title"
-            onClick={() => open(use.id)}
-          >
-            {use.title}
-          </button>
-        )}
-        <span className="nx-shared-styles__meta">
-          {` · shared style · ${sharedStyleSets(usage.classes, use.id, identity)}`}
-        </span>
-      </>
+      <Place
+        name={
+          open === undefined ? (
+            <Named title={use.title} />
+          ) : (
+            <button
+              type="button"
+              className="nx-vars__link nx-shared-styles__use-title"
+              onClick={() => open(use.id)}
+            >
+              {use.title}
+            </button>
+          )
+        }
+        chip="shared style"
+        detail={sharedStyleSets(usage.classes, use.id, identity)}
+      />
     );
   }
   return (
+    <Place
+      name={
+        use.href === undefined ? (
+          <Named title={use.title} />
+        ) : (
+          // A new tab, so the page open here keeps its own undo history.
+          <a
+            className="nx-vars__link nx-shared-styles__use-title"
+            href={use.href}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {use.title}
+          </a>
+        )
+      }
+      detail={sharedStyleKindName(use.kind).toLowerCase()}
+    />
+  );
+}
+
+/** A place's name where there is nowhere to open it. */
+function Named({ title }: { title: string }): React.JSX.Element {
+  return <span className="nx-shared-styles__use-title">{title}</span>;
+}
+
+/**
+ * One place's line: its name and what kind of place it is beside it, what
+ * it does with the variable at the end. Read as one phrase, "Card · shared
+ * style · sets text colour": the dots are said, not drawn.
+ */
+function Place({
+  name,
+  chip,
+  detail,
+}: {
+  name: React.ReactNode;
+  /** What kind of place it is, drawn as a small label beside the name. */
+  chip?: string;
+  /** What it is, or what it does with the variable, at the line's end. */
+  detail?: string;
+}): React.JSX.Element {
+  return (
     <>
-      {use.href === undefined ? (
-        <span className="nx-shared-styles__use-title">{use.title}</span>
-      ) : (
-        // A new tab, so the page open here keeps its own undo history.
-        <a
-          className="nx-vars__link nx-shared-styles__use-title"
-          href={use.href}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {use.title}
-        </a>
-      )}
-      <span className="nx-shared-styles__meta">
-        {` · ${sharedStyleKindName(use.kind).toLowerCase()}`}
+      <span className="nx-vars-refusal__place">
+        {name}
+        {chip === undefined ? null : (
+          <>
+            <span className="nx-sr-only"> · </span>
+            <span className="nx-vars-refusal__kind">{chip}</span>
+          </>
+        )}
       </span>
+      {detail === undefined ? null : (
+        <>
+          <span className="nx-sr-only"> · </span>
+          <span className="nx-shared-styles__meta">{detail}</span>
+        </>
+      )}
     </>
   );
 }

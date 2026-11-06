@@ -5292,7 +5292,8 @@
 }
 
 .nx-vars__row:hover,
-.nx-vars__row[data-state="open"] {
+.nx-vars__row[data-state="open"],
+.nx-vars__row[data-open] {
   background: var(--nx-muted);
 }
 
@@ -5633,19 +5634,37 @@
   margin: 0;
 }
 
-/* Each place on its own ruled line, its name then what it is. */
-.nx-vars-refusal__uses li {
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 0;
-  padding-block: 3px;
+/* Each place on its own ruled line: its name, with what kind of place it is
+   beside it, then what it is or does at the end. Two classes, to keep the
+   Shared styles list's own spacing from the line. */
+.nx-shared-styles__uses.nx-vars-refusal__uses li {
+  align-items: baseline;
+  padding-block: 4px;
   border-top: 1px solid var(--nx-border);
 }
 
-/* The spaces around the dots kept, and a long "sets …" wrapped under the
-   name rather than pushed out of the 240px editor. */
+.nx-vars-refusal__place {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* What kind of place a shared style or a block default is: a small label. */
+.nx-vars-refusal__kind {
+  flex: none;
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--nx-muted-foreground);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* What a place does with the variable, wrapped rather than cut. */
 .nx-vars-refusal__uses .nx-shared-styles__meta {
-  white-space: pre-wrap;
+  text-align: end;
 }
 
 /* Empty until a count says something: takes no room in the box. */

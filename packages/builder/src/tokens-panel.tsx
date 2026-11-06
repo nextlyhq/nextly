@@ -974,6 +974,9 @@ function VariableRow({
               data-kind={entry.row.kind}
               // A fourth column for the count, only where usage is read.
               data-counted={usage === undefined ? undefined : ""}
+              // Drawn as chosen while its editor is open. Its own mark: the
+              // row's tooltip sets `data-state` too, over the popover's.
+              data-open={open ? "" : undefined}
             >
               <RowLead
                 entry={entry}
