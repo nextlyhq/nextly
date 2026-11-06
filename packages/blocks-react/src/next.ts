@@ -2044,9 +2044,31 @@ function listsComparingDays(
 }
 
 /**
+ * Whether any list on the page compares days, and so needs the site's zone:
+ * one filtering by a day, or one whose item conditions order a value. A list
+ * whose item conditions only match text or a yes-or-no needs field shapes
+ * but no zone, and must not spend the page's query budget reading one.
+ */
+function listsNeedZone(
+  documents: readonly BlockDocument[],
+  run: BindingRun | undefined
+): boolean {
+  return (
+    listCollectionsWhere(
+      documents,
+      (query, list) =>
+        query.filters.some(row => isListDay(row.value)) ||
+        conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).ordersValues,
+      run
+    ).size > 0
+  );
+}
+
+/**
  * The site's zone and the field shapes of the collections whose lists filter
- * by a day or decide a block's conditions per entry; nothing when no list does. The page's bindings' answers are used
- * where they were already read.
+ * by a day or decide a block's conditions per entry; nothing when no list
+ * does. The zone is read only where a list compares days. The page's
+ * bindings' answers are used where they were already read.
  */
 async function listDayInputs(args: {
   config: BlocksPageConfig;
@@ -2065,14 +2087,9 @@ async function listDayInputs(args: {
       : pageBindingRun(args.bindings, args.context.locale, args.resolver);
   const collections = listsComparingDays(args.documents, run);
   if (collections.size === 0) return {};
-  const site =
-    args.bindings?.site ??
-    (args.config.timeZone === undefined
-      ? await readSite(args.config, args.budget, args.window)
-      : undefined);
-  const timeZone =
-    args.bindings?.timeZone ??
-    pageTimeZone(args.config, site ?? undefined, args.context);
+  const timeZone = listsNeedZone(args.documents, run)
+    ? await listZone(args)
+    : undefined;
   const cache: ReadCache = {
     scope: args.config.cacheScope ?? "",
     locale: args.context.locale,
@@ -2093,6 +2110,25 @@ async function listDayInputs(args: {
         "collection" in ref ? known.get(ref.collection) : undefined,
     },
   };
+}
+
+/** The zone a page's lists compare days in, the site read only when needed. */
+async function listZone(args: {
+  config: BlocksPageConfig;
+  bindings: PageBindings | undefined;
+  budget: QueryBudget;
+  window: number | false | undefined;
+  context: RenderContext;
+}): Promise<string | undefined> {
+  const site =
+    args.bindings?.site ??
+    (args.config.timeZone === undefined
+      ? await readSite(args.config, args.budget, args.window)
+      : undefined);
+  return (
+    args.bindings?.timeZone ??
+    pageTimeZone(args.config, site ?? undefined, args.context)
+  );
 }
 
 /** A shape ref as a map key. */

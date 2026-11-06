@@ -1128,6 +1128,49 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(runtime.judged).toContain("shapes collection:Public");
   });
 
+  it("reads the site's zone for a list's item conditions only when one orders a value", async () => {
+    const listWith = (op: string, value?: unknown) =>
+      instance(
+        page({
+          id: "loop",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts", limit: 1 },
+          slots: {
+            children: [
+              shownWhen("pill", "Featured", [
+                [
+                  {
+                    field: "title",
+                    op,
+                    ...(value === undefined ? {} : { value }),
+                  },
+                ],
+              ]),
+            ],
+          },
+        })
+      );
+    const siteRead = () =>
+      runtime.tags.some(tags =>
+        nextlySiteSettingsTags().every(tag => tags.includes(tag))
+      );
+    // A text match needs the item's field shapes, never the zone, so it
+    // spends none of the page's budget on the site and its list still draws.
+    runtime.tags = [];
+    const { html } = await renderedPage(
+      createBlocksPage,
+      { ...base, maxQueries: 2 },
+      listWith("equals", "Public")
+    );
+    expect(siteRead()).toBe(false);
+    expect(html).toContain("Featured");
+    // CONTROL: an ordered comparison reads it.
+    runtime.tags = [];
+    await renderedPage(createBlocksPage, base, listWith("greater_than", "A"));
+    expect(siteRead()).toBe(true);
+  });
+
   it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const { html } = await renderedPage(
