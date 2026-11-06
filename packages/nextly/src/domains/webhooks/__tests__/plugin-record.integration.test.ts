@@ -14,7 +14,7 @@
  *
  * @module domains/webhooks/__tests__/plugin-record.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { container } from "../../../di/container";
@@ -33,6 +33,7 @@ import {
   WebhookEndpointRegistry,
   type WebhookEndpointReader,
 } from "../endpoint-registry";
+import type { WebhookFastDrainScheduler } from "../after-drain";
 import { fanOutDueEvents, type FanOutDatabase } from "../fan-out";
 import type { FilterSpec, WebhookEventSubscription } from "../types";
 
@@ -164,6 +165,7 @@ interface DeliveryRow {
 function envelopeOf(row: EventRow): {
   type: string;
   data: unknown;
+  changedFields: string[];
   resource: { id?: string };
 } {
   return typeof row.payload === "string"
@@ -335,6 +337,102 @@ describe.each(getConfiguredTestDialects())(
       await plugin().webhooks.record({ type: PAID, id: "ord_2", data: {} });
 
       expect((await events(t)).map(row => row.type)).toEqual([PAID]);
+    });
+
+    it("offers the fast drain once a recorded event commits, and never for a rolled-back one", async () => {
+      // Core's write paths offer it after their event commits, so a plugin's
+      // event is delivered as promptly as theirs rather than waiting for the
+      // scheduled drain.
+      const t = await boot(dialect);
+      await endpoint(t, [PAID]);
+      const offer = vi.spyOn(
+        container.get<WebhookFastDrainScheduler>("webhookFastDrainScheduler"),
+        "offer"
+      );
+
+      await expect(
+        plugin().db.transaction(async tx => {
+          await plugin().webhooks.record({
+            type: PAID,
+            id: "ord_rolled_back",
+            data: {},
+            tx,
+          });
+          throw new Error("the plugin's own work failed");
+        })
+      ).rejects.toThrow();
+      expect(offer).not.toHaveBeenCalled();
+
+      await plugin().db.transaction(async tx => {
+        await plugin().webhooks.record({
+          type: PAID,
+          id: "ord_committed",
+          data: {},
+          tx,
+        });
+        // Held until the commit, so it has not been offered yet.
+        expect(offer).not.toHaveBeenCalled();
+      });
+      expect(offer).toHaveBeenCalledTimes(1);
+
+      await plugin().webhooks.record({ type: PAID, id: "ord_2", data: {} });
+      expect(offer).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses an id longer than every dialect keeps, naming the field, and writes nothing", async () => {
+      const t = await boot(dialect);
+      await endpoint(t, ["*"]);
+
+      const refusal = await refusalOf(
+        plugin().webhooks.record({ type: PAID, id: "x".repeat(192), data: {} })
+      );
+      expect(
+        (refusal.publicData as { errors?: Array<{ path?: string }> })?.errors
+      ).toEqual([expect.objectContaining({ path: "id" })]);
+      // The widest id kept is accepted, on every dialect alike.
+      await plugin().webhooks.record({
+        type: PAID,
+        id: "y".repeat(191),
+        data: {},
+      });
+
+      expect((await events(t)).map(row => envelopeOf(row).resource.id)).toEqual(
+        ["y".repeat(191)]
+      );
+    });
+
+    it("sends data as JSON: what JSON drops is dropped before the changed fields are worked out, and what it cannot hold is refused", async () => {
+      const t = await boot(dialect);
+      await endpoint(t, ["*"]);
+      const cyclic: Record<string, unknown> = { name: "loop" };
+      cyclic.self = cyclic;
+
+      for (const [field, event] of [
+        ["data", { data: { total: 10n } }],
+        ["data", { data: cyclic }],
+        ["previous", { data: {}, previous: { total: 10n } }],
+      ] as const) {
+        const refusal = await refusalOf(
+          plugin().webhooks.record({ type: PAID, id: "ord_1", ...event })
+        );
+        expect(
+          (refusal.publicData as { errors?: Array<{ path?: string }> })?.errors,
+          field
+        ).toEqual([expect.objectContaining({ path: field })]);
+      }
+      expect(await events(t)).toEqual([]);
+
+      await plugin().webhooks.record({
+        type: PAID,
+        id: "ord_2",
+        data: { total: 42, note: undefined },
+      });
+      const [event] = await events(t);
+      expect(event).toBeDefined();
+      expect(envelopeOf(event as EventRow)).toMatchObject({
+        data: { total: 42 },
+        changedFields: ["total"],
+      });
     });
   }
 );
