@@ -331,7 +331,7 @@ function assertKnownKeys(
   }
 }
 
-function assertCountKeys(query: object): void {
+export function assertCountKeys(query: object): void {
   if (query === null || typeof query !== "object") {
     refuse("query-invalid", "A count query must be an object.");
   }
@@ -596,7 +596,7 @@ function selectedFrom(
  * instance on its first read, and asked earlier the registry would not be
  * there to answer for that read.
  */
-async function hiddenOf(
+export async function hiddenOf(
   binding: PublicReaderBinding,
   source: PublicSource
 ): Promise<ReadonlySet<string>> {
@@ -622,7 +622,7 @@ async function hiddenOf(
  * returned: the rows a filter keeps, and the order a sort puts them in, would
  * reveal the value every row is stripped of.
  */
-function assertNotHidden(
+export function assertNotHidden(
   query: Pick<PublicReadQuery, "filters" | "sort">,
   hidden: ReadonlySet<string>
 ): void {

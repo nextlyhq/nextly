@@ -1,7 +1,8 @@
 /**
  * The canvas's read of a list's entries: refused for a collection the caller
- * may not read, before anything is read, and otherwise the public reader's
- * answer; a body no list could build is refused at the boundary.
+ * may not read, before anything is read, and otherwise the editor reader's
+ * answer, read as the caller; a body no list could build is refused at the
+ * boundary.
  */
 import {
   LIST_MAX_SORT_KEYS,
@@ -27,8 +28,8 @@ const ANSWER = {
 };
 
 describe("a canvas list's read", () => {
-  it("reads as the public, for a collection the caller may read", async () => {
-    const publicFind = vi.fn(async () => ANSWER);
+  it("reads as the caller, for a collection the caller may read", async () => {
+    const find = vi.fn(async () => ANSWER);
     const query = {
       collection: "posts",
       filters: [{ field: "title", op: "contains" as const, value: "build" }],
@@ -37,52 +38,51 @@ describe("a canvas list's read", () => {
     };
     const answer = await readListEntries(
       { query },
-      { mayRead: async slug => slug === "posts", publicFind }
+      { mayRead: async slug => slug === "posts", find }
     );
     expect(answer).toBe(ANSWER);
-    expect(publicFind).toHaveBeenCalledWith(query);
+    expect(find).toHaveBeenCalledWith(query);
   });
 
   it("refuses a collection the caller may not read, reading nothing", async () => {
-    const publicFind = vi.fn(async () => ANSWER);
+    const find = vi.fn(async () => ANSWER);
     const refused = readListEntries(
       { query: { collection: "orders" } },
-      { mayRead: async () => false, publicFind }
+      { mayRead: async () => false, find }
     );
     await expect(refused).rejects.toSatisfy(error =>
       NextlyError.isCode(error, "FORBIDDEN")
     );
-    expect(publicFind).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
   });
 
-  it("tells the editor visitors are refused, never that its author must sign in", async () => {
-    const refused = await readListEntries(
-      { query: { collection: "posts" } },
-      {
-        mayRead: async () => true,
-        publicFind: async () => {
-          throw NextlyError.authRequired();
-        },
-      }
-    ).catch((error: unknown) => error);
-    expect(NextlyError.isForbidden(refused)).toBe(true);
-    expect((refused as NextlyError).statusCode).toBe(403);
-    expect((refused as NextlyError).publicMessage).toBe(
-      "Visitors can't read posts, so a published list of it shows nothing."
-    );
-    // Any other failure travels as it was, so a refused sort still falls back.
-    const sort = NextlyError.validation({
-      errors: [{ path: "sort.x", code: "FIELD_NOT_SORTABLE", message: "No." }],
-    });
-    await expect(
-      readListEntries(
-        { query: { collection: "posts" } },
-        {
-          mayRead: async () => true,
-          publicFind: async () => Promise.reject(sort),
-        }
-      )
-    ).rejects.toBe(sort);
+  it("passes the reader's own refusals to the editor unchanged", async () => {
+    // A refused sort travels as it was, so the canvas falls back as the
+    // published page does; so does the caller's own refusal of a row read.
+    for (const failure of [
+      NextlyError.validation({
+        errors: [
+          { path: "sort.x", code: "FIELD_NOT_SORTABLE", message: "No." },
+        ],
+      }),
+      NextlyError.forbidden(),
+    ]) {
+      await expect(
+        readListEntries(
+          { query: { collection: "posts" } },
+          {
+            mayRead: async () => true,
+            find: async () => Promise.reject(failure),
+          }
+        )
+      ).rejects.toBe(failure);
+    }
+  });
+
+  it("is declared authenticated and never stored", () => {
+    const route = listEntriesRoute();
+    expect(route).not.toHaveProperty("public");
+    expect(route.noStore).toBe(true);
   });
 
   it("refuses a body no list could build, before the caller is asked", async () => {

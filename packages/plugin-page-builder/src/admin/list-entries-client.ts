@@ -2,8 +2,8 @@
 
 /**
  * The canvas's data for its collection lists: each read the renderer's
- * `readList` makes, answered through the list entries route as a visitor
- * reads it.
+ * `readList` makes, answered through the list entries route as the person
+ * editing reads it, drafts included.
  *
  * A data provider rather than a hook, because it is what a page context
  * carries: the canvas draws a list with the same renderer a published page

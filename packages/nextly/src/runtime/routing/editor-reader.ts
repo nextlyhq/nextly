@@ -1,0 +1,130 @@
+/**
+ * The reader a page builder's canvas reads a list with: the same queries a
+ * published page's list makes, read AS THE PERSON EDITING, drafts included.
+ *
+ * The published page reads every list as an anonymous visitor
+ * (`createPublicReader`): published entries and the fields the public may
+ * read. While a page is being edited, its author should see the content they
+ * could see in the admin: their drafts, the rows their access lets them read
+ * and the fields their field rules allow, never more. This reader takes the
+ * public reader's query, with the same keys, the same refusals and the same
+ * limits, so a list cannot read differently on the canvas because of how it
+ * was asked, and changes only who reads and which states are read:
+ *
+ * - every read is `overrideAccess: false` as the given person (their user,
+ *   and an API key's own scope when the request carried one), so core's one
+ *   access gate decides, exactly as for that person's own reads. A collection
+ *   they may not read is refused, and rows and fields their rules deny are
+ *   left out;
+ * - `status: "all"`, so a draft the person may read is listed with the rest;
+ * - a filter or sort on a field the PUBLIC may not read is refused, as on the
+ *   published page, so a list the published page would refuse never looks
+ *   right on the canvas. The rows themselves are not stripped of such fields:
+ *   the person may read them, and what the public could not is the canvas's
+ *   to mark, not this reader's to hide.
+ *
+ * Each read runs detached from the request being served and from any person
+ * an enclosing operation is made as, so only the person named here judges
+ * it. Nothing it reads is cached or tagged: the result goes to the one
+ * person who asked, and never into anything a published page reads.
+ *
+ * @module runtime/routing/editor-reader
+ * @experimental
+ */
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { runDetachedFromRequest } from "../../auth/caller-scope";
+import { runAsPrincipal } from "../../auth/principal-scope";
+import type { FindArgs } from "../../direct-api/types/collections";
+import type { UserContext } from "../../direct-api/types/shared";
+
+import {
+  assertCountKeys,
+  assertNotHidden,
+  hiddenOf,
+  toPublicFind,
+  type PublicCountQuery,
+  type PublicReader,
+  type PublicReaderBinding,
+  type PublicReaderSource,
+  type PublicReadQuery,
+  type PublicReadResult,
+} from "./public-reader";
+
+/**
+ * Who an editor reader reads as: the signed-in person, and an API key's own
+ * scope when the request was made with one, so the key is judged on its
+ * grants rather than its owner's.
+ *
+ * @experimental
+ */
+export interface EditorReaderPerson {
+  readonly user: UserContext | undefined;
+  readonly actor?: AuthenticatedScope;
+}
+
+/**
+ * The read a public list query becomes when the person editing makes it:
+ * the public read's arguments, with who reads and which states replaced.
+ * Pure: every refusal `toPublicFind` makes happens here too, before
+ * anything is read.
+ *
+ * @experimental
+ */
+export function toEditorFind(
+  query: PublicReadQuery,
+  person: EditorReaderPerson,
+  binding: PublicReaderBinding = {}
+): FindArgs {
+  return {
+    ...toPublicFind(query, binding),
+    // Drafts with the rest; the person's own access still bounds every row.
+    status: "all",
+    overrideAccess: false,
+    user: person.user,
+    actor: person.actor,
+  };
+}
+
+/**
+ * A reader over a Direct API's `find`, reading as `person`. A person with no
+ * user is no one: their reads are refused by core as an anonymous read of a
+ * draft would be, never widened.
+ *
+ * @experimental
+ */
+export function createEditorReader(
+  nextly: PublicReaderSource,
+  person: EditorReaderPerson,
+  binding: PublicReaderBinding = {}
+): PublicReader {
+  const read = (args: FindArgs) =>
+    // `null` is a frame of its own, so it clears a person an enclosing
+    // operation was made as rather than inheriting it; the person named in
+    // the arguments is the only one who judges the read.
+    runDetachedFromRequest(() => runAsPrincipal(null, () => nextly.find(args)));
+  return Object.freeze({
+    async find(query: PublicReadQuery): Promise<PublicReadResult> {
+      const result = await read(toEditorFind(query, person, binding));
+      // Judged once the read has booted the instance, as the public reader
+      // judges it, and before any of its rows is returned: the published
+      // page's refusal of a filter or sort on a field the public may not read.
+      assertNotHidden(
+        query,
+        await hiddenOf(binding, { kind: "collection", slug: query.collection })
+      );
+      return result;
+    },
+    async count(query: PublicCountQuery): Promise<number> {
+      // Only what narrows a count, as the public reader's count takes.
+      assertCountKeys(query);
+      const result = await read(
+        toEditorFind({ ...query, limit: 1, select: ["id"] }, person, binding)
+      );
+      assertNotHidden(
+        query,
+        await hiddenOf(binding, { kind: "collection", slug: query.collection })
+      );
+      return result.meta.total;
+    },
+  });
+}
