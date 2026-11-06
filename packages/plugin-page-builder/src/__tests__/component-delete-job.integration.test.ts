@@ -97,6 +97,8 @@ interface Switches {
    * never run.
    */
   deleteHookRanFor?: string[];
+  /** Run once, on the next read of a component that a read hook sees. */
+  onComponentRead?: () => Promise<void>;
 }
 
 /** A plugin whose hooks time an author's save against the delete. */
@@ -119,6 +121,12 @@ function harness(switches: Switches): PluginDefinition {
       ctx.hooks.on("beforeDelete", COMPONENTS_SLUG, context => {
         const id = (context as { data?: { id?: unknown } }).data?.id;
         switches.deleteHookRanFor?.push(String(id));
+      });
+      ctx.hooks.on("afterRead", COMPONENTS_SLUG, async () => {
+        const run = switches.onComponentRead;
+        if (run === undefined) return;
+        switches.onComponentRead = undefined;
+        await run();
       });
       ctx.hooks.on("afterRead", LAYOUTS_SLUG, async () => {
         const run = switches.onLayoutRead;
@@ -908,6 +916,37 @@ describe.each(getConfiguredTestDialects())(
       expect(second.item).toMatchObject({
         status: "none",
         plan: { complete: true, next: null },
+      });
+    });
+    it("keeps the tombstone when a stale step of the same person is refused after the delete", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      await note(t, "Holding", [copyOf("i1", cardId)]);
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+      // The stale step has read the run, still converting, and pauses on its
+      // first read of the component while a second step of the same person
+      // carries the delete to the end. Then the stale one goes on: the
+      // component is gone, so it may not delete it, and its refusal path
+      // runs against the run it read.
+      let finished: Answer | undefined;
+      switches.onComponentRead = async () => {
+        finished = await deleteToTheEnd(cookie, cardId);
+      };
+
+      const stale = await call(cookie, cardId, "POST", {});
+
+      expect(finished?.item.status).toBe("done");
+      expect(stale.status, JSON.stringify(stale.body)).toBe(200);
+      expect(stale.item.status).toBe("done");
+      expect(await exists(t, cardId)).toBe(false);
+      // The tombstone is still there: it answers for the gone component, and
+      // a save from a stale copy holding it is refused.
+      expect((await call(cookie, cardId, "GET")).item.status).toBe("done");
+      await expect(addsACopy(t, cardId)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
       });
     });
   }

@@ -55,6 +55,18 @@ export type DeleteStep = "preflight" | "deleting" | "deleted";
 export type StoredPhase = RunPhase | DeleteStep;
 
 /**
+ * The phases a request may close a run at: every one before the component's
+ * own delete. A run at `deleting` or `deleted` is never closed: the second is
+ * the tombstone that refuses a save still holding a deleted component.
+ */
+export const CLOSABLE_PHASES: readonly StoredPhase[] = [
+  "preflight",
+  "converting",
+  "final",
+  "done",
+];
+
+/**
  * What a run is for. Only a `delete` run fences new references: the component
  * is about to go, so a copy added now would be one nobody converts. A
  * `strip-retired` run removes values of fields the component no longer
@@ -126,8 +138,19 @@ export interface FenceStore {
    * by a write.
    */
   runsAt(phase: StoredPhase): Promise<readonly DeletionRun[]>;
-  /** Close a run, which lifts a `delete` run's fence, and drop its progress. */
+  /**
+   * Close the run for a component and purpose, which lifts a `delete` run's
+   * fence, and drop its progress: only while it is at a phase in
+   * {@link CLOSABLE_PHASES}, so a deleted component's tombstone is never
+   * closed this way.
+   */
   close(componentId: string, purpose: RunPurpose): Promise<void>;
+  /**
+   * Close this run, by compare-and-set: only while it still has this id and
+   * is at one of `at`, so a request acting on a run it read earlier closes
+   * nothing a later request moved on. Answers whether it closed it.
+   */
+  closeRun(runId: string, at: readonly StoredPhase[]): Promise<boolean>;
 }
 
 /** The dialect, as `ctx.dialect` names it. */
@@ -219,6 +242,24 @@ export function fenceStore(
     return rows;
   };
 
+  const closeRun = (
+    runId: string,
+    at: readonly StoredPhase[]
+  ): Promise<boolean> =>
+    db.transaction(async tx => {
+      const t = tx.table(componentDeletions);
+      // The row removed only where it still has the phase read: a phase
+      // moved meanwhile is seen after the row lock on every dialect, and the
+      // count says so (a delete counts the rows it removed, MySQL too).
+      const removed = await tx
+        .delete(componentDeletions)
+        .where(both(eq(t.id, runId), inArray(t.phase, [...at])));
+      if (removed === 0) return false;
+      const h = tx.table(componentDeletionHosts);
+      await tx.delete(componentDeletionHosts).where(eq(h.deletionId, runId));
+      return true;
+    });
+
   return {
     runFor,
     runById: async runId => {
@@ -279,18 +320,11 @@ export function fenceStore(
           .where(eq(columns().phase, phase))
           .all()
       ).map(row => runOf(row)),
-    close: async (componentId, purpose) =>
-      db.transaction(async tx => {
-        const t = tx.table(componentDeletions);
-        const run = await tx
-          .select(componentDeletions)
-          .where(both(eq(t.componentId, componentId), eq(t.purpose, purpose)))
-          .first();
-        if (run === null) return;
-        const h = tx.table(componentDeletionHosts);
-        await tx.delete(componentDeletionHosts).where(eq(h.deletionId, run.id));
-        await tx.delete(componentDeletions).where(eq(t.id, run.id));
-      }),
+    close: async (componentId, purpose) => {
+      const run = await runFor(componentId, purpose);
+      if (run !== null) await closeRun(run.id, CLOSABLE_PHASES);
+    },
+    closeRun,
   };
 }
 
