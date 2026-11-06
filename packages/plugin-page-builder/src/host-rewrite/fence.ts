@@ -24,7 +24,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
-import { and, eq } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -46,10 +46,10 @@ export type RunPhase = "converting" | "final" | "done";
  * The steps a component delete takes around its walks (`component-delete/`):
  * `preflight` before the converting walk, judging every host and writing
  * none; `deleting` once both walks are done, while the component itself is
- * deleted; `settling` after that, while writes from stale copies are still
- * refused. No walk runs in any of them.
+ * deleted; `deleted` for good after that, the row kept as the tombstone that
+ * refuses any save still holding the component. No walk runs in any of them.
  */
-export type DeleteStep = "preflight" | "deleting" | "settling";
+export type DeleteStep = "preflight" | "deleting" | "deleted";
 
 /** A run's stored phase: a walk, or a step of a component delete. */
 export type StoredPhase = RunPhase | DeleteStep;
@@ -74,8 +74,9 @@ export interface DeletionRun {
   readonly startedBy: string;
   readonly phase: StoredPhase;
   /**
-   * Where the final walk stopped, or `null` before it started. At `settling`,
-   * when the component was deleted (an ISO time).
+   * Where the final walk stopped, or `null` before it started. At
+   * `preflight`, where its check stopped; at `deleted`, when the component
+   * was deleted (an ISO time).
    */
   readonly cursor: string | null;
 }
@@ -114,10 +115,17 @@ export interface FenceStore {
     to: StoredPhase,
     cursor: string | null
   ): Promise<boolean>;
-  /** Every component a `delete` run is open for. */
-  fenced(): Promise<ReadonlySet<string>>;
-  /** Every open run, of every purpose: one row per run in flight. */
-  openRuns(): Promise<readonly DeletionRun[]>;
+  /**
+   * Every component a `delete` run is open for, or deleted by one: among
+   * `among` alone when named, read by the run table's index.
+   */
+  fenced(among?: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Every run at `phase`, of every purpose. The phase is not indexed, so this
+   * reads the table, tombstones included; it is asked by a sweep pass, never
+   * by a write.
+   */
+  runsAt(phase: StoredPhase): Promise<readonly DeletionRun[]>;
   /** Close a run, which lifts a `delete` run's fence, and drop its progress. */
   close(componentId: string, purpose: RunPurpose): Promise<void>;
 }
@@ -132,8 +140,11 @@ const STORED_PHASES: ReadonlySet<string> = new Set<StoredPhase>([
   "done",
   "preflight",
   "deleting",
-  "settling",
+  "deleted",
 ]);
+
+/** How many component ids one indexed read of the runs names. */
+const IDS_PER_READ = 200;
 
 /** A stored phase, read strictly: anything else is the converting walk. */
 function phaseOf(value: string): StoredPhase {
@@ -195,6 +206,19 @@ export function fenceStore(
     return row === null ? null : runOf(row);
   };
 
+  const runsAmong = (chunk: readonly string[]) =>
+    db
+      .select(componentDeletions)
+      .where(inArray(columns().componentId, [...chunk]))
+      .all();
+  const runsOf = async (ids: readonly string[]) => {
+    const rows: Awaited<ReturnType<typeof runsAmong>> = [];
+    for (let at = 0; at < ids.length; at += IDS_PER_READ) {
+      rows.push(...(await runsAmong(ids.slice(at, at + IDS_PER_READ))));
+    }
+    return rows;
+  };
+
   return {
     runFor,
     runById: async runId => {
@@ -232,18 +256,29 @@ export function fenceStore(
         .where(both(eq(r.id, runId), eq(r.phase, from)));
       return moved > 0;
     },
-    fenced: async () => {
-      // Every open run, filtered here: the table holds one row per run in
-      // flight, and a purpose read strictly fences when it cannot be told.
-      const rows = await db.select(componentDeletions).all();
+    fenced: async among => {
+      // The runs of the components named, by the index on the component's
+      // id: a deleted component's row stays for good, so the table grows,
+      // and reading all of it is kept for a document read only in part.
+      // Filtered here, as a purpose read strictly fences when it cannot be
+      // told.
+      const rows =
+        among === undefined
+          ? await db.select(componentDeletions).all()
+          : await runsOf(among);
       return new Set(
         rows
           .filter(row => purposeOf(row.purpose) === "delete")
           .map(row => row.componentId)
       );
     },
-    openRuns: async () =>
-      (await db.select(componentDeletions).all()).map(row => runOf(row)),
+    runsAt: async phase =>
+      (
+        await db
+          .select(componentDeletions)
+          .where(eq(columns().phase, phase))
+          .all()
+      ).map(row => runOf(row)),
     close: async (componentId, purpose) =>
       db.transaction(async tx => {
         const t = tx.table(componentDeletions);
@@ -311,8 +346,11 @@ export interface FenceJudgement {
   readonly localized: boolean;
   /** How many nodes to read before a document counts as unreadable. */
   readonly maxNodes: number;
-  /** The fenced components, read when the write places any component. */
-  readonly fenced: () => Promise<FencedComponents>;
+  /**
+   * The fenced components, read when the write places any component: among
+   * the ones named, when the document was read to the end.
+   */
+  readonly fenced: (among?: readonly string[]) => Promise<FencedComponents>;
 }
 
 /**
@@ -327,7 +365,7 @@ export async function fenceIssues(
 ): Promise<FenceIssue[]> {
   const placed = componentReferencesIn(judged.document, judged.maxNodes);
   if (placed.complete && placed.ids.length === 0) return [];
-  const fenced = await judged.fenced();
+  const fenced = await judged.fenced(placed.complete ? placed.ids : undefined);
   // Neither side read to the end: the components the document places beyond
   // its surveyed prefix are unknown, and so is which ones are fenced. An empty
   // prefix proves nothing, so the write is refused as it stands.
@@ -440,10 +478,10 @@ function fencedMessage(componentId: string, unread: boolean): string {
 export function fencedComponentsReader(
   store: () => Pick<FenceStore, "fenced">,
   onUnreadable: (error: unknown) => void
-): () => Promise<FencedComponents> {
-  return async () => {
+): (among?: readonly string[]) => Promise<FencedComponents> {
+  return async among => {
     try {
-      return { kind: "read", ids: await store().fenced() };
+      return { kind: "read", ids: await store().fenced(among) };
     } catch (error) {
       onUnreadable(error);
       return { kind: "unreadable" };

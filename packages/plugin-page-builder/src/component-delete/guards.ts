@@ -22,10 +22,20 @@
  *
  * A reader is served only published components, so unpublishing one takes it
  * off every page that places it as surely as deleting it would. The refusal
- * names the documents the person may read and counts the rest, from the
- * usage index. Doubt counts as use: while the index is not whole, the count
- * is only a floor ("at least"), and an index that is not whole and found
- * nothing refuses as well, saying the use cannot be confirmed.
+ * names the documents the person may read and counts the rest.
+ *
+ * The usage index answers first, and a use it names refuses. It is a hint,
+ * maintained after commit, so its "none" is never taken as the answer: every
+ * document is then read as stored, as the delete's own check reads it, within
+ * a budget. A use found refuses; a walk that could not finish, or a document
+ * it could not read, refuses too, saying the use can't be confirmed. Doubt
+ * counts as use.
+ *
+ * A save placing the component while it is unpublished is not fenced here,
+ * and need not be: placing an unpublished component is allowed by design
+ * (`component-readiness-hook.ts`: publishing a page before its components is
+ * an ordinary order of work, so the save reports and never refuses). Such a
+ * save lands where a save made just after the unpublish lands anyway.
  *
  * Neither reaches a write that skips hooks, nor core's all-languages
  * lifecycle, which runs no collection hooks: the known limit of every guard a
@@ -38,6 +48,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { HostFinder } from "../fields/blocks-composition";
 import { documentKeyOf } from "../host-rewrite/contract";
 import type { FenceStore } from "../host-rewrite/fence";
+import type { ComponentDeleteRewriteService } from "../host-rewrite/service";
 import type { PersonReads } from "../layout-removal/layout-references";
 import { unpublishes } from "../unpublish-write";
 
@@ -48,6 +59,42 @@ import {
   NOT_IN_A_BATCH,
   unpublishRefusal,
 } from "./words";
+
+/** How many documents the walk before an unpublish reads at most. */
+const UNPUBLISH_DOCUMENTS = 2000;
+
+/** How long the walk before an unpublish reads for at most. */
+const UNPUBLISH_MS = 10_000;
+
+/**
+ * Who places a component, read from every document as stored, within the
+ * budget: the delete's own check, as the system, writing nothing. Any host it
+ * would convert, and any it could not judge, counts as a use.
+ */
+export function storedUseCheck(
+  service: () => Pick<ComponentDeleteRewriteService, "plan">
+): (componentId: string) => Promise<UseCheck> {
+  return async componentId => {
+    const slice = await service().plan({
+      componentId,
+      // The walk reads as the system and, as a plan, writes nothing, so it
+      // is made for nobody.
+      caller: { caller: null, user: null },
+      after: null,
+      maxDocuments: UNPUBLISH_DOCUMENTS,
+      deadline: new Date(Date.now() + UNPUBLISH_MS),
+    });
+    const keys = [
+      ...new Set(
+        [...slice.report.rewritten, ...slice.report.left.map(l => l.host)].map(
+          host => documentKeyOf(host)
+        )
+      ),
+    ];
+    if (keys.length > 0) return { kind: "used", keys };
+    return slice.complete ? { kind: "unused" } : { kind: "unsure" };
+  };
+}
 
 /** The plugin context the guards need, named structurally. */
 export interface ComponentGuardContext {
@@ -68,7 +115,17 @@ export interface ComponentGuardArgs {
   readonly runs: () => Pick<FenceStore, "runFor">;
   /** The usage index's answer to who places a component; absent, none is asked. */
   readonly hostsOf?: () => HostFinder | undefined;
+  /** Every document read as stored, within a budget: who places it. */
+  readonly confirmUnused: (componentId: string) => Promise<UseCheck>;
 }
+
+/** What reading every document as stored found. */
+export type UseCheck =
+  | { readonly kind: "unused" }
+  /** The documents placing it, or that could not be judged. */
+  | { readonly kind: "used"; readonly keys: readonly string[] }
+  /** The walk ran out of budget before the last document. */
+  | { readonly kind: "unsure" };
 
 /** The parts of a hook context the guards read. */
 interface GuardHookContext {
@@ -113,10 +170,6 @@ async function refuseUnpublishWhileUsed(
   args: ComponentGuardArgs,
   hook: GuardHookContext
 ): Promise<void> {
-  const hosts = args.hostsOf?.();
-  // A host that renders components from a store of its own keeps no index of
-  // them, so there is nothing to ask.
-  if (hosts === undefined) return;
   if (hook.executor !== undefined) {
     throw refusal(
       "Components can't be unpublished as part of a batch, because whether a page uses one can't be checked safely there. Unpublish each one on its own.",
@@ -125,6 +178,27 @@ async function refuseUnpublishWhileUsed(
   }
   const id = idIn(hook.originalData) ?? idIn(hook.data);
   if (id === null) return;
+  const indexed = await indexedHosts(args.hostsOf?.(), id);
+  if (indexed.keys.length > 0) {
+    throw await usedRefusal(hook, indexed.keys, indexed.whole);
+  }
+  const confirmed = await args.confirmUnused(id);
+  if (confirmed.kind === "unused") return;
+  if (confirmed.kind === "used") {
+    throw await usedRefusal(hook, confirmed.keys, true);
+  }
+  throw refusal(
+    unpublishRefusal({ titles: [], others: 0, whole: false }),
+    "unpublish-unconfirmed"
+  );
+}
+
+/** The documents the usage index says place the component, and if it is whole. */
+async function indexedHosts(
+  hosts: HostFinder | undefined,
+  id: string
+): Promise<{ keys: string[]; whole: boolean }> {
+  if (hosts === undefined) return { keys: [], whole: false };
   const [whole, found] = await Promise.all([
     hosts.whole(),
     hosts.placing([id]),
@@ -140,14 +214,21 @@ async function refuseUnpublishWhileUsed(
       )
     ),
   ];
-  const complete = whole && found.complete;
-  if (keys.length === 0 && complete) return;
+  return { keys, whole: whole && found.complete };
+}
+
+/** The refusal naming the documents that place it. */
+async function usedRefusal(
+  hook: GuardHookContext,
+  keys: readonly string[],
+  whole: boolean
+): Promise<NextlyError> {
   const named = await namesFor(hook, keys);
-  throw refusal(
+  return refusal(
     unpublishRefusal({
       titles: named.titles,
       others: named.others,
-      whole: complete,
+      whole,
     }),
     "unpublish-used"
   );

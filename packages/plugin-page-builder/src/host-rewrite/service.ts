@@ -44,7 +44,7 @@ import {
   type RunPurpose,
 } from "./fence";
 import { progressStore, type HostProgress } from "./progress";
-import { rewriteHosts, type RunStore } from "./rewrite";
+import { rewriteHosts, type HostSource, type RunStore } from "./rewrite";
 import {
   siteHostReader,
   siteHostSource,
@@ -100,9 +100,7 @@ export interface ComponentDeleteRewriteService {
    * so nothing is fenced: what the delete dialog shows before anyone
    * confirms, and the check a delete makes before converting anything.
    */
-  plan(
-    args: Pick<ComponentDeleteRewriteArgs, "componentId" | "caller">
-  ): Promise<RewriteReport>;
+  plan(args: PlanArgs): Promise<PlanSlice>;
   /** What a run recorded about each document, or nothing when none is open. */
   progress(
     componentId: string,
@@ -110,6 +108,31 @@ export interface ComponentDeleteRewriteService {
   ): Promise<readonly HostProgress[]>;
   /** Close a run, which lifts a `delete` run's fence. */
   close(componentId: string, purpose?: RunPurpose): Promise<void>;
+}
+
+/**
+ * One slice of a plan: the hosts after `after`, until the budget is spent.
+ * A plan of a whole site may take several, each resuming where the last
+ * stopped, so no one request walks a large site.
+ */
+export interface PlanArgs
+  extends Pick<ComponentDeleteRewriteArgs, "componentId" | "caller"> {
+  /** Where the slice starts: the `next` of the one before, or `null`. */
+  readonly after: string | null;
+  /** How many documents the slice judges at most (at least one). */
+  readonly maxDocuments: number;
+  /** When the slice stops, after the document in hand. */
+  readonly deadline: Date;
+}
+
+/** What one slice of a plan found. */
+export interface PlanSlice {
+  /** The slice's own findings: its hosts, and Layouts on its last slice. */
+  readonly report: RewriteReport;
+  /** Whether the slice reached the last document, so the plan is whole. */
+  readonly complete: boolean;
+  /** Where the next slice starts; `null` once complete. */
+  readonly next: string | null;
 }
 
 /** What the installed plugin hands the service. */
@@ -217,8 +240,9 @@ export function componentDeleteRewriteService(
     },
     // A dry walk reads the run once, for its phase, and moves nothing: the
     // stand-in answers that one read and refuses any move.
-    plan: args =>
-      rewriteAsCaller(
+    plan: async args => {
+      const slice: SliceState = { next: args.after, ended: false };
+      const report = await rewriteAsCaller(
         install(),
         {
           runById: runId =>
@@ -226,9 +250,53 @@ export function componentDeleteRewriteService(
           advance: () => Promise.resolve(false),
         },
         progress(),
-        { ...args, dryRun: true },
-        PLAN_RUN_ID
-      ),
+        { componentId: args.componentId, caller: args.caller, dryRun: true },
+        PLAN_RUN_ID,
+        source => slicedSource(source, args, slice)
+      );
+      return {
+        report,
+        complete: slice.ended,
+        next: slice.ended ? null : slice.next,
+      };
+    },
+  };
+}
+
+/** Where a slice of a plan got to. */
+interface SliceState {
+  /** The cursor after the last document it judged. */
+  next: string | null;
+  /** Whether it judged the last document there is. */
+  ended: boolean;
+}
+
+/**
+ * A source answering one slice: the documents after `after`, stopping once the
+ * budget is spent, always after at least one so every slice moves on. The
+ * hosts outside every walk (Layouts) are judged on the slice that ends, once.
+ */
+function slicedSource(
+  source: HostSource,
+  budget: Pick<PlanArgs, "after" | "maxDocuments" | "deadline">,
+  slice: SliceState
+): HostSource {
+  return {
+    ...source,
+    documents: async function* () {
+      let judged = 0;
+      for await (const document of source.documents(budget.after)) {
+        const spent =
+          judged >= budget.maxDocuments ||
+          Date.now() >= budget.deadline.getTime();
+        if (judged > 0 && spent) return;
+        judged += 1;
+        slice.next = source.cursorOf(document);
+        yield document;
+      }
+      slice.ended = true;
+    },
+    outside: () => (slice.ended ? source.outside() : Promise.resolve([])),
   };
 }
 
@@ -242,7 +310,9 @@ function rewriteAsCaller(
   progress: ReturnType<typeof progressStore>,
   args: ComponentDeleteRewriteArgs,
   /** The run whose starter was just checked against the caller. */
-  runId: string
+  runId: string,
+  /** How the site's source is narrowed, for a slice of a plan. */
+  narrow: (source: HostSource) => HostSource = source => source
 ): Promise<RewriteReport> {
   const site: RewriteSite = {
     ...installed.site,
@@ -255,7 +325,7 @@ function rewriteAsCaller(
     {
       fence: runs,
       progress,
-      source: siteHostSource(site),
+      source: narrow(siteHostSource(site)),
       read: siteHostReader(site),
       write: siteHostWriter(site),
     },

@@ -6,12 +6,13 @@
  * ## Who may call them
  *
  * The routes admit a signed-in caller who may read the component store.
- * Starting a delete asks, before anything is written, whether they hold the
- * right to delete components at all; whether they may delete THIS one, and
- * change each document, is decided by the writes themselves, made as them
- * through the Direct API with their access enforced. A dry run asks nothing
- * past reading, and says whether they hold the right, so the dialog can say
- * so beside what the delete would do.
+ * Before a delete starts, and before each step of it, core's own delete gate
+ * is asked whether they may delete THIS component (`probe.ts`), a rule over
+ * the row included; refused, nothing is converted. Whether they may change
+ * each document is decided by the writes themselves, made as them through
+ * the Direct API with their access enforced. A dry run changes nothing, and
+ * says what the gate answered, so the dialog can say so beside what the
+ * delete would do.
  *
  * @module component-delete/route
  */
@@ -35,13 +36,19 @@ import {
   stepComponentDelete,
   type ComponentDeleteDeps,
 } from "./job";
+import { mayDeleteComponent } from "./probe";
 
 /**
  * The request body. Unknown keys are refused rather than dropped: a typo of
  * `dryRun` silently ignored would start the delete the caller meant to
  * preview.
  */
-const DeleteBody = z.strictObject({ dryRun: z.boolean().optional() });
+const DeleteBody = z.strictObject({
+  dryRun: z.boolean().optional(),
+  // Where a dry run's next slice starts, as the last one answered it. An
+  // opaque cursor, bounded as the run row stores one.
+  after: z.string().min(1).max(1024).optional(),
+});
 
 /** The body, parsed at the boundary; an empty body is `{}`. */
 async function readBody(req: Request): Promise<z.infer<typeof DeleteBody>> {
@@ -85,16 +92,26 @@ async function depsFor(
     });
   }
   const components = storeOf(ctx, setup).collection;
+  const componentId = ctx.params.id ?? "";
+  const nextly = await getCachedNextly();
+  const asPerson = await readingAsUser(ctx);
   return {
     ...setup.install(),
-    componentId: ctx.params.id ?? "",
+    componentId,
     components,
     caller: ctx,
-    nextly: await getCachedNextly(),
-    asPerson: await readingAsUser(ctx),
+    nextly,
+    asPerson,
     may: (action, resource, anyEntry) =>
       caller.can(action, resource, anyEntry ? { anyEntry } : undefined),
     mayReadSingle: slug => caller.can("read", slug),
+    mayDeleteIt: async () =>
+      mayDeleteComponent({
+        nextly,
+        components,
+        componentId,
+        asPerson,
+      }),
     now: () => new Date(),
   };
 }
@@ -120,7 +137,7 @@ export function componentDeleteRoutes(setup: ComponentDeleteRouteSetup): {
         const deps = await depsFor(setup, ctx);
         const answer =
           body.dryRun === true
-            ? await planComponentDelete(deps)
+            ? await planComponentDelete(deps, body.after ?? null)
             : await stepComponentDelete(deps);
         return respondMutation(answer.message, answer.item);
       },

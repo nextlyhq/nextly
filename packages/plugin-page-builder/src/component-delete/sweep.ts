@@ -5,11 +5,10 @@
  * their own requests (`job.ts`), because nothing lets a job act as a stored
  * person. What is left to a job is what needs nobody's rights:
  *
- * - closing a run whose settle window has passed, so the fence against stale
- *   copies of a deleted component does not outlast it when its starter never
- *   calls again;
- * - finishing a run that stopped between the component's delete and the
- *   move to `settling`: the component is gone, so the run settles.
+ * finishing a run that stopped between the component's delete and its move
+ * to `deleted`: the component is gone, so the run becomes its tombstone. A
+ * tombstone is never closed: it is what refuses a save still holding the
+ * deleted component, however long that save was held.
  *
  * A run whose component still exists at `deleting` is its starter's to carry
  * on; the sweep leaves it. Idempotent: each move is a compare-and-set, and a
@@ -21,16 +20,14 @@ import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 
 import type { DeletionRun, FenceStore } from "../host-rewrite/fence";
 
-import { settled } from "./job";
-
 /** The job type this plugin registers, namespaced by the plugin. */
 export const COMPONENT_DELETE_JOB = "page-builder:component-delete";
 
 /** What a pass needs, resolved per pass. */
 export interface ComponentDeleteSweepDeps {
-  /** Every open run, of every purpose. */
-  readonly runs: () => Promise<readonly DeletionRun[]>;
-  readonly store: () => Pick<FenceStore, "advance" | "close">;
+  /** Every run stopped at its delete, of every purpose. */
+  readonly deleting: () => Promise<readonly DeletionRun[]>;
+  readonly store: () => Pick<FenceStore, "advance">;
   /** Whether a component still exists, read as the system. */
   readonly exists: (componentId: string) => Promise<boolean>;
   readonly now: () => Date;
@@ -40,16 +37,12 @@ export interface ComponentDeleteSweepDeps {
 export async function sweepComponentDeletes(
   deps: ComponentDeleteSweepDeps
 ): Promise<void> {
-  for (const run of await deps.runs()) {
-    if (run.purpose !== "delete") continue;
-    if (run.phase === "deleting" && !(await deps.exists(run.componentId))) {
+  for (const run of await deps.deleting()) {
+    if (run.purpose !== "delete" || run.phase !== "deleting") continue;
+    if (!(await deps.exists(run.componentId))) {
       await deps
         .store()
-        .advance(run.id, "deleting", "settling", deps.now().toISOString());
-      continue;
-    }
-    if (run.phase === "settling" && settled(run, deps.now())) {
-      await deps.store().close(run.componentId, "delete");
+        .advance(run.id, "deleting", "deleted", deps.now().toISOString());
     }
   }
 }

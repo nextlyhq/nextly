@@ -20,14 +20,17 @@
  *   against the delete's move from `done` to `deleting`: whichever commits
  *   second finds the other's phase, so the delete never passes a save that
  *   keeps a copy, and the copy is converted again from what was saved;
- * - a run deleting the component (`deleting`, `settling`) refuses the write:
- *   its final walk found no copy left, so a save holding one now was made
- *   from a stale copy (spec: refused, saying the component was turned into
- *   plain blocks).
+ * - a run deleting the component (`deleting`), or the row it leaves for good
+ *   once the component is gone (`deleted`), refuses the write: its final walk
+ *   found no copy left, so a save holding one now was made from a stale copy
+ *   (spec: refused, saying the component was turned into plain blocks). The
+ *   tombstone never expires, so a save held for any length of time is
+ *   refused all the same.
  *
  * Throwing aborts the write and everything it did, a batch included. A write
  * holding no component costs nothing here: its documents are surveyed before
- * any table is read.
+ * any table is read, and the runs are then read by the index on the
+ * component's id, for the components the write holds.
  *
  * @module host-rewrite/in-transaction
  */
@@ -76,7 +79,10 @@ export function registerInTransactionFence(args: InTransactionFenceArgs): void {
 const WALKING: readonly StoredPhase[] = ["converting", "final", "done"];
 
 /** The phases in which the component is being deleted, or has been. */
-const DELETING: ReadonlySet<StoredPhase> = new Set(["deleting", "settling"]);
+const DELETING: ReadonlySet<StoredPhase> = new Set(["deleting", "deleted"]);
+
+/** How many component ids one indexed read of the runs names. */
+const IDS_PER_READ = 200;
 
 /** How many values of a written row are looked through for blocks documents. */
 const MAX_VALUES = 10_000;
@@ -102,7 +108,9 @@ export async function judgeInTransaction(
   if (write.operation === "delete") return;
   const held = heldComponents(write.data, maxNodes);
   if (held.complete && held.ids.size === 0) return;
-  const runs = (await write.db.select(componentDeletions).all()).filter(
+  // The read names the components already; matched again here, over the
+  // rows in hand, so a read answering more fences nothing extra.
+  const runs = (await runsHolding(write, held)).filter(
     run =>
       run.purpose !== "strip-retired" &&
       (!held.complete || held.ids.has(run.componentId))
@@ -112,7 +120,7 @@ export async function judgeInTransaction(
   for (const run of runs) {
     const phase = run.phase as StoredPhase;
     if (DELETING.has(phase)) {
-      throw refusal(held.field, deletedMessage(run.componentId));
+      throw refusal(held.field, deletedMessage(run.componentId, phase));
     }
     if (phase === "preflight" || at === undefined) continue;
     const t = write.db.table(componentDeletions);
@@ -144,6 +152,28 @@ export async function judgeInTransaction(
         .where(row);
     }
   }
+}
+
+/**
+ * The runs of the components the row holds, by the index on the component's
+ * id; every run, for a row read only in part.
+ */
+async function runsHolding(write: FencedWrite, held: Held) {
+  const all = () => write.db.select(componentDeletions).all();
+  if (!held.complete) return all();
+  const ids = [...held.ids];
+  const t = write.db.table(componentDeletions);
+  const rows: Awaited<ReturnType<typeof all>> = [];
+  for (let at = 0; at < ids.length; at += IDS_PER_READ) {
+    const chunk = ids.slice(at, at + IDS_PER_READ);
+    rows.push(
+      ...(await write.db
+        .select(componentDeletions)
+        .where(inArray(t.componentId, chunk))
+        .all())
+    );
+  }
+  return rows;
 }
 
 /** The components a written row's blocks documents hold. */
@@ -199,8 +229,9 @@ function refusal(path: string, message: string): NextlyError {
   });
 }
 
-function deletedMessage(componentId: string): string {
-  return `Component "${componentId}" has been turned into plain blocks and deleted, so content still holding it cannot be saved. Reload to get the converted content, then make your changes again.`;
+function deletedMessage(componentId: string, phase: StoredPhase): string {
+  const done = phase === "deleted" ? "has been" : "is being";
+  return `Component "${componentId}" ${done} turned into plain blocks and deleted, so content still holding it cannot be saved. Reload to get the converted content, then make your changes again.`;
 }
 
 function movedOnMessage(componentId: string): string {

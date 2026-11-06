@@ -1,19 +1,19 @@
 /**
  * Delete component: turn every copy of a component into plain blocks, then
- * delete it. The one way a component is deleted (`delete-guard.ts`).
+ * delete it. The one way a component is deleted (`guards.ts`).
  *
  * ## The steps, as the run's row records them
  *
  * 1. **Open** (`preflight`). Inserting the run's row is the fence: from now on
- *    no write may add a copy (`host-rewrite/fence.ts`). Opened by a person who
- *    may read the component and holds the right to delete components.
- * 2. **Check before converting.** Every host is judged as the conversion
- *    would judge it, writing nothing. Anything that would stop the delete
- *    part way stops it here, with no host changed: a copy that can't be
- *    converted (a locked area's starting blocks, a setting that installs the
- *    component), a host that can't be read or written where it is, a Layout
- *    using it, a collection the person may not change at all. Stopped, the
- *    fence comes down and the answer lists why.
+ *    no write may add a copy (`host-rewrite/fence.ts`). Opened by a person core
+ *    lets delete THIS component (`probe.ts`), asked again before every step.
+ * 2. **Check before converting** (`preflight`, a slice per step, its cursor on
+ *    the row). Every host is judged as the conversion would judge it, writing
+ *    nothing. Anything that would stop the delete part way stops it here, with
+ *    no host changed: a copy that can't be converted (a locked area's starting
+ *    blocks, a setting that installs the component), a host that can't be read
+ *    or written where it is, a Layout using it, a collection the person may
+ *    not change at all. Stopped, the fence comes down and the answer lists why.
  * 3. **Convert** (`converting`, `final`, `done`): the host rewrite, a bounded
  *    tick per request, as the person. Its two walks end with every host read
  *    again under the fence.
@@ -26,10 +26,8 @@
  *    (`host-rewrite/in-transaction.ts`). The component is deleted as the
  *    person, the run's id in the hook context, which the delete guard
  *    requires.
- * 6. **Settle** (`settling`): the run stays {@link SETTLE_MS} after the
- *    delete, refusing saves made from a copy that still holds the component,
- *    then is closed. No fence lasts beyond that: restoring an old version
- *    shows the missing-component placeholder.
+ * 6. **Deleted** (`deleted`): the row stays for good, as the tombstone that
+ *    refuses any save still holding the component, however long it was held.
  *
  * ## Who it runs as, and when it runs
  *
@@ -38,21 +36,26 @@
  * of the delete route by that person carries the delete on by one step, and
  * the dialog calls it until it is finished. Closing the dialog pauses the
  * delete; calling again resumes it. Anyone else is refused while it runs.
- * The sweep (`sweep.ts`) only closes settled runs and finishes a delete that
- * stopped after its write; it never writes a host or deletes a component.
+ * The sweep (`sweep.ts`) only finishes a delete that stopped after its write;
+ * it never writes a host or deletes a component.
  *
  * @module component-delete/job
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
-import type { LeftReason, RewriteReport } from "../host-rewrite/contract";
+import type {
+  HostAddress,
+  LeftReason,
+  RewriteReport,
+} from "../host-rewrite/contract";
 import { documentKeyOf } from "../host-rewrite/contract";
 import type { DeletionRun, FenceStore } from "../host-rewrite/fence";
 import type { HostProgress } from "../host-rewrite/progress";
 import {
   runStarterOf,
   type ComponentDeleteRewriteService,
+  type PlanSlice,
   type RewriteCaller,
 } from "../host-rewrite/service";
 
@@ -70,14 +73,11 @@ import { leftWords, MESSAGES, SOMEONE_ELSE_IS_DELETING } from "./words";
 /** The hook-context key the delete's own write carries the run's id under. */
 export const COMPONENT_DELETE_CONTEXT_KEY = "pageBuilder.componentDelete";
 
-/** How long a run stays after the delete, refusing saves from stale copies. */
-export const SETTLE_MS: number = 2 * 60 * 1000;
+/** How many documents one step judges or converts at most. */
+export const STEP_DOCUMENTS = 25;
 
-/** How many documents one step converts at most. */
-const STEP_DOCUMENTS = 25;
-
-/** How long one step converts for at most. */
-const STEP_MS = 8000;
+/** How long one step judges or converts for at most. */
+export const STEP_MS = 8000;
 
 /** What the delete needs, injected so a test can drive it. */
 export interface ComponentDeleteDeps extends NamingDeps {
@@ -95,6 +95,8 @@ export interface ComponentDeleteDeps extends NamingDeps {
     resource: string,
     anyEntry: boolean
   ) => Promise<boolean>;
+  /** Whether core's delete gate lets the caller delete THIS component. */
+  readonly mayDeleteIt: () => Promise<boolean>;
   readonly now: () => Date;
 }
 
@@ -105,41 +107,34 @@ export interface ComponentDeleteAnswer {
 }
 
 /**
- * A dry run: what deleting would do, changing nothing, and the delete already
- * open, if any.
+ * A dry run: what deleting would do over one slice of the documents, changing
+ * nothing, and the delete already open, if any.
  */
 export async function planComponentDelete(
-  deps: ComponentDeleteDeps
+  deps: ComponentDeleteDeps,
+  after: string | null
 ): Promise<ComponentDeleteAnswer> {
   await requireReadable(deps);
   const [mayDelete, run] = await Promise.all([
-    deps.may("delete", deps.components, true),
+    deps.mayDeleteIt(),
     deps.runs.runFor(deps.componentId, "delete"),
   ]);
-  const judged = await judge(deps);
+  const judged = await judge(deps, after);
+  const found = sizeOf(judged.plan.convert) + sizeOf(judged.plan.drafts) > 0;
   const status = judged.blocked
     ? "refused"
-    : judged.plan.convert.named.length +
-          judged.plan.convert.unreadable +
-          judged.plan.convert.more +
-          judged.plan.drafts.named.length +
-          judged.plan.drafts.unreadable +
-          judged.plan.drafts.more ===
-        0
-      ? "none"
-      : "used";
-  return {
-    message: MESSAGES[status],
-    item: {
-      componentId: deps.componentId,
-      status,
-      mayDelete,
-      run: runInfo(deps, run),
-      plan: judged.plan,
-      ...(judged.layouts === undefined ? {} : { layouts: judged.layouts }),
-      ...(judged.left.length === 0 ? {} : { left: judged.left }),
-    },
-  };
+    : found
+      ? "used"
+      : judged.plan.complete
+        ? "none"
+        : "counting";
+  return answer(deps, status, {
+    mayDelete,
+    run: runInfo(deps, run),
+    plan: judged.plan,
+    ...(judged.layouts === undefined ? {} : { layouts: judged.layouts }),
+    ...(judged.left.length === 0 ? {} : { left: judged.left }),
+  });
 }
 
 /** Start the delete, or carry the caller's own on by one step. */
@@ -148,17 +143,25 @@ export async function stepComponentDelete(
 ): Promise<ComponentDeleteAnswer> {
   const held = await deps.runs.runFor(deps.componentId, "delete");
   // Once the component is gone, its run answers for it: there is nothing
-  // left to read.
+  // left to read or to authorize.
   if (held !== null && isMine(deps, held) && afterTheDelete(held)) {
     return carryOn(deps, held);
   }
   await requireReadable(deps);
-  if (!(await deps.may("delete", deps.components, true))) {
+  if (held !== null && !isMine(deps, held)) throw someoneElse(deps);
+  // A precondition of every step, judged for THIS component by core's own
+  // gate: a rule that lets the caller delete some components does not let
+  // them convert the copies of one it refuses. A delete they had open stops,
+  // with nothing further converted.
+  if (!(await deps.mayDeleteIt())) {
+    if (held !== null) await deps.runs.close(deps.componentId, "delete");
     throw NextlyError.forbidden({
-      logContext: { reason: "component-delete-not-granted" },
+      logContext: {
+        reason: "component-delete-not-granted",
+        componentId: deps.componentId,
+      },
     });
   }
-  if (held !== null && !isMine(deps, held)) throw someoneElse(deps);
   const run =
     held ??
     (
@@ -173,22 +176,17 @@ export async function stepComponentDelete(
   return carryOn(deps, run);
 }
 
-/** The open delete's progress, changing nothing but a settled run's close. */
+/** The open delete's progress, changing nothing. */
 export async function componentDeleteProgress(
   deps: ComponentDeleteDeps
 ): Promise<ComponentDeleteAnswer> {
   const run = await deps.runs.runFor(deps.componentId, "delete");
-  if (run === null || !(isMine(deps, run) && afterTheDelete(run))) {
-    await requireReadable(deps);
+  if (run !== null && afterTheDelete(run) && isMine(deps, run)) {
+    return answer(deps, "done", { mayDelete: true, run: runInfo(deps, run) });
   }
-  const mayDelete = await deps.may("delete", deps.components, true);
-  if (run === null) {
-    return answer(deps, "idle", { mayDelete, run: null });
-  }
-  if (afterTheDelete(run)) {
-    await closeIfSettled(deps, run);
-    return answer(deps, "done", { mayDelete, run: runInfo(deps, run) });
-  }
+  await requireReadable(deps);
+  const mayDelete = await deps.mayDeleteIt();
+  if (run === null) return answer(deps, "idle", { mayDelete, run: null });
   return answer(deps, run.phase === "preflight" ? "preflight" : "running", {
     mayDelete,
     run: runInfo(deps, run),
@@ -206,20 +204,22 @@ async function carryOn(
       return preflight(deps, run);
     case "deleting":
       return deleteIt(deps, run);
-    case "settling":
-      await closeIfSettled(deps, run);
+    case "deleted":
       return answer(deps, "done", { mayDelete: true, run: runInfo(deps, run) });
     default:
       return convert(deps, run);
   }
 }
 
-/** Step 2: judge every host; stop with nothing changed, or go on to convert. */
+/**
+ * Step 2, one slice: stop with nothing changed, go on to the next slice, or,
+ * once the last is judged, go on to convert.
+ */
 async function preflight(
   deps: ComponentDeleteDeps,
   run: DeletionRun
 ): Promise<ComponentDeleteAnswer> {
-  const judged = await judge(deps);
+  const judged = await judge(deps, run.cursor);
   if (judged.blocked) {
     await deps.runs.close(deps.componentId, "delete");
     return answer(deps, "refused", {
@@ -230,12 +230,20 @@ async function preflight(
       left: judged.left,
     });
   }
-  // Lost only to a second request of the same person that moved it first.
+  // Each move is from `preflight`, so a slice a second request of the same
+  // person judged first is simply judged again.
+  if (!judged.plan.complete) {
+    await deps.runs.advance(run.id, "preflight", "preflight", judged.plan.next);
+    return answer(deps, "preflight", {
+      mayDelete: true,
+      run: { yours: true, step: "preflight" },
+      progress: progressOf([]),
+    });
+  }
   await deps.runs.advance(run.id, "preflight", "converting", null);
   return answer(deps, "running", {
     mayDelete: true,
     run: { yours: true, step: "converting" },
-    plan: judged.plan,
     progress: progressOf([]),
   });
 }
@@ -282,9 +290,9 @@ async function convert(
 }
 
 /**
- * Step 5: delete the component as the person, then settle. A delete that
- * failed leaves the component and takes the fence down, unless it committed
- * before failing, which a read tells.
+ * Step 5: delete the component as the person, then leave the tombstone. A
+ * delete that failed leaves the component and takes the fence down, unless
+ * it committed before failing, which a read tells.
  */
 async function deleteIt(
   deps: ComponentDeleteDeps,
@@ -308,31 +316,16 @@ async function deleteIt(
   await deps.runs.advance(
     run.id,
     "deleting",
-    "settling",
+    "deleted",
     deps.now().toISOString()
   );
   return answer(deps, "done", {
     mayDelete: true,
-    run: { yours: true, step: "settling" },
+    run: { yours: true, step: "deleted" },
   });
 }
 
-/** Close a settled run whose window has passed. */
-async function closeIfSettled(
-  deps: Pick<ComponentDeleteDeps, "runs" | "now" | "componentId">,
-  run: DeletionRun
-): Promise<void> {
-  if (run.phase !== "settling" || !settled(run, deps.now())) return;
-  await deps.runs.close(deps.componentId, "delete");
-}
-
-/** Whether a settling run's window has passed. Unreadable times have. */
-export function settled(run: Pick<DeletionRun, "cursor">, now: Date): boolean {
-  const deletedAt = Date.parse(run.cursor ?? "");
-  return Number.isNaN(deletedAt) || now.getTime() - deletedAt >= SETTLE_MS;
-}
-
-/** What the check before converting found. */
+/** What the check before converting found, over one slice. */
 interface Judged {
   readonly plan: DeletePlan;
   readonly layouts?: DocumentList;
@@ -351,12 +344,19 @@ const STOPS: ReadonlySet<LeftReason> = new Set<LeftReason>([
   "layout",
 ]);
 
-/** Judge every host as the delete would, writing nothing. */
-async function judge(deps: ComponentDeleteDeps): Promise<Judged> {
-  const report = await deps.rewrite.plan({
+/** Judge one slice of the hosts as the delete would, writing nothing. */
+async function judge(
+  deps: ComponentDeleteDeps,
+  after: string | null
+): Promise<Judged> {
+  const slice: PlanSlice = await deps.rewrite.plan({
     componentId: deps.componentId,
     caller: deps.caller,
+    after,
+    maxDocuments: STEP_DOCUMENTS,
+    deadline: new Date(deps.now().getTime() + STEP_MS),
   });
+  const { report } = slice;
   const convertKeys = keysOf(report.rewritten);
   const draftKeys = keysOf(
     report.left.filter(left => left.reason === "pending-draft").map(l => l.host)
@@ -383,6 +383,8 @@ async function judge(deps: ComponentDeleteDeps): Promise<Judged> {
   );
   return {
     plan: {
+      complete: slice.complete,
+      next: slice.next,
       convert: await namedDocuments(deps, convertKeys),
       drafts: await namedDocuments(deps, draftKeys),
       mayBeRefused: rights.maybe,
@@ -393,6 +395,11 @@ async function judge(deps: ComponentDeleteDeps): Promise<Judged> {
     left,
     blocked: stopping.size > 0,
   };
+}
+
+/** How many documents a list holds, named or not. */
+function sizeOf(list: DocumentList): number {
+  return list.named.length + list.unreadable + list.more;
 }
 
 /**
@@ -424,9 +431,7 @@ async function rightsOver(
 }
 
 /** The documents the hosts belong to, once each, in the order found. */
-function keysOf(
-  hosts: readonly RewriteReport["rewritten"][number][]
-): string[] {
+function keysOf(hosts: readonly HostAddress[]): string[] {
   return [...new Set(hosts.map(host => documentKeyOf(host)))];
 }
 
@@ -510,7 +515,7 @@ function progressOf(rows: readonly HostProgress[]): DeleteProgress {
 
 /** Whether the run is at or past its delete. */
 function afterTheDelete(run: DeletionRun): boolean {
-  return run.phase === "deleting" || run.phase === "settling";
+  return run.phase === "deleting" || run.phase === "deleted";
 }
 
 /** Whether the caller started this run. */

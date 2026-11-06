@@ -8,9 +8,12 @@
  * changes, and takes the fence down; that a page with unpublished changes
  * keeps the component; that nobody else can carry a delete on, and nobody
  * without the right can start one; that the component's own delete and an
- * unpublish of a used one are refused; and that a save already in flight
- * when the delete runs never leaves a copy of the deleted component, in
- * either commit order (the fence inside the write's own transaction).
+ * unpublish of a used one are refused, the index's "none" confirmed by
+ * reading every document; that a person a rule lets delete some components
+ * but not this one converts nothing; and that a save already in flight when
+ * the delete runs never leaves a copy of the deleted component, in either
+ * commit order and however long it was held (the fence inside the write's
+ * own transaction, and the deleted component's tombstone).
  *
  * @module __tests__/component-delete-job.integration.test
  */
@@ -43,6 +46,7 @@ import type { ComponentDeleteResult } from "../component-delete/contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { COMPONENT_DELETE_JOB } from "../component-delete/sweep";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
@@ -116,6 +120,55 @@ function harness(switches: Switches): PluginDefinition {
   });
 }
 
+/**
+ * A plugin limiting deletes of components to the one whose slug is
+ * `deletable`: a rule over the row, which the type-level question answers
+ * yes for.
+ */
+function oneDeletableComponent(): PluginDefinition {
+  return definePlugin({
+    name: "@t/one-deletable-component",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
+    contributes: {
+      transforms: [
+        {
+          target: COMPONENTS_SLUG,
+          transform: entity => ({
+            ...entity,
+            access: {
+              ...((entity as { access?: Record<string, unknown> }).access ??
+                {}),
+              delete: () =>
+                ({ slug: { equals: "deletable" } }) as unknown as boolean,
+            },
+          }),
+        },
+      ],
+    },
+  });
+}
+
+/** The plugin's own job of this slug, run once as the runner would. */
+function jobTick(
+  plugin: PluginDefinition,
+  slug: string
+): () => Promise<unknown> {
+  const job = plugin.contributes?.jobs?.find(entry => entry.slug === slug);
+  if (job === undefined) throw new Error(`the page builder has no ${slug}`);
+  return async () =>
+    job.handler(
+      null as never,
+      {
+        user: null,
+        now: new Date(),
+        deadline: new Date(Date.now() + 60_000),
+        content: {},
+      } as never
+    );
+}
+
 /** The plugin's own backfill job, so the usage index is whole. */
 function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
   const job = plugin.contributes?.jobs?.find(
@@ -154,12 +207,16 @@ describe.each(getConfiguredTestDialects())(
 
     async function boot(
       switches: Switches = {},
-      site: { boards?: boolean } = {}
+      site: { boards?: boolean; rowRule?: boolean } = {}
     ) {
       const plugin = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [plugin, harness(switches)],
+        plugins: [
+          plugin,
+          harness(switches),
+          ...(site.rowRule === true ? [oneDeletableComponent()] : []),
+        ],
         seedPublic: true,
         collections: [
           {
@@ -193,6 +250,7 @@ describe.each(getConfiguredTestDialects())(
         t,
         cookie: await sessionOf(t, owner),
         backfill: backfillTick(plugin),
+        sweep: jobTick(plugin, COMPONENT_DELETE_JOB),
         anAuthor: async (name: string, grants: string[]) => {
           const id = await person(t, name);
           await grant(t, id, grants);
@@ -305,12 +363,16 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** A published component drawing one heading. */
-    async function card(t: TestNextly, title = "Card"): Promise<string> {
+    async function card(
+      t: TestNextly,
+      title = "Card",
+      slug = `card-${String(Math.random()).slice(2, 10)}`
+    ): Promise<string> {
       const created = await t.nextly.create({
         collection: COMPONENTS_SLUG,
         data: {
           title,
-          slug: `card-${String(Math.random()).slice(2, 10)}`,
+          slug,
           status: "published",
           content: {
             formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -422,7 +484,7 @@ describe.each(getConfiguredTestDialects())(
       expect(copies(nodes, cardId)).toBe(0);
       expect(texts(nodes)).toEqual(["Own", "Card title"]);
       expect(await exists(t, cardId)).toBe(false);
-      // Settling: the run answers for the gone component, and a save from a
+      // The tombstone answers for the gone component, and a save from a
       // stale copy holding it is refused.
       expect((await call(cookie, cardId, "GET")).item.status).toBe("done");
       await expect(addsACopy(t, cardId)).rejects.toMatchObject({
@@ -705,6 +767,133 @@ describe.each(getConfiguredTestDialects())(
       expect(copies(nodes, cardId)).toBe(0);
       expect(texts(nodes)).toEqual(["Card title", "Edit"]);
       expect(await exists(t, cardId)).toBe(false);
+    });
+    it("converts nothing for a person a rule lets delete other components but not this one", async () => {
+      const { t, anAuthor } = await boot({}, { rowRule: true });
+      const kept = await card(t, "Kept");
+      const deletable = await card(t, "Deletable", "deletable");
+      const id = await note(t, "Holding", [copyOf("i1", kept)]);
+      const designer = await anAuthor("designer", [
+        "read-components",
+        "delete-components",
+        "read-notes",
+        "update-notes",
+      ]);
+
+      const plan = await dryRun(designer, kept);
+      const started = await call(designer, kept, "POST", {});
+
+      expect(plan.item.mayDelete).toBe(false);
+      expect(started.status, JSON.stringify(started.body)).toBe(403);
+      expect(copies(await nodesOf(t, NOTES, id), kept)).toBe(1);
+      expect(await exists(t, kept)).toBe(true);
+      expect((await call(designer, kept, "GET")).item.status).toBe("idle");
+      // CONTROL: the component the rule allows is deleted, through the probe
+      // and the real delete alike.
+      expect((await dryRun(designer, deletable)).item.mayDelete).toBe(true);
+      expect((await deleteToTheEnd(designer, deletable)).item.status).toBe(
+        "done"
+      );
+      expect(await exists(t, deletable)).toBe(false);
+    });
+
+    it("refuses unpublishing a component a page holds that the index does not name", async () => {
+      const { t, backfill } = await boot();
+      const cardId = await card(t);
+      await note(t, "Holding", [copyOf("i1", cardId)]);
+      await backfill();
+      // The index rows gone, as a failed maintenance write leaves them: the
+      // index names nobody, and only reading the pages finds the copy.
+      await t.adapter.delete("page_builder__component_usage", {
+        and: [{ column: "entity", op: "=", value: NOTES }],
+      });
+
+      await expect(
+        t.nextly.update({
+          collection: COMPONENTS_SLUG,
+          id: cardId,
+          data: { status: "draft", _overwrite: true },
+          overrideAccess: true,
+        })
+      ).rejects.toThrow("can't be unpublished because 1 document uses it");
+    });
+
+    it("refuses a save held past validation released long after the delete", async () => {
+      const switches: Switches = {};
+      const { t, cookie, sweep } = await boot(switches);
+      const cardId = await card(t);
+      const id = await note(t, "Holding", [copyOf("i1", cardId)]);
+      let reached!: () => void;
+      const atHold = new Promise<void>(resolve => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      switches.holdAfterValidation = {
+        title: "Edited",
+        reached,
+        release: new Promise<void>(resolve => {
+          release = resolve;
+        }),
+      };
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+      const save = t.nextly
+        .update({
+          collection: NOTES,
+          id,
+          data: {
+            title: "Edited",
+            content: pageDoc([copyOf("i1", cardId), heading("e", "Edit")]),
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      await atHold;
+      expect((await deleteToTheEnd(cookie, cardId)).item.status).toBe("done");
+      // The delete made an hour ago, as far as the row says, and the sweep
+      // run since: nothing about the fence is kept by a clock.
+      await t.adapter.update(
+        "page_builder__component_deletions",
+        { cursor: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+        { and: [{ column: "componentId", op: "=", value: cardId }] }
+      );
+      await sweep();
+
+      release();
+      const refused = await save;
+
+      expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(0);
+    });
+
+    it("answers a dry run over a slice at a time, never 'none' before the last", async () => {
+      const { t, cookie } = await boot();
+      const spare = await card(t, "Spare");
+      // More documents than one slice judges, none using the component.
+      for (let n = 0; n < 30; n += 1) {
+        await note(t, `Plain ${String(n)}`, [heading(`h${String(n)}`, "x")]);
+      }
+
+      const first = await dryRun(cookie, spare);
+      const second = await call(cookie, spare, "POST", {
+        dryRun: true,
+        after: first.item.plan?.next,
+      });
+
+      expect(first.item).toMatchObject({
+        status: "counting",
+        plan: { complete: false },
+      });
+      expect(typeof first.item.plan?.next).toBe("string");
+      expect(second.item).toMatchObject({
+        status: "none",
+        plan: { complete: true, next: null },
+      });
     });
   }
 );

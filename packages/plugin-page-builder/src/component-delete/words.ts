@@ -39,6 +39,7 @@ export const MESSAGES = {
     "Some copies couldn't be turned into plain blocks, so the component was kept. Fix the documents listed, then delete it again.",
   done: "The component was deleted. Its copies are plain blocks now.",
   idle: "This component isn't being deleted.",
+  counting: "Still checking where this component is used…",
 } as const;
 
 /** A second person starting a delete somebody else is running. */
@@ -65,7 +66,7 @@ export function unpublishRefusal(found: {
 }): string {
   const total = found.titles.length + found.others;
   if (total === 0) {
-    return "This component can't be unpublished yet: whether any page uses it can't be confirmed while its usage is still being counted. Try again later, or delete it with Delete component, which turns any copies into plain blocks.";
+    return "This component can't be unpublished yet: whether any page uses it couldn't be confirmed. Try again later, or delete it with Delete component, which turns any copies into plain blocks.";
   }
   const listed = found.titles.map(title => `"${title}"`);
   if (found.others > 0) {
