@@ -1,6 +1,9 @@
 import type { WhereFilter } from "../domains/collections/query/query-operators";
 
+import type { AdminContributionKind, AdminPlaceId } from "./admin-places";
 import type { PermissionSlug } from "./contributions";
+import type { RowPredicate } from "./row-predicate";
+import type { RouteMethod } from "./routes/route-types";
 
 /**
  * @public A value that survives being sent to the browser as JSON.
@@ -273,7 +276,110 @@ export interface PluginAdminPlaceDeclaration {
   name: string;
   /** What the place is for, for the authors of plugins that add to it. */
   description?: string;
+  /** The kinds of contribution the place takes; blocks alone when absent. */
+  accepts?: AdminContributionKind[];
 }
+
+/**
+ * @experimental What every contribution to an admin place says: its id, its
+ * place, where it goes there, and who sees it.
+ */
+interface AdminContributionBase {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-support.sla"`; unique. */
+  id: string;
+  /** The place it is added to, which must take its kind. */
+  place: AdminPlaceId;
+  /** Lower first; 100 when absent, as the menu orders. */
+  order?: number;
+  /** Straight before this contribution's id, or a built-in part's name. */
+  before?: string;
+  /** Straight after this contribution's id, or a built-in part's name. */
+  after?: string;
+  /** A built-in part of the same kind at this place, whose place it takes. */
+  replaces?: string;
+  /**
+   * Who sees it. A reader without this permission is not sent it at all, so
+   * its label and action never reach them. Not allowed on the login page,
+   * where nobody has signed in.
+   */
+  requiredPermission?: PermissionSlug;
+  /**
+   * On a page about one entry, or an action on rows, the entries it shows for.
+   * Judged on each entry as the reader's read returned it: a field the reader
+   * may not read is missing, and a rule that needs it does not match. A
+   * contribution whose rule names a field the reader may not read is not sent
+   * to them.
+   */
+  visibleWhen?: RowPredicate;
+  /**
+   * On a collection's list or edit page, the collections it is added to, by
+   * slug; every collection's when absent.
+   */
+  collections?: string[];
+}
+
+/**
+ * @experimental What an action does: open one of the plugin's components with
+ * the rows, or call one of the plugin's own routes with them.
+ */
+export type AdminContributionAction =
+  | { open: ComponentPath }
+  | { run: { method: RouteMethod; path: string } };
+
+/** @experimental A block the plugin draws, at any place that takes blocks. */
+export interface AdminBlockContribution extends AdminContributionBase {
+  kind: "block";
+  component: ComponentPath;
+}
+
+/** @experimental A tab of the plugin's own on an edit or detail page. */
+export interface AdminTabContribution extends AdminContributionBase {
+  kind: "tab";
+  label: string;
+  component: ComponentPath;
+}
+
+/** @experimental A section of the edit page's side panel. */
+export interface AdminSidebarSectionContribution extends AdminContributionBase {
+  kind: "sidebarSection";
+  label: string;
+  component: ComponentPath;
+}
+
+/**
+ * @experimental A column of a collection's entry list: a field's value, or a
+ * cell the plugin draws.
+ */
+export type AdminColumnContribution = AdminContributionBase & {
+  kind: "column";
+  label: string;
+} & (
+    | { field: string; component?: never }
+    | { component: ComponentPath; field?: never }
+  );
+
+/** @experimental An action on one row of a collection's entry list. */
+export interface AdminRowActionContribution extends AdminContributionBase {
+  kind: "rowAction";
+  label: string;
+  action: AdminContributionAction;
+}
+
+/** @experimental An action on the selected rows of a collection's entry list. */
+export interface AdminBulkActionContribution extends AdminContributionBase {
+  kind: "bulkAction";
+  label: string;
+  action: AdminContributionAction;
+}
+
+/** @experimental One declared contribution to an admin place. */
+export type AdminContribution =
+  | AdminBlockContribution
+  | AdminTabContribution
+  | AdminSidebarSectionContribution
+  | AdminColumnContribution
+  | AdminRowActionContribution
+  | AdminBulkActionContribution;
 
 /**
  * @public Declarative admin-UI contributions. Introspectable
@@ -304,6 +410,13 @@ export interface PluginAdminContributions {
    * malformed option.
    */
   filters?: PluginListFilterDeclaration[];
+  /**
+   * @experimental Blocks, tabs, columns, row and bulk actions and side panel
+   * sections, each added to an admin place and ordered there. Declared as
+   * data, checked when the app starts, and sent to a signed-in admin only,
+   * leaving out what the reader may not see.
+   */
+  contributions?: AdminContribution[];
   /** Custom admin pages, namespaced + RBAC-gated. */
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
