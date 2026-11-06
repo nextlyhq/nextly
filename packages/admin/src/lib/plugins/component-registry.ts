@@ -171,7 +171,12 @@ export interface DocumentActionReplacementProps {
   entryId: string;
   /**
    * What holds the document right now, kept current while the component is
-   * open: a colleague's claim, a past version on screen, a reader's page.
+   * open. `readOnly` covers its fields: a colleague's claim, a past version
+   * on screen, a reader's page, the editor readying the document.
+   * `actionsDisabled` covers a plugin's own writes, as it does the built-in
+   * Delete: a colleague's claim, a past version, a collection removed from
+   * code, the editor readying it. A reader's page alone does not hold them;
+   * the plugin's route judges its own permission.
    */
   documentLock: DocumentLockGates;
   /**
@@ -198,10 +203,12 @@ export interface DocumentPanelSectionProps {
   /** The entry's id. */
   entryId: string;
   /**
-   * What holds the document right now: a colleague's claim, a past version on
-   * screen, a reader's page or the editor still readying the document. The
-   * pair a custom edit view is given; a section that writes holds its writes
-   * while `actionsDisabled`.
+   * What holds the document right now, the pair a custom edit view is given:
+   * `readOnly` as the fields are held (a colleague's claim, a past version, a
+   * reader's page, the editor readying the document), and `actionsDisabled`
+   * as the built-in Delete is (a colleague's claim, a past version, a
+   * collection removed from code, the editor readying it). A section that
+   * writes holds its writes while `actionsDisabled`.
    */
   documentLock: DocumentLockGates;
   /**

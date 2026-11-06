@@ -874,8 +874,12 @@ export function EntryForm({
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
   // What a plugin's own write is held by at this instant: a colleague's claim,
-  // a past version on screen or a recovery, as the built-in Delete is.
-  pluginWritesHeldNow.current = writesHeld || recovering;
+  // a past version on screen or a recovery, as the built-in Delete is, and a
+  // collection removed from code, where the server refuses every write and
+  // the editor offers none. A reader's page is not among them: like Delete, a
+  // plugin's action follows its own permission, which its route judges.
+  const pluginWritesHeld = writesHeld || recovering || removedFromCode;
+  pluginWritesHeldNow.current = pluginWritesHeld;
 
   /*
    * The one gate every write passes through.
@@ -1111,7 +1115,8 @@ export function EntryForm({
     entryId: savedEntryId,
     documentLock: {
       readOnly: contentHeld,
-      actionsDisabled: writesHeld || recovering,
+      // The same hold `mayWrite` reads, so the two cannot disagree.
+      actionsDisabled: pluginWritesHeld,
     },
     mayWrite: () => !pluginWritesHeldNow.current,
     onDeleted: onDelete,

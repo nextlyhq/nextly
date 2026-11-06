@@ -475,26 +475,45 @@ describe("a plugin's replacement over time", () => {
     unregisterComponent("test/layouts#Throws");
   });
 
-  it("keeps the author's unsaved edits when a plugin's own change is read back", async () => {
+  it("keeps the author's unsaved edits over a plugin's own change, and takes in the next version from someone else", async () => {
     const drawAgain = renderLive();
     const summary = await screen.findByRole("textbox", { name: "Summary" });
     await userEvent.setup().type(summary, "Not saved yet");
     await screen.findByText("Used by 2 pages");
 
+    // The plugin's change, completed: reported, then its newer copy read back.
     act(() => section.current!.documentChanged("changed"));
-    // The read brings the plugin's change: a newer version of the entry.
-    drawAgain({ ...(entry as object), updatedAt: "2026-10-03T09:00:00Z" });
-
+    drawAgain({
+      ...(entry as object),
+      summary: "From the plugin",
+      updatedAt: "2026-10-03T09:00:00Z",
+    });
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
         "Not saved yet"
       )
     );
+
+    // Then someone else's newer version. It is not the plugin's, so it
+    // replaces the form as any other newer version does. A form that kept
+    // expecting the plugin's change after taking it in would keep the
+    // unsaved text over this one too, and fail here.
+    drawAgain({
+      ...(entry as object),
+      summary: "Theirs",
+      updatedAt: "2026-10-04T09:00:00Z",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Theirs"
+      )
+    );
   });
 
-  it("still takes in someone else's newer version, once the plugin's change is read", async () => {
-    // The control: without a plugin's change on its way, a newer version is
-    // someone else's and replaces the form, as it always has.
+  it("takes in someone else's newer version when no plugin changed the document", async () => {
+    // The control for the case above: with no plugin change reported, the
+    // first newer version already replaces the unsaved text. A fix that kept
+    // unsaved edits over every newer version would fail here.
     const drawAgain = renderLive();
     const summary = await screen.findByRole("textbox", { name: "Summary" });
     await userEvent.setup().type(summary, "Not saved yet");
@@ -510,6 +529,27 @@ describe("a plugin's replacement over time", () => {
         "Theirs"
       )
     );
+  });
+
+  it("holds a section's writes on a collection removed from code, as the editor holds its own", async () => {
+    // The server refuses every write to such a collection and the editor
+    // offers none; a plugin's section must be told the same.
+    render(
+      <EntryForm
+        collection={
+          {
+            ...(collectionNamed("layouts") as object),
+            removedFromCode: true,
+          } as never
+        }
+        entry={entry}
+        mode="edit"
+      />,
+      { wrapper: Providers }
+    );
+    await screen.findByText("Used by 2 pages");
+    expect(section.current?.documentLock.actionsDisabled).toBe(true);
+    expect(section.current?.mayWrite()).toBe(false);
   });
 });
 
