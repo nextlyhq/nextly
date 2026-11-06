@@ -37,9 +37,6 @@ import {
   RECEIVED_WEBHOOKS_TABLE,
   receivedWebhooksTables,
 } from "../../schemas/received-webhooks";
-import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
-import type { PluginTransaction } from "../database/plugin-database";
-import { linkedTransaction } from "../database/plugin-transaction-link";
 
 import {
   verifiedFacts,
@@ -50,6 +47,7 @@ import {
   type PluginReceivedWebhooks,
   type VerifiedFacts,
 } from "./inbound-webhooks";
+import { pluginWriter } from "./plugin-write";
 import { isWellFormed } from "./well-formed";
 
 /** What claiming needs from the database adapter. */
@@ -291,20 +289,9 @@ export function createPluginReceivedWebhooks(
   const { owner } = options;
   const now = options.now ?? (() => new Date());
 
-  /**
-   * Run `work` on the plugin's transaction when it passed one, else in a
-   * transaction of its own, refused when the calling flow has one open.
-   */
-  const write = <R>(
-    operation: string,
-    tx: PluginTransaction | undefined,
-    work: (adapterTx: TransactionContext) => Promise<R>
-  ): Promise<R> => {
-    if (tx !== undefined) return linkedTransaction(tx, operation).run(work);
-    const adapter = options.adapter();
-    assertNoOpenTransaction(adapter, operation);
-    return adapter.transaction(work);
-  };
+  // Every write on the plugin's transaction or one of its own, as
+  // `runPluginWrite` decides.
+  const write = pluginWriter(options.adapter);
 
   /** The claim `token` holds on `deliveryKey`, for its handler to end. */
   const claimOf = (deliveryKey: string, token: string): DeliveryClaim => {

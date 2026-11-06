@@ -50,6 +50,7 @@ import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
 
+import { pluginWriter } from "./plugin-write";
 import { isWellFormed } from "./well-formed";
 
 /** @experimental A secret's data: stored in clear, at most 1 KB serialised. */
@@ -253,20 +254,9 @@ export function createOneTimeSecrets(
       )
       .digest("hex");
 
-  /**
-   * Run a write on the plugin's transaction when it passed one, else in a
-   * transaction of its own, refused when the calling flow has one open.
-   */
-  const write = <R>(
-    operation: string,
-    tx: PluginTransaction | undefined,
-    work: (adapterTx: TransactionContext) => Promise<R>
-  ): Promise<R> => {
-    if (tx !== undefined) return linkedTransaction(tx, operation).run(work);
-    const adapter = options.adapter();
-    assertNoOpenTransaction(adapter, operation);
-    return adapter.transaction(work);
-  };
+  // Every write on the plugin's transaction or one of its own, as
+  // `runPluginWrite` decides.
+  const write = pluginWriter(options.adapter);
 
   const ownerWhere = (purpose: string) => [
     { column: "owner", op: "=" as const, value: owner },
