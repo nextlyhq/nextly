@@ -32,9 +32,7 @@ describe("NotFoundPage", () => {
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Go back" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Go to dashboard" })
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Go to dashboard" })).toBeTruthy();
   });
 
   it("reads in the interface language when the admin has its catalog", () => {
