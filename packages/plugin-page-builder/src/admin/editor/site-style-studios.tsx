@@ -71,6 +71,7 @@ import {
 } from "../site-style-client";
 import { useShown } from "../use-shown";
 
+import { rebasedOnCode } from "./class-override-rebase";
 import { useDesignHeaderSlot } from "./design-panel";
 import { StyleRevisionContext } from "./site-style-history";
 import { PLUGIN_SOURCE } from "./stored-document";
@@ -733,6 +734,9 @@ function useHeldWhileReplaying<Args extends unknown[], Outcome>(
  */
 function classChangeOn(
   held: unknown,
+  /** The site's code as it was when the step was recorded. */
+  recorded: readonly NamedClass[] | undefined,
+  /** The site's code as it is now, when the step is replayed. */
   configured: readonly NamedClass[] | undefined,
   classId: string,
   change: SharedStyleChange
@@ -741,15 +745,44 @@ function classChangeOn(
     (entry): entry is NamedClass => typeof entry === "object" && entry !== null
   );
   const at = entries.findIndex(entry => entry.id === classId);
+  const code = configured?.find(each => each.id === classId);
   // A style the site's code supplies is stored only while it differs from
   // the code's, so after an undo the stored tier may not hold it: its
-  // styles are then the code's.
-  const entry = entries[at] ?? configured?.find(each => each.id === classId);
-  if (entry === undefined) return { kind: "gone" };
+  // styles are then the code's. Stored, it is first moved onto the code as
+  // it now is, so the code's old values in it don't mask the new.
+  const stored = entries[at];
+  const entry =
+    stored === undefined
+      ? code
+      : rebasedOnCode(
+          stored,
+          recorded?.find(each => each.id === classId),
+          code
+        );
+  if (entry === undefined) {
+    // The code no longer supplies it and nothing of the site's own is left.
+    return stored === undefined
+      ? { kind: "gone" }
+      : {
+          kind: "write",
+          value: classOverrideOf(
+            configured,
+            entries.filter((_, index) => index !== at)
+          ),
+        };
+  }
   const out = change(entry.styles);
   if (out.kind === "refused") return { kind: "gone" };
-  if (out.kind === "unchanged") return { kind: "unchanged" };
-  const changed = { ...entry, styles: out.styles };
+  // Nothing for the change to do can still leave the rebase to store: the
+  // code may since have set the value the change sets, and the stored entry
+  // would go on masking it.
+  if (out.kind === "unchanged" && (stored === undefined || stored === entry)) {
+    return { kind: "unchanged" };
+  }
+  const changed = {
+    ...entry,
+    styles: out.kind === "write" ? out.styles : entry.styles,
+  };
   const next =
     at === -1
       ? [...entries, changed]
@@ -892,11 +925,24 @@ function useWriteClassStyles(
          * as a style removed through the Shared styles tab.
          */
         const undo = change.invert(entry.styles);
+        /*
+         * The code the stored entry was last rebased onto: the code this
+         * edit was made against, then whatever each replay rebased it onto,
+         * so a second change to the code between undo and redo is told
+         * from the site's own.
+         */
+        let baseline = configured;
+        const replay =
+          (step: SharedStyleChange) =>
+          (held: unknown): SiteStyleReplayed => {
+            const now = configuredNow.current;
+            const out = classChangeOn(held, baseline, now, classId, step);
+            if (out.kind !== "gone") baseline = now;
+            return out;
+          };
         const result = await slot.save(classOverrideOf(configured, next), {
-          undo: held =>
-            classChangeOn(held, configuredNow.current, classId, undo),
-          redo: held =>
-            classChangeOn(held, configuredNow.current, classId, change),
+          undo: replay(undo),
+          redo: replay(change),
         });
         const refused = refusalOf(
           result,
@@ -1351,6 +1397,7 @@ export function SharedStylesStudio({
   styleContext,
   suppliedClassIds,
   tokens,
+  looks,
 }: {
   classes: ClassSurface;
   pageBlocks: PageClassBlocks;
@@ -1358,6 +1405,8 @@ export function SharedStylesStudio({
   suppliedClassIds: readonly string[] | undefined;
   /** The site's variables as the canvas draws them, for the rows' preview tile. */
   tokens: SiteTokenSet | undefined;
+  /** The look the inspector edits on its own, which a Block looks row chooses. */
+  looks?: React.ComponentProps<typeof SharedStylesPanel>["looks"];
 }): React.JSX.Element {
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
@@ -1374,6 +1423,7 @@ export function SharedStylesStudio({
       onRename={classes.rename}
       currentRenameAttempt={classes.currentRenameAttempt}
       pendingNames={classes.pendingNames}
+      {...(looks === undefined ? {} : { looks })}
     />
   );
 }

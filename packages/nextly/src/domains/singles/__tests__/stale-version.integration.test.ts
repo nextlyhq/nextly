@@ -16,6 +16,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -32,6 +36,10 @@ const PLAIN = "plain";
 let beforeChangeCalls = 0;
 /** Two languages, each with its own status. */
 const LIVE = "live";
+/** Readable only by AUTHOR, by its read rule; both people may update it. */
+const AUTHORS_ONLY = "authors_only";
+const AUTHOR = "single-author";
+const OTHER = "single-other";
 const ANA = {
   id: "user-ana",
   name: "Ana Ruiz",
@@ -76,6 +84,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "notice" })],
       }),
       defineSingle({
+        slug: AUTHORS_ONLY,
+        access: {
+          read: ({ user }: { user: { id: string } | null }) =>
+            user?.id === AUTHOR,
+          update: () => true,
+        },
+        fields: [text({ name: "notice" })],
+      }),
+      defineSingle({
         slug: LIVE,
         localized: true,
         status: true,
@@ -96,6 +113,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     createdAt: now,
     updatedAt: now,
   });
+  // A code rule only narrows a permission, so both people hold each one.
+  for (const person of [AUTHOR, OTHER]) {
+    await userWhoMay(current, person, "read", [AUTHORS_ONLY]);
+    await grantTo(current, person, "update", [AUTHORS_ONLY]);
+  }
   return current;
 }
 
@@ -168,7 +190,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a save from a version someone else's save replaced, and leaves it as it was", async () => {
       const t = await boot(dialect);
-      const first = await save(t, PLAIN, { notice: "first" });
+      const first = await save(t, PLAIN, { notice: "first", _overwrite: true });
       const version = revOf(first);
       const theirs = await save(
         t,
@@ -194,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("applies a save from the current version, and one that gives none", async () => {
       const t = await boot(dialect);
-      const first = await save(t, PLAIN, { notice: "first" });
+      const first = await save(t, PLAIN, { notice: "first", _overwrite: true });
       const second = await save(t, PLAIN, {
         notice: "second",
         _rev: revOf(first),
@@ -207,7 +229,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses with 400 a version that is not one, and an _overwrite that is not true or false", async () => {
       const t = await boot(dialect);
-      await save(t, PLAIN, { notice: "first" });
+      await save(t, PLAIN, { notice: "first", _overwrite: true });
       for (const data of [
         { _rev: "seven" },
         { _rev: 7 },
@@ -232,14 +254,24 @@ describe.each(getConfiguredTestDialects())(
       await save(
         t,
         PREFS,
-        { siteName: "Hello", contact: "c" },
+        { siteName: "Hello", contact: "c", _overwrite: true },
         { locale: "en" }
       );
-      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
+      const es = await save(
+        t,
+        PREFS,
+        { siteName: "Hola", _overwrite: true },
+        { locale: "es" }
+      );
       const readEs = revOf(es);
 
       // English changes: the Spanish version is still current.
-      await save(t, PREFS, { siteName: "Hello again" }, { locale: "en" });
+      await save(
+        t,
+        PREFS,
+        { siteName: "Hello again", _overwrite: true },
+        { locale: "en" }
+      );
       const fine = await save(
         t,
         PREFS,
@@ -263,7 +295,12 @@ describe.each(getConfiguredTestDialects())(
       expect(stale.publicData).toMatchObject({ currentVersion: revOf(fine) });
 
       // A shared field changes: every language's save from before it is out of date.
-      await save(t, PREFS, { contact: "shared" }, { locale: "en" });
+      await save(
+        t,
+        PREFS,
+        { contact: "shared", _overwrite: true },
+        { locale: "en" }
+      );
       const afterShared = await save(
         t,
         PREFS,
@@ -282,8 +319,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a version below the stored one before any hook runs", async () => {
       const t = await boot(dialect);
-      const first = await save(t, PLAIN, { notice: "first" });
-      await save(t, PLAIN, { notice: "theirs" });
+      const first = await save(t, PLAIN, { notice: "first", _overwrite: true });
+      await save(t, PLAIN, { notice: "theirs", _overwrite: true });
       const before = beforeChangeCalls;
       expect(before).toBeGreaterThan(0);
       const refused = await save(t, PLAIN, {
@@ -299,11 +336,21 @@ describe.each(getConfiguredTestDialects())(
       await save(
         t,
         PREFS,
-        { siteName: "Hello", contact: "c" },
+        { siteName: "Hello", contact: "c", _overwrite: true },
         { locale: "en" }
       );
-      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
-      await save(t, PREFS, { contact: "shared" }, { locale: "en" });
+      const es = await save(
+        t,
+        PREFS,
+        { siteName: "Hola", _overwrite: true },
+        { locale: "es" }
+      );
+      await save(
+        t,
+        PREFS,
+        { contact: "shared", _overwrite: true },
+        { locale: "en" }
+      );
       const refused = await save(
         t,
         PREFS,
@@ -327,18 +374,23 @@ describe.each(getConfiguredTestDialects())(
       await save(
         t,
         LIVE,
-        { headline: "Hi", status: "published" },
+        { headline: "Hi", status: "published", _overwrite: true },
         { locale: "en" }
       );
       await save(
         t,
         LIVE,
-        { headline: "Hola", status: "published" },
+        { headline: "Hola", status: "published", _overwrite: true },
         { locale: "es" }
       );
       const everyLanguage = await read(t, LIVE, "*");
       // Spanish alone changes after the read.
-      await save(t, LIVE, { headline: "Hola de nuevo" }, { locale: "es" });
+      await save(
+        t,
+        LIVE,
+        { headline: "Hola de nuevo", _overwrite: true },
+        { locale: "es" }
+      );
       const swept = await save(
         t,
         LIVE,
@@ -363,11 +415,21 @@ describe.each(getConfiguredTestDialects())(
       await save(
         t,
         PREFS,
-        { siteName: "Hello", contact: "c" },
+        { siteName: "Hello", contact: "c", _overwrite: true },
         { locale: "en" }
       );
-      const es = await save(t, PREFS, { siteName: "Hola" }, { locale: "es" });
-      await save(t, PREFS, { siteName: "Hola otra vez" }, { locale: "es" });
+      const es = await save(
+        t,
+        PREFS,
+        { siteName: "Hola", _overwrite: true },
+        { locale: "es" }
+      );
+      await save(
+        t,
+        PREFS,
+        { siteName: "Hola otra vez", _overwrite: true },
+        { locale: "es" }
+      );
       const before = prefsBeforeChangeCalls;
       const refused = await save(
         t,
@@ -384,13 +446,13 @@ describe.each(getConfiguredTestDialects())(
       await save(
         t,
         LIVE,
-        { headline: "Hi", status: "published" },
+        { headline: "Hi", status: "published", _overwrite: true },
         { locale: "en" }
       );
       await save(
         t,
         LIVE,
-        { headline: "Hola", status: "published" },
+        { headline: "Hola", status: "published", _overwrite: true },
         { locale: "es" }
       );
       const english = await read(t, LIVE, "en");
@@ -401,6 +463,32 @@ describe.each(getConfiguredTestDialects())(
         { locale: "*" }
       );
       expect(swept).toMatchObject({ success: false, statusCode: 400 });
+    });
+
+    it("tells who changed it and when only to a caller its read rule lets read it", async () => {
+      const t = await boot(dialect);
+      const first = await save(t, AUTHORS_ONLY, {
+        notice: "first",
+        _overwrite: true,
+      });
+      await save(t, AUTHORS_ONLY, { notice: "theirs", _overwrite: true });
+      const refusalTo = (userId: string) =>
+        singlesOf(t).update(
+          AUTHORS_ONLY,
+          { notice: "mine", _rev: revOf(first) },
+          { overrideAccess: false, user: { id: userId } } as never
+        ) as Promise<Result>;
+      const author = await refusalTo(AUTHOR);
+      expect(author, JSON.stringify(author)).toMatchObject({
+        code: "STALE_VERSION",
+      });
+      expect(author.publicData).toHaveProperty("changedBy");
+      const other = await refusalTo(OTHER);
+      expect(other, JSON.stringify(other)).toMatchObject({
+        code: "STALE_VERSION",
+      });
+      expect(other.publicData).not.toHaveProperty("changedBy");
+      expect(other.publicData).not.toHaveProperty("changedAt");
     });
   }
 );

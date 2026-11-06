@@ -7,6 +7,7 @@ import type {
   FieldTypeCategory,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
+import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
@@ -83,17 +84,72 @@ export interface PluginRole {
 }
 
 /**
- * @experimental A reserved scheduled-task declaration. **Not executed yet**
- * — see `contributes.schedules`. The shape is forward-designed so it stays stable
- * once a durable-jobs backend lands.
+ * @experimental A plugin's schedule: the job it runs once per window of a cron
+ * expression. Each jobs pass (the jobs route, `/admin/api/jobs/run` in a
+ * scaffolded app) enqueues the job for the
+ * latest window that has opened, once, whatever runs the pass and however
+ * often; a schedule's first job is for the first window that opens after the
+ * installation first sees it, and windows missed while nothing called the
+ * jobs route are not run later. Minute schedules need the route called every
+ * minute.
+ */
+export interface PluginSchedule {
+  /** Unique within the plugin, e.g. `'regenerate-sitemap'`. */
+  slug: string;
+  /**
+   * Five-field cron (minute, hour, day of month, month, day of week) or an
+   * alias such as `@daily`, read in `tz`.
+   */
+  cron: string;
+  /** The slug of a job this plugin declares in `contributes.jobs`. */
+  job: string;
+  /** An IANA time zone, e.g. `'Europe/Berlin'`; UTC when absent. */
+  tz?: string;
+  /**
+   * Given to the job with each run, beside `window`: the ISO time the window
+   * opened, which this cannot replace.
+   */
+  input?: { [key: string]: JobJsonValue };
+}
+
+/**
+ * @experimental The earlier scheduled-task declaration.
+ *
+ * @deprecated Declare a {@link PluginSchedule} instead. One in this shape is
+ * mapped to it, with a deprecation notice: `name` is the slug, a cron string
+ * is the cron, an interval in milliseconds of whole minutes dividing an hour
+ * or whole hours dividing a day is the cron that fires on it, and `handler`
+ * runs as a job of its own, given the plugin's context. One that cannot be
+ * mapped (another interval, a cron that does not parse, no handler) is not
+ * run, and a notice says why; it never stops the installation starting.
  */
 export interface ScheduledTask {
   /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
   name: string;
-  /** Cron expression or interval in milliseconds (reserved; not yet honored). */
+  /** Cron expression or interval in milliseconds. */
   schedule: string | number;
-  /** Task handler (reserved — the runtime does not invoke it yet). */
+  /** Task handler, run once per window with the plugin's context. */
   handler?: (ctx: PluginContext) => Promise<void> | void;
+  description?: string;
+}
+
+/**
+ * @experimental A plugin's admin strings, `contributes.translations`: interface
+ * language, then key, then the text.
+ */
+export type PluginTranslations = Readonly<
+  Record<string, Readonly<Record<string, string>>>
+>;
+
+/**
+ * @experimental A webhook event type a plugin declares: `contributes.webhookEvents`.
+ */
+export interface PluginWebhookEventType {
+  /** The type's id, in the plugin's namespace, e.g. `"acme-shop.order.paid"`. */
+  type: string;
+  /** What the admin's webhook form calls it; the id when absent. */
+  label?: string;
+  /** One line on when the event fires. */
   description?: string;
 }
 
@@ -794,15 +850,14 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    */
   declarations?: Record<string, unknown>;
   /**
-   * @experimental Scheduled tasks — **RESERVED, NOT EXECUTED** in this
-   * release. The shape is published so authors aren't surprised by its absence,
-   * but the runtime does not run these yet (a real scheduler needs durable jobs,
-   * D51, because the typical Next.js/serverless deploy has no long-lived
-   * process). Until then: trigger work via an external cron service hitting a
-   * route handler, or react to events (e.g. for cache
-   * invalidation). See `docs/plugins`.
+   * @experimental The plugin's schedules: each runs one of its jobs once per
+   * window of a cron expression ({@link PluginSchedule}). A schedule that
+   * cannot run (an invalid cron or time zone, a job the plugin does not
+   * declare) stops the installation from starting, naming the plugin. An
+   * entry in the earlier {@link ScheduledTask} shape is mapped to this one
+   * with a deprecation notice, or, when it cannot be, not run, with a notice.
    */
-  schedules?: ScheduledTask[];
+  schedules?: Array<PluginSchedule | ScheduledTask>;
   /** @experimental Custom email providers, registered into the provider registry. */
   emailProviders?: PluginEmailProvider[];
   /** @experimental Email templates, seeded idempotently into the DB on boot. */
@@ -811,6 +866,29 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
   fieldTypes?: PluginFieldType[];
   /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
   events?: Array<{ name: string }>;
+  /**
+   * @experimental The admin's strings this plugin's components show, by
+   * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.
+   *
+   * Each key begins with the plugin's admin slug and a dot. Startup refuses
+   * a key outside that namespace, a malformed key or language, a value that is
+   * not text, and a key another plugin already declares. The admin's own keys
+   * begin with `nextly.`, which no plugin's may, so a plugin slugged `nextly`
+   * can declare none. English is the fallback for a key a language lacks.
+   */
+  translations?: PluginTranslations;
+  /**
+   * @experimental Webhook event types this plugin declares, which an
+   * endpoint may subscribe to beside core's. Distinct from `events`, which are
+   * the plugin's own in-process bus events and never leave the server.
+   *
+   * Each `type` begins with the plugin's admin slug and a dot, and is written
+   * as lower-case segments separated by dots, such as `"acme-shop.order.paid"`
+   * for `@acme/shop`.
+   * Checked at startup, which refuses a type outside that namespace, one of
+   * core's, one declared twice, or one that is malformed.
+   */
+  webhookEvents?: PluginWebhookEventType[];
   /**
    * @public HTTP routes, namespaced under `/plugins/<name>` beneath wherever the
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).

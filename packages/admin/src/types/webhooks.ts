@@ -8,33 +8,31 @@
  * exception is `CreatedWebhook.secret`, returned exactly once on create.
  */
 
-/** Every event an endpoint can subscribe to (mirrors `WEBHOOK_EVENT_TYPES`). */
-export const WEBHOOK_EVENT_TYPES = [
-  "entry.created",
-  "entry.updated",
-  "entry.deleted",
-  "entry.published",
-  "entry.unpublished",
-  "entry.status_changed",
-  "single.updated",
-  "single.published",
-  "single.unpublished",
-  "media.uploaded",
-  "media.updated",
-  "media.deleted",
-  "user.created",
-  "user.deleted",
-  "form.submission.created",
-] as const;
+/**
+ * An event type's id, such as `"entry.created"` or a plugin's
+ * `"acme-shop.order.paid"`. Which ones exist is the server's to say: the admin
+ * reads the list from `GET /webhooks/event-types` and keeps no copy of it, so
+ * a type a plugin declares is offered as core's are.
+ */
+export type WebhookEventType = string;
 
-export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+/** One event type an endpoint may subscribe to, as the server lists it. */
+export interface WebhookEventTypeEntry {
+  type: WebhookEventType;
+  /** `"core"`, or the name of the plugin that declares it. */
+  owner: string;
+  label?: string;
+  description?: string;
+}
 
 /** Subscribe to every current and future event. Must be used alone. */
 export const WEBHOOK_EVENT_WILDCARD = "*" as const;
 
-export type WebhookEventSubscription =
-  | WebhookEventType
-  | typeof WEBHOOK_EVENT_WILDCARD;
+/**
+ * What an endpoint subscribes to: an event type, or the wildcard on its own.
+ * Both are strings, since which types exist is the server's to say.
+ */
+export type WebhookEventSubscription = WebhookEventType;
 
 /** The sentinel a redacted header value reads back as; never sent on write. */
 export const REDACTED_HEADER_VALUE = "<redacted>";
@@ -164,7 +162,10 @@ export type WebhookDeliveryStatus = (typeof WEBHOOK_DELIVERY_STATUSES)[number];
 /** The resource an event was about, surfaced from the joined event row. */
 export interface WebhookDeliveryResource {
   kind: string;
+  /** An entry's collection, or a Single's slug. Never set for kind `plugin`. */
   collection: string | null;
+  /** Set only for kind `plugin`: which plugin recorded it, by admin slug. */
+  plugin?: string | null;
   id: string | null;
   /** Which translation changed, for a localized resource; null otherwise. */
   locale: string | null;

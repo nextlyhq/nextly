@@ -572,7 +572,10 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
+  type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
   // `ctx.hooks.onInTransaction`'s handler and what it is handed.
@@ -620,8 +623,15 @@ export {
   type PluginCollectionView,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginAdminPlaceDeclaration,
+  type PluginListFilterDeclaration,
+  type PluginListFilterOption,
   type PluginMenuItem,
   type PluginNavSection,
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
 } from "./plugins";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
@@ -848,6 +858,20 @@ export type {
   ReadableContentCaller,
   ReadableContentEntity,
 } from "./auth/readable-content";
+// A plugin's read of a document's stored field values with no read hook, and
+// its write of a field only if the stored value is still the one it read,
+// judged under the write's own row lock. Here for `@nextlyhq/plugin-sdk` to
+// publish; it is the surface a plugin is promised. The hash is the one both
+// sides of the comparison use, so a plugin never computes its own.
+export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
+export type {
+  PluginConditionalUpdate,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginWriteExpectation,
+} from "./plugins/stored-fields";
+export { storedValueHash } from "./domains/collections/services/stored-field-read";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).

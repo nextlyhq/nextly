@@ -36,6 +36,8 @@ import {
 } from "../../storage/storage";
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { plannedOrRefused } from "../dry-run-refusal";
 import { environmentFilesRead } from "../environment";
 import { exitWithError, printCliError, type CliError } from "../errors";
 import {
@@ -45,7 +47,11 @@ import {
   mediaStorageUnlistable,
   mediaThumbnailsNotRemoved,
 } from "../errors/areas/commands";
-import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openCommandAdapter,
+  type CLIDatabaseAdapter,
+} from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import type { Logger } from "../utils/logger";
@@ -572,7 +578,7 @@ export async function mediaRemoveSizesAction(
 
 /** The action of `nextly media reindex-usage`, loaded when it runs. */
 export async function mediaReindexUsageAction(
-  _cmdOptions: unknown,
+  cmdOptions: { dryRun?: boolean },
   cmd: Command
 ): Promise<void> {
   const context = createContext(cmd.optsWithGlobals());
@@ -591,6 +597,30 @@ export async function mediaReindexUsageAction(
       context.logger
     );
     const db = databaseEnvOrThrow();
+    if (cmdOptions.dryRun === true) {
+      // Read-only, and nothing booted: the plan is read from the registries
+      // and the record as they stand. A database that is not there, or a
+      // record `nextly migrate` has not made yet, is the refusal named.
+      const opened = await openCommandAdapter(
+        {
+          dialect: db.dialect,
+          databaseUrl: db.databaseUrl,
+          logger: context.options.verbose ? context.logger : undefined,
+          dryRun: true,
+        },
+        context.logger
+      );
+      if (opened === undefined) process.exit(0);
+      adapter = opened;
+      const readOnly = opened as unknown as DrizzleAdapter;
+      installRegistryResolver(readOnly);
+      reportDryRun(
+        context.logger,
+        await plannedOrRefused(() => reindexUsagePlan(readOnly, context.logger))
+      );
+      await opened.disconnect();
+      process.exit(0);
+    }
     adapter = await createCliAdapter({
       dialect: db.dialect,
       databaseUrl: db.databaseUrl,
@@ -612,6 +642,63 @@ export async function mediaReindexUsageAction(
     if (adapter) await adapter.disconnect();
     exitWithError(context.logger, error);
   }
+}
+
+/**
+ * `media reindex-usage --dry-run`: the rebuild's plan (`planMediaUsageReindex`),
+ * the collections and Singles read from their registries without booting the
+ * services. It names the record replaced, with the rows it holds now, and the
+ * sources the rebuild reads; what the rebuilt record holds is not simulated,
+ * since a rebuild reads each document to find it.
+ */
+async function reindexUsagePlan(
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<DryRunPlan> {
+  const [
+    { planMediaUsageReindex },
+    { CollectionRegistryService },
+    { SingleRegistryService },
+  ] = await Promise.all([
+    import("../../domains/media/usage/reindex-usage"),
+    import("../../domains/collections/services/collection-registry-service"),
+    import("../../domains/singles/services/single-registry-service"),
+  ]);
+  const plan = await planMediaUsageReindex({
+    adapter,
+    collections: {
+      slugs: async () =>
+        (
+          await new CollectionRegistryService(
+            adapter,
+            logger
+          ).getAllCollections()
+        ).map(collection => collection.slug),
+    },
+    singles: {
+      slugs: async () =>
+        (await new SingleRegistryService(adapter, logger).getAllSingles()).map(
+          single => single.slug
+        ),
+    },
+  });
+  const named = (names: readonly string[]) =>
+    names.length > 0 ? ` (${names.join(", ")})` : "";
+  return {
+    changes: [
+      {
+        action: "replace",
+        target:
+          `the media usage record (${String(plan.rowsNow)} use(s) now) with one rebuilt from ` +
+          `${String(plan.collections.length)} collection(s)${named(plan.collections)}, ` +
+          `${String(plan.singles.length)} Single(s)${named(plan.singles)} and ` +
+          `${String(plan.templates)} email template(s)`,
+      },
+    ],
+    notes: [
+      "The rebuilt record's count is not simulated: a real run reads each document to find its uses.",
+    ],
+  };
 }
 
 /** What a `nextly media` command runs against, once the project is entered. */

@@ -107,6 +107,13 @@ function publishedPhrase(
   }
 }
 
+/** A language's name as the app's localization labels it, or its code. */
+export function languageLabelOf(
+  locales: readonly { code: string; label: string }[]
+): (code: string) => string {
+  return code => locales.find(locale => locale.code === code)?.label ?? code;
+}
+
 /**
  * The result message after publishing every language: each language's
  * outcome, as the publish reports it. Where the server reports none, only that

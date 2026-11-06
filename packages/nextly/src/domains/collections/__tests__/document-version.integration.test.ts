@@ -276,8 +276,12 @@ describe.each(getConfiguredTestDialects())(
 
       // Back to back, well inside one second: a version derived from
       // `updated_at` gives SQLite's whole seconds the same value twice.
-      const first = revOf(await updateNote(t, id, { title: "b" }));
-      const second = revOf(await updateNote(t, id, { title: "c" }));
+      const first = revOf(
+        await updateNote(t, id, { title: "b", _overwrite: true })
+      );
+      const second = revOf(
+        await updateNote(t, id, { title: "c", _rev: first })
+      );
 
       expect([first, second]).toEqual(["2", "3"]);
       expect(await mainCounter(t, NOTES, id)).toBe(3);
@@ -291,13 +295,15 @@ describe.each(getConfiguredTestDialects())(
       // client holding the earlier version holds a stale one.
       const t = await boot(dialect);
       const id = idOf(await createNote(t, { title: "a", code: "a" }));
-      expect(revOf(await updateNote(t, id, { title: "a" }))).toBe("2");
+      expect(
+        revOf(await updateNote(t, id, { title: "a", _overwrite: true }))
+      ).toBe("2");
     });
 
     it("leaves the version unchanged across reads, single and list", async () => {
       const t = await boot(dialect);
       const id = idOf(await createNote(t, { title: "a", code: "a" }));
-      await updateNote(t, id, { title: "b" });
+      await updateNote(t, id, { title: "b", _overwrite: true });
 
       expect(await readRev(t, NOTES, id)).toBe("2");
       expect(await readRev(t, NOTES, id)).toBe("2");
@@ -316,8 +322,8 @@ describe.each(getConfiguredTestDialects())(
       // A counter computed from a read made outside the row lock gives both
       // saves the same next value; the database must serialise them.
       const revs = await Promise.all([
-        updateNote(t, id, { title: "x" }).then(revOf),
-        updateNote(t, id, { title: "y" }).then(revOf),
+        updateNote(t, id, { title: "x", _overwrite: true }).then(revOf),
+        updateNote(t, id, { title: "y", _overwrite: true }).then(revOf),
       ]);
 
       expect([...revs].sort()).toEqual(["2", "3"]);
@@ -330,7 +336,9 @@ describe.each(getConfiguredTestDialects())(
       const id = idOf(await createNote(t, { title: "b", code: "free" }));
 
       // Refused by the database's unique index, inside the update statement.
-      expect(await updateNote(t, id, { code: "taken" })).toMatchObject({
+      expect(
+        await updateNote(t, id, { code: "taken", _overwrite: true })
+      ).toMatchObject({
         success: false,
         statusCode: 409,
       });
@@ -364,7 +372,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
 
       // Only the translated field changed, so only the Spanish row's counter
@@ -381,7 +389,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola otra vez" }
+        { title: "hola otra vez", _overwrite: true }
       );
       expect(await languageCounter(t, id, "es")).toBe(2);
       expect(await languageCounter(t, id, "en")).toBe(1);
@@ -403,7 +411,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "shared edit" }
+        { note: "shared edit", _overwrite: true }
       );
       expect(revOf(saved)).toBe("2.en:1");
       expect(await mainCounter(t, DOCS, id)).toBe(2);
@@ -429,7 +437,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "held edit" }
+        { note: "held edit", _overwrite: true }
       );
 
       const after = await rowOf(t, `dc_${DOCS}`, { id });
@@ -454,11 +462,14 @@ describe.each(getConfiguredTestDialects())(
 
       // Discarding the held draft changes what that read shows, so the
       // version changes with it.
-      await handlerOf(t).getEntryService().discardWorkingDraft({
-        collectionName: DOCS,
-        entryId: id,
-        locale: "en",
-      });
+      await handlerOf(t)
+        .getEntryService()
+        .discardWorkingDraft({
+          collectionName: DOCS,
+          entryId: id,
+          locale: "en",
+          version: { _rev: draftRead._rev },
+        });
       expect(await mainCounter(t, DOCS, id)).toBe(Number(after._revision) + 1);
     });
 
@@ -477,7 +488,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { code: "b" }
+        { code: "b", _overwrite: true }
       );
       expect(revOf(saved)).toBe("2");
       expect(await readRev(t, UNTRANSLATED, id, "en")).toBe("2");
@@ -541,7 +552,7 @@ describe.each(getConfiguredTestDialects())(
       // Whole seconds on SQLite: wait into the next one, so a save that left
       // the time where the create put it is told from one that set it.
       await new Promise(resolve => setTimeout(resolve, 1_100));
-      await updateNote(t, id, { title: "b" });
+      await updateNote(t, id, { title: "b", _overwrite: true });
       const saved = await rowOf(t, `dc_${NOTES}`, { id });
       expect(timeOf(saved._changed_at)).toBeGreaterThan(
         timeOf(created._changed_at)
@@ -568,7 +579,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "held edit" }
+        { note: "held edit", _overwrite: true }
       );
       const after = await rowOf(t, `dc_${DOCS}`, { id });
       expect(timeOf(after.updated_at)).toBe(timeOf(before.updated_at));
@@ -582,7 +593,10 @@ describe.each(getConfiguredTestDialects())(
       const id = idOf(await createNote(t, { title: "a", code: "a" }));
       const before = await rowOf(t, `dc_${NOTES}`, { id });
       await new Promise(resolve => setTimeout(resolve, 1_100));
-      await updateNote(t, id, { box: { label: "only the component" } });
+      await updateNote(t, id, {
+        box: { label: "only the component" },
+        _overwrite: true,
+      });
       const after = await rowOf(t, `dc_${NOTES}`, { id });
       expect(Number(after._revision)).toBe(Number(before._revision) + 1);
       expect(timeOf(after._changed_at)).toBeGreaterThan(
@@ -637,14 +651,17 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "held edit" }
+        { note: "held edit", _overwrite: true }
       );
       const held = await readRev(t, DOCS, id, "en");
-      await handlerOf(t).getEntryService().discardWorkingDraft({
-        collectionName: DOCS,
-        entryId: id,
-        locale: "en",
-      });
+      await handlerOf(t)
+        .getEntryService()
+        .discardWorkingDraft({
+          collectionName: DOCS,
+          entryId: id,
+          locale: "en",
+          version: { _rev: held },
+        });
       expect(await readRev(t, DOCS, id, "en")).not.toBe(held);
     });
 
@@ -663,7 +680,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "held edit" }
+        { note: "held edit", _overwrite: true }
       );
       const held = await readRev(t, DOCS, id, "en");
       // As the discard route makes it: the live document read first, then
@@ -674,6 +691,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         locale: "en",
         user: { id: "system-check", roles: ["super-admin"] } as never,
+        version: { _rev: held },
       });
       expect(removed).toBe(1);
       const answered = (document as Record<string, unknown>)._rev;
@@ -696,7 +714,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(revOf(swept)).toBe(await readRev(t, DOCS, id, "*"));
     });
@@ -722,12 +740,13 @@ describe.each(getConfiguredTestDialects())(
           locale: "en",
           actor: { type: "user", id: "writer" },
         },
-        { note: "held" }
+        { note: "held", _overwrite: true }
       );
       await handlerOf(t).publishAllLocales({
         collectionName: DOCS,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       const snapshots = await recordedSnapshots(t);
       expect(snapshots.length).toBeGreaterThan(0);
@@ -754,13 +773,14 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "es",
         },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
 
       const published = await handlerOf(t).publishAllLocales({
         collectionName: DOCS,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       const afterPublish = await readRev(t, DOCS, id, "*");
       expect(afterPublish).toBe(
@@ -779,6 +799,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: DOCS,
         entryId: id,
         overrideAccess: true,
+        data: { _rev: afterPublish },
       });
       const afterUnpublish = await readRev(t, DOCS, id, "*");
       expect(afterUnpublish).not.toBe(afterPublish);
@@ -808,7 +829,7 @@ describe.each(getConfiguredTestDialects())(
       const resaved = await updateNote(t, id, { ...read, _revision: 999 });
       expect(revOf(resaved)).toBe("2");
 
-      await updateNote(t, id, { title: "b", _revision: 999 });
+      await updateNote(t, id, { title: "b", _revision: 999, _overwrite: true });
       expect(await mainCounter(t, NOTES, id)).toBe(3);
 
       // An update of several documents with one set of values names no one
@@ -835,6 +856,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: NOTES,
         ids: [id],
         data: { title: "c", _revision: 999 },
+        revs: { [id]: "3" },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(4);
@@ -842,7 +864,7 @@ describe.each(getConfiguredTestDialects())(
       await handlerOf(t).bulkUpdateByQuery({
         collectionName: NOTES,
         where: { id: { equals: id } },
-        data: { title: "d", _revision: 999 },
+        data: { title: "d", _revision: 999, _overwrite: true },
         overrideAccess: true,
       });
       expect(await mainCounter(t, NOTES, id)).toBe(5);
@@ -866,6 +888,7 @@ describe.each(getConfiguredTestDialects())(
         title: "f",
         _changed_by_kind: "person",
         _changed_by_id: "forged",
+        _overwrite: true,
       });
       const row = await rowOf(t, `dc_${NOTES}`, { id });
       expect(row._changed_by_id).not.toBe("forged");
@@ -908,7 +931,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
           DOCS,
           id,
-          { note: "held in a transaction" },
+          { note: "held in a transaction", _overwrite: true },
           { overrideAccess: true } as never
         )
       );
@@ -918,6 +941,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: DOCS,
         ids: [id],
         data: { note: "held in bulk" },
+        revs: { [id]: await readRev(t, DOCS, id, "en") },
         overrideAccess: true,
       })) as unknown as {
         data?: { successes?: Record<string, unknown>[] };
@@ -936,6 +960,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: NOTES,
         ids: [a, b],
         data: { title: "bulk" },
+        revs: { [a]: "1", [b]: "1" },
         overrideAccess: true,
       });
       expect([
@@ -946,7 +971,8 @@ describe.each(getConfiguredTestDialects())(
       await handlerOf(t).bulkUpdateByQuery({
         collectionName: NOTES,
         where: { title: { equals: "bulk" } },
-        data: { title: "query" },
+        // An update by query names no entry to give a version for.
+        data: { title: "query", _overwrite: true },
         overrideAccess: true,
       });
       expect([
@@ -957,8 +983,8 @@ describe.each(getConfiguredTestDialects())(
       const batch = await serviceOf(t).updateMany(
         NOTES,
         [
-          { id: a, data: { title: "batch a" } },
-          { id: b, data: { title: "batch b" } },
+          { id: a, data: { title: "batch a", _overwrite: true } },
+          { id: b, data: { title: "batch b", _overwrite: true } },
         ],
         { overrideAccess: true } as never
       );
@@ -998,7 +1024,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "es",
           actor: { type: "apiKey", id: "key-1" },
         },
-        { title: "hola" }
+        { title: "hola", _overwrite: true }
       );
       const spanish = await languageRow(t, id, "es");
       expect([
@@ -1020,7 +1046,7 @@ describe.each(getConfiguredTestDialects())(
             principal: { kind: "member", id: "m-1" },
           },
         },
-        { note: "shared" }
+        { note: "shared", _overwrite: true }
       );
       const shared = await rowOf(t, `dc_${DOCS}`, { id });
       // A plugin-defined person by kind alone: their id may be an address,
@@ -1045,7 +1071,7 @@ describe.each(getConfiguredTestDialects())(
             principal: { kind: "member", id: "m-1" },
           },
         },
-        { title: "hola de nuevo" }
+        { title: "hola de nuevo", _overwrite: true }
       );
       const translated = await languageRow(t, id, "es");
       expect([

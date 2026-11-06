@@ -1,8 +1,8 @@
 /**
  * The page builder's own tables: the usage indexes' bookkeeping, the fence a
  * Layout's removal puts up, the runs that turn every copy of a component into
- * plain blocks before it is deleted, and the site-wide options only this
- * plugin writes.
+ * plain blocks before it is deleted, the site-wide options only this plugin
+ * writes, and the runs that strip a removed breakpoint's values from the site.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -32,7 +32,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 6;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -294,6 +294,110 @@ export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
     { indexes: [{ columns: ["name"], unique: true }] }
   );
 
+/** The columns of {@link breakpointRemovals}. */
+type BreakpointRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly removedIds: ColumnBuilder<string, false, false>;
+  readonly before: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly openKey: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run stripping every value stored under breakpoints the site removed:
+ * the styles and own per-device hides of every document holding blocks, walked
+ * the way a component's hosts are (`host-rewrite/rewrite`), its progress kept
+ * in {@link componentDeletionHosts} under this row's id.
+ *
+ * - `removedIds` is the JSON list of the breakpoint ids removed.
+ * - `before` is the JSON record `{ stored, emitted }`: the breakpoint set the
+ *   site stored before the removal (`null` where it stored none and the
+ *   configured set applied), so the removal can be undone later, and the set
+ *   the stylesheet was emitted under then, so a run carried on after the
+ *   configured defaults changed carries hides under the cascade it began with.
+ * - `startedBy` names who saved the removal, as `user:<id>` or `api-key:<id>`.
+ *   The writes themselves are made as the system: every value under a removed
+ *   breakpoint goes, whoever may open the document holding it.
+ * - `phase` and `cursor` are the walk's, as for a component's run.
+ * - `openKey` is `site` while the run is open and `null` once it is done. Its
+ *   unique index lets one removal be open at a time: a second insert meets it
+ *   and is refused, and every finished run (all `null`) stays as a record.
+ */
+export const breakpointRemovals: TableDefinition<
+  "breakpoint_removals",
+  BreakpointRemovalsColumns
+> = defineTable<"breakpoint_removals", BreakpointRemovalsColumns>(
+  "breakpoint_removals",
+  {
+    id: col.id(),
+    removedIds: col.longText(),
+    before: col.longText(),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+    openKey: col.varchar(16, { nullable: true }),
+  },
+  { indexes: [{ columns: ["openKey"], unique: true }] }
+);
+
+/** The columns of {@link breakpointRemovalFragments}. */
+type BreakpointRemovalFragmentsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly runId: ColumnBuilder<string, false, false>;
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly host: ColumnBuilder<unknown, true, false>;
+  readonly form: ColumnBuilder<string, false, false>;
+  readonly fragment: ColumnBuilder<unknown, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * What each breakpoint removal took out of the site, kept so it can be put
+ * back: one row per stored value it stripped, written before the strip itself,
+ * so a value that was stripped always has its row.
+ *
+ * - `runId` is the removal ({@link breakpointRemovals}) that stripped it.
+ * - `documentKey` names the document (`host-rewrite/contract`'s
+ *   `documentKeyOf`), or the site style for the shared styles' fragment.
+ * - `host` is the address of the blocks value within it (its field path and
+ *   language), `null` for the shared styles, and `form` which stored form was
+ *   stripped: `published`, `draft`, or `site` for the shared styles.
+ * - `fragment` is what was taken out (`breakpoint-removal/strip`). JSON
+ *   columns, not text: a large page's fragment outgrows MySQL's `TEXT`.
+ * - A value stripped twice (a write brought values back) has a row for each;
+ *   the newest is the latest strip.
+ *
+ * Rows older than the window a removal can be undone in are deleted by the
+ * removal job.
+ */
+export const breakpointRemovalFragments: TableDefinition<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+> = defineTable<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+>(
+  "breakpoint_removal_fragments",
+  {
+    id: col.id(),
+    runId: col.char(36),
+    documentKey: col.varchar(512),
+    host: col.json({ nullable: true }),
+    form: col.varchar(16),
+    fragment: col.json(),
+    ...col.timestamps(),
+  },
+  // Read and purged by run; the purge also reads by age.
+  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -302,6 +406,8 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof componentDeletions,
   typeof componentDeletionHosts,
   typeof siteOptions,
+  typeof breakpointRemovals,
+  typeof breakpointRemovalFragments,
 ] = [
   usageRuns,
   usageProgress,
@@ -309,4 +415,6 @@ export const PAGE_BUILDER_TABLES: readonly [
   componentDeletions,
   componentDeletionHosts,
   siteOptions,
+  breakpointRemovals,
+  breakpointRemovalFragments,
 ];

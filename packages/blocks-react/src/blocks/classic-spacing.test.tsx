@@ -32,9 +32,35 @@ import {
 } from "./classic-spacing.fixture";
 import { coreBlocks } from "./index";
 
-const OLD_CSS = readFileSync(
+const CAPTURED_CSS = readFileSync(
   new URL("./__fixtures__/classic-spacing.css", import.meta.url),
   "utf8"
+);
+
+/** The accordion's rule as the earlier compiler wrote it. */
+const CAPTURED_ACCORDION =
+  ".nx-pb-page :where(.nx-bt-core--accordion) { display: grid; gap: var(--site-space-4) }";
+
+/**
+ * The captured sheet with the one addition made since, stated here rather
+ * than edited into the capture, which stays what the earlier compiler wrote.
+ * An accordion's sections now draw an empty icon beside their titles, and a
+ * classic site's accordion keeps the browser's marker: its icon choice is
+ * Browser default, which keeps the summary as the browser draws it, hides
+ * that icon and keeps a title on the marker's line, with the position a new
+ * accordion has for an icon chosen later; and a section's title
+ * takes the section's own typography, which a text title already did. The
+ * page looks as it did.
+ */
+const OLD_CSS = CAPTURED_CSS.replace(
+  CAPTURED_ACCORDION,
+  [
+    ".nx-pb-page :where(.nx-bt-core--accordion) { --nx-pb-disclosure-icon: browser; --nx-pb-disclosure-position: after; display: grid; gap: var(--site-space-4) }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary) { display: revert; list-style: revert }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-icon) { display: none; order: 1; margin-inline-start: auto }",
+    ".nx-pb-page :where(.nx-bt-core--accordion > details > summary > .nx-pb-disclosure-title) { display: inline }",
+    ".nx-pb-page :where(.nx-bp-core--accordion-item--title) { font-size: inherit; font-weight: inherit; line-height: inherit; margin-block-end: 0; margin-block-start: 0; margin-inline-end: 0; margin-inline-start: 0 }",
+  ].join("\n")
 );
 
 const resolver: BlockResolver = {
@@ -53,6 +79,12 @@ function compiled(document: BlockDocument, ctx: StyleCompileContext) {
 }
 
 describe("the classic spacing model", () => {
+  it("states its addition over the capture, which still holds the rule it replaces", () => {
+    // A replace that matched nothing would leave the capture as the pin.
+    expect(CAPTURED_CSS).toContain(CAPTURED_ACCORDION);
+    expect(OLD_CSS).not.toBe(CAPTURED_CSS);
+  });
+
   it("compiles the stylesheet the compiler before container gaps wrote", () => {
     expect(compiled(CLASSIC_SPACING_PAGE, context("classic")).css).toBe(
       OLD_CSS

@@ -481,7 +481,7 @@ describe.each(getConfiguredTestDialects())(
           entryId: storyId,
           overrideAccess: true,
         },
-        { body: imageText(String(after.url)) }
+        { body: imageText(String(after.url)), _overwrite: true }
       );
       const story = (
         (await usageOf(reader, logo.id)).items as Array<{
@@ -754,7 +754,7 @@ describe.each(getConfiguredTestDialects())(
           entryId: storyId,
           overrideAccess: true,
         },
-        { title: "Story, edited" }
+        { title: "Story, edited", _overwrite: true }
       );
 
       const used = (await usageOf(reader, image.id)).items as Array<{
@@ -1044,6 +1044,7 @@ describe.each(getConfiguredTestDialects())(
               ],
             },
           },
+          _overwrite: true,
         }
       );
 

@@ -5,6 +5,7 @@
 import {
   compilePageCss,
   nodeClassName,
+  overlaidStyles,
   type BlockDocument,
   type BreakpointSet,
   type NamedClass,
@@ -16,7 +17,7 @@ import {
   hasOwnStyles,
   newSharedStyleName,
   nodeSharedStyles,
-  overlaidStyles,
+  DETACH_LOOK_NOT_KEPT,
   planDetachSharedStyle,
   moveToSharedStyleClear,
   planMoveToSharedStyle,
@@ -623,6 +624,32 @@ describe("detaching and removing a block's style", () => {
       );
       if (!plan.ok) throw new Error(plan.reason);
       expect(everywhere(applied(before, plan.ops), [styleB])).toEqual(was);
+    });
+
+    it("refuses, leaving the style worn, a look the block's own rules can't hold", () => {
+      // The detached style's small-container value shows only where the
+      // later style's tablet value does not: "small container and not
+      // tablet" is a combined query the block's own rules have no way to say.
+      const set: BreakpointSet = {
+        viewport: [
+          { id: "base", label: "Base" },
+          { id: "md", label: "Medium", maxWidth: 900 },
+        ],
+        container: [{ id: "cq-sm", label: "Small", maxWidth: 400 }],
+      };
+      const styleA = early({ base: { "cq-sm": { color: "#aaaa00" } } });
+      const styleB = late({ base: { md: { color: "#0000aa" } } });
+      const before = page({ classes: ["c-early", "c-late"] });
+      expect(
+        planDetachSharedStyle(
+          before,
+          "a",
+          styleA,
+          [styleA, styleB],
+          undefined,
+          set
+        )
+      ).toEqual({ ok: false, reason: DETACH_LOOK_NOT_KEPT });
     });
 
     it("keeps the look for any mix of styles, states and widths", () => {

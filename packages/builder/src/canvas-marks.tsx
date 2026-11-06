@@ -57,7 +57,27 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
+import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
+import { EDITING_ATTRIBUTE } from "./use-inline-text";
+
+/**
+ * The marks that are the marked element's outline and nothing more, by the
+ * attribute that asks for each: a block an edit to the look being edited
+ * reaches, and a drop's parent and refused target.
+ */
+const OUTLINE_MARKS = [
+  [LOOK_REACH_ATTRIBUTE, "look-reach"],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+] as const;
+
+/** The outline-only marks an element asks for, drawn as `box`. */
+function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+  return OUTLINE_MARKS.filter(([attribute]) =>
+    marked.hasAttribute(attribute)
+  ).map(([, kind]) => ({ ...box, kind }));
+}
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -65,6 +85,7 @@ interface Mark {
     | "selected"
     | "hovered"
     | "exposed"
+    | "look-reach"
     | "drop-parent"
     | "drop-refused";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
@@ -73,6 +94,13 @@ interface Mark {
   readonly component: boolean;
   /** A block locked in Layers, by its own lock or one around it: dashed. */
   readonly locked: boolean;
+  /**
+   * An exposed part being edited in place on the canvas: a solid ring, so the
+   * passage the caret is in reads apart from the placement's other parts.
+   */
+  readonly editing?: boolean;
+  /** Another exposed part of a placement while one of its parts is edited. */
+  readonly dimmed?: boolean;
   /**
    * A selected block the page hides on the device shown, drawn because it is
    * selected: hatched, and tagged as hidden.
@@ -98,6 +126,11 @@ interface Mark {
   readonly tagEdge: "right" | "left";
   /** Cut to the part a clipping ancestor leaves visible, with no halo band. */
   readonly clipped: boolean;
+  /**
+   * Around a block its own `clip-path` shapes: no halo band, the ring still
+   * outside the box.
+   */
+  readonly shaped?: boolean;
   /** The placement a component frame is drawn around, by its address. */
   readonly placement?: string;
   /**
@@ -189,6 +222,9 @@ function markKey(mark: Mark): string {
     tagEdge,
     tagInset,
     clipped,
+    shaped,
+    editing,
+    dimmed,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -207,6 +243,9 @@ function markKey(mark: Mark): string {
     tagInset.bottom,
     tagInset.side,
     clipped,
+    shaped === true,
+    editing === true,
+    dimmed === true,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -276,6 +315,8 @@ interface Outline {
   readonly radius: string;
   readonly radii: CornerRadii;
   readonly clipped: boolean;
+  /** Shaped by the block's own `clip-path`: no halo band, ring outside. */
+  readonly shaped?: boolean;
 }
 
 /**
@@ -321,6 +362,24 @@ function outlineOf(
       clipped: true,
     };
   }
+  /*
+   * A block its OWN `clip-path` shapes — a circle cut from a square box —
+   * draws nothing of the box outside that shape. A halo band hugging the box
+   * would frame corners that show the page behind, so the ring is drawn
+   * square around the box with no band. Unlike an ancestor's clip, the
+   * block's own shape does not cut the overlay, so the ring stays OUTSIDE
+   * the box, where it covers nothing the shape shows.
+   */
+  const shape = style?.clipPath;
+  if (shape !== undefined && shape !== "" && shape !== "none") {
+    return {
+      rect: space.place(own),
+      radius: borderRadiusOf(SQUARE_CORNERS),
+      radii: SQUARE_CORNERS,
+      clipped: false,
+      shaped: true,
+    };
+  }
   const drawn = scaleCornerRadii(inRoot, { x: space.scale, y: space.scale });
   return {
     rect: space.place(own),
@@ -353,6 +412,7 @@ function ringOf(outline: Outline): Outline {
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
+    ...(outline.shaped === true ? { shaped: true } : {}),
   };
 }
 
@@ -378,6 +438,7 @@ function placementOutline(parts: readonly Outline[]): Outline {
     radius: borderRadiusOf(SQUARE_CORNERS),
     radii: SQUARE_CORNERS,
     clipped: parts.some(part => part.clipped),
+    ...(parts.some(part => part.shaped === true) ? { shaped: true } : {}),
   };
 }
 
@@ -415,6 +476,7 @@ function selectedMark(
     rect: ring.rect,
     radius: ring.radius,
     clipped: ring.clipped,
+    ...(ring.shaped === true ? { shaped: true } : {}),
     kind: "selected",
     component: placement !== undefined,
     ...look,
@@ -550,7 +612,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -592,14 +654,15 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         marked.hasAttribute(EXPOSED_ATTRIBUTE) &&
         (selected === null || placement !== "")
       ) {
-        found.push({ ...outline, ...plain, kind: "exposed" });
+        found.push({
+          ...outline,
+          ...plain,
+          kind: "exposed",
+          ...(marked.hasAttribute(EDITING_ATTRIBUTE) ? { editing: true } : {}),
+        });
       }
-      if (marked.hasAttribute(DROP_PARENT_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-parent" });
-      }
-      if (marked.hasAttribute(DROP_REFUSED_ATTRIBUTE)) {
-        found.push({ ...outline, ...plain, kind: "drop-refused" });
-      }
+      // The marks drawn as the element's outline alone, one per attribute.
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
     });
   placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts));
@@ -650,7 +713,28 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  return found;
+  return dimmedBesideEditing(found);
+}
+
+/** An exposed part's editing state, as the stylesheet reads it. */
+function editingAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.editing === true ? { "data-editing": "" } : {}),
+    ...(mark.dimmed === true ? { "data-dimmed": "" } : {}),
+  };
+}
+
+/**
+ * The marks with every other exposed part dimmed while one is being edited,
+ * so the passage the caret is in is the one that stands out.
+ */
+function dimmedBesideEditing(marks: Mark[]): Mark[] {
+  if (!marks.some(mark => mark.editing === true)) return marks;
+  return marks.map(mark =>
+    mark.kind === "exposed" && mark.editing !== true
+      ? { ...mark, dimmed: true }
+      : mark
+  );
 }
 
 /**
@@ -735,6 +819,7 @@ export function CanvasMarks({
           data-secondary={mark.secondary ? "" : undefined}
           data-component={mark.component ? "" : undefined}
           data-locked={mark.locked ? "" : undefined}
+          {...editingAttributes(mark)}
           data-hidden={mark.hidden ? "" : undefined}
           // The tag a hidden block's ring carries, drawn by the stylesheet
           // from this attribute; the layer is hidden from assistive
@@ -743,6 +828,7 @@ export function CanvasMarks({
           data-tag={mark.hidden ? mark.tag : undefined}
           data-tag-edge={mark.hidden ? mark.tagEdge : undefined}
           data-clipped={mark.clipped ? "" : undefined}
+          data-shaped={mark.shaped === true ? "" : undefined}
           // The tag a placement's frame carries, drawn by the stylesheet from
           // this attribute: the layer is hidden from assistive technology,
           // and the inspector names the placement in words.

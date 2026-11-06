@@ -59,7 +59,11 @@ vi.mock("../site-style-read", () => ({
   }),
 }));
 
-/** What the Single was asked to store, in order. */
+/**
+ * What the Single was asked to store, in order. Each write is saved over
+ * whatever the style holds and says so with `_overwrite: true`, which the
+ * expectations state.
+ */
 const writes: Record<string, unknown>[] = [];
 /**
  * Whether the Single refuses the next writes, and what it says; whether each
@@ -447,7 +451,7 @@ describe("the Design panel's writes", () => {
     // Written, then taken back; the read has not moved on, and the canvas
     // shows what the section holds again.
     expect(writes).toHaveLength(2);
-    expect(writes[1]).toEqual({ tokens: null });
+    expect(writes[1]).toEqual({ _overwrite: true, tokens: null });
     expect(canvas()).toBe("none");
   });
   it("sends a write released while the page is visible so it outlives the page", async () => {

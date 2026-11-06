@@ -32,9 +32,7 @@
 import {
   findNode,
   PAGE_ROOT_CLASS,
-  parseColor,
   previewStateClass,
-  relativeLuminance,
   resolveSiteTokens,
   resolveTokenPrefix,
   statePropagatesToAncestors,
@@ -43,12 +41,12 @@ import {
   tokenIdentity,
   walkNodes,
   type BlockDocument,
-  type Rgb,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
   INSTANCE_ATTRIBUTE,
   layoutPartSheets,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   sharedStyleInputs,
@@ -94,6 +92,7 @@ import { nodeElements } from "./rendered-nodes";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { alphaOf, computedAlphaOf, isDarkGround } from "./site-ground";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
@@ -204,12 +203,6 @@ const SITE_SURFACE_TOKENS = [
 /** The token the page's ground is drawn from, by identity. */
 const SITE_GROUND_TOKEN = "color.background";
 
-/**
- * The largest relative luminance a ground can have and still be dark: the
- * point where white text and black text contrast with it equally.
- */
-const DARK_GROUND_LUMINANCE = 0.179;
-
 /** What the canvas root needs from the site sheet to draw the page as the site. */
 interface SiteSurface {
   /** The custom properties naming the site's tokens, under its prefix. */
@@ -267,181 +260,6 @@ function siteSurface(
   };
 }
 
-/**
- * Whether a token value is a dark ground. A value this engine cannot read as a
- * colour — a named colour, `oklch()`, a reference to another property — says
- * nothing about how light it is, so it is not called dark: the canvas keeps the
- * page's light default rather than switching every native control to a dark
- * scheme over what may be a light ground.
- */
-function isDarkGround(value: string): boolean {
-  const luminance = groundLuminance(value.trim());
-  return luminance !== undefined && luminance < DARK_GROUND_LUMINANCE;
-}
-
-/**
- * One numeric colour component, with its percentage sign if it has one: an
- * optional sign, a decimal, an optional exponent, an optional `%`.
- *
- * The SAME grammar as the engine's `NUMERIC_COMPONENT` in `contrast.ts`, which
- * reads `rgb()` and does not export it; mirrored here for the two syntaxes the
- * engine does not read, so a component is a number in all of them alike.
- * Matched whole rather than parsed with `parseFloat`, which reads a prefix and
- * stops — `5e-1` would read as 5 and `12abc` as 12.
- */
-const NUMERIC_COMPONENT = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%?)$/;
-
-/** A component as a number, and whether it was a percentage. */
-function numericOf(
-  part: string | undefined
-): { value: number; percent: boolean } | undefined {
-  if (part === undefined) return undefined;
-  const match = NUMERIC_COMPONENT.exec(part);
-  if (match === null) return undefined;
-  const value = Number.parseFloat(part);
-  return Number.isFinite(value)
-    ? { value, percent: match[1] === "%" }
-    : undefined;
-}
-
-/** A component as a 0–1 fraction: a percentage of 100, or a number of `scale`. */
-function fractionOf(
-  part: string | undefined,
-  scale: number
-): number | undefined {
-  const parsed = numericOf(part);
-  if (parsed === undefined) return undefined;
-  const fraction = parsed.value / (parsed.percent ? 100 : scale);
-  // Clamped, as CSS Color 4 clamps alpha, lightness and saturation.
-  return Math.min(1, Math.max(0, fraction));
-}
-
-/**
- * An `oklch()` or `hsl()`/`hsla()` call, split into its colour components and
- * its alpha: after a `/` in the modern syntax, the fourth comma-separated
- * component in the legacy one. `undefined` for anything else, or a call whose
- * shape is neither.
- */
-function colourFunction(text: string): ColourCall | undefined {
-  const call = /^(oklch|hsla?)\(([^()]*)\)$/i.exec(text);
-  if (call === null) return undefined;
-  const name = (call[1] ?? "").toLowerCase() === "oklch" ? "oklch" : "hsl";
-  const body = call[2] ?? "";
-  return body.includes(",") ? legacyCall(name, body) : modernCall(name, body);
-}
-
-/** A colour function's name, colour components and alpha, as written. */
-interface ColourCall {
-  readonly name: "oklch" | "hsl";
-  readonly components: readonly string[];
-  readonly alpha: string | undefined;
-}
-
-/**
- * The legacy, comma-separated form: `hsl(h, s%, l%)` or `hsla(h, s%, l%, a)`.
- * Only `hsl()` has one, and it takes no slash.
- */
-function legacyCall(
-  name: ColourCall["name"],
-  body: string
-): ColourCall | undefined {
-  if (name === "oklch" || body.includes("/")) return undefined;
-  const parts = body.split(",").map(part => part.trim());
-  if (parts.length !== 3 && parts.length !== 4) return undefined;
-  return { name, components: parts.slice(0, 3), alpha: parts[3] };
-}
-
-/** The modern, space-separated form, with an optional `/ alpha` after it. */
-function modernCall(
-  name: ColourCall["name"],
-  body: string
-): ColourCall | undefined {
-  const [channels, alpha, ...rest] = body.split("/");
-  if (rest.length > 0) return undefined;
-  const parts = (channels ?? "")
-    .trim()
-    .split(/\s+/)
-    .filter(part => part !== "");
-  if (parts.length !== 3) return undefined;
-  return { name, components: parts, alpha: alpha?.trim() };
-}
-
-/**
- * A colour's alpha, 0–1, or `undefined` when it cannot be told.
- *
- * Hex and `rgb()` from the engine's parser; `oklch()` and `hsl()` from their
- * own alpha component, 1 when they state none. A bare colour keyword is opaque
- * — every named colour is — except `transparent`, and a keyword this cannot
- * place, such as `currentColor`, is unknown, as is a reference or a function
- * this does not read.
- */
-function alphaOf(text: string): number | undefined {
-  const rgb = parseColor(text);
-  if (rgb !== undefined) return rgb.a;
-  const call = colourFunction(text);
-  if (call !== undefined) {
-    return call.alpha === undefined ? 1 : fractionOf(call.alpha, 1);
-  }
-  if (!/^[a-z]+$/i.test(text)) return undefined;
-  const keyword = text.toLowerCase();
-  if (keyword === "transparent") return 0;
-  return keyword === "currentcolor" ? undefined : 1;
-}
-
-/**
- * The relative luminance of a ground colour, or `undefined` when it cannot be
- * told. Hex and `rgb()` go through the engine's own parser. `oklch()`, which
- * Tailwind themes write, carries perceptual lightness directly: its L cubed is
- * the luminance of a grey, close enough for a dark-or-light call. `hsl()`,
- * which shadcn-style themes write, converts to rgb by the standard formula.
- *
- * A TRANSLUCENT colour has no lightness of its own: what a visitor sees is the
- * surface behind it, which the canvas cannot see either. So any alpha below 1,
- * in any of these syntaxes, is `undefined` — `#0000` is not a dark ground — and
- * so is an alpha this cannot read.
- */
-function groundLuminance(text: string): number | undefined {
-  if (alphaOf(text) !== 1) return undefined;
-  const rgb = parseColor(text);
-  if (rgb !== undefined) return relativeLuminance(rgb);
-  const call = colourFunction(text);
-  if (call === undefined) return undefined;
-  const [first, second, third] = call.components;
-  if (call.name === "oklch") {
-    // L is a number in 0–1, or a percentage.
-    const lightness = fractionOf(first, 1);
-    return lightness === undefined ? undefined : lightness ** 3;
-  }
-  // Hue as a number, in degrees if it says so; saturation and lightness as
-  // percentages, or the bare numbers CSS Color 4 also accepts for them.
-  const hue = numericOf(first?.replace(/deg$/i, ""));
-  const saturation = fractionOf(second, 100);
-  const lightness = fractionOf(third, 100);
-  if (
-    hue === undefined ||
-    hue.percent ||
-    saturation === undefined ||
-    lightness === undefined
-  ) {
-    return undefined;
-  }
-  return relativeLuminance(hslToRgb(hue.value, saturation, lightness));
-}
-
-/** An HSL colour as 0–255 channels, by the CSS Color 4 conversion. */
-function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
-  const h = ((hue % 360) + 360) % 360;
-  const a = saturation * Math.min(lightness, 1 - lightness);
-  const channel = (n: number): number => {
-    const k = (n + h / 30) % 12;
-    return Math.round(
-      (lightness - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
-    );
-  };
-  return { r: channel(0), g: channel(8), b: channel(4), a: 1 };
-}
-
-/** Whether an event started inside editor chrome rather than inside the page. */
 /**
  * The block a context gesture is aimed at, or `null` when it is aimed at
  * nothing a block menu could act on.
@@ -509,6 +327,16 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isChrome(target: EventTarget | null): boolean {
   return isElement(target) && target.closest(`[${CHROME_ATTRIBUTE}]`) !== null;
+}
+
+/** The action a list's note offers, when a press landed on it. */
+function listActionOf(target: EventTarget | null): string | null {
+  if (!isElement(target)) return null;
+  return (
+    target
+      .closest(`[${LIST_ACTION_ATTRIBUTE}]`)
+      ?.getAttribute(LIST_ACTION_ATTRIBUTE) ?? null
+  );
 }
 
 /**
@@ -624,6 +452,32 @@ export function isOutermostForAddress(
   // no outline and no rectangle for a drag.
   if (!ownedByCanvas(host, container)) return true;
   return host.getAttribute(INSTANCE_ATTRIBUTE) !== address;
+}
+
+/**
+ * Every element standing for each of `addresses` on this canvas: the
+ * outermost per address, in document order. What a toolbar or a gap measures a
+ * block by, so that a component placement whose definition draws several
+ * top-level elements is measured as all of them rather than as its first.
+ * Only this canvas's own: a canvas nested inside a block (component edit
+ * mode) scopes ids to its own document, which may reuse an address from out
+ * here.
+ */
+export function outermostElementsOf(
+  root: HTMLElement,
+  addresses: ReadonlySet<string>
+): Map<string, Element[]> {
+  const drawn = new Map<string, Element[]>();
+  for (const element of nodeElements(root)) {
+    if (!ownedByCanvas(element, root)) continue;
+    const address = nodeAddressOf(element);
+    if (address === null || !addresses.has(address)) continue;
+    if (!isOutermostForAddress(element, address, root)) continue;
+    const elements = drawn.get(address) ?? [];
+    elements.push(element);
+    drawn.set(address, elements);
+  }
+  return drawn;
 }
 
 /**
@@ -824,11 +678,14 @@ function useCanvasMarkers(
         // Whether the engine would refuse to move this node, asked from the set
         // rather than from the document per element: this walk re-runs on every
         // change to the rendered tree, and a tree search per element would make
-        // that quadratic on a large page.
+        // that quadratic on a large page. Asked by the ADDRESS, as the selection
+        // pass above is: a placement's parts carry a re-minted id the document
+        // does not hold, and the lock that holds them is the placement's.
+        const address = nodeAddressOf(element);
         setMark(
           element,
           LOCKED_ATTRIBUTE,
-          id === null ? undefined : lockedIds.get(id)
+          address === null ? undefined : lockedIds.get(address)
         );
         for (const [attribute, wanted] of dragMarks) {
           setFlag(element, attribute, id !== null && id === wanted);
@@ -987,6 +844,89 @@ function setMark(
   else element.setAttribute(attribute, value);
 }
 
+/**
+ * The marks the site's surface puts on the canvas root, written before paint:
+ * the nearest theme marker above it (`useNearestThemeMarker`), and whether the
+ * site's ground is fully opaque.
+ *
+ * Only an opaque ground is repeated on the rendered page as well as the
+ * canvas: painted twice, an opaque ground looks exactly as it does once, while
+ * a translucent one would darken where the layers overlap. Judged from the
+ * colour the root's background RESOLVES to, because the host's own CSS can
+ * set the token's property to something the token set does not say. The
+ * token set's answer stands where the resolved colour says nothing: one that
+ * cannot be read, or one fully transparent, which is what a root painting no
+ * ground of its own resolves to (a page the site serves), and a transparent
+ * ground repeated on the page paints nothing either way.
+ */
+function useSiteSurfaceMarks(
+  rootRef: React.RefObject<HTMLElement | null>,
+  opaqueByTokens: boolean
+): void {
+  useNearestThemeMarker(rootRef);
+  const tokens = useRef(opaqueByTokens);
+  tokens.current = opaqueByTokens;
+  // On every render: a render is what brings new site styles.
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (root !== null) markGround(root, tokens.current);
+  });
+  /*
+   * And on what changes the ground with no render, subscribed once for the
+   * root rather than on every render:
+   *
+   * - the site's mode: the theme marker rewrites the root's
+   *   `data-nx-site-theme` from an observer of its own, and the device's
+   *   colour scheme changes on its own. A light ground and a dark one can
+   *   differ in whether they are opaque;
+   * - the canvas's window resizing, or the canvas itself: a site can override
+   *   the ground under a width or height query, which a resized frame
+   *   crosses, and under a container query, which a canvas drawn without a
+   *   frame crosses as the layout around it changes.
+   */
+  useEffect(() => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const view = root.ownerDocument.defaultView;
+    const mark = (): void => markGround(root, tokens.current);
+    const Observer = view?.MutationObserver;
+    const theme =
+      typeof Observer === "function" ? new Observer(() => mark()) : null;
+    theme?.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-nx-site-theme"],
+    });
+    const scheme = view?.matchMedia?.("(prefers-color-scheme: dark)");
+    scheme?.addEventListener("change", mark);
+    view?.addEventListener("resize", mark);
+    const Sizes = view?.ResizeObserver;
+    const size = typeof Sizes === "function" ? new Sizes(() => mark()) : null;
+    size?.observe(root);
+    return () => {
+      theme?.disconnect();
+      scheme?.removeEventListener("change", mark);
+      view?.removeEventListener("resize", mark);
+      size?.disconnect();
+    };
+  }, [rootRef]);
+}
+
+/**
+ * Mark whether the site's ground is fully opaque, from the colour the root's
+ * background resolves to; the token set's answer where that says nothing.
+ */
+function markGround(root: HTMLElement, opaqueByTokens: boolean): void {
+  const resolved = (
+    root.ownerDocument.defaultView?.getComputedStyle(root).backgroundColor ?? ""
+  ).trim();
+  const alpha = alphaOf(resolved) ?? computedAlphaOf(resolved);
+  setFlag(
+    root,
+    "data-nx-site-ground-opaque",
+    alpha === undefined || alpha === 0 ? opaqueByTokens : alpha === 1
+  );
+}
+
 function setFlag(element: Element, attribute: string, wanted: boolean): void {
   if (wanted === element.hasAttribute(attribute)) return;
   if (wanted) element.setAttribute(attribute, "");
@@ -1023,7 +963,8 @@ function useCanvasPointer(
   onDoubleClick:
     | ((event: React.MouseEvent<HTMLDivElement>) => void)
     | undefined,
-  marked: readonly string[]
+  marked: readonly string[],
+  onListSortField?: (id: string) => void
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -1033,12 +974,24 @@ function useCanvasPointer(
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (onSelect === undefined || isChrome(event.target)) return;
+      const id = nodeIdFromEvent(event.target);
+      // A list note's "Choose a field", pressed or activated from the
+      // keyboard: the host selects the list and takes the author to its sort,
+      // in place of the plain selection a click inside the list makes.
+      if (
+        id !== null &&
+        onListSortField !== undefined &&
+        listActionOf(event.target) === "choose-sort-field"
+      ) {
+        onListSortField(id);
+        return;
+      }
       // A click on the canvas background resolves to null, which CLEARS the
       // selection rather than being ignored. Ignoring it leaves an inspector
       // showing a node the author believes they have deselected.
-      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
+      onSelect(id, selectionModeFor(event));
     },
-    [onSelect]
+    [onSelect, onListSortField]
   );
   const doubleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -1201,6 +1154,12 @@ export interface CanvasProps {
    * reading modifiers off a later render's event would read a different click.
    */
   onSelect?: (id: string | null, mode: SelectionMode) => void;
+  /**
+   * Raised with a collection list's id when its note's "Choose a field" is
+   * pressed, for the host to select the list and take the author to its
+   * sort. Absent, the press selects the list as any click inside it does.
+   */
+  onListSortField?: (id: string) => void;
   /**
    * Everything else the renderer needs, passed through untouched.
    *
@@ -1771,12 +1730,14 @@ function useSelectionPointer({
   selectedId,
   onSelect,
   onDoubleClick,
+  onListSortField,
   dragPointerDown,
 }: {
   selectedIds: CanvasProps["selectedIds"];
   selectedId: string | null;
   onSelect: CanvasProps["onSelect"];
   onDoubleClick: CanvasProps["onDoubleClick"];
+  onListSortField: CanvasProps["onListSortField"];
   dragPointerDown:
     | ((event: React.PointerEvent<HTMLDivElement>) => void)
     | undefined;
@@ -1785,7 +1746,12 @@ function useSelectionPointer({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const pointer = useCanvasPointer(
+    onSelect,
+    onDoubleClick,
+    marked,
+    onListSortField
+  );
   const canvasPointerDown = pointer.onPointerDown;
   const pointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1966,6 +1932,7 @@ export function Canvas({
   dragHandlers,
   drag,
   onDoubleClick,
+  onListSortField,
   overlay,
   regions,
 }: CanvasProps): JSX.Element {
@@ -1982,11 +1949,12 @@ export function Canvas({
     selectedId,
     onSelect,
     onDoubleClick,
+    onListSortField,
     dragPointerDown: dragHandlers?.onPointerDown,
   });
 
-  useNearestThemeMarker(root);
   const surface = siteSurface(render, siteStyles);
+  useSiteSurfaceMarks(root, surface?.opaqueGround === true);
   // The scale the page is painted at, for chrome drawn inside it to undo.
   const canvasScale = useCanvasFrame().scale;
 
@@ -2049,15 +2017,10 @@ export function Canvas({
        * not rendered here: see that hook.
        */
       /*
-       * Whether the site's ground is fully opaque, in every mode. Only then
-       * does the rendered page carry the ground as well as the canvas: painted
-       * twice, an opaque ground looks exactly as it does once, while a
-       * translucent one would darken where the layers overlap. See the page
-       * root's rule in `builder-chrome.css` for why the page wants it.
+       * `data-nx-site-ground-opaque`, whether the site's ground is fully
+       * opaque, is written onto this element by `useSiteSurfaceMarks` from the
+       * colour it resolves to, not rendered here: see that hook.
        */
-      data-nx-site-ground-opaque={
-        surface?.opaqueGround === true ? "" : undefined
-      }
       /*
        * What the pointer means, for the cursor.
        *

@@ -26,6 +26,11 @@ export interface PanelDocumentStatus {
   status: string;
   /** Whether a published document has a working draft pending. */
   hasWorkingDraft: boolean;
+  /**
+   * Whether the language being edited has no content of its own yet, which
+   * the sentence says rather than calling it a draft.
+   */
+  untranslated?: boolean;
 }
 
 /** What each of the pill's states means, after the subject that has it. */
@@ -45,7 +50,12 @@ export function StatusSection({
     documentStatus.status,
     documentStatus.hasWorkingDraft
   );
-  const standing = STANDING[state];
+  // A language with no content of its own is not a draft yet: said as the
+  // Languages panel says it, "not translated", and not published.
+  const standing =
+    state === "draft" && documentStatus.untranslated === true
+      ? "isn't translated or published yet."
+      : STANDING[state];
   return (
     <PanelSection title="Status">
       <p

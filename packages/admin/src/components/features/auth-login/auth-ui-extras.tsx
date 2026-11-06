@@ -1,6 +1,7 @@
 "use client";
 
 import type { AuthUiMeta, AuthUiProvider } from "nextly/api/auth-ui-types";
+import { noticeDeprecation } from "nextly/deprecation-notice";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -268,22 +269,26 @@ export interface ChallengeViewProps {
   onResolved: (next: string | null) => void;
 }
 
-/** The challenge types whose view has been reported posting its own answer. */
-const selfPostingViewsNoticed = new Set<string>();
-
 /**
  * Say, once per challenge type, that its view posted its own answer with the
- * deprecated `pendingToken` rather than through `resolve`.
+ * deprecated `pendingToken` rather than through `resolve`. Through the one
+ * deprecation notice, which keeps the record of what it already said: the
+ * challenge type is part of the surface, so each type is told once.
  */
 function noticeSelfPostedAnswer(challengeType: string): void {
-  if (selfPostingViewsNoticed.has(challengeType)) return;
-  selfPostingViewsNoticed.add(challengeType);
-  console.warn(
-    `[nextly] The challenge view for "${challengeType}" finished without ` +
-      "calling `resolve`, so it posts its own answer with the deprecated " +
-      "`pendingToken` prop. That prop is removed in a later minor release, " +
-      "and it is undefined for a login resumed from an external provider. " +
-      "Call `resolve(response)` and let the host post the answer."
+  noticeDeprecation(
+    {
+      surface: `The challenge view for "${challengeType}" posting its own answer with \`pendingToken\``,
+      replacement: "`resolve(response)`",
+      message:
+        `The challenge view for "${challengeType}" finished without ` +
+        "calling `resolve`, so it posts its own answer with the deprecated " +
+        "`pendingToken` prop. That prop is removed in a later minor release, " +
+        "and it is undefined for a login resumed from an external provider. " +
+        "Call `resolve(response)` and let the host post the answer.",
+    },
+    // The browser's console: a plugin author reads it in their devtools.
+    message => console.warn(message)
   );
 }
 

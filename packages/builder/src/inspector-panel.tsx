@@ -50,6 +50,12 @@ import * as React from "react";
 
 import { AdvancedPanel } from "./advanced-panel";
 import { BlockCard, SelectionCard, type CardVerbs } from "./block-card";
+import {
+  blockLookGroups,
+  sameLook,
+  type BlockLookRow,
+} from "./block-look-rows";
+import { CanvasPassageContext, type CanvasPassage } from "./canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import {
   ComponentFieldsContext,
@@ -72,6 +78,7 @@ import {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { FocalFrame } from "./focal-frame";
 import { HeldByLock } from "./held-by-lock";
 import type { SavedComponent } from "./inserter";
 import {
@@ -95,8 +102,10 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
-import { commitLinkChanges, LinkGroupField } from "./link-control";
-import { linkGroupOf } from "./link-group";
+import { commitLinkChanges } from "./link-control";
+import { LookInspector, type LookEditing } from "./look-inspector";
+import { useCanvasTokenModeAt } from "./prefers-dark";
+import { propGroupsOf } from "./prop-groups";
 import { selectionLock } from "./selection-ops";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -139,6 +148,12 @@ export type BlockInspectorResolver = (
 
 export interface InspectorPanelProps {
   /**
+   * The component placement's exposed passage the canvas is editing in place,
+   * whose field the inspector holds meanwhile; `null` or omitted while the
+   * canvas edits none.
+   */
+  canvasPassage?: CanvasPassage | null;
+  /**
    * The canvas root, forwarded to the style tab.
    *
    * Declared here only to CARRY it: this panel has no opinion about the canvas,
@@ -172,6 +187,13 @@ export interface InspectorPanelProps {
    * @experimental Settles with the shared-styles editor.
    */
   sharedStyles?: SharedStylesHost;
+  /**
+   * A look edited on its own, chosen in the Design panel: while no block is
+   * selected the inspector edits it instead of saying to select a block.
+   *
+   * @experimental Settles with the Design panel's Block looks group.
+   */
+  lookEditing?: LookEditing;
   /**
    * The site's fonts, carried to the Style tab's Font control. See
    * {@link StyleInspectorPanelProps.fonts}.
@@ -550,15 +572,56 @@ function surfaceFor(
 export function InspectorPanel({
   componentFields,
   componentVariants,
+  canvasPassage = null,
   ...panel
 }: InspectorPanelProps): React.JSX.Element {
+  const look = editedLook(panel);
+  if (look !== undefined && panel.lookEditing !== undefined) {
+    return (
+      <LookInspector
+        editor={panel.editor}
+        look={look}
+        host={panel.sharedStyles}
+        onExit={panel.lookEditing.onExit}
+        library={panel.classLibrary ?? []}
+        canvasRoot={panel.canvasRoot}
+        state={editedStyleState(panel.styleState)}
+        policy={panel.policy}
+        breakpoint={panel.breakpoint}
+        cascade={panel.cascade}
+        breakpoints={panel.breakpoints}
+        previewContainer={panel.previewContainer}
+        liveBreakpoints={panel.liveBreakpoints}
+        onJumpToBreakpoint={panel.onJumpToBreakpoint}
+        tokens={panel.tokens}
+        fonts={panel.fonts}
+      />
+    );
+  }
   return (
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
-        <SelectionInspector {...panel} />
+        <CanvasPassageContext.Provider value={canvasPassage}>
+          <SelectionInspector {...panel} />
+        </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
   );
+}
+
+/**
+ * The look the inspector edits on its own: the one the host names, while no
+ * block is selected and the look is still one the site renders or reads.
+ * Selecting a block edits the block, whatever look was chosen.
+ */
+function editedLook(
+  panel: Pick<InspectorPanelProps, "editor" | "classLibrary" | "lookEditing">
+): BlockLookRow | undefined {
+  const key = panel.lookEditing?.look;
+  if (key === undefined || panel.editor.selectedId !== null) return undefined;
+  return blockLookGroups(panel.classLibrary ?? [], new Set())
+    .flatMap(group => group.rows)
+    .find(row => sameLook(row, key));
 }
 
 function SelectionInspector({
@@ -632,6 +695,17 @@ function SelectionInspector({
    * resetting would silently discard what it restored.
    */
   const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
+  // A list's sort asked for from its canvas note is on the Content tab, so
+  // the author is taken there, once per ask, from wherever they were.
+  // Each ask moves the tab once: a new style-state setter is no new ask.
+  const asked = editor.sortFieldAsked?.seq;
+  const onStyleStateChange = styleState?.onChange;
+  const answeredAsk = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (asked === undefined || asked === answeredAsk.current) return;
+    answeredAsk.current = asked;
+    tabChangeHandler(setTab, onStyleStateChange)("content");
+  }, [asked, onStyleStateChange]);
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -761,6 +835,8 @@ function SelectionInspector({
             editor={editor}
             styleNode={styleNode}
             renderedTag={canvas.tag}
+            renderedPicture={canvas.picture}
+            renderedPicturePosition={canvas.picturePosition}
             sideOrientation={canvas.orientation}
             styleState={styleState}
             breakpoint={breakpoint}
@@ -934,6 +1010,8 @@ function StyleTab({
   editor,
   styleNode,
   renderedTag,
+  renderedPicture,
+  renderedPicturePosition,
   sideOrientation,
   styleState,
   policy,
@@ -967,6 +1045,8 @@ function StyleTab({
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
+  renderedPicture: string | undefined;
+  renderedPicturePosition: string | undefined;
   sideOrientation: StyleInspectorPanelProps["sideOrientation"];
 }): React.JSX.Element {
   const state = editedStyleState(styleState);
@@ -976,6 +1056,9 @@ function StyleTab({
     shared.classLibrary,
     shared.sharedStyles
   );
+  // The mode the selected block is drawn in, read once for the look tiles and
+  // the controls below, so the canvas is watched by one subscription.
+  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
   return (
     <>
       {/*
@@ -986,6 +1069,8 @@ function StyleTab({
     */}
       <StyleTargetBar
         editor={editor}
+        tokens={tokens}
+        tokenMode={tokenMode}
         target={target}
         onChoose={choose}
         held={held}
@@ -1003,24 +1088,30 @@ function StyleTab({
           breakpoints
         )}
       />
-      <StyleInspectorPanel
-        editor={editor}
-        // The block card above says why a held block can't be changed.
-        showReadOnlyReason={false}
-        renderedTag={renderedTag}
-        sideOrientation={sideOrientation}
-        policy={policy}
-        state={state}
-        breakpoint={breakpoint}
-        cascade={cascade}
-        breakpoints={breakpoints}
-        previewContainer={previewContainer}
-        liveBreakpoints={liveBreakpoints}
-        onJumpToBreakpoint={onJumpToBreakpoint}
-        tokens={tokens}
-        target={target}
-        fonts={fonts}
-      />
+      {/* The picture the canvas draws, for the focal point aimed over it. */}
+      <FocalFrame.Provider
+        value={{ picture: renderedPicture, position: renderedPicturePosition }}
+      >
+        <StyleInspectorPanel
+          editor={editor}
+          tokenMode={tokenMode}
+          // The block card above says why a held block can't be changed.
+          showReadOnlyReason={false}
+          renderedTag={renderedTag}
+          sideOrientation={sideOrientation}
+          policy={policy}
+          state={state}
+          breakpoint={breakpoint}
+          cascade={cascade}
+          breakpoints={breakpoints}
+          previewContainer={previewContainer}
+          liveBreakpoints={liveBreakpoints}
+          onJumpToBreakpoint={onJumpToBreakpoint}
+          tokens={tokens}
+          target={target}
+          fonts={fonts}
+        />
+      </FocalFrame.Provider>
     </>
   );
 }
@@ -1099,6 +1190,8 @@ function ContentSurface({
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
+      document={editor.document}
+      listView={listViewOf(editor, inspection.nodeId)}
     />
   );
   const Custom =
@@ -1263,6 +1356,41 @@ class CustomInspectorBoundary extends React.Component<
   }
 }
 
+/** Whether the canvas draws a list's empty state, and the way to switch it. */
+interface ListView {
+  readonly showsEmpty: boolean;
+  readonly onShowEmpty: (empty: boolean) => void;
+  /** The count of the latest ask to fix this list's sort, when it has one. */
+  readonly sortFieldAsked: number | undefined;
+}
+
+/** A block's list view, where the editor keeps one. */
+function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
+  const show = editor.showListEmpty;
+  if (show === undefined) return undefined;
+  return {
+    showsEmpty: editor.listsShowingEmpty?.has(nodeId) === true,
+    onShowEmpty: empty => show(nodeId, empty),
+    sortFieldAsked:
+      editor.sortFieldAsked?.id === nodeId
+        ? editor.sortFieldAsked.seq
+        : undefined,
+  };
+}
+
+/** What a group is told of the list view: none drawn empty when none is kept. */
+function listGroupView(listView: ListView | undefined): {
+  showsEmpty: boolean;
+  onShowEmpty: ListView["onShowEmpty"] | undefined;
+  sortFieldAsked: number | undefined;
+} {
+  return {
+    showsEmpty: listView?.showsEmpty === true,
+    onShowEmpty: listView?.onShowEmpty,
+    sortFieldAsked: listView?.sortFieldAsked,
+  };
+}
+
 /** The Content tab: one field per declared prop, or the note that there are none. */
 function ContentFields({
   inspection,
@@ -1272,10 +1400,16 @@ function ContentFields({
   fields,
   writable,
   onCommitMany,
+  document,
+  listView,
 }: {
   inspection: BlockInspection;
+  /** The document the block is in, for a group that reads around it. */
+  document: BlockDocument;
+  /** Whether the canvas draws this block's empty state, and the switch. */
+  listView?: ListView | undefined;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
-  /** Several props written as one edit, for a block's link group. */
+  /** Several props written as one edit, for a block's prop groups. */
   onCommitMany: (
     changes: Readonly<Record<string, unknown>>
   ) => BlockDocument | null | void;
@@ -1304,36 +1438,66 @@ function ContentFields({
       </p>
     );
   }
-  // A link and the props that qualify it are drawn as one group, where the
-  // link prop sits; the others it draws get no row of their own. Built from
+  // What the block holds, for a control whose choices depend on another of
+  // its props: a loop's sort offers its collection's fields.
+  const values = Object.fromEntries(
+    inspection.props.map(prop => [prop.name, prop.value])
+  );
+  // Props an author reads as one thing (a link and what qualifies it, an
+  // image's source, its alt text) are drawn as one group, where the group's
+  // lead prop sits; the others it draws get no row of their own. Built from
   // the props the block offers, so a sibling its own `onlyWithout` hides is
-  // neither drawn nor written by the group.
-  const link = linkGroupOf(inspection.props.filter(prop => prop.offered));
+  // neither drawn nor written by a group.
+  const groups = propGroupsOf(inspection.props.filter(prop => prop.offered));
+  const leads = new Map(groups.map(group => [group.lead, group]));
+  const grouped = new Set(groups.flatMap(group => [...group.drawn]));
   return (
     <div className="nx-inspector__fields">
       {drawn.map(prop => {
-        if (link?.drawn.has(prop.name) === true && prop.name !== link.link) {
-          return null;
-        }
-        const grouped =
-          link?.link === prop.name ? (
-            <LinkGroupField
+        const group = leads.get(prop.name);
+        if (group === undefined && grouped.has(prop.name)) {
+          // Drawn inside its group, but in a component's view still a prop of
+          // its own to expose: named, with its icon, as a prop the inspector
+          // leaves out is, so a placement may still set it.
+          return fields === undefined ? null : (
+            <div
               key={`${inspection.nodeId}:${prop.name}`}
-              group={link}
-              props={inspection.props}
-              writable={writable}
-              reasonId={reasonId}
-              services={services}
-              onCommitMany={onCommitMany}
-            />
-          ) : undefined;
+              className="nx-inspector__prop"
+            >
+              <p className="nx-inspector__note">
+                {propLabel(prop.name, prop.schema)}
+              </p>
+              <PropExposeControl
+                binding={fields}
+                nodeId={inspection.nodeId}
+                prop={prop}
+              />
+            </div>
+          );
+        }
+        const groupField =
+          group === undefined ? undefined : (
+            <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
+              {group.render({
+                props: inspection.props,
+                writable,
+                reasonId,
+                services,
+                placedWith: inspection.placedWith,
+                onCommitMany,
+                document,
+                nodeId: inspection.nodeId,
+                ...listGroupView(listView),
+              })}
+            </React.Fragment>
+          );
         // Named as the block names it, so its icon is not drawn bare.
         const field = !prop.offered ? (
           <p className="nx-inspector__note">
             {propLabel(prop.name, prop.schema)}
           </p>
         ) : (
-          (grouped ?? (
+          (groupField ?? (
             <HeldByLock
               // Keyed by node AND prop: a bare prop name would let React reuse
               // one block's field for the next block's same-named prop, so the
@@ -1347,6 +1511,7 @@ function ContentFields({
                 disabled={!writable(prop.name)}
                 onCommit={onCommit}
                 services={services}
+                values={values}
               />
             </HeldByLock>
           ))
@@ -1378,11 +1543,14 @@ function PropField({
   disabled,
   onCommit,
   services,
+  values,
 }: {
   prop: EditableProp;
   disabled: boolean;
   onCommit: (name: string, value: unknown) => BlockDocument | null | void;
   services: ContentServices | undefined;
+  /** The block's props as stored, for a control that reads another of them. */
+  values: Readonly<Record<string, unknown>>;
 }): React.JSX.Element {
   // Unique per mount, so two editors on one page never share a field id and a
   // label never points at the other editor's control.
@@ -1400,6 +1568,7 @@ function PropField({
       disabled={disabled}
       onCommit={onCommit}
       services={services}
+      values={values}
     />
   );
 }

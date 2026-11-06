@@ -58,7 +58,7 @@ beforeEach(async () => {
   });
   await handle.nextly.updateSingle({
     slug: SETTINGS,
-    data: { siteName: "Acme", tagline: "Hello" },
+    data: { siteName: "Acme", tagline: "Hello", _overwrite: true },
     overrideAccess: true,
   });
   // A cold process: boot publishes no source, and a previous test in this

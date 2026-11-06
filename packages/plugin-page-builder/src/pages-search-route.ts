@@ -64,9 +64,11 @@ import {
 } from "nextly/reserved-filter-keys";
 import { z } from "nextly/zod";
 
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
+import { documentVersionOf } from "./document-version";
 import {
   NO_MATCH,
   searchOn,
@@ -544,38 +546,16 @@ const LIVE_SCHEMA_STATES: ReadonlySet<string> = new Set(["synced", "applied"]);
  * A record that carries none is read: nothing says it is not live, and a read
  * that fails anyway drops only that collection (see `searchCollection`).
  */
-function schemaIsLive(record: Record<string, unknown>): boolean {
+export function schemaIsLive(record: Record<string, unknown>): boolean {
   const state = record.migrationStatus;
   return typeof state !== "string" || LIVE_SCHEMA_STATES.has(state);
 }
 
 /** A record's slug, when it has a usable one. */
-function slugOf(record: Record<string, unknown>): string | undefined {
+export function slugOf(record: Record<string, unknown>): string | undefined {
   return typeof record.slug === "string" && record.slug !== ""
     ? record.slug
     : undefined;
-}
-
-/**
- * The label the registry listing already resolved (the singular name, or the
- * slug where there is none), rather than a second rule here.
- */
-function labelOf(record: Record<string, unknown>, slug: string): string {
-  return typeof record.label === "string" && record.label !== ""
-    ? record.label
-    : slug;
-}
-
-/** The plural name a registry record holds (`labels.plural`), if any. */
-function pluralLabelOf(record: Record<string, unknown>): {
-  pluralLabel?: string;
-} {
-  const labels = record.labels;
-  if (typeof labels !== "object" || labels === null) return {};
-  const plural = (labels as { plural?: unknown }).plural;
-  return typeof plural === "string" && plural !== ""
-    ? { pluralLabel: plural }
-    : {};
 }
 
 /** One as-caller list read, as the search asks the Direct API for it. */
@@ -1107,6 +1087,7 @@ export function pageItemOf(
   const entry = entryOf(row, source.title?.name);
   if (entry === undefined) return undefined;
   const status = source.lifecycle ? statusOf(row) : undefined;
+  const rev = documentVersionOf(row);
   return {
     id: entry.id,
     collection: source.slug,
@@ -1117,6 +1098,7 @@ export function pageItemOf(
     field: source.field,
     title: entry.title,
     ...(status === undefined ? {} : { status }),
+    ...(rev === undefined ? {} : { rev }),
     ...pathOf(row, source),
   };
 }

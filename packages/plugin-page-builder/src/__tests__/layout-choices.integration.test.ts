@@ -26,7 +26,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { ensureDefaultLayout } from "../default-layout/ensure-default";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
-import { writeLayoutSettings } from "../default-layout/store";
+import {
+  readLayoutSettings,
+  writeLayoutSettings,
+} from "../default-layout/store";
 import {
   LAYOUT_CHOICES_ROUTE_PATH,
   LAYOUT_CHOICES_SELECTED_PARAM,
@@ -199,10 +202,15 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: LAYOUTS_SLUG,
         id: landing,
-        data: { title: "landing, edited" },
+        data: { title: "landing, edited", _overwrite: true },
         overrideAccess: true,
       });
-      await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: main });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        { defaultLayout: main }
+      );
       return { logo, header, main, unfinished, landing };
     }
 

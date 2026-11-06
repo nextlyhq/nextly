@@ -39,12 +39,12 @@ import {
 } from "./content-control-types";
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
+import { blockLabel, insertionPropSets } from "./inserter";
 import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp, NodePatch } from "./ops";
+import type { BuilderOp, NodePatch } from "./op-vocabulary";
 
 /**
  * The prop types this inspector can draw a control for.
@@ -184,6 +184,12 @@ export interface BlockInspection {
    * refused edit give one reason.
    */
   readonly designLock: RefusalWording | undefined;
+  /**
+   * Every set of props the block can be placed with (its defaults under its
+   * example, then each variation's), for a control that must tell a value an
+   * author set from one the block started with.
+   */
+  readonly placedWith: ReadonlyArray<Readonly<Record<string, unknown>>>;
 }
 
 /** The selected node together with the definition that describes it. */
@@ -461,6 +467,7 @@ export function inspectSelection(
     props,
     inspector: inspectorOf(definition),
     designLock,
+    placedWith: insertionPropSets(definition),
   };
 }
 
