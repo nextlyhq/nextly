@@ -428,6 +428,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "HookPointPayloads (type)",
   "HookPointValue (type)",
   "HookType (type)",
+  "InTransactionContext (type)",
+  "InTransactionHandler (type)",
   "InboundWebhookDelivery (type)",
   "InboundWebhookReading (type)",
   "InboundWebhookScheme (type)",
