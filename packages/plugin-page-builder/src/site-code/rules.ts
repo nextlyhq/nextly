@@ -163,6 +163,25 @@ const SLOTS: Readonly<Record<SiteCodeEntry["tag"], readonly SiteCodeSlot[]>> = {
   noscript: ["body"],
 };
 
+/**
+ * A link's relations, as HTML reads them: whitespace-separated keywords, in
+ * any case. Read once here for the rules, the CSP check and the loader.
+ */
+export function siteCodeLinkRelations(rel: string | undefined): string[] {
+  return (rel ?? "")
+    .toLowerCase()
+    .split(/[\t\n\f\r ]+/)
+    .filter(token => token !== "");
+}
+
+/** What a preload may load: the destinations the CSP check judges. */
+const PRELOAD_DESTINATIONS: ReadonlySet<string> = new Set([
+  "script",
+  "style",
+  "font",
+  "image",
+]);
+
 /** The attributes that hold a URL, judged by {@link siteCodeUrlProblem}. */
 const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href"]);
 
@@ -222,6 +241,11 @@ function attributeProblem(
     const problem = siteCodeUrlProblem(value);
     if (problem !== undefined) return `its ${name} ${problem}`;
   }
+  // A style attribute fetches what its declarations name, as a sheet does.
+  if (name === "style") {
+    const problem = cssUrlProblem(value, "declarationList");
+    if (problem !== undefined) return `its style attribute loads ${problem}`;
+  }
   return undefined;
 }
 
@@ -236,11 +260,29 @@ function valueProblem(tag: string, attrs: SiteCodeAttrs): string | undefined {
       return "a script id starting __next belongs to Next.js";
     }
   }
-  if (tag === "link") {
-    if (attrs.rel === undefined || !LINK_RELS.has(attrs.rel)) {
-      return `a link with rel "${attrs.rel ?? ""}" isn't allowed`;
-    }
-    if (attrs.href === undefined) return "a link needs an href";
+  return tag === "link" ? linkProblem(attrs) : undefined;
+}
+
+/**
+ * Why a link may not be used: every relation must be on the list (`shortcut`
+ * only beside `icon`, as old favicon snippets write it), it needs an href,
+ * and a preload must name what it loads, as a script, a style, a font or an
+ * image, which the CSP check judges.
+ */
+function linkProblem(attrs: SiteCodeAttrs): string | undefined {
+  const relations = siteCodeLinkRelations(attrs.rel);
+  const unlisted = relations.find(
+    relation =>
+      !LINK_RELS.has(relation) &&
+      !(relation === "shortcut" && relations.includes("icon"))
+  );
+  if (relations.length === 0 || unlisted !== undefined) {
+    return `a link with rel "${attrs.rel ?? ""}" isn't allowed`;
+  }
+  if (attrs.href === undefined) return "a link needs an href";
+  const destination = (attrs.as ?? "").trim().toLowerCase();
+  if (relations.includes("preload") && !PRELOAD_DESTINATIONS.has(destination)) {
+    return `a preload of "${attrs.as ?? ""}" isn't allowed: it may load a script, a style, a font or an image`;
   }
   return undefined;
 }
@@ -271,19 +313,22 @@ function textProblem(
   if (tag === "style" && /<\/style/i.test(text)) {
     return "its styles contain </style, which would end them early";
   }
-  return tag === "style" ? cssUrlProblem(text) : undefined;
+  if (tag !== "style") return undefined;
+  const problem = cssUrlProblem(text, "stylesheet");
+  return problem === undefined ? undefined : `its styles load ${problem}`;
 }
 
 /**
- * Why a stylesheet's fetches may not be used: each `@import`, font and image
- * it loads is held to the same rule as an attribute's URL.
+ * Why CSS's fetches may not be used: each `@import`, font and image it loads
+ * is held to the same rule as an attribute's URL.
  */
-function cssUrlProblem(text: string): string | undefined {
-  for (const fetch of cssFetches(text)) {
+function cssUrlProblem(
+  text: string,
+  context: "stylesheet" | "declarationList"
+): string | undefined {
+  for (const fetch of cssFetches(text, context)) {
     const problem = siteCodeUrlProblem(fetch.url);
-    if (problem !== undefined) {
-      return `its styles load "${fetch.url}", which ${problem}`;
-    }
+    if (problem !== undefined) return `"${fetch.url}", which ${problem}`;
   }
   return undefined;
 }
