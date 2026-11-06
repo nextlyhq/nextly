@@ -9,6 +9,7 @@ import {
   allNamedQueries,
   clearNamedQueries,
   defineNamedQuery,
+  judgeNamedParams,
   param,
   registerNamedQueries,
 } from "@nextlyhq/blocks-engine";
@@ -183,6 +184,37 @@ describe("a named query's declaration, as the editor and the API read it", () =>
       },
       required: ["city"],
     });
+  });
+
+  it("bounds an entry input's id in its schema as the save does", () => {
+    const schema = namedQueryParamsSchema({
+      ...fromPlugin,
+      params: { venue: param.entry({ label: "Venue", collection: "venues" }) },
+    }) as { properties: { venue: { anyOf: Record<string, unknown>[] } } };
+    expect(schema.properties.venue.anyOf).toEqual([
+      { type: "string", minLength: 1, maxLength: 200 },
+      {
+        type: "integer",
+        minimum: Number.MIN_SAFE_INTEGER,
+        maximum: Number.MAX_SAFE_INTEGER,
+      },
+    ]);
+    // The save takes exactly what the schema bounds, at both edges.
+    const judged = (venue: unknown) =>
+      judgeNamedParams(
+        {
+          ...fromPlugin,
+          params: {
+            venue: param.entry({ label: "Venue", collection: "venues" }),
+          },
+        },
+        { venue }
+      ).problems.length;
+    expect(judged("x".repeat(200))).toBe(0);
+    expect(judged("x".repeat(201))).toBe(1);
+    expect(judged("")).toBe(1);
+    expect(judged(Number.MAX_SAFE_INTEGER)).toBe(0);
+    expect(judged(Number.MAX_SAFE_INTEGER + 2)).toBe(1);
   });
 
   it("names a declared collection visitors can read nothing of, judging each once", async () => {

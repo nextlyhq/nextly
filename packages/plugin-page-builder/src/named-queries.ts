@@ -241,10 +241,19 @@ function inputSchema(param: NamedQueryParam): Record<string, unknown> {
     case "day":
       return { ...titled, type: "string", format: "date" };
     case "entry":
+      // The bounds the save holds an entry's id to (`judgeNamedParams`), so
+      // a request the schema accepts is one the save takes.
       return {
         ...titled,
-        type: ["string", "integer"],
         description: `The id of an entry of "${param.collection}".`,
+        anyOf: [
+          { type: "string", minLength: 1, maxLength: NAMED_QUERY_TEXT_MAX },
+          {
+            type: "integer",
+            minimum: Number.MIN_SAFE_INTEGER,
+            maximum: Number.MAX_SAFE_INTEGER,
+          },
+        ],
       };
   }
 }
