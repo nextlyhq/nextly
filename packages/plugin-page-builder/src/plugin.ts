@@ -1915,6 +1915,8 @@ export const pageBuilder = (
         site: rewriteInstall.site,
         defaults: configStyle,
         definedBreakpoints,
+        breakpointsNow: async () =>
+          siteBreakpoints(await siteStyleNow()) ?? null,
       };
       removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the

@@ -108,6 +108,9 @@ const styledAfter: Node = {
   styles: { base: { tablet: { color: "#444444" } } },
 };
 
+/** The set an undo of Mobile's removal stores, as it records it. */
+const WITH_MOBILE = { viewport: [TABLET, MOBILE], container: [] };
+
 const doc = (kind: "page" | "component" | "pattern", nodes: Node[]) => ({
   formatVersion: DOCUMENT_FORMAT_VERSION,
   kind,
@@ -2021,7 +2024,7 @@ describe.each(getConfiguredTestDialects())(
         });
         const removed = runIdOf(await save(cookie, [TABLET]));
         // An undo opened, its set stored, and nothing walked yet.
-        const opened = await svc.undo(removed, "user:test");
+        const opened = await svc.undo(removed, "user:test", WITH_MOBILE);
         await svc.retire(["mobile"]);
         await t.nextly.updateSingle({
           slug: SITE_STYLE_SLUG,
@@ -2088,7 +2091,9 @@ describe.each(getConfiguredTestDialects())(
             now + (FRAGMENTS_KEPT_DAYS + 1) * 24 * 60 * 60 * 1000
           );
         try {
-          await expect(svc.undo(third, "user:test")).rejects.toMatchObject({
+          await expect(
+            svc.undo(third, "user:test", WITH_MOBILE)
+          ).rejects.toMatchObject({
             code: "CONFLICT",
             publicMessage: expect.stringMatching(
               /its 30 days to undo it ended on \d{1,2} [A-Z][a-z]+ \d{4}\./
@@ -2111,7 +2116,7 @@ describe.each(getConfiguredTestDialects())(
         const { store, age } = fragments();
         const kept = (await store.forRun(removed)).length;
         // An undo opened, its walk not finished, as the window closes.
-        await svc.undo(removed, "user:test");
+        await svc.undo(removed, "user:test", WITH_MOBILE);
         await age(removed, FRAGMENTS_KEPT_DAYS + 1);
         await jobPass();
         expect(await store.forRun(removed)).toHaveLength(kept);
@@ -2130,7 +2135,7 @@ describe.each(getConfiguredTestDialects())(
           content: doc("page", [heading("a", styledAtMobile)]),
         });
         const removed = runIdOf(await save(cookie, [TABLET]));
-        const stopped = await svc.undo(removed, "user:test");
+        const stopped = await svc.undo(removed, "user:test", WITH_MOBILE);
         // Older than any request takes, its set never stored.
         await passAfterItsSaveStopped(jobPass, stopped.id);
         expect(await svc.runById(stopped.id)).toBeNull();
@@ -2138,7 +2143,7 @@ describe.each(getConfiguredTestDialects())(
           heading("a", styledAfter)
         );
         // CONTROL: one whose set was stored is published and walked.
-        const landed = await svc.undo(removed, "user:test");
+        const landed = await svc.undo(removed, "user:test", WITH_MOBILE);
         await svc.retire(["mobile"]);
         await t.nextly.updateSingle({
           slug: SITE_STYLE_SLUG,
@@ -2168,6 +2173,77 @@ describe.each(getConfiguredTestDialects())(
         expect(await svc.runById(stopped.id)).toMatchObject({ open: false });
 
         expect((await undo(cookie, removed)).status).toBe(200);
+      });
+
+      it("drops a stopped undo when another save defined its breakpoints differently", async () => {
+        const { svc, cookie, jobPass } = await boot();
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        const stopped = await svc.undo(removed, "user:test", WITH_MOBILE);
+        // Another save defines Mobile again, at another width, before the
+        // undo stored its set.
+        expect(
+          (
+            await post(cookie, ["site", "breakpoints"], {
+              breakpoints: {
+                viewport: [TABLET, { ...MOBILE, maxWidth: 500 }],
+                container: [],
+              },
+            })
+          ).status
+        ).toBe(200);
+        await passAfterItsSaveStopped(jobPass, stopped.id);
+        expect(await svc.runById(stopped.id)).toBeNull();
+      });
+
+      it("undoes a removal past a later one whose set never landed, though it kept the shared styles first", async () => {
+        const { t, svc, cookie, jobPass } = await boot();
+        await create(t, "pages", {
+          title: "Home",
+          slug: "home",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        // A later removal kept its shared styles' row, then stopped before
+        // its set landed.
+        const stopped = await svc.begin(["tablet"], null, "user:test");
+        await svc.keepFragment({
+          runId: stopped.id,
+          host: null,
+          form: "site",
+          fragment: { classes: {}, overridden: [] },
+        });
+        await passAfterItsSaveStopped(jobPass, stopped.id);
+
+        expect((await undo(cookie, removed)).status).toBe(200);
+      });
+
+      it("answers what an undo could not put back after the window's purge has run", async () => {
+        const { t, cookie, fragments, jobPass } = await boot();
+        const deleted = await create(t, "pages", {
+          title: "Old",
+          slug: "old",
+          content: doc("page", [heading("a", styledAtMobile)]),
+        });
+        const removed = runIdOf(await save(cookie, [TABLET]));
+        await t.nextly.delete({
+          collection: "pages",
+          id: deleted,
+          overrideAccess: true,
+        });
+        const undone = await undo(cookie, removed);
+        const undoRun = runIdOf(undone);
+        // Its removal's rows past the window, and the job's purge run.
+        await fragments().age(removed, FRAGMENTS_KEPT_DAYS + 1);
+        await jobPass();
+
+        const again = await carryOn(cookie, undoRun);
+
+        expect(again.body.item).toMatchObject({
+          undo: {
+            undoes: removed,
+            skipped: [expect.objectContaining({ id: deleted, reason: "gone" })],
+          },
+        });
       });
 
       it("refuses, and drops, an undo whose breakpoints no longer fit the set", async () => {

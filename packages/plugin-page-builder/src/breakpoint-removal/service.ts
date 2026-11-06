@@ -39,7 +39,8 @@ import {
 } from "../host-rewrite/site";
 import type { SiteBreakpointUndoSkipped } from "../library-contract";
 import type { SiteStyleData } from "../site-style";
-import { readStoredJson } from "../stored-json";
+import { checkStoredBreakpoints } from "../site-style-record";
+import { readStoredJson, sameStoredValue } from "../stored-json";
 
 import {
   fragmentCapture,
@@ -210,7 +211,14 @@ export interface BreakpointRemovalService {
    * kept for. The run takes the one open slot, preparing until its set is
    * stored (`publish`); walking it puts each kept value back (`restore`).
    */
-  undo(runId: string, startedBy: string): Promise<BreakpointRun>;
+  undo(
+    runId: string,
+    startedBy: string,
+    /** The breakpoint set the undo is about to store, recorded on its run. */
+    planned: unknown
+  ): Promise<BreakpointRun>;
+  /** Refuse (409) unless removal `runId` can be undone now, opening nothing. */
+  assertUndoable(runId: string): Promise<void>;
   /** What removal `runId` kept of the shared styles; `null` for nothing. */
   keptSharedStyles(runId: string): Promise<StoredFragment | null>;
   /**
@@ -235,6 +243,11 @@ export interface RemovalInstall {
    * only those of its ids the site does not define again.
    */
   readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
+  /**
+   * The breakpoints the site's stylesheet is emitted under now, read when
+   * asked: how recovery tells an undo's own set landed from another save's.
+   */
+  readonly breakpointsNow: () => Promise<unknown>;
 }
 
 /** What a call on a run its save has not published yet answers: nothing done. */
@@ -430,18 +443,77 @@ async function newestRemoval(
 
 /**
  * Whether an undo whose request stopped while it was preparing stored its set:
- * every breakpoint its removal took out is defined again. Published only then,
- * so values are never put back under breakpoints that were not.
+ * the site's breakpoints are now exactly the set it planned (recorded on its
+ * run when it opened), so another save that happens to define the same ids is
+ * not taken for it. Published only then, so values are never put back under
+ * breakpoints the undo did not define.
  */
 async function undoLanded(
   installed: RemovalInstall,
-  store: ReturnType<typeof removalRunStore>,
-  undoes: string
+  undo: BreakpointRun
 ): Promise<boolean> {
-  const undone = await store.runById(undoes);
-  if (undone === null) return false;
-  const defined = await installed.definedBreakpoints();
-  return [...removedEver(undone)].every(id => defined.has(id));
+  if (undo.before === null) return false;
+  // Both read as the Single's own check reads a set, so only what defines the
+  // breakpoints (ids, labels, widths, axes) is compared.
+  const now = checkStoredBreakpoints(await installed.breakpointsNow()).value;
+  const planned = checkStoredBreakpoints(undo.before).value;
+  return planned !== undefined && sameStoredValue(now, planned);
+}
+
+/**
+ * Whether removal `runId` can be undone now: it is a finished removal, the
+ * newest one (`newestRemoval`), not undone already, and within the days what
+ * it took out is kept for, read from its id. Rows are kept after the run
+ * opens, so they outlive this window, never the other way round. Answers the
+ * refusal to throw, or when the window ends.
+ */
+async function undoJudged(
+  installed: RemovalInstall,
+  all: readonly BreakpointRun[],
+  runId: string
+): Promise<{ refusal: NextlyError } | { refusal?: undefined; ends: number }> {
+  const run = all.find(candidate => candidate.id === runId);
+  if (run === undefined || run.open || run.undoes !== null) {
+    return { refusal: cannotUndo("not-a-done-removal", runId) };
+  }
+  const newest = await newestRemoval(
+    all,
+    id => fragmentStore(installed.db).keptAny(id),
+    installed.definedBreakpoints
+  );
+  if (newest?.id !== runId) {
+    return { refusal: cannotUndo("a-newer-removal", runId) };
+  }
+  if (all.some(candidate => candidate.undoes === runId)) {
+    return { refusal: cannotUndo("already-undone", runId) };
+  }
+  const at = openedAt(runId);
+  if (at === undefined) {
+    return { refusal: cannotUndo("not-a-done-removal", runId) };
+  }
+  const ends = at + FRAGMENTS_KEPT_DAYS * DAY_MS;
+  if (Date.now() >= ends) return { refusal: pastItsWindow(runId, ends) };
+  return { ends };
+}
+
+/**
+ * The removals whose kept rows the purge leaves: each one an undo is still
+ * putting back (open, or holding a page it left), and each undone within the
+ * window, whose undo still answers what it could not put back from them.
+ */
+function undoneRecently(all: readonly BreakpointRun[]): string[] {
+  return all
+    .filter(run => {
+      if (run.undoes === null) return false;
+      const at = openedAt(run.id);
+      return (
+        run.open ||
+        at === undefined ||
+        Date.now() - at < FRAGMENTS_KEPT_DAYS * DAY_MS
+      );
+    })
+    .map(run => run.undoes)
+    .filter((undoes): undoes is string => undoes !== null);
 }
 
 /** The service over the installed plugin, resolved per call. */
@@ -481,6 +553,13 @@ export function breakpointRemovalService(
       // is nothing to strip. An open run is closed, keeping its row as the
       // record, so the one open slot is not held for nothing.
       if (run.open) await store.advance(run.id, run.phase, "done", null);
+      // What it kept records a strip that never landed, or one its defined
+      // ids took back: nothing to put back, so it does not stand as a
+      // removal an undo is measured against. Not while an undo reads it.
+      const undone = (await store.runs()).some(
+        other => other.undoes === run.id
+      );
+      if (!undone) await fragmentStore(installed.db).forget(run.id);
       return NOTHING_LEFT;
     }
     // A done run is walked again only for the documents it left, which
@@ -571,10 +650,7 @@ export function breakpointRemovalService(
         // An undo is published only once its set is stored: its walk puts
         // values back whatever the site defines, so one whose set never
         // landed is dropped, and can be made again.
-        if (
-          open.undoes !== null &&
-          !(await undoLanded(install(), store, open.undoes))
-        ) {
+        if (open.undoes !== null && !(await undoLanded(install(), open))) {
           await store.abandon(open.id);
           return;
         }
@@ -593,32 +669,22 @@ export function breakpointRemovalService(
     },
     retire: ids => runs().retire(ids),
     publish: runId => runs().publish(runId),
-    undo: async (runId, startedBy) => {
+    assertUndoable: async runId => {
+      const judged = await undoJudged(install(), await runs().runs(), runId);
+      if (judged.refusal !== undefined) throw judged.refusal;
+    },
+    undo: async (runId, startedBy, planned) => {
       const store = runs();
-      const all = await store.runs();
-      const run = all.find(candidate => candidate.id === runId);
       // Preconditions, before anything is opened.
-      if (run === undefined || run.open || run.undoes !== null) {
-        throw cannotUndo("not-a-done-removal", runId);
-      }
-      const installed = install();
-      const newest = await newestRemoval(
-        all,
-        id => fragmentStore(installed.db).keptAny(id),
-        installed.definedBreakpoints
+      const judged = await undoJudged(install(), await store.runs(), runId);
+      if (judged.refusal !== undefined) throw judged.refusal;
+      // The set it is about to store is recorded with it, for recovery.
+      return store.open(
+        [],
+        { stored: planned, emitted: null },
+        startedBy,
+        runId
       );
-      if (newest?.id !== runId) throw cannotUndo("a-newer-removal", runId);
-      if (all.some(candidate => candidate.undoes === runId)) {
-        throw cannotUndo("already-undone", runId);
-      }
-      // Within the days what it took out is kept for, read from its id. Rows
-      // are kept after the run opens, so they outlive this window, never the
-      // other way round.
-      const at = openedAt(runId);
-      if (at === undefined) throw cannotUndo("not-a-done-removal", runId);
-      const ends = at + FRAGMENTS_KEPT_DAYS * DAY_MS;
-      if (Date.now() >= ends) throw pastItsWindow(runId, ends);
-      return store.open([], { stored: null, emitted: null }, startedBy, runId);
     },
     keptSharedStyles: runId => fragmentStore(install().db).sharedStyles(runId),
     undoSkipped: async undoRunId => {
@@ -634,10 +700,13 @@ export function breakpointRemovalService(
     // Not the rows of a removal an undo is still putting back, open or
     // holding a document it left: its walk reads them until it is done.
     purgeFragments: async before => {
-      const undoing = (await runs().holding())
-        .map(held => held.run.undoes)
-        .filter((undoes): undoes is string => undoes !== null);
-      await fragmentStore(install().db).purge(before, undoing);
+      const store = runs();
+      const keep = new Set(undoneRecently(await store.runs()));
+      // A run holding a page it left is carried on later: its rows stay too.
+      for (const held of await store.holding()) {
+        if (held.run.undoes !== null) keep.add(held.run.undoes);
+      }
+      await fragmentStore(install().db).purge(before, [...keep]);
     },
   };
 }

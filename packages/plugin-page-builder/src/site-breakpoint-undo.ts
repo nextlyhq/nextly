@@ -212,19 +212,16 @@ async function planUndo(
   removal: BreakpointRemoval,
   ctx: BreakpointsRouteContext,
   service: BreakpointRemovalService,
-  undone: BreakpointRun,
-  undo: BreakpointRun
+  undone: BreakpointRun
 ): Promise<UndoPlan> {
   const stored = await removal.stored(ctx);
   const now = siteBreakpoints(currentStyle(removal, stored));
   const ids = removedEver(undone);
   const before = removalOf(undone, removal.defaults).before;
   const breakpoints = setWithRemoved(now, before, ids);
-  // The removal being undone, and the undo itself, are not in the way.
+  // The removal being undone is not in the way.
   refuseReadding(
-    (await service.holding()).filter(
-      held => held.run.id !== undone.id && held.run.id !== undo.id
-    ),
+    (await service.holding()).filter(held => held.run.id !== undone.id),
     now,
     breakpoints
   );
@@ -319,17 +316,18 @@ async function undoRemoval(
   const runId = await readUndo(req);
   const service = removal.cascade.service();
   // The preconditions first: the newest removal, done, not undone yet, within
-  // its window. The undo's run is opened only once they hold.
-  const undo = await service.undo(runId, runStarterOf(ctx));
-  let plan: UndoPlan;
+  // its window. Then the set it stores is planned, reading only; its run is
+  // opened with that set recorded, judged again as it opens.
+  await service.assertUndoable(runId);
+  const undone = await service.runById(runId);
+  if (undone === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "breakpoint-undo-no-run", runId },
+    });
+  }
+  const plan = await planUndo(removal, ctx, service, undone);
+  const undo = await service.undo(runId, runStarterOf(ctx), plan.breakpoints);
   try {
-    const undone = await service.runById(runId);
-    if (undone === null) {
-      throw NextlyError.notFound({
-        logContext: { reason: "breakpoint-undo-no-run", runId },
-      });
-    }
-    plan = await planUndo(removal, ctx, service, undone, undo);
     // Before the set is stored, as a re-add retires the claims on what it
     // defines again (`retireReadded`): the removal gives up its ids.
     await service.retire([...plan.ids]);
