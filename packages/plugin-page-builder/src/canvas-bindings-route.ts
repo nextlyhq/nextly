@@ -14,12 +14,13 @@
  *
  * ## Who may ask
  *
- * The route is authenticated. A caller who may not read the entry's
- * collection, or its Single, is refused before anything is read
- * (`caller.can("read", slug)`), as the admin refuses them. A Single the
- * bindings read but the caller may not is left out before anything is read,
- * so its bindings show their fallbacks, as a published page shows them for a
- * Single the public may not read.
+ * The route is authenticated, and every source is read through core's one
+ * access gate as the caller (`readingAsUser`, `overrideAccess: false`): the
+ * gate is the only door, and no second check is made here. A source the
+ * caller may not read is refused by the gate before anything of it is read
+ * or any read hook runs, and reads as nothing, so its bindings show their
+ * fallbacks, as a published page shows them for a source the public may not
+ * read.
  *
  * ## Caching
  *
@@ -29,7 +30,7 @@
  *
  * @module canvas-bindings-route
  */
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondDoc } from "nextly";
 import { z } from "nextly/zod";
 
@@ -93,55 +94,25 @@ const CanvasBindingsBody = z
   })
   .strict();
 
-/**
- * What the route reads with, injected so the gate and the read are tested
- * without a server.
- */
+/** What the route reads with, injected so the read is tested without a server. */
 export interface CanvasBindingsReads {
-  /** Whether the caller may read this collection or Single. */
-  mayRead(slug: string): Promise<boolean>;
   /** The sources the request names, read as the caller. */
   read(request: CanvasBindingsRequest): Promise<CanvasBindingsResponse>;
 }
 
-/**
- * Answer one ask: refused unless the caller may read the entry's source, and
- * otherwise the sources as the caller reads them, without the Singles they
- * may not read. Every precondition runs before anything is read.
- */
-export async function readCanvasBindings(
+/** Answer one ask: the sources it names, as the caller reads them. */
+export function readCanvasBindings(
   request: CanvasBindingsRequest,
   reads: CanvasBindingsReads
 ): Promise<CanvasBindingsResponse> {
-  if (!(await reads.mayRead(request.source.slug))) {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "canvas-bindings-forbidden",
-        source: request.source.slug,
-      },
-    });
-  }
-  const singles: Record<
-    string,
-    CanvasBindingsRequest["demand"]["singles"][string]
-  > = {};
-  for (const [slug, wanted] of Object.entries(request.demand.singles)) {
-    if (await reads.mayRead(slug)) singles[slug] = wanted;
-  }
-  return reads.read({ ...request, demand: { ...request.demand, singles } });
+  return reads.read(request);
 }
 
-/** The reads the route binds: the caller's permission and the editor reader. */
+/** The read the route binds: the editor reader, as the caller. */
 function directCanvasBindingsReads(
   ctx: PluginRouteContext
 ): CanvasBindingsReads {
   return {
-    // No caller is no reader: the route is authenticated, so this is a guard
-    // for a caller the dispatcher could not resolve.
-    mayRead: slug =>
-      ctx.caller === null
-        ? Promise.resolve(false)
-        : ctx.caller.can("read", slug),
     // Imported at call time, so loading this module costs none of the
     // runtime, as the route's other reads are.
     read: async request => {
@@ -186,7 +157,8 @@ function directCanvasBindingsReads(
 
 /**
  * The route declaration. Authenticated (no `public: true`), with no
- * permission of its own: each source's read is asked of the caller above.
+ * permission of its own: core's gate judges each source's read as the
+ * caller.
  * A POST because an ask carries what to read, never because it writes;
  * `noStore` because its answer is one person's.
  */

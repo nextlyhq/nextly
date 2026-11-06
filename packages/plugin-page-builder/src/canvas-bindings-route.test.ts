@@ -1,8 +1,7 @@
 /**
- * The canvas's read of its binding sources: refused for a source the caller
- * may not read, before anything is read; a Single they may not read is left
- * out before the read; and a body no canvas could build is refused at the
- * boundary.
+ * The canvas's read of its binding sources: answered by the editor reader as
+ * the caller, core's gate the only door; and a body no canvas could build is
+ * refused at the boundary.
  */
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
@@ -33,27 +32,13 @@ const request = (
 });
 
 describe("the canvas's binding sources", () => {
-  it("refuses a source the caller may not read, reading nothing", async () => {
+  it("answers the ask with the sources read as the caller", async () => {
+    // Core's gate, in the read, is the only door: a source the caller may
+    // not read reads as nothing there, and its bindings show fallbacks.
     const read = vi.fn(async () => ANSWER);
-    await expect(
-      readCanvasBindings(request(), { mayRead: async () => false, read })
-    ).rejects.toSatisfy(error => NextlyError.isCode(error, "FORBIDDEN"));
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it("leaves out, before the read, a Single the caller may not read", async () => {
-    const read = vi.fn(async () => ANSWER);
-    await readCanvasBindings(
-      request({
-        home: { fields: ["headline"], follows: {} },
-        payroll: { fields: ["total"], follows: {} },
-      }),
-      { mayRead: async slug => slug !== "payroll", read }
-    );
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(Object.keys(read.mock.calls[0]?.[0].demand.singles ?? {})).toEqual([
-      "home",
-    ]);
+    const ask = request({ home: { fields: ["headline"], follows: {} } });
+    await expect(readCanvasBindings(ask, { read })).resolves.toBe(ANSWER);
+    expect(read).toHaveBeenCalledWith(ask);
   });
 
   it("carries what the bindings read over JSON and back", () => {
@@ -87,9 +72,8 @@ describe("the canvas's binding sources", () => {
     expect(route.noStore).toBe(true);
   });
 
-  it("refuses a body no canvas could build, before the caller is asked", async () => {
-    const can = vi.fn(async () => true);
-    const ctx = { caller: { can } } as unknown as PluginRouteContext;
+  it("refuses a body no canvas could build, before anything is read", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
     const post = (body: unknown) =>
       new Request(`http://nextly.test/x${CANVAS_BINDINGS_ROUTE_PATH}`, {
         method: "POST",
@@ -111,6 +95,5 @@ describe("the canvas's binding sources", () => {
         NextlyError.isCode(error, "VALIDATION_ERROR")
       );
     }
-    expect(can).not.toHaveBeenCalled();
   });
 });
