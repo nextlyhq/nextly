@@ -2343,8 +2343,8 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
-        // A collection list's entries on the canvas, read as a visitor reads
-        // them, for a collection the author may read.
+        // A collection list's entries on the canvas, read as the author asking
+        // reads them, drafts included, for a collection they may read.
         listEntriesRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.

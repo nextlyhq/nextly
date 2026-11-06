@@ -15,7 +15,8 @@
  * and the page is drawn again under a context naming them, while none being
  * chosen is the editor's one object again, with everything it kept.
  *
- * A collection list draws the entries a visitor would see, read in the
+ * A collection list draws the entries the person editing may read, their
+ * drafts included (the list entries route reads as them), in the
  * language being edited through the reads the inspector's count shares
  * (`canvasListReadsIn`), and, since an author is looking, says what it could
  * not do as stored (`diagnostics`): a sort that fell back to id order, a read
@@ -33,6 +34,7 @@ import {
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
+  useCurrentUserId,
   useDocumentIdentity,
   useMediaResolver,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -123,14 +125,15 @@ export function useCanvasPageContext(
     budget.renew();
   });
   // The entry the document is stored on, by its collection and id, so a list
-  // of its related entries reads the relation as a visitor reads the entry:
+  // of its related entries reads the relation as the canvas reads the entry:
   // again, through the canvas's reader, never from the form's values.
   const identity = useDocumentIdentity();
   const entryCollection = listEntryCollectionOf(identity) ?? undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
-  // The language's one set of list reads, which the inspector's count shares.
-  const lists = canvasListReadsIn(locale);
+  // The person's and language's one set of list reads, which the inspector's
+  // count shares: the rows are read as the person signed in.
+  const lists = canvasListReadsIn(locale, useCurrentUserId());
   const base = useMemo(
     () =>
       createStandaloneContext({
