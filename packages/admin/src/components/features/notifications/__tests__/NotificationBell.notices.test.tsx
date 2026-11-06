@@ -155,4 +155,25 @@ describe("the bell for a super-admin", () => {
       forYou.compareDocumentPosition(journal) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
+
+  it("shows For you and no schema changes where the builder is off", async () => {
+    permissions.mockReturnValue({ isSuperAdmin: true, isLoading: false });
+    journalList.mockResolvedValue({
+      rows: [{ id: "j1", createdAt: "2026-11-04T09:00:00.000Z" }],
+      hasMore: false,
+    });
+    render(<NotificationBell journalOffered={false} />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByTestId("notification-bell"));
+
+    expect(
+      await screen.findByRole("heading", { name: "For you" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Recent schema changes" })
+    ).not.toBeInTheDocument();
+    // Its count is the notices alone: the journal is not this workspace's.
+    expect(screen.getByTestId("notification-bell-badge")).toHaveTextContent(
+      "1"
+    );
+  });
 });

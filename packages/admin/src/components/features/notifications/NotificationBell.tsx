@@ -29,10 +29,17 @@ import { useUnreadCount } from "./useUnreadCount";
 
 export interface NotificationBellProps {
   className?: string;
+  /**
+   * Whether this workspace has a schema-change journal to show: where the
+   * builder runs. Every reader's own notices are shown either way; the
+   * journal, a super-admin's alone, only where it is offered.
+   */
+  journalOffered?: boolean;
 }
 
 export function NotificationBell({
   className,
+  journalOffered = true,
 }: NotificationBellProps): JSX.Element | null {
   const { isSuperAdmin, isLoading: permissionsLoading } =
     useCurrentUserPermissions();
@@ -50,10 +57,12 @@ export function NotificationBell({
 
   if (permissionsLoading) return null;
 
-  const unread = noticeUnread + (isSuperAdmin ? journalUnread : 0);
+  // The journal is a super-admin's, and only where the workspace has one.
+  const showJournal = isSuperAdmin && journalOffered;
+  const unread = noticeUnread + (showJournal ? journalUnread : 0);
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
-    if (next && isSuperAdmin) {
+    if (next && showJournal) {
       // Open → mark everything currently visible as seen.
       markAllSeen();
     }
@@ -95,7 +104,7 @@ export function NotificationBell({
         {/* Your own notices first; the schema changes below, a super-admin's alone. */}
         <div className="w-96 max-h-[480px] overflow-y-auto">
           <ForYouSection />
-          {isSuperAdmin ? <NotificationDropdown /> : null}
+          {showJournal ? <NotificationDropdown /> : null}
         </div>
       </PopoverContent>
     </Popover>
