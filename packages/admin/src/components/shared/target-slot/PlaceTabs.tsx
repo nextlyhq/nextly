@@ -26,6 +26,7 @@ import { Activity, useState, type ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 
+import { PlaceContributionFallback } from "./PlaceContributionFallback";
 import type { PlaceContributionProps, PlaceProps } from "./TargetSlot";
 import { usePlaceContributions } from "./usePlaceContributions";
 
@@ -92,6 +93,7 @@ export function PlaceTabs<P extends AdminPlaceId>({
             <TabsContent key={tab.id} value={tab.id}>
               <PluginSlot<PlaceContributionProps<P>>
                 path={tab.component}
+                fallback={<PlaceContributionFallback />}
                 props={{ context, ...(entry === undefined ? {} : { entry }) }}
               />
             </TabsContent>
