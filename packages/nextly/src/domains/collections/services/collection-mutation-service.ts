@@ -2987,16 +2987,53 @@ export class CollectionMutationService extends BaseService {
     );
     // The document judged can hold fields the caller may not read; their
     // issues are told without naming them or their values.
-    if (issues.length === 0) return issues;
+    return this.readerVisibleIssues({
+      issues,
+      collectionName: args.collectionName,
+      document: view,
+      fields: args.fields,
+      id: args.id,
+      user: args.user,
+      reader: args.reader,
+      readLocale: args.readLocale,
+      tx: args.tx,
+    });
+  }
+
+  /**
+   * The issues a reader may be told about one entry write, whatever pass
+   * raised them: an issue rooted at a field the writer may not read is told
+   * without naming it or its value. The hook walk's refusals ask for the
+   * same answer the gate's own issues get, so a hook cannot surface a name
+   * the gate withholds.
+   */
+  private async readerVisibleIssues(args: {
+    issues: ValidationIssue[];
+    collectionName: string;
+    /** The document the issues were raised on, as the validator was shown it. */
+    document: Record<string, unknown>;
+    fields: FieldDefinition[];
+    id?: string;
+    user: UserContext | undefined;
+    reader: IssueReader;
+    readLocale?: string;
+    tx?: TransactionContext;
+  }): Promise<ValidationIssue[]> {
+    if (args.issues.length === 0) return args.issues;
     const service = this.fieldGroupDataService;
     const collection = await this.collectionService.getCollection(
       args.collectionName,
       args.tx?.getDrizzle()
     );
-    return issuesTheReaderMaySee(issues, {
+    const componentFieldsOf = async (componentSlug: string) =>
+      (await this.fieldGroupDataService?.getComponentFields(
+        componentSlug,
+        args.tx?.getDrizzle()
+      )) ?? null;
+    return issuesTheReaderMaySee(args.issues, {
       kind: "collection",
       slug: args.collectionName,
-      document: view,
+      document: args.document,
       fields: args.fields as unknown as FieldConfig[],
       fieldGroups: service && {
         getComponentFields: componentFieldsOf,
@@ -7365,13 +7402,21 @@ export class CollectionMutationService extends BaseService {
 
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
-      // decide, on every verb this gate guards.
-      const hookIssues = hookChangedWholeNumberIssues(
-        finalData,
+      // decide, on every verb this gate guards. Told as the gate tells its
+      // own issues: a field the writer may not read is not named.
+      const hookIssues = await this.readerVisibleIssues({
+        issues: hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          await this.hookWalkComponentResolver(fields)
+        ),
+        collectionName: params.collectionName,
+        document: this.validationView(finalData, fields),
         fields,
-        "",
-        await this.hookWalkComponentResolver(fields)
-      );
+        user: params.user,
+        reader: params,
+      });
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -13554,14 +13599,24 @@ export class CollectionMutationService extends BaseService {
       // The whole-number floor judges what the hooks changed: a fraction a
       // hook produced would reach the integer column and let the database
       // decide, on every verb this gate guards. Paths the restore kept from
-      // the row for a denied rule are the row's own, not judged.
-      const hookIssues = hookChangedWholeNumberIssues(
-        finalData,
+      // the row for a denied rule are the row's own, not judged. Told as the
+      // gate tells its own issues: a field the writer may not read is not
+      // named.
+      const hookIssues = await this.readerVisibleIssues({
+        issues: hookChangedWholeNumberIssues(
+          finalData,
+          fields,
+          "",
+          await this.hookWalkComponentResolver(fields),
+          storedPaths
+        ),
+        collectionName: params.collectionName,
+        document: this.validationView(finalData, fields),
         fields,
-        "",
-        await this.hookWalkComponentResolver(fields),
-        storedPaths
-      );
+        id: params.entryId,
+        user: params.user,
+        reader: params,
+      });
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
       }
@@ -18128,12 +18183,22 @@ export class CollectionMutationService extends BaseService {
         // The whole-number floor judges what the hooks changed: a fraction a
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards.
-        const hookIssues = hookChangedWholeNumberIssues(
-          finalData,
+        // Told as the gate tells its own issues: a field the writer may not
+        // read is not named.
+        const hookIssues = await this.readerVisibleIssues({
+          issues: hookChangedWholeNumberIssues(
+            finalData,
+            fields,
+            "",
+            await this.hookWalkComponentResolver(fields)
+          ),
+          collectionName: params.collectionName,
+          document: this.validationView(finalData, fields),
           fields,
-          "",
-          await this.hookWalkComponentResolver(fields)
-        );
+          tx,
+          user: params.user,
+          reader: params,
+        });
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
@@ -18886,13 +18951,24 @@ export class CollectionMutationService extends BaseService {
         // hook produced would reach the integer column and let the database
         // decide, on every verb this gate guards. Paths the restore kept
         // from the row for a denied rule are the row's own, not judged.
-        const hookIssues = hookChangedWholeNumberIssues(
-          finalData,
+        // Told as the gate tells its own issues: a field the writer may not
+        // read is not named.
+        const hookIssues = await this.readerVisibleIssues({
+          issues: hookChangedWholeNumberIssues(
+            finalData,
+            fields,
+            "",
+            await this.hookWalkComponentResolver(fields),
+            storedPaths
+          ),
+          collectionName: params.collectionName,
+          document: this.validationView(finalData, fields),
           fields,
-          "",
-          await this.hookWalkComponentResolver(fields),
-          storedPaths
-        );
+          id: entryId,
+          tx,
+          user: params.user,
+          reader: params,
+        });
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
         }
