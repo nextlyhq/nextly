@@ -28,6 +28,7 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -58,6 +59,7 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
+import { addressClaimsCollection } from "./collections/address-claims";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -2132,6 +2134,8 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Who holds each served address, so no two documents share one.
+        addressClaimsCollection(),
         // Each component's retired field and slot ids, recorded when a
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
@@ -2349,6 +2353,7 @@ export const pageBuilder = (
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        addressWaitingRoute(),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.
