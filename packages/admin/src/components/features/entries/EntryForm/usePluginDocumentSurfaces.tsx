@@ -13,7 +13,7 @@
  *
  * @module components/features/entries/EntryForm/usePluginDocumentSurfaces
  */
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   OVERRIDABLE_DOCUMENT_ACTIONS,
   type OverridableDocumentAction,
@@ -52,7 +52,6 @@ import {
   type CollectionDocumentSurfaces,
   type PluginPanelSectionEntry,
 } from "@admin/lib/plugins/document-surfaces";
-import { entryKeys } from "@admin/services/entryApi";
 
 import type { DocumentLockGates } from "./document-lock-affordances";
 import type {
@@ -75,6 +74,9 @@ const BACKED_OUT: DocumentActionOutcome = {
 interface OpenReplacement {
   action: OverridableDocumentAction;
   component: string;
+  /** The document it was opened for, which it acts on and nothing else. */
+  collectionSlug: string;
+  entryId: string;
   answered: Promise<DocumentActionOutcome>;
   answer: (outcome: DocumentActionOutcome) => void;
 }
@@ -186,34 +188,17 @@ function ClosesAsFailed({ onMount }: { onMount: () => void }): null {
   return null;
 }
 
-/**
- * Calls `release` a task after the next SUCCESSFUL read of the entry whose
- * detail key is `detail`, under any of its scoped keys: the form takes that
- * read in as it renders, before the task runs. A failed read releases nothing.
- * Answers how to stop waiting, which releases at once.
- */
-function releaseOnNextRead(
-  queryClient: QueryClient,
-  detail: readonly unknown[],
-  release: () => void
-): () => void {
-  const isOfEntry = (key: readonly unknown[]): boolean =>
-    detail.every(
-      (part, index) => JSON.stringify(key[index]) === JSON.stringify(part)
-    );
-  let done = false;
-  const finish = (): void => {
-    if (done) return;
-    done = true;
-    unsubscribe();
-    release();
-  };
-  const unsubscribe = queryClient.getQueryCache().subscribe(event => {
-    if (event.type !== "updated" || event.action.type !== "success") return;
-    if (!isOfEntry(event.query.queryKey)) return;
-    setTimeout(finish, 0);
-  });
-  return finish;
+/** Whether a replacement was opened for this document, which must be saved. */
+function isFor(
+  request: OpenReplacement,
+  collectionSlug: string,
+  entryId: string
+): boolean {
+  return (
+    entryId !== "" &&
+    request.collectionSlug === collectionSlug &&
+    request.entryId === entryId
+  );
 }
 
 export interface PluginDocumentSurfaces {
@@ -242,19 +227,9 @@ function useDocumentChanged({
   collectionSlug: string;
   entryId: string;
   onDeleted: (() => void) | undefined;
-  onOwnChange: (() => () => void) | undefined;
+  onOwnChange: (() => void) | undefined;
 }): (result: DocumentChangeResult) => void {
   const queryClient = useQueryClient();
-  // Ends a plugin's change still expected: stops waiting and releases it.
-  const expectedChange = useRef<(() => void) | null>(null);
-  // Leaving the editor ends it with the form it was expected for.
-  useEffect(
-    () => () => {
-      expectedChange.current?.();
-      expectedChange.current = null;
-    },
-    []
-  );
   return result => {
     if (result === "deleted") {
       refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
@@ -263,22 +238,117 @@ function useDocumentChanged({
     }
     // The copy that arrives is the author's own change, so the form keeps
     // what they have not saved over it, as it does over its own save's echo,
-    // rather than resetting to it as to someone else's. Expected until a read
-    // of the entry SUCCEEDS and the form has taken it in, a task later: a
-    // failed refetch leaves it expected, so the copy a later read brings is
-    // still taken in as the author's; the first successful read ends it, so
-    // it cannot carry over onto a version someone else writes after.
-    const release = onOwnChange?.();
-    if (release !== undefined) {
-      expectedChange.current?.();
-      expectedChange.current = releaseOnNextRead(
-        queryClient,
-        entryKeys.detail(collectionSlug, entryId),
-        release
-      );
-    }
+    // rather than resetting to it as to someone else's. The form expects it
+    // until a copy NEWER than the one on screen now arrives: a read that
+    // started before the change, or one that failed, does not end it.
+    onOwnChange?.();
     void refreshAfterEntryChange(queryClient, collectionSlug, entryId);
   };
+}
+
+/**
+ * The replacement open on this document, if any, and how it is opened,
+ * closed and failed: one request at a time, each answered once, bound to the
+ * document it was opened for.
+ */
+function useReplacementRequests({
+  collectionSlug,
+  entryId,
+  documentChanged,
+}: {
+  collectionSlug: string;
+  entryId: string;
+  documentChanged: (result: DocumentChangeResult) => void;
+}): {
+  open: OpenReplacement | null;
+  openReplacement: (
+    action: OverridableDocumentAction,
+    component: string
+  ) => Promise<DocumentActionOutcome>;
+  closeRequest: (
+    request: OpenReplacement,
+    result?: DocumentChangeResult
+  ) => void;
+  failed: (request: OpenReplacement) => void;
+} {
+  const [open, setOpen] = useState<OpenReplacement | null>(null);
+  // The replacement asked for, read when it closes: a close from a render
+  // before the open state reached it must still answer the one on screen.
+  const openNow = useRef<OpenReplacement | null>(null);
+  const openReplacement = (
+    action: OverridableDocumentAction,
+    component: string
+  ): Promise<DocumentActionOutcome> => {
+    // A second run of the open action joins it: one component is on screen,
+    // so its callers share its answer. Another action waits for it to close.
+    const current = openNow.current;
+    if (current !== null) {
+      return current.action === action
+        ? current.answered
+        : Promise.resolve(ANOTHER_OPEN);
+    }
+    // Answered when the component closes, with what it came to, so a caller
+    // running Delete learns whether the document is gone.
+    let answer: (outcome: DocumentActionOutcome) => void = () => {};
+    const answered = new Promise<DocumentActionOutcome>(resolve => {
+      answer = resolve;
+    });
+    const next = {
+      action,
+      component,
+      collectionSlug,
+      entryId,
+      answered,
+      answer,
+    };
+    openNow.current = next;
+    setOpen(next);
+    return answered;
+  };
+
+  /*
+   * Closes `request`, with what it came to, if it is still the one open: a
+   * close the component calls again after it closed, once another has opened,
+   * is ignored rather than closing that one and applying a stale result.
+   */
+  const closeRequest = (
+    request: OpenReplacement,
+    result?: DocumentChangeResult
+  ): void => {
+    if (openNow.current !== request) return;
+    openNow.current = null;
+    setOpen(null);
+    // Applied only to the document it was opened for, which is still the
+    // one on screen: a request for another is cancelled below first.
+    const onItsDocument = isFor(request, collectionSlug, entryId);
+    if (result !== undefined && onItsDocument) documentChanged(result);
+    request.answer(
+      result === undefined || !onItsDocument ? BACKED_OUT : { ok: true }
+    );
+  };
+
+  /*
+   * The plugin's component could not be drawn: it names nothing registered,
+   * or it threw. It can never call `close`, so the editor closes it, says so,
+   * and answers the run as cancelled, or every caller would wait forever and
+   * every other replaced action would answer busy.
+   */
+  const failed = (request: OpenReplacement): void => {
+    if (openNow.current !== request) return;
+    toast.error(REPLACEMENT_FAILED);
+    closeRequest(request);
+  };
+
+  // Moving to another document while a replacement is open cancels it: it
+  // was opened for the document it names, and must not act on the next one.
+  useEffect(() => {
+    const current = openNow.current;
+    if (current !== null && !isFor(current, collectionSlug, entryId)) {
+      closeRequest(current);
+    }
+  });
+
+  return { open, openReplacement, closeRequest, failed };
 }
 
 export function usePluginDocumentSurfaces({
@@ -307,7 +377,7 @@ export function usePluginDocumentSurfaces({
    * made by a plugin: it keeps the unsaved edits over it and starts from it,
    * as after its own save. Answers how to stop expecting it.
    */
-  onOwnChange?: () => () => void;
+  onOwnChange?: () => void;
 }): PluginDocumentSurfaces {
   const { plugins } = useBranding();
   // Until the list has arrived, an absent override says nothing: the plugin
@@ -325,10 +395,6 @@ export function usePluginDocumentSurfaces({
     registryVersionNow,
     registryVersionNow
   );
-  const [open, setOpen] = useState<OpenReplacement | null>(null);
-  // The replacement asked for, read when it closes: a close from a render
-  // before the open state reached it must still answer the one on screen.
-  const openNow = useRef<OpenReplacement | null>(null);
   const documentChanged = useDocumentChanged({
     collectionSlug,
     entryId,
@@ -336,73 +402,34 @@ export function usePluginDocumentSurfaces({
     onOwnChange,
   });
 
-  const openReplacement = (
-    action: OverridableDocumentAction,
-    component: string
-  ): Promise<DocumentActionOutcome> => {
-    // A second run of the open action joins it: one component is on screen,
-    // so its callers share its answer. Another action waits for it to close.
-    const current = openNow.current;
-    if (current !== null) {
-      return current.action === action
-        ? current.answered
-        : Promise.resolve(ANOTHER_OPEN);
-    }
-    // Answered when the component closes, with what it came to, so a caller
-    // running Delete learns whether the document is gone.
-    let answer: (outcome: DocumentActionOutcome) => void = () => {};
-    const answered = new Promise<DocumentActionOutcome>(resolve => {
-      answer = resolve;
-    });
-    const next = { action, component, answered, answer };
-    openNow.current = next;
-    setOpen(next);
-    return answered;
-  };
+  const { open, openReplacement, closeRequest, failed } =
+    useReplacementRequests({ collectionSlug, entryId, documentChanged });
 
   const actionOverrides =
     isPending || isUnavailable
       ? heldUntilPluginsLoad(isUnavailable && !isPending, retry)
       : overridesFor(surfaces.actions, openReplacement);
 
-  const close = (result?: DocumentChangeResult): void => {
-    const closing = openNow.current;
-    openNow.current = null;
-    setOpen(null);
-    if (result !== undefined) documentChanged(result);
-    closing?.answer(result === undefined ? BACKED_OUT : { ok: true });
-  };
-
-  /*
-   * The plugin's component could not be drawn: it names nothing registered,
-   * or it threw. It can never call `close`, so the editor closes it, says so,
-   * and answers the run as cancelled, or every caller would wait forever and
-   * every other replaced action would answer busy.
-   */
-  const failed = (): void => {
-    if (openNow.current === null) return;
-    toast.error(REPLACEMENT_FAILED);
-    close();
-  };
-
   return {
     actionOverrides,
+    // Drawn only on the document it was opened for, with that document's
+    // identity: on another, it is not drawn while it is being cancelled.
     replacement:
-      open === null || entryId === "" ? null : (
+      open === null || !isFor(open, collectionSlug, entryId) ? null : (
         <PluginSlot<DocumentActionReplacementProps>
           path={open.component}
           props={{
             action: open.action,
-            collectionSlug,
-            entryId,
+            collectionSlug: open.collectionSlug,
+            entryId: open.entryId,
             documentLock,
             mayWrite,
-            close,
+            close: result => closeRequest(open, result),
           }}
-          fallback={<ClosesAsFailed onMount={failed} />}
+          fallback={<ClosesAsFailed onMount={() => failed(open)} />}
           // Nothing drawn in its place: the editor closes it at once.
           errorFallback={null}
-          onError={failed}
+          onError={() => failed(open)}
         />
       ),
     // Each with whether its component is still loading, so the panel draws

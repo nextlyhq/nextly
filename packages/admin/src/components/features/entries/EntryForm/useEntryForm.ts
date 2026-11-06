@@ -408,11 +408,13 @@ export interface UseEntryFormReturn {
    */
   stopAwaitingCurrentVersion: () => void;
   /**
-   * The next newer copy of the entry is the author's own change, made by a
-   * plugin's surface: keep the unsaved edits over it and start from it, as
-   * after the form's own save. Answers how to stop expecting it.
+   * The author's own change, made by a plugin's surface: the first copy of
+   * this entry NEWER than the one now on screen is taken in keeping the
+   * unsaved edits over it, as after the form's own save. A read of the same
+   * or an older version (one that started before the change) leaves it
+   * expected; the expectation ends with that newer copy, or with the entry.
    */
-  expectOwnChange: () => () => void;
+  expectOwnChange: () => void;
 }
 
 // ============================================================================
@@ -516,9 +518,25 @@ function resetDecision(
     ownSave.inFlight ||
     (next.version !== null && next.version === ownSave.storedVersion);
   if (ownEcho) return "keep-unsaved";
-  // A newer version the author's own plugin surface wrote: unsaved edits
-  // stay over it, as over their own save, and the copy starts from it.
-  return ownSave.ownChange === true ? "own-change" : "full";
+  // A version newer than the one on screen when the author's own plugin
+  // surface changed the entry: unsaved edits stay over it, as over their own
+  // save, and the copy starts from it. A read that started before the change
+  // brings no newer version and is judged as it always was.
+  return newerThan(next.version, ownSave.ownChange) ? "own-change" : "full";
+}
+
+/**
+ * Whether `version` is newer than the one an expected own change was made
+ * over. Versions are the entry's `updatedAt`, so newer is later in time; a
+ * change made over a copy with no version is passed by any version.
+ */
+function newerThan(
+  version: string | null,
+  ownChange: OwnWrites["ownChange"]
+): boolean {
+  if (ownChange === undefined || version === null) return false;
+  if (ownChange.over === null) return true;
+  return Date.parse(version) > Date.parse(ownChange.over);
 }
 
 /**
@@ -529,8 +547,11 @@ function resetDecision(
 interface OwnWrites {
   inFlight: boolean;
   storedVersion?: string;
-  /** Set while a plugin's change, made for this author, is being read back. */
-  ownChange?: boolean;
+  /**
+   * A change the author's own plugin surface made, being read back: the
+   * entry it was made on and the version on screen when it was made.
+   */
+  ownChange?: { id: EntryIdentity["id"]; over: string | null };
 }
 
 /**
@@ -990,7 +1011,14 @@ export function useEntryForm({
     if (holdsRead(entry, next)) return;
     const decision = resetDecision(resetKey.current, next, ownSave.current);
     // Taken in once: a later newer version is someone else's again.
-    if (decision === "own-change") ownSave.current.ownChange = false;
+    // Taken in once: a later newer version is someone else's again. And
+    // another entry ends it, since it was about the one it was made on.
+    if (
+      decision === "own-change" ||
+      ownSave.current.ownChange?.id !== next.id
+    ) {
+      ownSave.current.ownChange = undefined;
+    }
     resetKey.current = next;
     resetBy(entry, decision);
     form.reset(defaultValues, decision === "full" ? undefined : KEEP_UNSAVED);
@@ -1327,11 +1355,11 @@ export function useEntryForm({
 
   // The author's own plugin surface changed the entry: the copy read back is
   // theirs, so it keeps their unsaved edits over it. Until released.
-  const expectOwnChange = useCallback((): (() => void) => {
-    ownSave.current.ownChange = true;
-    return () => {
-      ownSave.current.ownChange = false;
-    };
+  const expectOwnChange = useCallback((): void => {
+    const shown = resetKey.current;
+    if (shown === undefined) return;
+    // Made over the version on screen now; only a newer one is its copy.
+    ownSave.current.ownChange = { id: shown.id, over: shown.version };
   }, []);
 
   // Cancel handler

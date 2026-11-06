@@ -114,7 +114,6 @@ import {
   markModulesSettled,
   resetSettledModules,
 } from "@admin/lib/plugins/component-registry-internal";
-import { entryKeys } from "@admin/services/entryApi";
 
 import { EntryForm } from "../EntryForm";
 import { useDocumentLocale } from "../EntryFormContext";
@@ -369,13 +368,17 @@ describe("a plugin's document actions", () => {
 
 describe("a plugin's replacement over time", () => {
   /** The editor with the layouts plugin, drawn again on demand. */
-  function renderLive(rows: { updatedAt: string } = entry as never) {
+  function renderLive(
+    rows: { updatedAt: string } = entry as never,
+    onDelete: () => void = () => {}
+  ) {
     const element = (current: object) => (
       <EntryForm
         collection={collectionNamed("layouts")}
         entry={current as never}
         mode="edit"
         onViewApi={() => {}}
+        onDelete={onDelete}
       />
     );
     const view = render(element(rows), { wrapper: Providers });
@@ -546,36 +549,74 @@ describe("a plugin's replacement over time", () => {
     );
   });
 
-  it("stops expecting the plugin's change once a read of the entry succeeds", async () => {
-    // A successful read ends the expectation even when it brings no newer
-    // copy, so it cannot carry onto a version someone else writes later.
+  it("keeps expecting the plugin's change past a read that started before it, until the newer copy arrives", async () => {
+    // A read already on its way when the plugin wrote lands first, with the
+    // version from before the change. It is not the plugin's copy, so the
+    // expectation stays, and the newer copy that follows keeps the edits. A
+    // form that ended the expectation on any read would reset them here.
     const drawAgain = renderLive();
     const summary = await screen.findByRole("textbox", { name: "Summary" });
     await userEvent.setup().type(summary, "Not saved yet");
     await screen.findByText("Used by 2 pages");
 
     act(() => section.current!.documentChanged("changed"));
-    // The entry is read successfully, under one of its scoped detail keys.
-    act(() => {
-      queryClient.setQueryData(
-        [...entryKeys.detail("layouts", "l1"), { locale: null }],
-        entry
-      );
-    });
+    // The stale read: a fresh copy of the version already on screen.
+    drawAgain({ ...(entry as object) });
     await act(async () => {
       await new Promise(resolve => setTimeout(resolve, 20));
     });
+    // Then the plugin's own newer copy.
     drawAgain({
       ...(entry as object),
-      summary: "Theirs",
-      updatedAt: "2026-10-04T09:00:00Z",
+      summary: "From the plugin",
+      updatedAt: "2026-10-03T09:00:00Z",
     });
 
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
-        "Theirs"
+        "Not saved yet"
       )
     );
+  });
+
+  it("closes an open replacement when the editor moves to another entry, and acts on neither", async () => {
+    const onDelete = vi.fn();
+    const drawAgain = renderLive(entry as never, onDelete);
+    await openRemove();
+    const forFirst = replacement.current!;
+    expect(forFirst.entryId).toBe("l1");
+
+    // The route moves to another entry while the dialog is open.
+    drawAgain({ ...(entry as object), id: "l2", title: "Other layout" });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Remove layout" })).toBeNull()
+    );
+    // What the first entry's dialog reports afterwards changes nothing.
+    act(() => forFirst.close("deleted"));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("ignores a close from a replacement that already closed, once another has opened", async () => {
+    const onDelete = vi.fn();
+    renderLive(entry as never, onDelete);
+    await openRemove();
+    const first = replacement.current!;
+    act(() => first.close());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Remove layout" })).toBeNull()
+    );
+
+    await openRemove();
+    // The first one's close, late: it must not close the second or apply
+    // its result.
+    act(() => first.close("deleted"));
+
+    expect(
+      screen.getByRole("dialog", { name: "Remove layout" })
+    ).toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("takes in someone else's newer version when no plugin changed the document", async () => {
