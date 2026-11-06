@@ -10,8 +10,10 @@
  * @module variable-usage-view
  */
 import type { NamedClass, TokenKind } from "@nextlyhq/blocks-engine";
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ChromeTooltip } from "./chrome-tooltip";
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { UsesTail, UsesUnread } from "./shared-style-details";
 import { sharedStyleKindName } from "./shared-style-library";
@@ -81,7 +83,8 @@ export interface VariableUsageHere {
 /**
  * The count at the end of a variable's row: a bare number of places, muted
  * when nothing uses it, "2+" while it is a floor; nothing until it is read.
- * Said in words on hover; the row's own name says them to a screen reader.
+ * Said in words by the row's tooltip ({@link CountTip}), and by the row's own
+ * name to a screen reader.
  */
 export function VariableRowCount({
   reach,
@@ -94,12 +97,38 @@ export function VariableRowCount({
     <span
       className="nx-vars__count"
       aria-hidden="true"
-      title={count.words}
       data-zero={count.zero ? "" : undefined}
       data-floor={count.floor ? "" : undefined}
     >
       {count.text}
     </span>
+  );
+}
+
+/**
+ * The row's count in words, as the editor's tooltip: shown when the row is
+ * pointed at or takes focus, so keyboard and touch users meet it too, not a
+ * title on the hidden count. Above the row and at its end, over the count.
+ * The row alone until its usage is read.
+ */
+export function CountTip({
+  reach,
+  children,
+}: {
+  reach: VariableReach | undefined;
+  children: React.ReactElement;
+}): React.JSX.Element {
+  if (reach === undefined) return children;
+  return (
+    <TooltipProvider delayDuration={300}>
+      <ChromeTooltip
+        side="top"
+        align="end"
+        content={variableCount(reach).words}
+      >
+        {children}
+      </ChromeTooltip>
+    </TooltipProvider>
   );
 }
 

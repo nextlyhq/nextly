@@ -84,6 +84,7 @@ import {
   type VariablesAccess,
 } from "./variable-usage";
 import {
+  CountTip,
   useVariableUsage,
   VariableRowCount,
   type VariableUsageHere,
@@ -961,29 +962,41 @@ function VariableRow({
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="nx-vars__row"
-            data-variable-key={entry.row.key}
-            // The visible name first, then the values the swatches show, so
-            // a screen reader hears both and speech input still matches.
-            aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
-            data-kind={entry.row.kind}
-            // A fourth column for the count, only where usage is read.
-            data-counted={usage === undefined ? undefined : ""}
-          >
-            <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
-            <span className="nx-vars__name">
-              {entry.label}
-              {entry.kindWord === undefined ? null : (
-                <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
-              )}
-            </span>
-            <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
-            <VariableRowCount reach={reach} />
-          </button>
-        </PopoverTrigger>
+        <CountTip reach={reach}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className="nx-vars__row"
+              data-variable-key={entry.row.key}
+              // The visible name first, then the values the swatches show, so
+              // a screen reader hears both and speech input still matches.
+              aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
+              data-kind={entry.row.kind}
+              // A fourth column for the count, only where usage is read.
+              data-counted={usage === undefined ? undefined : ""}
+            >
+              <RowLead
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+              />
+              <span className="nx-vars__name">
+                {entry.label}
+                {entry.kindWord === undefined ? null : (
+                  <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
+                )}
+              </span>
+              <RowTail
+                entry={entry}
+                token={token}
+                tokens={tokens}
+                mode={mode}
+              />
+              <VariableRowCount reach={reach} />
+            </button>
+          </PopoverTrigger>
+        </CountTip>
         <PopoverContent
           side="right"
           align="start"

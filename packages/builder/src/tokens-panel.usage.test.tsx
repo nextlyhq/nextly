@@ -17,6 +17,7 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -204,7 +205,7 @@ const USES: readonly VariableUse[] = [
 ];
 
 describe("the count at the end of each row", () => {
-  it("is the places, said in words to a screen reader and on hover", async () => {
+  it("is the places, said in words to a screen reader and in the row's tooltip", async () => {
     const usage = host({
       reaches: () => ({
         "color.brand": reach(12, ["c-card", "c-hero"]),
@@ -219,8 +220,16 @@ describe("the count at the end of each row", () => {
     });
     const count = brand.querySelector(".nx-vars__count");
     expect(count?.textContent).toBe("14");
-    expect(count?.getAttribute("title")).toBe("Used in 14 places");
     expect(count?.hasAttribute("data-zero")).toBe(false);
+    // Said by the row's tooltip, where keyboard users meet it too, not by a
+    // title on the hidden count.
+    expect(count?.hasAttribute("title")).toBe(false);
+    await act(async () => {
+      brand.focus();
+    });
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Used in 14 places"
+    );
 
     const text = row(/^Text.*\. Not used anywhere$/);
     const zero = text.querySelector(".nx-vars__count");
