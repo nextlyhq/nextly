@@ -400,11 +400,18 @@ describe.each(getConfiguredTestDialects())(
             fields: [{ name: "body", type: "doc", localized: true }],
           } as unknown as CollectionConfig,
           {
-            // A field laid out in a group with no name, which stores it at
-            // the level it sits in.
+            // A field laid out in a group with no name, inside a named group:
+            // stored in the named group's value, at the level the nameless
+            // group sits in.
             slug: "laidout",
             fields: [
-              { type: "group", fields: [{ name: "body", type: "doc" }] },
+              {
+                name: "outer",
+                type: "group",
+                fields: [
+                  { type: "group", fields: [{ name: "body", type: "doc" }] },
+                ],
+              },
             ],
           } as unknown as CollectionConfig,
           {
@@ -1163,40 +1170,19 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("languages and groups", () => {
-      it("reads and conditionally writes a field laid out in a group with no name, stored at its parent's level", async () => {
-        const id = await created("laidout", { body: { v: "laid" } });
-        const entry = { collection: "laidout", id };
+      it("reads a field laid out in a group with no name inside a named group, from that group's stored value", async () => {
+        const id = await created("laidout", {
+          outer: { body: { v: "laid" } },
+        });
         const read = await readStoredFields(owner, {
-          ...entry,
-          fields: ["body"],
+          collection: "laidout",
+          id,
+          fields: ["outer.body"],
           form: "published",
         });
         expect(read).toEqual({
           kind: "found",
-          values: { body: { kind: "value", value: { v: "laid" } } },
-        });
-
-        await updateIfUnchanged(owner, {
-          ...entry,
-          data: { body: { v: "written" } },
-          expect: {
-            field: "body",
-            form: "published",
-            hash: await storedValueHash({
-              kind: "value",
-              value: { v: "laid" },
-            }),
-          },
-        });
-        expect(
-          await readStoredFields(owner, {
-            ...entry,
-            fields: ["body"],
-            form: "published",
-          })
-        ).toEqual({
-          kind: "found",
-          values: { body: { kind: "value", value: { v: "written" } } },
+          values: { "outer.body": { kind: "value", value: { v: "laid" } } },
         });
       });
 

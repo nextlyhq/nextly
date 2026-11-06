@@ -52,7 +52,10 @@ const HARNESS = "@t/rewrite-harness";
 const NOTES = "notes";
 /** A collection whose blocks values sit in a repeater: no fixed path reaches them. */
 const BOARDS = "boards";
-/** A collection whose blocks field is laid out in a group with no name. */
+/**
+ * A collection whose blocks field is laid out in a group with no name, inside
+ * a named group: stored in the named group's value.
+ */
 const PANELS = "panels";
 /** A translated collection whose blocks field sits in a group kept per language. */
 const ARTICLES = "articles";
@@ -326,8 +329,14 @@ describe.each(getConfiguredTestDialects())(
                   fields: [
                     { name: "title", type: "text" },
                     {
+                      name: "panel",
                       type: "group",
-                      fields: [{ name: "content", type: BLOCKS_TYPE }],
+                      fields: [
+                        {
+                          type: "group",
+                          fields: [{ name: "content", type: BLOCKS_TYPE }],
+                        },
+                      ],
                     },
                   ],
                 } as never,
@@ -1151,14 +1160,16 @@ describe.each(getConfiguredTestDialects())(
         left => left.host.slug === slug && left.host.id === id
       );
 
-    it("converts a copy in a blocks field laid out in a group with no name, and leaves nothing", async () => {
+    it("reads a copy in a blocks field laid out in a group with no name, inside a named group, and leaves it to its author", async () => {
       const { t, cookie } = await boot({}, { panels: true });
       const cardId = await card(t);
       const created = await t.nextly.create({
         collection: PANELS,
         data: {
           title: "Panel",
-          content: pageDoc([heading("own", "Own"), copyOf("i1", cardId)]),
+          panel: {
+            content: pageDoc([heading("own", "Own"), copyOf("i1", cardId)]),
+          },
         },
         overrideAccess: true,
       });
@@ -1167,11 +1178,27 @@ describe.each(getConfiguredTestDialects())(
 
       const reports = await rewriteToTheEnd(cookie, cardId);
 
-      expect(reports.at(-1)?.finished).toBe(true);
-      expect(leaves(reports, PANELS, panelId)).toBe(false);
-      const nodes = await nodesOf(t, PANELS, panelId);
-      expect(copies(nodes, cardId)).toBe(0);
-      expect(texts(nodes)).toEqual(["Own", "Card title"]);
+      // Read where it is stored, in the named group's value: a host below a
+      // group is never written, so the copy is reported, never unreadable.
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({
+            slug: PANELS,
+            id: panelId,
+            path: ["panel", "content"],
+          }),
+          reason: "unaddressable",
+        })
+      );
+      const row = (await t.nextly.findByID({
+        collection: PANELS,
+        id: panelId,
+        overrideAccess: true,
+        depth: 0,
+      })) as unknown as { panel?: { content?: unknown } };
+      const nodes = (asDocument(row.panel?.content)?.nodes ?? []) as Node[];
+      expect(copies(nodes, cardId)).toBe(1);
+      expect(nodes).toHaveLength(2);
     });
 
     /** An article's hero body in one language, as stored. */
@@ -1193,7 +1220,7 @@ describe.each(getConfiguredTestDialects())(
       articles: true,
     };
 
-    it("converts a copy in a group kept per language, in each language", async () => {
+    it("reads a copy in a group kept per language, in each language, and leaves it to its author", async () => {
       const { t, cookie } = await boot({}, TRANSLATED);
       const cardId = await card(t);
       const created = await t.nextly.create({
@@ -1223,14 +1250,30 @@ describe.each(getConfiguredTestDialects())(
 
       const reports = await rewriteToTheEnd(cookie, cardId);
 
-      expect(reports.at(-1)?.finished).toBe(true);
-      expect(leaves(reports, ARTICLES, articleId)).toBe(false);
+      // Each language is read through the group's stored value: a host below
+      // a group is never written, so each copy is reported, never unreadable,
+      // and neither language is changed.
+      for (const locale of ["en", "de"]) {
+        expect(reports.at(-1)?.left).toContainEqual(
+          expect.objectContaining({
+            host: expect.objectContaining({
+              slug: ARTICLES,
+              id: articleId,
+              path: ["hero", "body"],
+              locale,
+            }),
+            reason: "unaddressable",
+          })
+        );
+      }
       const en = await heroOf(t, articleId, "en");
       const de = await heroOf(t, articleId, "de");
-      expect(copies(en, cardId)).toBe(0);
-      expect(texts(en)).toEqual(["English", "Card title"]);
-      expect(copies(de, cardId)).toBe(0);
-      expect(texts(de)).toEqual(["Deutsch", "Card title"]);
+      expect(copies(en, cardId)).toBe(1);
+      expect(en).toHaveLength(2);
+      expect(texts(en)[0]).toBe("English");
+      expect(copies(de, cardId)).toBe(1);
+      expect(de).toHaveLength(2);
+      expect(texts(de)[0]).toBe("Deutsch");
     });
 
     it("clears a run once an author removed a copy from a group kept per language by hand", async () => {

@@ -13,7 +13,6 @@
 import {
   NextlyError,
   readStoredFields,
-  storedValueHash,
   updateIfUnchanged,
   type PluginStoredDocument,
   type PluginStoredFields,
@@ -36,7 +35,6 @@ import type {
   HostRead,
   HostReader,
   HostSource,
-  HostWrite,
   HostWriter,
   ReadValue,
   WriteResult,
@@ -771,12 +769,18 @@ export function siteHostWriter(
   site: Pick<RewriteSite, "identity">
 ): HostWriter {
   return async write => {
-    const target = await writeTarget(write);
-    if ("kind" in target) return target;
-    const { field } = target;
+    // A host below a group is only ever read: the walk leaves one holding a
+    // copy to its author, so no write reaches here with one, nor with a scan.
+    const field = write.host.path[0];
+    if (field === undefined || write.host.path.length !== 1) {
+      return {
+        kind: "refused",
+        detail: "This value has no address a write can name.",
+      };
+    }
     const data = withVersionFrom(
       {
-        [field]: target.value,
+        [field]: write.value,
         // Published again in the public state it was read in, which is the
         // one its workflow already chose.
         ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
@@ -797,7 +801,7 @@ export function siteHostWriter(
         expect: {
           field,
           form: write.expected.form,
-          hash: target.hash,
+          hash: write.expected.hash,
           ...(write.mode === "publish" ? { noPendingDraft: true } : {}),
         },
       });
@@ -805,68 +809,6 @@ export function siteHostWriter(
     } catch (error) {
       return writeFailure(error);
     }
-  };
-}
-
-/**
- * The top-level field a write replaces, its new value, and the hash the
- * conditional write expects of it; or why the write is not made.
- *
- * A host at the top level is written as it was computed. A host below a group
- * is written as the group's whole value: the group is read again as stored,
- * the host's own value in it must still hash to what the rewrite read, and the
- * new value replaces it there, so a sibling an author changed meanwhile is
- * kept. The conditional write then expects the group as just read, under its
- * row lock. A whole-row scan has no address a write can name.
- */
-async function writeTarget(
-  write: HostWrite
-): Promise<
-  | { readonly field: string; readonly value: unknown; readonly hash: string }
-  | WriteResult
-> {
-  const [field, ...rest] = write.host.path;
-  if (field === undefined) {
-    return {
-      kind: "refused",
-      detail: "This value has no address a write can name.",
-    };
-  }
-  if (rest.length === 0) {
-    return { field, value: write.value, hash: write.expected.hash };
-  }
-  const read = await readStored(write.host, [field], write.expected.form);
-  const group = read.kind === "found" ? read.values[field] : undefined;
-  if (
-    group === undefined ||
-    group.kind === "absent" ||
-    !isRecord(group.value) ||
-    (await storedValueHash(within(group, rest))) !== write.expected.hash
-  ) {
-    return { kind: "changed" };
-  }
-  return {
-    field,
-    value: withValueAt(group.value, rest, write.value),
-    hash: await storedValueHash(group),
-  };
-}
-
-/** A copy of `container` with the value at `path` replaced by `value`. */
-function withValueAt(
-  container: Record<string, unknown>,
-  path: readonly string[],
-  value: unknown
-): Record<string, unknown> {
-  const [key, ...rest] = path;
-  if (key === undefined) return container;
-  const inner = container[key];
-  return {
-    ...container,
-    [key]:
-      rest.length === 0
-        ? value
-        : withValueAt(isRecord(inner) ? inner : {}, rest, value),
   };
 }
 
