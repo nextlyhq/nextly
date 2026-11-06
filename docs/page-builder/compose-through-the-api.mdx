@@ -115,6 +115,7 @@ drafts saves an edit straight onto the published entry, so there the caller need
 | `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
 | `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
 | `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`. See below.       |
+| `set-conditions`       | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                              |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -139,6 +140,16 @@ field holding several values, a related list nested more than one level deep, an
 into pages the page cannot serve (a second list split into pages, one inside another list,
 one of related entries, one in a component or a Layout region) are refused, in the words the
 editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+
+`set-conditions` sets the visibility conditions of the block whose id is `nodeId`.
+`conditions` is a list of groups, each a list of `{ "field", "op", "value"? }`: the block
+shows when every condition of any one group holds. `op` is one of `equals`, `not_equals`,
+`contains`, `not_contains`, `greater_than`, `less_than`, `exists`, `not_exists`,
+`is_true` and `is_false`, and `field` is one field of the page's entry, or of the list
+item for a block inside a Collection list. `null`, or no groups, shows the block to
+everyone. The devices the block shows on are kept. The write is judged as the editor's save
+is: an operator the field's kind does not take, a field the entry lacks or visitors can't
+see, and a value that does not fit are refused in the words the editor shows.
 
 ## Change a component's definition
 

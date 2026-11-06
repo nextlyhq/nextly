@@ -8597,7 +8597,9 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin-top: 1rem;
 }
 
-.nx-variants__header {
+/* Also the head of Show when, its title and whose fields it reads. */
+.nx-variants__header,
+.nx-show-when__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -9538,6 +9540,96 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 /* Under a field's control rather than under its label. */
 .nx-list-query__indented {
   padding-inline-start: calc(6.5rem + 0.5rem);
+}
+
+/* Show when: a block's visibility conditions, built from the list's filters.
+   Its head shares the variants header's row, above. Whose fields the
+   conditions read: "This post", "Each post in the list". */
+.nx-show-when__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* Said once, above the rows, while the page leaves the block out. */
+.nx-show-when__notice {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: color-mix(
+    in srgb,
+    var(--nx-destructive) 8%,
+    var(--nx-background)
+  );
+  color: var(--nx-destructive);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.45;
+}
+
+.nx-show-when__notice > svg {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.nx-show-when__notice > p {
+  margin: 0;
+}
+
+/* Groups set through the API, shown as they read. */
+.nx-show-when__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-show-when__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--nx-builder-font-size);
+}
+
+/* Wrapped, never cut: an API group's condition reads whole. */
+.nx-show-when__line {
+  overflow-wrap: anywhere;
+}
+
+.nx-show-when__or {
+  align-self: center;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-show-when__keep {
+  align-self: flex-start;
+}
+
+/* A condition wraps to two lines rather than cutting off its rule: a long
+   field name must never hide the operator and value an author has to read,
+   least of all on the row the page can't check. */
+.nx-show-when .nx-list-filter__line {
+  height: auto;
+  min-height: 28px;
+  padding-block: 0.25rem;
+}
+
+.nx-show-when .nx-list-filter__sentence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 /* A refused value spans its row when the row has no label column. */

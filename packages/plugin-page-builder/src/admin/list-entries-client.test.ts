@@ -168,6 +168,20 @@ describe("the editor's count of a list", () => {
     expect(canvasListReadsIn("en", "author-a")).not.toBe(first);
   });
 
+  it("keeps nothing while the signed-in person is not known", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(3));
+    // Before the person is known, the session may already be another
+    // account's: what one ask read must not answer the next.
+    const first = canvasListReadsIn("en", null);
+    await first.count({ collection: "posts", limit: 2 });
+    const second = canvasListReadsIn("en", null);
+    expect(second).not.toBe(first);
+    await second.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(2);
+  });
+
   it("reads nothing for a list one read cannot count", async () => {
     const read = vi.fn(async () => counted(7));
     const count = canvasListCount(

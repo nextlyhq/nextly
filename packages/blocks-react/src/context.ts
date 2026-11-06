@@ -118,6 +118,20 @@ export interface BlocksPublicReader {
     locale?: string;
     select?: readonly string[];
   }): Promise<Record<string, unknown> | null>;
+  /**
+   * One entry by its id, or `null` when there is none the reader may see.
+   * Given by an editor's reader, whose by-id read returns an entry's pending
+   * working draft where a list read returns its live row; the page's own entry
+   * and each entry a binding follows a relation to are read through it when
+   * it is there. A published page's reader has none, and reads them as a
+   * list does.
+   */
+  findById?(query: {
+    collection: string;
+    id: string | number;
+    locale?: string;
+    select?: readonly string[];
+  }): Promise<Record<string, unknown> | null>;
 }
 
 /**
@@ -594,11 +608,15 @@ export interface BlocksFieldShapes {
 /**
  * What a page's bindings read, already read, and how their values are shown.
  *
- * Every source here is the PUBLIC's: the entry re-read as an anonymous visitor
- * reads it, the Singles and site settings likewise. The renderer takes values
- * only from here, never from the context's `entry`, which a route may have
- * read with more access than a visitor has. A source left out is one this
- * page did not read: its bindings render their fallbacks and are reported.
+ * On a published page every source here is the PUBLIC's: the entry re-read as
+ * an anonymous visitor reads it, the Singles and site settings likewise. On
+ * the editor's canvas the entry and the Singles are the person editing's,
+ * read with their own access (`readBindingSources` over an editor's reader),
+ * while the site settings and the field shapes stay the public's. The
+ * renderer takes values only from here, never from the context's `entry`,
+ * which a route may have read with more access than a visitor has. A source
+ * left out is one this page did not read: its bindings render their
+ * fallbacks and are reported.
  *
  * @experimental
  */

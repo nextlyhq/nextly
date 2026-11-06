@@ -152,8 +152,15 @@ export type {
 export {
   createEditorReader,
   toEditorFind,
+  toEditorFindById,
+  toEditorFindSingle,
 } from "./runtime/routing/editor-reader";
-export type { EditorReaderPerson } from "./runtime/routing/editor-reader";
+export type {
+  EditorByIdQuery,
+  EditorReaderPerson,
+  EditorReaderSource,
+  EditorSourceReader,
+} from "./runtime/routing/editor-reader";
 
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
