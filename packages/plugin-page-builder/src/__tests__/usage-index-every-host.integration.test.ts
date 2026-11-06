@@ -34,6 +34,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { classUsageIndex } from "../class-usage-reconcile";
 import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { componentUsageCount, componentUsageIndex } from "../component-usage";
@@ -46,6 +47,7 @@ import {
   USAGE_HEALTH_SERVICE,
   type UsageHealthService,
 } from "../usage-health-service";
+import { usageBookkeeping } from "../usage-bookkeeping";
 import { indexIsWhole } from "../usage-index-health";
 import {
   usageTableOf,
@@ -57,6 +59,7 @@ type Node = Record<string, unknown>;
 
 /** Where the component index's rows live. */
 const COMPONENT_ROWS = "page_builder__component_usage";
+const CLASS_ROWS = "page_builder__class_usage";
 /** Where the backfill's run and its progress live. */
 const RUNS = "page_builder__usage_runs";
 const PROGRESS = "page_builder__usage_progress";
@@ -186,9 +189,13 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    /** A site with a blocks-backed Single, and a small depth limit. */
+    /**
+     * A site with a blocks-backed Single, and a small depth limit; the
+     * Single's blocks field takes `contentDefault` as its default when given.
+     */
     async function boot(
-      limits: DocumentLimits = { ...DEFAULT_LIMITS, maxDepth: 4 }
+      limits: DocumentLimits = { ...DEFAULT_LIMITS, maxDepth: 4 },
+      contentDefault?: () => unknown
     ) {
       const options = { limits };
       const plugin = pageBuilder(options);
@@ -200,7 +207,13 @@ describe.each(getConfiguredTestDialects())(
             slug: SINGLE,
             fields: [
               { name: "title", type: "text" },
-              { name: "content", type: BLOCKS_TYPE },
+              {
+                name: "content",
+                type: BLOCKS_TYPE,
+                ...(contentDefault === undefined
+                  ? {}
+                  : { defaultValue: contentDefault }),
+              },
             ],
           } as never,
         ],
@@ -428,6 +441,89 @@ describe.each(getConfiguredTestDialects())(
         expect(await placers(t, deep)).toEqual([
           `collection:${COMPONENTS_SLUG}:${picker}`,
         ]);
+      });
+    });
+
+    describe("a run a failed write starts", () => {
+      it("sweeps again, though the run before it had swept", async () => {
+        const { t, tick, count } = await boot();
+        const header = await component(t, "header", [text("h")]);
+        const home = await page(t, [placing("i1", header)]);
+        await tick();
+        // Rows of a collection removed from the site, which no progress
+        // names: left by a run that has swept, as its later passes read
+        // nothing unless a scope it recorded is gone.
+        await t.adapter.insert(COMPONENT_ROWS, {
+          id: globalThis.crypto.randomUUID(),
+          scope: "collection",
+          entity: "retired-pages",
+          entityKey: "p9",
+          field: "content",
+          locale: "",
+          variant: "published",
+          kind: "reference",
+          componentId: header,
+        });
+        await tick();
+        expect(await placers(t, header)).toEqual([
+          `collection:pages:${home}`,
+          "collection:retired-pages:p9",
+        ]);
+
+        // A failed write marks the index dirty and starts a new run, whose
+        // progress, the record of the sweep with it, starts empty.
+        await usageBookkeeping(
+          probe.db!,
+          dialect as Parameters<typeof usageBookkeeping>[1]
+        ).markDirty();
+        await tick();
+
+        expect(await placers(t, header)).toEqual([`collection:pages:${home}`]);
+        expect(await count(header)).toEqual({ documents: 1, complete: true });
+      });
+    });
+
+    describe("a Single nobody has saved, whose defaults place a component and a style", () => {
+      it("is counted from its defaults, and stays counted once a first read stores them", async () => {
+        // The default is computed when a read builds it, by which time the
+        // component it places exists.
+        const placed: { header?: string } = {};
+        const { t, tick, count, service } = await boot(undefined, () =>
+          document("page", [
+            placing("i1", placed.header ?? "not-yet"),
+            { ...text("t1"), classes: ["c-card"] },
+          ])
+        );
+        const header = await component(t, "header", [text("h")]);
+        placed.header = header;
+        const stored = () => t.adapter.select(`single_${SINGLE}`, {});
+        const styled = async () =>
+          (
+            await t.adapter.select<Record<string, unknown>>(CLASS_ROWS, {
+              where: {
+                and: [{ column: "classId", op: "=", value: "c-card" }],
+              },
+            })
+          ).map(row => `${String(row.scope)}:${String(row.entity)}`);
+        expect(await stored()).toHaveLength(0);
+
+        await tick();
+
+        expect(await placers(t, header)).toEqual([`single:${SINGLE}:`]);
+        expect([...new Set(await styled())]).toEqual([`single:${SINGLE}`]);
+        expect(await count(header)).toEqual({ documents: 1, complete: true });
+        expect(indexIsWhole(await service.read(classUsageIndex))).toBe(true);
+        // Indexing the default stored nothing.
+        expect(await stored()).toHaveLength(0);
+
+        // A first ordinary read stores the default, which no save hook sees.
+        await t.nextly.findSingle({ slug: SINGLE, overrideAccess: true });
+        expect(await stored()).toHaveLength(1);
+        await tick();
+
+        expect(await placers(t, header)).toEqual([`single:${SINGLE}:`]);
+        expect([...new Set(await styled())]).toEqual([`single:${SINGLE}`]);
+        expect(await count(header)).toEqual({ documents: 1, complete: true });
       });
     });
 

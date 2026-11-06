@@ -11,7 +11,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { backfillScopeKey } from "./usage-backfill-scope";
+import {
+  backfillScopeKey,
+  GONE_SCOPES_SWEPT_KEY,
+} from "./usage-backfill-scope";
 import {
   backfillScopes,
   backfillSurvey,
@@ -290,43 +293,43 @@ describe("reporting content no scope can cover", () => {
   });
 });
 
-describe("finding the rows of scopes that are gone", () => {
-  /** A table of `pages` pages of `size` rows, read as the row reader reads it. */
-  function rowsOf(pages: number, size: number, last: Record<string, unknown>) {
-    const all: Record<string, unknown>[] = [];
-    for (let n = 0; n < pages * size; n += 1) {
-      all.push({
-        id: `r${String(n).padStart(6, "0")}`,
-        scope: "single",
-        entity: "home",
-        field: "content",
-        locale: "",
-        variant: "published",
-      });
-    }
-    all.push({ ...last, id: "r999999" });
-    const asked: (string | undefined)[] = [];
-    const rows: UsageRowReader = async args => {
-      asked.push(args.after);
-      // The predicate honoured as the table store honours it, so a sweep
-      // that asks a narrower question reads fewer rows here too.
-      const matching = all.filter(row =>
-        Object.entries(args.where).every(([column, predicate]) =>
-          "equals" in predicate
-            ? row[column] === predicate.equals
-            : predicate.in.includes(String(row[column]))
-        )
-      );
-      const start =
-        args.after === undefined
-          ? 0
-          : matching.findIndex(row => row.id === args.after) + 1;
-      const items = matching.slice(start, start + size);
-      return { items, hasNext: start + size < matching.length };
-    };
-    return { rows, asked };
+/** A table of `pages` pages of `size` rows, read as the row reader reads it. */
+function rowsOf(pages: number, size: number, last: Record<string, unknown>) {
+  const all: Record<string, unknown>[] = [];
+  for (let n = 0; n < pages * size; n += 1) {
+    all.push({
+      id: `r${String(n).padStart(6, "0")}`,
+      scope: "single",
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
   }
+  all.push({ ...last, id: "r999999" });
+  const asked: (string | undefined)[] = [];
+  const rows: UsageRowReader = async args => {
+    asked.push(args.after);
+    // The predicate honoured as the table store honours it, so a sweep
+    // that asks a narrower question reads fewer rows here too.
+    const matching = all.filter(row =>
+      Object.entries(args.where).every(([column, predicate]) =>
+        "equals" in predicate
+          ? row[column] === predicate.equals
+          : predicate.in.includes(String(row[column]))
+      )
+    );
+    const start =
+      args.after === undefined
+        ? 0
+        : matching.findIndex(row => row.id === args.after) + 1;
+    const items = matching.slice(start, start + size);
+    return { items, hasNext: start + size < matching.length };
+  };
+  return { rows, asked };
+}
 
+describe("finding the rows of scopes that are gone", () => {
   const HOME = backfillScopeKey({
     scope: "single",
     entity: "home",
@@ -391,7 +394,7 @@ describe("finding the rows of scopes that are gone", () => {
 });
 
 describe("forgetting the scopes that are gone", () => {
-  it("reads nothing on a finished run's later pass when nothing it recorded is gone", async () => {
+  it("reads nothing on a swept run's later pass when nothing it recorded is gone", async () => {
     // The sweep runs on every jobs pass; reading every row of both tables
     // each time would cost a site whose content stays put a table scan a pass.
     const fenced: unknown[] = [];
@@ -415,9 +418,57 @@ describe("forgetting the scopes that are gone", () => {
         fenced.push(write);
         return undefined as never;
       },
-      { completed: new Set([backfillScopeKey(home)]), walked: false }
+      {
+        completed: new Set([backfillScopeKey(home), GONE_SCOPES_SWEPT_KEY]),
+        markSwept: async () => {
+          throw new Error("a swept run recorded its sweep again");
+        },
+      }
     );
 
     expect(fenced).toEqual([]);
+  });
+
+  it("sweeps a run with nothing left to walk, whose progress names no scope", async () => {
+    // A failed write started a new run, discarding the old one's progress,
+    // and the site's last blocks field went: no scope to walk, no progress
+    // naming one, and rows of the removed field still in the table. The
+    // absence of progress is no proof the tables are clean.
+    const fenced: unknown[] = [];
+    let swept = 0;
+    const host = {
+      collectionSlugs: async () => [],
+      singles: async () => [],
+      locales: () => [],
+    } as unknown as BackfillHost;
+    const { rows } = rowsOf(1, 1, {
+      scope: "collection",
+      entity: "pages",
+      field: "content",
+      locale: "",
+      variant: "published",
+    });
+
+    await forgetGoneScopes(
+      host,
+      [],
+      async write => {
+        fenced.push(write);
+        return undefined as never;
+      },
+      {
+        completed: new Set(),
+        markSwept: async () => {
+          swept += 1;
+        },
+      },
+      () => rows
+    );
+
+    // Both scopes the table holds rows for, the Single's and the removed
+    // field's, are named by nothing now: each is forgotten in its own fenced
+    // transaction, and the run records its sweep.
+    expect(fenced).toHaveLength(2);
+    expect(swept).toBe(1);
   });
 });

@@ -170,6 +170,9 @@ type ForwardedOption =
   // Whether a Single read creates a missing document. Shaping, not
   // authority: `false` only declines to write.
   | "createIfMissing"
+  // What a Single read that declines to create answers instead: shaping
+  // too, since the default document is read under the same access as any.
+  | "whenAbsent"
   // `findSingles` filters.
   | "source"
   | "migrationStatus"

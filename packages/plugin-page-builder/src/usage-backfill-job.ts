@@ -37,7 +37,10 @@ import type {
   ScopeWalk,
   ScopeWalkOutcome,
 } from "./usage-backfill";
-import type { BackfillScope } from "./usage-backfill-scope";
+import {
+  GONE_SCOPES_SWEPT_KEY,
+  type BackfillScope,
+} from "./usage-backfill-scope";
 import { isSupersededRun } from "./usage-bookkeeping";
 
 /**
@@ -83,9 +86,9 @@ export interface UsageBackfillDeps {
    * scope has been walked: those of a collection or Single removed from the
    * site, or of one that no longer stores blocks where, in the language or in
    * the form it did. No walk visits them, so nothing else would. Its writes go
-   * through `fenced`, as a walk's do. Told what the run has recorded and
-   * whether this pass walked a scope, so a finished run's later passes can
-   * skip reading the tables when nothing it recorded is gone.
+   * through `fenced`, as a walk's do. Told what the run has recorded, and
+   * how to record that it has swept, so a run that has swept reads the tables
+   * again only when a scope it recorded is gone.
    */
   forgetGone?: (
     scopes: readonly BackfillScope[],
@@ -96,16 +99,18 @@ export interface UsageBackfillDeps {
 
 /** What the run that just walked every scope knows, as the cleanup reads it. */
 export interface GoneScopeRun {
-  /** The keys of the scopes this run has recorded as walked. */
+  /**
+   * The keys this run has recorded: the scopes it walked, and
+   * {@link GONE_SCOPES_SWEPT_KEY} once it has swept.
+   */
   completed: ReadonlySet<string>;
   /**
-   * Whether this pass walked a scope, which makes it the pass that finished
-   * the run. Rows of content gone before or while the run walked, which the
-   * run never recorded, are found only by reading the tables, so that pass
-   * reads them; a later pass of a finished run reads them only when a scope
-   * it recorded is gone.
+   * Record, in the run's progress, that it has swept the tables. Rows of
+   * content gone before or while the run walked, which no progress of this
+   * run names, are found only by reading the tables, so a run that has not
+   * swept reads them, whether or not it had anything left to walk.
    */
-  walked: boolean;
+  markSwept: () => Promise<void>;
 }
 
 /**
@@ -138,8 +143,6 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
       // Read ONCE for the handler and threaded through every pass, so a pass
       // does not re-read progress this same invocation already holds.
       let completed: ReadonlySet<string> | undefined;
-      // Whether this handler walked a scope: the pass that finishes a run.
-      let walked = false;
 
       try {
         for (;;) {
@@ -155,7 +158,6 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
             ...(completed === undefined ? {} : { completed }),
           });
           completed = pass.completed;
-          if (pass.walked !== null) walked = true;
 
           // Every scope walked under this run: the dirty mark a failed
           // maintenance write left can go, since this run started after it.
@@ -164,7 +166,7 @@ export function usageBackfillJob(deps: UsageBackfillDeps): JobDefinition {
             // the rows of content that is gone are gone too.
             await deps.forgetGone?.(scopes, write => state.fenced(write), {
               completed: pass.completed,
-              walked,
+              markSwept: () => state.record(GONE_SCOPES_SWEPT_KEY),
             });
             await state.finish();
             return;

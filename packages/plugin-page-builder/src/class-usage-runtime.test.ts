@@ -312,10 +312,11 @@ describe("resolving a Single's subject to its document", () => {
   const single = (over: Partial<ClassUsageSubject> = {}) =>
     subject({ scope: "single", entity: "home", entityKey: "", ...over });
 
-  it("reads it by slug, as the system, WITHOUT creating it", async () => {
+  it("reads it by slug, as the system, WITHOUT creating it, and an unsaved one as its default", async () => {
     // Any other read of a Single writes its default document when it has
     // none, which would materialise every Single in the app as a side effect
-    // of indexing it.
+    // of indexing it. An unsaved Single is read as the default its first read
+    // will store, so what that default places is counted before it is stored.
     const { api, calls } = recordingApi();
 
     expect(await classUsageDocumentReader(api)(single())).toEqual(
@@ -326,6 +327,7 @@ describe("resolving a Single's subject to its document", () => {
         op: "findSingle",
         slug: "home",
         createIfMissing: false,
+        whenAbsent: "default",
         status: "all",
         depth: 0,
         overrideAccess: true,

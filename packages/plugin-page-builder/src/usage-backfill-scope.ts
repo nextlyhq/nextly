@@ -117,6 +117,18 @@ export function backfillScopeKey(scope: BackfillScope): string {
 }
 
 /**
+ * The progress key a run records once it has swept the tables for the rows of
+ * scopes that are gone, beside the keys of the scopes it walked.
+ *
+ * Never a scope's key: a scope key joins five parts on
+ * {@link KEY_SEPARATOR}, and this holds none. Kept in the run's progress
+ * rather than beside the run, so whatever discards a run's progress (a new
+ * derivation, a failed write starting a new run) discards it too, and the next
+ * run sweeps again however little it has left to walk.
+ */
+export const GONE_SCOPES_SWEPT_KEY = "gone-scopes-swept";
+
+/**
  * Which DERIVATION a recorded scope belongs to.
  *
  * A scope says WHICH documents were walked; this says what they were read as.

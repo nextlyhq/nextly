@@ -1256,17 +1256,19 @@ export class SingleQueryService extends BaseService {
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
       const read = await this.readDocument(slug, singleMeta, options);
-      const { translations } = read;
-      let { doc } = read;
+      let { doc, translations } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
-        const answered = await this.answerWithoutCreating(slug, options);
-        if (answered !== null) return answered;
-        this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocumentOnce(singleMeta);
+        const absent = await this.documentInPlaceOfNone(
+          slug,
+          singleMeta,
+          options
+        );
+        if ("answer" in absent) return absent.answer;
+        ({ doc, translations } = absent);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -2250,9 +2252,103 @@ export class SingleQueryService extends BaseService {
     if (await entityRemovedFromCode("single", slug)) {
       return singleAbsentResult(slug);
     }
-    return options.createIfMissing === false
+    return options.createIfMissing === false && options.whenAbsent !== "default"
       ? singleWithoutDocumentResult()
       : null;
+  }
+
+  /**
+   * What a read that found no stored document goes on with: the answer it
+   * gives instead when it must not create one, the default document it
+   * creates otherwise, or, for `whenAbsent: "default"`, that default
+   * document built and not stored, read on from here as the created one is.
+   */
+  private async documentInPlaceOfNone(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<
+    | { answer: SingleResult }
+    | { doc: SingleDocument; translations: JoinedTranslations | undefined }
+  > {
+    const answered = await this.answerWithoutCreating(slug, options);
+    if (answered !== null) return { answer: answered };
+    if (options.createIfMissing === false) {
+      return this.unstoredDefaultDocument(slug, singleMeta, options);
+    }
+    this.logger.info("Auto-creating Single document", { slug });
+    return {
+      doc: await this.createDefaultDocumentOnce(singleMeta),
+      translations: undefined,
+    };
+  }
+
+  /**
+   * The default document a creating read would store, built by the same
+   * function and not written: the main row as it would be inserted, and, for a
+   * localized Single, the default-language translation row the creation would
+   * seed, so the rest of the read resolves its languages as it resolves the
+   * stored one's. Nothing is written: no row, no translation, no version and
+   * no event.
+   *
+   * The translation row is offered only where the creation would write one:
+   * the Single is localized, has translatable defaults, and its translations
+   * table exists. Otherwise the read goes on with no joined translations, as a
+   * read of the stored document would, and finds none.
+   */
+  private async unstoredDefaultDocument(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<{
+    doc: SingleDocument;
+    translations: JoinedTranslations | undefined;
+  }> {
+    const built = await this.buildDefaultDocument(singleMeta);
+    const doc = { ...built.insertValues } as SingleDocument;
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      options.locale,
+      options.fallbackLocale
+    );
+    const companion = this.companionOf(slug, singleMeta);
+    const seed = this.companionForDefaultsSeed(
+      singleMeta,
+      built.localizedDefaults
+    );
+    if (
+      !localeChain ||
+      !companion ||
+      !seed ||
+      !this.localization ||
+      !(await this.localizedDefaultsCompanionExists(
+        singleMeta,
+        built.localizedDefaults
+      ))
+    ) {
+      return { doc, translations: undefined };
+    }
+    const { companion: values } = splitLocalizedWrite(
+      built.localizedDefaults,
+      seed.localizedFields
+    );
+    const status = (built.document as { status?: string }).status;
+    return {
+      doc,
+      translations: {
+        mainTable: null,
+        companion,
+        localeChain,
+        companionRows: [
+          {
+            ...values,
+            _parent: doc.id,
+            _locale: this.localization.defaultLocale,
+            ...(seed.hasStatus ? { _status: status ?? "draft" } : {}),
+          },
+        ],
+      },
+    };
   }
 
   /**

@@ -34,6 +34,7 @@ import {
   backfillGeneration,
   backfillScopeKey,
   backfillScopesFor,
+  GONE_SCOPES_SWEPT_KEY,
   type BackfillScope,
 } from "./usage-backfill-scope";
 import {
@@ -48,6 +49,7 @@ import {
   usageTableOf,
   usageTableRows,
   type UsageDb,
+  type UsageTable,
 } from "./usage-index-tables";
 
 /** What the wiring must be able to ask of the host, named structurally. */
@@ -335,20 +337,28 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
  * run, so a scope that comes back is walked again rather than read as
  * walked.
  *
- * A finished run's later passes read nothing unless a scope it recorded is
- * gone, so a site whose content stays put pays no table read per pass.
+ * Every run sweeps once, on the pass that finds every scope walked, and
+ * records that it has in its progress: a run with nothing left to walk, such
+ * as one started over a site whose last blocks field is gone, sweeps all the
+ * same, since no progress of a new run says the tables are clean. After that
+ * a pass reads nothing unless a scope the run recorded is gone, so a site
+ * whose content stays put pays no table read per pass.
  */
 export async function forgetGoneScopes(
   host: BackfillHost,
   scopes: readonly BackfillScope[],
   fenced: BackfillStateStore["fenced"],
   run: GoneScopeRun,
-  /** Rows per read of each table; smaller only in a test. */
-  pageSize?: number
+  /** How each table's rows are read; another reader only in a test. */
+  rowsOf: (table: UsageTable) => UsageRowReader = table =>
+    usageTableRows(host.db, table)
 ): Promise<void> {
   const named = new Set(scopes.map(backfillScopeKey));
-  const recordedGone = [...run.completed].filter(key => !named.has(key));
-  if (!run.walked && recordedGone.length === 0) return;
+  const recordedGone = [...run.completed].filter(
+    key => key !== GONE_SCOPES_SWEPT_KEY && !named.has(key)
+  );
+  const swept = run.completed.has(GONE_SCOPES_SWEPT_KEY);
+  if (swept && recordedGone.length === 0) return;
   const live = new Set([
     ...named,
     ...(await backfillScopes(host)).map(backfillScopeKey),
@@ -362,8 +372,7 @@ export async function forgetGoneScopes(
     if (!live.has(key)) gone.set(key, null);
   }
   for (const table of tables) {
-    const rows = usageTableRows(host.db, table, pageSize);
-    for (const scope of await goneScopes(rows, live)) {
+    for (const scope of await goneScopes(rowsOf(table), live)) {
       gone.set(backfillScopeKey(scope), scope);
     }
   }
@@ -385,6 +394,7 @@ export async function forgetGoneScopes(
       await forgetScopeProgress(tx, key);
     });
   }
+  if (!swept) await run.markSwept();
 }
 
 /**
@@ -427,17 +437,34 @@ export async function goneScopes(
 function scopeOfRow(item: unknown): BackfillScope | null {
   if (typeof item !== "object" || item === null) return null;
   const row = item as Record<string, unknown>;
-  const { scope, entity, field, locale, variant } = row;
-  if (
-    (scope !== "collection" && scope !== "single") ||
-    typeof entity !== "string" ||
-    typeof field !== "string" ||
-    typeof locale !== "string" ||
-    (variant !== "published" && variant !== "draft")
-  ) {
-    return null;
-  }
-  return { scope, entity, field, locale, variant };
+  const scope = scopeKindOf(row.scope);
+  const names = subjectNamesOf(row);
+  const variant = variantOf(row.variant);
+  return scope === null || names === null || variant === null
+    ? null
+    : { scope, ...names, variant };
+}
+
+/** A row's `scope` column, when it names one of the two kinds. */
+function scopeKindOf(value: unknown): BackfillScope["scope"] | null {
+  return value === "collection" || value === "single" ? value : null;
+}
+
+/** A row's `variant` column, when it names one of the two forms. */
+function variantOf(value: unknown): BackfillScope["variant"] | null {
+  return value === "published" || value === "draft" ? value : null;
+}
+
+/** A row's document, field and language columns, when each is a string. */
+function subjectNamesOf(
+  row: Record<string, unknown>
+): Pick<BackfillScope, "entity" | "field" | "locale"> | null {
+  const { entity, field, locale } = row;
+  return typeof entity === "string" &&
+    typeof field === "string" &&
+    typeof locale === "string"
+    ? { entity, field, locale }
+    : null;
 }
 
 /**

@@ -458,6 +458,23 @@ const saved = await nextly.findSingle({
 const siteName = saved === null ? "My site" : saved.siteName;
 ```
 
+**Experimental:** add `whenAbsent: "default"` beside `createIfMissing: false`
+to read, for a single that has no stored document yet, the default document a
+first read would create, without creating it. It goes through the same read:
+access rules, the draft and published filter, field rules and read hooks apply
+as they would to the stored document. Passing `whenAbsent` without
+`createIfMissing: false` is refused. A `defaultValue` written as a function is
+computed again for each such read, so one that is not deterministic may answer
+differently from what is later stored.
+
+```typescript
+const settings = await nextly.findSingle({
+  slug: "site-settings",
+  createIfMissing: false,
+  whenAbsent: "default",
+});
+```
+
 ### updateSingle
 
 Update a single's content by slug. Returns the same `{ message, item }` envelope

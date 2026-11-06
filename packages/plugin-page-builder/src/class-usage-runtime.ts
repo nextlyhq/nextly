@@ -105,11 +105,14 @@ export interface ClassUsageDirectApi {
   /**
    * A Single's one document, read without creating it: `createIfMissing:
    * false` answers `null` for a Single nobody has saved, where any other read
-   * writes its default document as a side effect.
+   * writes its default document as a side effect. With `whenAbsent:
+   * "default"` it answers, for such a Single, the default document that first
+   * read will store, still without storing it.
    */
   findSingle(args: {
     slug: string;
     createIfMissing: false;
+    whenAbsent?: "default";
     draft?: boolean;
     status?: "all";
     locale?: string;
@@ -301,7 +304,11 @@ async function readById(
  * reason `readPublished` gives about collection entries; the draft read opts
  * into the working draft the same way. No identity check: a Single is read by
  * its slug, and the answer carries no key the subject could be compared with.
- * A Single nobody has saved has no row, and answers as absent.
+ *
+ * A Single nobody has saved answers its default document, built by core as
+ * the first read will store it, and not stored. Its first ordinary read stores
+ * that document without a save hook, so indexing it as empty would leave the
+ * index at an exact zero while the Single renders what its defaults place.
  */
 async function readSingle(
   nextly: ClassUsageDirectApi,
@@ -311,6 +318,7 @@ async function readSingle(
   const row = await nextly.findSingle({
     slug: subject.entity,
     createIfMissing: false,
+    whenAbsent: "default",
     status: "all",
     ...options,
     ...localeOptions(subject),
