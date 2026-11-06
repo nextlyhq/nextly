@@ -287,6 +287,80 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
+ * The issues one component instance's whole-number children raise, judged
+ * against the fields the component's slug resolves to — the same descent
+ * the contained-component pass makes, rows indexed in the path.
+ */
+function componentInstanceIssues(
+  field: ValidatableField,
+  value: unknown,
+  childPath: string,
+  componentFields: (slug: string) => ValidatableField[] | undefined,
+  storedPaths: ReadonlySet<string> | undefined
+): ValidationIssue[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  const instances: Array<[unknown, string]> = Array.isArray(value)
+    ? value.map((row, index) => [row, `${childPath}[${index}]`])
+    : [[value, childPath]];
+  const issues: ValidationIssue[] = [];
+  for (const [instance, at] of instances) {
+    if (
+      instance === null ||
+      typeof instance !== "object" ||
+      Array.isArray(instance)
+    ) {
+      continue;
+    }
+    const slug =
+      single ??
+      (many?.includes(readFieldGroupType(instance) ?? "")
+        ? readFieldGroupType(instance)
+        : undefined);
+    const own = slug ? componentFields(slug) : undefined;
+    if (!own) continue;
+    issues.push(
+      ...hookChangedWholeNumberIssues(
+        instance as Record<string, unknown>,
+        own,
+        at,
+        componentFields,
+        storedPaths
+      )
+    );
+  }
+  return issues;
+}
+
+/**
+ * The issues a whole-number field's stored value raises: one per fractional
+ * element, the hasMany list indexed in the path.
+ */
+function fractionalElementIssues(
+  field: ValidatableField,
+  value: unknown,
+  childPath: string
+): ValidationIssue[] {
+  const label = typeof field.label === "string" ? field.label : field.name;
+  const elements = field.hasMany && Array.isArray(value) ? value : [value];
+  const issues: ValidationIssue[] = [];
+  elements.forEach((element, index) => {
+    if (
+      typeof element !== "number" ||
+      Number.isNaN(element) ||
+      Number.isInteger(element)
+    ) {
+      return;
+    }
+    issues.push({
+      path: field.hasMany ? `${childPath}[${index}]` : childPath,
+      code: "INVALID_TYPE",
+      message: `${label} must be a whole number.`,
+    });
+  });
+  return issues;
+}
+
+/**
  * Whether a path sits under one the write kept from the stored row because
  * a rule denies it to this writer: the path itself, a leaf under a denied
  * container, or a row of a denied list. The value there is the row's own,
@@ -399,36 +473,15 @@ export function hookChangedWholeNumberIssues(
     // the whole document, so the walk descends by the same slug the gate
     // resolved and judges the fraction where the instance stores it.
     if (componentFields && isFieldGroupFieldType(field.type)) {
-      const { single, many } = extractFieldGroupReferences(field);
-      const value = data[key];
-      const instances: Array<[unknown, string]> = Array.isArray(value)
-        ? value.map((row, index) => [row, `${childPath}[${index}]`])
-        : [[value, childPath]];
-      for (const [instance, at] of instances) {
-        if (
-          instance === null ||
-          typeof instance !== "object" ||
-          Array.isArray(instance)
-        ) {
-          continue;
-        }
-        const slug =
-          single ??
-          (many?.includes(readFieldGroupType(instance) ?? "")
-            ? readFieldGroupType(instance)
-            : undefined);
-        const own = slug ? componentFields(slug) : undefined;
-        if (!own) continue;
-        issues.push(
-          ...hookChangedWholeNumberIssues(
-            instance as Record<string, unknown>,
-            own,
-            at,
-            componentFields,
-            storedPaths
-          )
-        );
-      }
+      issues.push(
+        ...componentInstanceIssues(
+          field,
+          data[key],
+          childPath,
+          componentFields,
+          storedPaths
+        )
+      );
       continue;
     }
 
@@ -442,23 +495,7 @@ export function hookChangedWholeNumberIssues(
       ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
       : field.type;
     if (effectiveType !== "number" || fieldJudgesFractions(field)) continue;
-    const label = typeof field.label === "string" ? field.label : field.name;
-    const value = data[key];
-    const elements = field.hasMany && Array.isArray(value) ? value : [value];
-    elements.forEach((element, index) => {
-      if (
-        typeof element !== "number" ||
-        Number.isNaN(element) ||
-        Number.isInteger(element)
-      ) {
-        return;
-      }
-      issues.push({
-        path: field.hasMany ? `${childPath}[${index}]` : childPath,
-        code: "INVALID_TYPE",
-        message: `${label} must be a whole number.`,
-      });
-    });
+    issues.push(...fractionalElementIssues(field, data[key], childPath));
   }
   return issues;
 }

@@ -282,17 +282,35 @@ function deniedStoredPaths(
   prefix: string
 ): string[] {
   if (Array.isArray(before)) {
-    if (!Array.isArray(after)) return prefix === "" ? [] : [prefix];
-    const pairing = rowPairing(before, after);
-    return before.flatMap((row, index) => {
-      const at = pairing(index);
-      return deniedStoredPaths(
-        row,
-        at === undefined ? undefined : after[at],
-        `${prefix}[${index}]`
-      );
-    });
+    return deniedStoredListPaths(before, after, prefix);
   }
+  return deniedStoredRecordPaths(before, after, prefix);
+}
+
+/** The denied paths under one list, its rows paired by identity. */
+function deniedStoredListPaths(
+  before: readonly unknown[],
+  after: unknown,
+  prefix: string
+): string[] {
+  if (!Array.isArray(after)) return prefix === "" ? [] : [prefix];
+  const pairing = rowPairing(before, after);
+  return before.flatMap((row, index) => {
+    const at = pairing(index);
+    return deniedStoredPaths(
+      row,
+      at === undefined ? undefined : after[at],
+      `${prefix}[${index}]`
+    );
+  });
+}
+
+/** The denied paths under one record: the keys the rules removed, and under them. */
+function deniedStoredRecordPaths(
+  before: unknown,
+  after: unknown,
+  prefix: string
+): string[] {
   if (!isRecord(before)) return [];
   if (!isRecord(after)) return prefix === "" ? [] : [prefix];
   const out: string[] = [];
