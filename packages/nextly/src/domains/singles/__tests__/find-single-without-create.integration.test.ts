@@ -85,7 +85,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await t.nextly.updateSingle({
         slug: SLUG,
-        data: { notice: "Closed on Monday" },
+        data: { notice: "Closed on Monday", _overwrite: true },
       });
 
       const withOption = await t.nextly.findSingle({

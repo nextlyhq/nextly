@@ -25,7 +25,6 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CLASS_USAGE_INDEX_SLUG } from "../collections/class-usage-index";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -33,6 +32,8 @@ import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 
 const ORIGIN = "http://localhost";
 const CSRF = "c".repeat(64);
+/** Where the class usage index's rows live. */
+const CLASS_ROWS = "page_builder__class_usage";
 
 const card = {
   id: "c-card",
@@ -130,7 +131,10 @@ describe.each(getConfiguredTestDialects())(
       // fixture, not the behaviour under test.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [{ ...card, locked: true }, hero, spare] },
+        data: {
+          classes: [{ ...card, locked: true }, hero, spare],
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       return { t, tick: backfillTick(plugin) };
@@ -244,7 +248,10 @@ describe.each(getConfiguredTestDialects())(
         [hero, spare],
       ];
       for (const classes of writes) {
-        const answer = await call("PATCH", SINGLE, designer, { classes });
+        const answer = await call("PATCH", SINGLE, designer, {
+          classes,
+          _overwrite: true,
+        });
         expect(answer.status).toBe(409);
         expect(JSON.stringify(answer.body)).toContain(
           "Card is locked, so it can't be changed, renamed or removed. Unlock it first."
@@ -273,6 +280,7 @@ describe.each(getConfiguredTestDialects())(
       const red = { ...card, styles: { base: { base: { color: "#ff0000" } } } };
       const change = await call("PATCH", SINGLE, keeper, {
         classes: [red, hero, spare],
+        _overwrite: true,
       });
       expect(change.status).toBe(200);
       const lock = await call("POST", route("lock"), keeper, {
@@ -301,6 +309,7 @@ describe.each(getConfiguredTestDialects())(
           { ...hero, locked: true },
           { ...spare, locked: true },
         ],
+        _overwrite: true,
       });
       expect(flip.status).toBe(400);
       expect(JSON.stringify(flip.body)).toContain(
@@ -319,6 +328,7 @@ describe.each(getConfiguredTestDialects())(
       // Undoing a style just made writes the section back without it.
       const undone = await call("PATCH", SINGLE, designer, {
         classes: [lockedCard, hero],
+        _overwrite: true,
       });
       expect(undone.status).toBe(200);
       expect((await stored(t)).map(entry => entry.id)).toEqual([
@@ -327,6 +337,7 @@ describe.each(getConfiguredTestDialects())(
       ]);
       const dropped = await call("PATCH", SINGLE, designer, {
         classes: [hero],
+        _overwrite: true,
       });
       expect(dropped.status).toBe(409);
       expect((await stored(t)).map(entry => entry.id)).toEqual([
@@ -506,20 +517,12 @@ describe.each(getConfiguredTestDialects())(
       });
       await tick();
       // The row two interleaved saves can lose, lost here directly.
-      const rows = await t.nextly.find({
-        collection: CLASS_USAGE_INDEX_SLUG,
-        where: { classId: { equals: "c-spare" } },
-        limit: 100,
-        overrideAccess: true,
-      });
-      expect(rows.items.length).toBeGreaterThan(0);
-      for (const row of rows.items) {
-        await t.nextly.delete({
-          collection: CLASS_USAGE_INDEX_SLUG,
-          id: String((row as { id: unknown }).id),
-          overrideAccess: true,
-        });
-      }
+      const spareRows = {
+        and: [{ column: "classId", op: "=" as const, value: "c-spare" }],
+      };
+      const rows = await t.adapter.select(CLASS_ROWS, { where: spareRows });
+      expect(rows.length).toBeGreaterThan(0);
+      await t.adapter.delete(CLASS_ROWS, spareRows);
       const designer = await holding(t, ...DESIGN, "read-pages");
       // CONTROL: the index is whole and counts the style on nothing, so the
       // refusal below comes from the stored page and not from the index.
@@ -580,7 +583,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { classes: [lockedCard, hero] },
+        data: { classes: [lockedCard, hero], _overwrite: true },
         overrideAccess: true,
       });
       const kept = await t.nextly.update({
@@ -589,6 +592,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           title: "Old, renamed",
           content: pageOf([text("a", { classes: ["c-spare"] })]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });

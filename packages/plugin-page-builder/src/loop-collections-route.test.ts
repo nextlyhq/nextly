@@ -1,53 +1,85 @@
 /**
- * Which collections a collection loop is offered, and which of their fields it
- * may sort by.
+ * Which collections a collection list is offered, and which of their fields
+ * and relations it may name.
  *
  * - Only a collection the caller may read; the plugin's own stores, a hidden
  *   collection and one whose schema is not live are never offered, while the
  *   plugin's Pages are.
- * - A collection is named by its plural name, then its name, then its slug.
- * - Sortable: a top-level field holding one scalar value, judged by the
- *   engine's binding vocabulary, including a plugin type by its storage
- *   primitive; never a relation, a list, a container, rich text or a
- *   password. The timestamps follow, unless turned off. Of those, only the
- *   keys core accepts for this caller, asked by one sorted read: a field
- *   whose read rule the records do not carry is still left out.
+ * - A collection is named by its plural name, then its name, then its slug,
+ *   and one entry by its singular name.
+ * - Fields: only the ones the PUBLIC may read, as a save judges a list, each
+ *   with the kind the engine names for it; never one holding several values,
+ *   rich text, a container or the id. In the collection's order, then the
+ *   timestamps. A choice field carries its choices by name, an entry field
+ *   its collection, a day field that it is a day.
+ * - Relations: a to-many relation the public may read, to a listed
+ *   collection.
  * - The route is contributed, authenticated, and answers the list envelope.
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import { LOOP_COLLECTIONS_ROUTE_PATH } from "./loop-collections-contract";
 import {
   internalCollections,
   readLoopCollections,
-  sortableKeys,
   type LoopCollectionsReads,
 } from "./loop-collections-route";
 import { pageBuilder } from "./plugin";
 
-/** Core's refusal of a sort, naming each key, as a sorted read throws it. */
-function sortRefusal(keys: readonly string[]): NextlyError {
-  return NextlyError.validation({
-    errors: keys.map(key => ({
-      path: `sort.${key}`,
-      code: "FIELD_NOT_SORTABLE",
-      message: `"${key}" is not a field this list can be sorted by.`,
-    })),
-  });
+/** A declared field as the fixtures write it. */
+interface FixtureField {
+  readonly name?: unknown;
+  readonly type?: string;
+  readonly hasMany?: boolean;
+  readonly relationTo?: string;
+  readonly dateOnly?: boolean;
+  readonly options?: ReadonlyArray<string | { readonly value: string }>;
+}
+
+/** The public's shape of one declared field, as `bindingFieldShapes` gives it. */
+function shapeOf(field: FixtureField): BindingFieldShape {
+  return {
+    name: String(field.name),
+    type: field.type ?? "text",
+    ...(field.hasMany === true ? { hasMany: true } : {}),
+    ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+    ...(field.options === undefined
+      ? {}
+      : {
+          options: field.options.map(option =>
+            typeof option === "string" ? option : option.value
+          ),
+        }),
+    ...(field.dateOnly === true ? { dateOnly: true } : {}),
+  };
 }
 
 /**
- * A sorted read that refuses, as core does, every asked key in `refused`,
- * one stage per entry in the order core checks them.
+ * The public's shapes of each record's fields, as `bindingFieldShapes`
+ * answers: every declared field but the ones named in `protectedFields`,
+ * which a visitor may not read. A collection in `unreadable` has none.
  */
-function sortedReadRefusing(stages: ReadonlyArray<readonly string[]> = []) {
-  return vi.fn(async (_slug: string, keys: readonly string[]) => {
-    for (const stage of stages) {
-      const named = keys.filter(key => stage.includes(key));
-      if (named.length > 0) throw sortRefusal(named);
+function publicShapesOf(
+  records: readonly unknown[],
+  protectedFields: readonly string[],
+  unreadable: readonly string[]
+) {
+  return vi.fn(
+    async (slug: string): Promise<readonly BindingFieldShape[] | undefined> => {
+      if (unreadable.includes(slug)) return undefined;
+      const record = records.find(
+        each => (each as { slug?: unknown } | null)?.slug === slug
+      ) as { fields?: readonly FixtureField[] } | undefined;
+      return (record?.fields ?? [])
+        .filter(
+          field =>
+            typeof field.name === "string" &&
+            !protectedFields.includes(field.name)
+        )
+        .map(shapeOf);
     }
-  });
+  );
 }
 
 function readsOf(
@@ -55,15 +87,17 @@ function readsOf(
   {
     internal = [],
     readable,
-    refused,
+    protectedFields = [],
+    unreadable = [],
   }: {
     internal?: readonly string[];
     readable?: readonly string[];
-    refused?: ReadonlyArray<readonly string[]>;
+    protectedFields?: readonly string[];
+    unreadable?: readonly string[];
   } = {}
 ): LoopCollectionsReads & {
   mayRead: ReturnType<typeof vi.fn>;
-  sortedRead: ReturnType<typeof vi.fn>;
+  publicFields: ReturnType<typeof vi.fn>;
 } {
   return {
     collections: async () => records,
@@ -71,30 +105,50 @@ function readsOf(
     mayRead: vi.fn(async (slug: string) =>
       readable === undefined ? true : readable.includes(slug)
     ),
-    sortedRead: sortedReadRefusing(refused),
+    publicFields: publicShapesOf(records, protectedFields, unreadable),
   };
 }
 
 const POSTS = {
   slug: "posts",
   label: "Post",
-  labels: { plural: "Blog posts" },
+  labels: { singular: "Post", plural: "Blog posts" },
   migrationStatus: "synced",
   fields: [
     { name: "title", type: "text", label: "Title" },
-    { name: "publishedAt", type: "date" },
+    { name: "publishedAt", type: "date", dateOnly: true },
     { name: "body", type: "richText" },
-    { name: "author", type: "relationship" },
-    { name: "tags", type: "select", hasMany: true },
-    { name: "kind", type: "select" },
+    { name: "author", type: "relationship", relationTo: "authors" },
+    {
+      name: "categories",
+      type: "relationship",
+      relationTo: "categories",
+      hasMany: true,
+    },
+    {
+      name: "reviewers",
+      type: "relationship",
+      relationTo: "categories",
+      hasMany: true,
+    },
+    { name: "tags", type: "select", hasMany: true, options: ["a"] },
+    {
+      name: "kind",
+      type: "select",
+      options: [{ value: "news", label: "News" }, "guide"],
+    },
     { name: "featured", type: "checkbox" },
     { name: "views", type: "number" },
     { name: "secret", type: "password" },
     { name: "seo", type: "group" },
     { name: "internalScore", type: "number" },
-    { name: "rating", type: "acme-stars", storage: "number" },
-    { name: "widget", type: "acme-widget" },
   ],
+};
+
+const CATEGORIES = {
+  slug: "categories",
+  label: "Category",
+  fields: [{ name: "name", type: "text" }],
 };
 
 describe("the collections a loop is offered", () => {
@@ -155,6 +209,21 @@ describe("the collections a loop is offered", () => {
     ]);
   });
 
+  it("names one entry by its singular name, then its name, then its slug", async () => {
+    const answer = await readLoopCollections(
+      readsOf([
+        POSTS,
+        { slug: "events", label: "Event", fields: [] },
+        { slug: "faq", fields: [] },
+      ])
+    );
+    expect(answer.items.map(item => item.singular)).toEqual([
+      "Post",
+      "Event",
+      "faq",
+    ]);
+  });
+
   it("answers the list envelope, every collection on one page", async () => {
     const answer = await readLoopCollections(readsOf([POSTS]));
     expect(answer.meta).toMatchObject({
@@ -167,139 +236,123 @@ describe("the collections a loop is offered", () => {
   });
 });
 
-describe("the fields a loop may sort by", () => {
-  it("offers scalar top-level fields, a plugin type by its primitive, then the timestamps, as core accepts them", async () => {
-    // `internalScore` carries a read rule this caller fails; a code-first
-    // rule is a function the records never hold, so only core can say.
+describe("the fields a list may name", () => {
+  it("offers the public's fields holding one scalar, in order, then the timestamps, each with its kind", async () => {
+    // `internalScore` is declared but withheld from the public, so a list
+    // may not name it: the entries shown would reveal its values.
     const answer = await readLoopCollections(
-      readsOf([POSTS], { refused: [["internalScore"]] })
+      readsOf([POSTS], { protectedFields: ["internalScore"] })
     );
-    expect(answer.items[0]?.sortFields).toEqual([
-      { name: "title", label: "Title", date: false },
-      { name: "publishedAt", label: "Published At", date: true },
-      { name: "kind", label: "Kind", date: false },
-      { name: "featured", label: "Featured", date: false },
-      { name: "views", label: "Views", date: false },
-      { name: "rating", label: "Rating", date: false },
-      { name: "createdAt", label: "Created", date: true },
-      { name: "updatedAt", label: "Updated", date: true },
+    expect(
+      answer.items[0]?.fields.map(field => [
+        field.name,
+        field.label,
+        field.kind,
+      ])
+    ).toEqual([
+      ["title", "Title", "text"],
+      ["publishedAt", "Published At", "date"],
+      ["author", "Author", "entry"],
+      ["kind", "Kind", "choice"],
+      ["featured", "Featured", "boolean"],
+      ["views", "Views", "number"],
+      ["createdAt", "Created", "date"],
+      ["updatedAt", "Updated", "date"],
     ]);
   });
 
-  it("leaves out a field it cannot name or order, and names one with a blank label in words", async () => {
-    const answer = await readLoopCollections(
-      readsOf([
-        {
-          slug: "notes",
-          timestamps: false,
-          fields: [
-            null,
-            "title",
-            { type: "text" },
-            { name: "", type: "text" },
-            { name: "untyped" },
-            { name: "codes", type: "text", hasMany: true },
-            { name: "score", type: "acme-score", storage: "unknown" },
-            { name: "weight", type: "acme-weight", storage: "number" },
-            { name: "shortName", type: "text", label: "  " },
-          ],
-        },
-      ])
+  it("names a choice field's choices as declared, an entry field's collection and a day field", async () => {
+    const answer = await readLoopCollections(readsOf([POSTS]));
+    const fields = new Map(
+      (answer.items[0]?.fields ?? []).map(field => [field.name, field])
     );
-    expect(answer.items[0]?.sortFields).toStrictEqual([
-      { name: "weight", label: "Weight", date: false },
-      { name: "shortName", label: "Short Name", date: false },
+    expect(fields.get("kind")?.options).toEqual([
+      { value: "news", label: "News" },
+      { value: "guide", label: "guide" },
     ]);
+    expect(fields.get("author")?.relationTo).toBe("authors");
+    expect(fields.get("publishedAt")?.dateOnly).toBe(true);
+    expect(fields.get("title")).toStrictEqual({
+      name: "title",
+      label: "Title",
+      kind: "text",
+    });
+  });
+
+  it("sends every field the public may read, as the save judges a list against them", async () => {
+    const answer = await readLoopCollections(
+      readsOf([POSTS], { protectedFields: ["internalScore"] })
+    );
+    const readable = answer.items[0]?.readable ?? [];
+    const names = readable.map(field => field.name);
+    // Rich text and a has-many relation are not offered, and are readable.
+    expect(names).toEqual(expect.arrayContaining(["id", "body", "categories"]));
+    expect(names).not.toContain("internalScore");
+    expect(readable.find(field => field.name === "categories")).toEqual({
+      name: "categories",
+      type: "relationship",
+      hasMany: true,
+      relationTo: "categories",
+    });
+  });
+
+  it("asks which fields the public may read in the language asked, as a save does", async () => {
+    const reads = readsOf([POSTS]);
+    await readLoopCollections(reads, "fr");
+    expect(reads.publicFields).toHaveBeenCalledWith("posts", "fr");
+  });
+
+  it("offers no field of a collection the public may read none of", async () => {
+    const answer = await readLoopCollections(
+      readsOf([POSTS], { unreadable: ["posts"] })
+    );
+    expect(answer.items.map(item => item.slug)).toEqual(["posts"]);
+    expect(answer.items[0]?.fields).toEqual([]);
+    expect(answer.items[0]?.relations).toEqual([]);
+    // Its names still travel, so a stored filter is told apart as hidden.
+    expect(answer.items[0]?.declared).toContain("title");
   });
 
   it("offers no timestamps where the collection turned them off", async () => {
     const answer = await readLoopCollections(
       readsOf([{ ...POSTS, timestamps: false }])
     );
-    const names = answer.items[0]?.sortFields.map(field => field.name);
+    const names = answer.items[0]?.fields.map(field => field.name);
     expect(names).not.toContain("createdAt");
     expect(names).toContain("title");
   });
 
-  it("lists a declared timestamp once, as the collection declares it", async () => {
+  it("names a field with a blank label in words", async () => {
     const answer = await readLoopCollections(
       readsOf([
         {
           slug: "notes",
-          fields: [{ name: "createdAt", type: "date", label: "Written" }],
+          timestamps: false,
+          fields: [{ name: "shortName", type: "text", label: "  " }],
         },
       ])
     );
-    expect(answer.items[0]?.sortFields).toEqual([
-      { name: "createdAt", label: "Written", date: true },
-      { name: "updatedAt", label: "Updated", date: true },
+    expect(answer.items[0]?.fields.map(field => field.label)).toEqual([
+      "Short Name",
     ]);
   });
 });
 
-describe("asking core which keys this caller may sort by", () => {
-  it("asks once with every key where core accepts them all", async () => {
-    const reads = { sortedRead: sortedReadRefusing() };
-    expect([...(await sortableKeys("posts", ["a", "b"], reads))]).toEqual([
-      "a",
-      "b",
-    ]);
-    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
-    expect(reads.sortedRead).toHaveBeenCalledWith("posts", ["a", "b"]);
-  });
-
-  it("asks again without each key core names, stage by stage", async () => {
-    const reads = { sortedRead: sortedReadRefusing([["b"], ["c"]]) };
-    expect([
-      ...(await sortableKeys("posts", ["a", "b", "c", "d"], reads)),
-    ]).toEqual(["a", "d"]);
-    expect(reads.sortedRead.mock.calls.map(call => call[1])).toEqual([
-      ["a", "b", "c", "d"],
-      ["a", "c", "d"],
-      ["a", "d"],
+describe("the relations a related list may show", () => {
+  it("offers a to-many relation the public may read, to a listed collection", async () => {
+    const answer = await readLoopCollections(
+      readsOf([POSTS, CATEGORIES], { protectedFields: ["reviewers"] })
+    );
+    expect(answer.items[0]?.relations).toEqual([
+      { field: "categories", label: "Categories", collection: "categories" },
     ]);
   });
 
-  it("offers nothing for a failure that is not a sort refusal", async () => {
-    const reads = {
-      sortedRead: vi.fn(async () => {
-        throw NextlyError.forbidden();
-      }),
-    };
-    expect([...(await sortableKeys("posts", ["a"], reads))]).toEqual([]);
-  });
-
-  it("reads a refusal naming anything but sort keys as a failure, offering nothing", async () => {
-    // A validation error that also names a filter is not core saying which
-    // keys it will not sort by, so no key is taken from it.
-    const reads = {
-      sortedRead: vi.fn(async () => {
-        throw NextlyError.validation({
-          errors: [
-            { path: "sort.a", code: "FIELD_NOT_SORTABLE", message: "No." },
-            { path: "where.b", code: "FIELD_NOT_FILTERABLE", message: "No." },
-          ],
-        });
-      }),
-    };
-    expect([...(await sortableKeys("posts", ["a", "c"], reads))]).toEqual([]);
-    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops at a refusal naming no key it asked, rather than asking forever", async () => {
-    const reads = {
-      sortedRead: vi.fn(async () => {
-        throw sortRefusal(["elsewhere"]);
-      }),
-    };
-    expect([...(await sortableKeys("posts", ["a"], reads))]).toEqual([]);
-    expect(reads.sortedRead).toHaveBeenCalledTimes(1);
-  });
-
-  it("asks nothing for a collection with no candidate field", async () => {
-    const reads = { sortedRead: sortedReadRefusing() };
-    expect([...(await sortableKeys("posts", [], reads))]).toEqual([]);
-    expect(reads.sortedRead).not.toHaveBeenCalled();
+  it("leaves out a relation to a collection the caller may not read", async () => {
+    const answer = await readLoopCollections(
+      readsOf([POSTS, CATEGORIES], { readable: ["posts"] })
+    );
+    expect(answer.items[0]?.relations).toEqual([]);
   });
 });
 

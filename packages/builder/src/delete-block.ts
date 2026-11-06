@@ -26,7 +26,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import type { SlotAddress } from "./ops";
+import type { SlotAddress } from "./op-vocabulary";
 
 /** A deletion, with everything a caller needs to describe and apply it. */
 export interface BlockDeletion {

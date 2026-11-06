@@ -38,7 +38,7 @@ import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
 import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,
@@ -177,6 +177,34 @@ export function useStyleTarget(
     },
     choose,
     held,
+  };
+}
+
+/**
+ * The target for a look edited on its own, with no block selected: the look,
+ * read and written as a shared style is, its edits queued the same way.
+ * `undefined` while there is no look, or no host to store it.
+ *
+ * @experimental Settles with the Design panel's Block looks group.
+ */
+export function useLookTarget(
+  look: SharedStyleRow | undefined,
+  host: SharedStylesHost | undefined
+): StyleTarget | undefined {
+  const queued = useQueuedStyles(look, host);
+  if (look === undefined || host === undefined || queued === undefined) {
+    return undefined;
+  }
+  return {
+    kind: "shared",
+    worn: NONE,
+    style: queued.style,
+    readOnly: !host.mayChange
+      ? NO_DESIGN_RIGHT
+      : look.locked
+        ? lockedStyleReason(look.name)
+        : undefined,
+    write: queued.write,
   };
 }
 

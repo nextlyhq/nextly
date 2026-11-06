@@ -63,6 +63,7 @@ import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
 import { BlockCard, type CardVerbs } from "./block-card";
+import { CanvasPassageContext } from "./canvas-passage";
 import {
   ChosenMedia,
   ContentServicesContext,
@@ -229,103 +230,115 @@ export function InstanceInspectorPanel({
   // unlocked.
   const lockedReasonId = React.useId();
   const locked = inspection.identity.locked;
+  const onCanvas = React.useContext(CanvasPassageContext);
 
   return (
-    <div className="nx-inspector" data-instance="">
-      {/*
+    <OnCanvasHere.Provider
+      value={
+        onCanvas?.placementId === inspection.nodeId
+          ? onCanvas.exposureId
+          : undefined
+      }
+    >
+      <div className="nx-inspector" data-instance="">
+        {/*
         The same card every block gets. Its description says what this IS —
         "Component", for the author who clicked into a header and is wondering
         why the Style tab went — with the usage count beside it when the
         library could say, because an edit to this component's definition
         reaches every one of those pages.
       */}
-      <BlockCard
-        // Keyed by node so a rename half-typed for one instance does not carry
-        // to the next, exactly as the block inspector's does.
-        key={`${inspection.nodeId}:card`}
-        // The editor's fallback mark: no block icon names a component.
-        icon={undefined}
-        type={inspection.label}
-        name={inspection.identity.name}
-        description={`Component${variantPhrase(inspection.variant)}${
-          inspection.usedOn === undefined
-            ? ""
-            : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`
-        }`}
-        lock={lockStatusOf(
-          editor.document,
-          inspection.nodeId,
-          lockViewOf(editor)
+        <BlockCard
+          // Keyed by node so a rename half-typed for one instance does not carry
+          // to the next, exactly as the block inspector's does.
+          key={`${inspection.nodeId}:card`}
+          // The editor's fallback mark: no block icon names a component.
+          icon={undefined}
+          type={inspection.label}
+          name={inspection.identity.name}
+          description={`Component${variantPhrase(inspection.variant)}${
+            inspection.usedOn === undefined
+              ? ""
+              : ` · used on ${inspection.usedOn} ${inspection.usedOn === 1 ? "page" : "pages"}`
+          }`}
+          lock={lockStatusOf(
+            editor.document,
+            inspection.nodeId,
+            lockViewOf(editor)
+          )}
+          onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
+          onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
+          verbs={verbs}
+          // The lock is said once, by the card's own line, and the rows and the
+          // values no longer exposed point at it; a second sentence below said
+          // the same thing again.
+          reasonId={lockedReasonId}
+        />
+        <EditComponentButton verbs={verbs} />
+
+        <VariantPicker
+          editor={editor}
+          nodeId={inspection.nodeId}
+          definition={definition}
+          disabled={inspection.identity.locked}
+        />
+
+        {!inspection.definitionFound ? (
+          /*
+           * The same state the canvas draws as could-not-be-loaded, in words. A
+           * `status` region rather than an alert: it is a standing fact about
+           * this selection, not an event.
+           */
+          <p className="nx-inspector__note" role="status">
+            This component could not be loaded, so its properties cannot be
+            edited here. It may have been deleted, or the library was too large
+            to load whole.
+          </p>
+        ) : inspection.rows.length === 0 ? (
+          /*
+           * Zero exposed properties is a locked, reusable block — a footer — not
+           * a broken component, so this says what there is to do rather than
+           * that something is missing: the content lives on the definition, and
+           * the definition has a screen.
+           */
+          <NoFieldsNote verbs={verbs} />
+        ) : (
+          <section aria-labelledby={headingId}>
+            <h3 id={headingId} className="nx-inspector__heading">
+              Fields
+            </h3>
+            <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
+              <div className="nx-inspector__fields">
+                {inspection.rows.map(row => (
+                  <ExposedField
+                    // Keyed by node AND property, for the reason the block
+                    // inspector keys its fields: a bare id would let React reuse
+                    // one instance's field for the next instance's same-named
+                    // property, and the input would keep the previous one's
+                    // uncommitted text.
+                    key={`${inspection.nodeId}:${row.id}`}
+                    row={row}
+                    onSet={set}
+                    onReset={reset}
+                  />
+                ))}
+              </div>
+            </HeldByLock>
+          </section>
         )}
-        onRename={name => editor.apply(renameOp(inspection.nodeId, name))}
-        onLock={locked => editor.apply(lockOp(inspection.nodeId, locked))}
-        verbs={verbs}
-        // The lock is said once, by the card's own line, and the rows and the
-        // values no longer exposed point at it; a second sentence below said
-        // the same thing again.
-        reasonId={lockedReasonId}
-      />
-      <EditComponentButton verbs={verbs} />
 
-      <VariantPicker
-        editor={editor}
-        nodeId={inspection.nodeId}
-        definition={definition}
-        disabled={inspection.identity.locked}
-      />
-
-      {!inspection.definitionFound ? (
-        /*
-         * The same state the canvas draws as could-not-be-loaded, in words. A
-         * `status` region rather than an alert: it is a standing fact about
-         * this selection, not an event.
-         */
-        <p className="nx-inspector__note" role="status">
-          This component could not be loaded, so its properties cannot be edited
-          here. It may have been deleted, or the library was too large to load
-          whole.
-        </p>
-      ) : inspection.rows.length === 0 ? (
-        /*
-         * Zero exposed properties is a locked, reusable block — a footer — not
-         * a broken component, so this says what there is to do rather than
-         * that something is missing: the content lives on the definition, and
-         * the definition has a screen.
-         */
-        <NoFieldsNote verbs={verbs} />
-      ) : (
-        <section aria-labelledby={headingId}>
-          <h3 id={headingId} className="nx-inspector__heading">
-            Fields
-          </h3>
+        {inspection.orphaned.length > 0 ? (
+          // Held by the same Layers lock as the rows: discarding a stored value
+          // is an edit of the placement too.
           <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
-            <div className="nx-inspector__fields">
-              {inspection.rows.map(row => (
-                <ExposedField
-                  // Keyed by node AND property, for the reason the block
-                  // inspector keys its fields: a bare id would let React reuse
-                  // one instance's field for the next instance's same-named
-                  // property, and the input would keep the previous one's
-                  // uncommitted text.
-                  key={`${inspection.nodeId}:${row.id}`}
-                  row={row}
-                  onSet={set}
-                  onReset={reset}
-                />
-              ))}
-            </div>
+            <OrphanedOverrides
+              orphaned={inspection.orphaned}
+              onDiscard={reset}
+            />
           </HeldByLock>
-        </section>
-      )}
-
-      {inspection.orphaned.length > 0 ? (
-        // Held by the same Layers lock as the rows: discarding a stored value
-        // is an edit of the placement too.
-        <HeldByLock reasonId={locked ? lockedReasonId : undefined}>
-          <OrphanedOverrides orphaned={inspection.orphaned} onDiscard={reset} />
-        </HeldByLock>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </OnCanvasHere.Provider>
   );
 }
 
@@ -593,6 +606,12 @@ function NotEditable({ row }: { row: ExposedRow }): React.JSX.Element {
  * is the component's, so the Content tab's "edit it on the canvas" would not
  * be true of it.
  */
+/**
+ * The exposure of the placement shown whose passage the canvas is editing in
+ * place, if any: its field is held meanwhile.
+ */
+const OnCanvasHere = React.createContext<string | undefined>(undefined);
+
 function ExposedRichTextField({
   id,
   row,
@@ -605,20 +624,31 @@ function ExposedRichTextField({
   const services = React.useContext(ContentServicesContext);
   // Held by the placement's Layers lock or a lock inside the component.
   const held = React.useContext(HeldHere);
+  // Held while the canvas edits this passage in place: one editor serves
+  // both, and opening it here would take the passage from under the caret.
+  const onCanvas = React.useContext(OnCanvasHere) === row.id;
   if (services?.loadRichTextEditor === undefined) {
     return <NotEditable row={row} />;
   }
   return (
-    <RichTextField
-      id={id}
-      labelledBy={`${id}-label`}
-      value={row.value}
-      // Passed to the passage itself: a held row's wrapper disables its
-      // fieldset, which does not stop typing in a `contenteditable`.
-      disabled={held}
-      onCommit={value => onSet(row.id, value)}
-      services={services}
-    />
+    <>
+      <RichTextField
+        id={id}
+        labelledBy={`${id}-label`}
+        value={row.value}
+        // Passed to the passage itself: a held row's wrapper disables its
+        // fieldset, which does not stop typing in a `contenteditable`.
+        disabled={held || onCanvas}
+        onCommit={value => onSet(row.id, value)}
+        services={services}
+      />
+      {onCanvas ? (
+        <p className="nx-inspector__note" data-held="canvas">
+          This passage is being edited on the canvas. Finish there to edit it
+          here.
+        </p>
+      ) : null}
+    </>
   );
 }
 

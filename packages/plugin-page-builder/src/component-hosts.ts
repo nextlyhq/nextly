@@ -4,20 +4,19 @@
  * A component save is judged inside the documents that use it, and the index
  * is how those are found. It is a hint rather than a boundary: it is maintained
  * after commit, a backfill may not have walked every document yet, and some
- * content — a single, a nested blocks field — it cannot index at all. So the
+ * content — a nested blocks field — it cannot index at all. So the
  * answer says whether it is the whole list, from the same health reading the
  * usage counts use, and a caller treats a partial list as partial.
  *
  * @module component-hosts
  */
-import type { ClassUsageDirectApi } from "./class-usage-runtime";
+import { componentUsageIndex } from "./component-usage";
 import type { HostFinder, HostRef } from "./fields/blocks-composition";
 import { chunked } from "./id-batches";
+import { lastIdOf } from "./paged-walk";
+import type { UsageRowReader } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 import { indexIsWhole } from "./usage-index-health";
-
-/** How many index rows one page of the read returns. */
-const ROWS_PER_PAGE = 200;
 
 /**
  * How many index rows one component's lookup reads before calling the list a
@@ -26,37 +25,24 @@ const ROWS_PER_PAGE = 200;
  */
 const MOST_ROWS = 5000;
 
-/**
- * A finder over the component usage index.
- *
- * Reads as the SYSTEM: the index denies every access rule it declares, so an
- * untrusted read answers an empty list — which is indistinguishable from a
- * component nothing uses, the answer that lets a breaking change through.
- */
+/** A finder over the component usage index. */
 export function indexHostFinder(args: {
-  nextly: () => Promise<ClassUsageDirectApi>;
-  /** The index collection's RESOLVED slug; an integrator may rename it. */
-  indexCollection: string;
+  /** The component index's rows, read as they are stored. */
+  rows: () => UsageRowReader;
   /** Whether the index covers every document. */
   health: () => Promise<UsageIndexHealth>;
 }): HostFinder {
   return {
     whole: async () => indexIsWhole(await args.health()),
     placing: async componentIds => {
-      const nextly = await args.nextly();
+      const rows = args.rows();
       const listing = { hosts: new Map<string, HostRef>(), complete: true };
       let read = 0;
       // A whole frontier per query rather than a query per component: a host
       // walk can reach many components at once, and asking for each in turn
       // is a round trip per id.
       for (const ids of chunked(componentIds, IDS_PER_QUERY)) {
-        read += await readRows(
-          nextly,
-          args.indexCollection,
-          ids,
-          listing,
-          MOST_ROWS - read
-        );
+        read += await readRows(rows, ids, listing, MOST_ROWS - read);
         if (read >= MOST_ROWS) {
           listing.complete = false;
           break;
@@ -72,26 +58,20 @@ const IDS_PER_QUERY = 100;
 
 /** Read the index rows referencing any of `ids` into the listing; how many were read. */
 async function readRows(
-  nextly: ClassUsageDirectApi,
-  indexCollection: string,
+  rows: UsageRowReader,
   ids: readonly string[],
   listing: { hosts: Map<string, HostRef>; complete: boolean },
   budget: number
 ): Promise<number> {
   let read = 0;
+  let after: string | undefined;
   for (let page = 1; read < budget; page += 1) {
-    const answer = await nextly.find({
-      collection: indexCollection,
-      where: {
-        componentId: { in: [...ids] },
-        kind: { equals: "reference" },
-      },
-      limit: ROWS_PER_PAGE,
+    const answer = await rows({
+      where: componentUsageIndex.whereReferencingAny(ids),
       page,
-      sort: "id",
-      depth: 0,
-      overrideAccess: true,
+      ...(after === undefined ? {} : { after }),
     });
+    after = lastIdOf(answer.items) ?? after;
     for (const row of answer.items) {
       const host = hostOf(row);
       // A row this cannot address names a document that cannot be judged, so
@@ -100,23 +80,33 @@ async function readRows(
         listing.complete = false;
         continue;
       }
-      const key = `${host.slug}\u0000${host.id}\u0000${host.field}`;
+      const key = hostKeyOf(host);
       listing.hosts.set(key, merged(listing.hosts, host));
     }
     read += answer.items.length;
-    if (!answer.meta.hasNext) return read;
+    if (!answer.hasNext) return read;
   }
   return read;
 }
 
-/** One index row as a host, or `null` for a row that names no collection entry. */
+/** One host's identity: a Single by its slug, an entry by its collection and id. */
+function hostKeyOf(host: HostRef): string {
+  return `${host.single === true ? "single" : "collection"}\u0000${host.slug}\u0000${host.id}\u0000${host.field}`;
+}
+
+/** One index row as a host, or `null` for a row that names no document. */
 function hostOf(row: unknown): HostRef | null {
   if (typeof row !== "object" || row === null) return null;
   const value = row as Record<string, unknown>;
-  if (value.scope !== "collection") return null;
   const [slug, id, field] = [value.entity, value.entityKey, value.field];
-  if (!isName(slug) || !isName(id) || typeof field !== "string") return null;
-  return { slug, id, field, localized: isName(value.locale) };
+  if (!isName(slug) || typeof field !== "string") return null;
+  const localized = isName(value.locale);
+  // A Single has one document, filed under its slug with no id.
+  if (value.scope === "single") {
+    return id === "" ? { slug, id: "", field, localized, single: true } : null;
+  }
+  if (value.scope !== "collection" || !isName(id)) return null;
+  return { slug, id, field, localized };
 }
 
 /** A non-empty string: the index stores an absent key as the empty one. */
@@ -131,6 +121,6 @@ function isName(value: unknown): value is string {
  * is localized in any of them is one this cannot read, so that wins.
  */
 function merged(hosts: ReadonlyMap<string, HostRef>, host: HostRef): HostRef {
-  const seen = hosts.get(`${host.slug}\u0000${host.id}\u0000${host.field}`);
+  const seen = hosts.get(hostKeyOf(host));
   return seen === undefined || !seen.localized ? host : seen;
 }

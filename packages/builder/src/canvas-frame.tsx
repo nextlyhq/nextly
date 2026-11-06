@@ -78,6 +78,7 @@ import {
 } from "./geometry-dom";
 import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "./shell-state";
 import { SiteChromeCues } from "./site-chrome-cues";
+import { pageSchemeOf } from "./site-ground";
 
 /**
  * Where the frame's page comes from, and where in it the canvas is mounted.
@@ -1079,6 +1080,28 @@ const PAGE_CHROME_TOKENS: readonly {
     tokens: ["--nx-builder-region-opacity"],
   },
   {
+    // A collection list's note to its author holds the admin's words alone,
+    // so it may take the admin's face as well as its colours.
+    selector: "[data-nx-list-diagnostic]",
+    tokens: [
+      // The focus ring of the note's one action.
+      "--nx-builder-select",
+      "--nx-builder-warning",
+      "--nx-builder-danger",
+      "--nx-builder-surface-raised",
+      "--nx-builder-text",
+      "--nx-builder-scheme",
+      "--font-sans",
+      "--radius-sm",
+    ],
+  },
+  {
+    // A list drawing its empty state holds the site's content, so its tag
+    // reads only the editor's own names.
+    selector: "[data-nx-list-shows]",
+    tokens: ["--nx-builder-select", "--nx-builder-select-text"],
+  },
+  {
     selector: ".nx-canvas-region__badge, .nx-canvas-region__tag",
     tokens: [
       "--nx-builder-border",
@@ -1269,11 +1292,10 @@ function useLayerPlacement(
       content.hidden = false;
       // The scheme the page is drawn in, so the marks over it take the hue for
       // its ground rather than for the admin's theme.
-      const scheme = view.getComputedStyle(root).colorScheme;
-      box.setAttribute(
-        PAGE_SCHEME_ATTRIBUTE,
-        scheme.includes("dark") ? "dark" : "light"
-      );
+      // Judged from the ground the page paints, not from its `color-scheme`:
+      // a site offering a dark set declares `light dark` while showing a
+      // light page, and the dark hues are faint there.
+      box.setAttribute(PAGE_SCHEME_ATTRIBUTE, pageSchemeOf(root));
       const at = pointToHost(rootInFrameViewport(root), {
         origin: { x: 0, y: 0 },
         scale: painted,

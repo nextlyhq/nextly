@@ -1,11 +1,12 @@
 /**
- * Reaching the database from inside a save hook.
+ * Reading the documents the usage indexes describe.
  *
  * `class-usage-write` decides WHICH subjects a save owes an update to and
- * `class-usage-maintenance` reconciles one of them. Both take their database
- * access as an interface so they can be tested against values. This is the one
+ * `class-usage-maintenance` reconciles one of them. Both take their document
+ * reads as an interface so they can be tested against values. This is the one
  * place that turns those interfaces into real calls, through the Direct API a
- * hook is handed on `ctx.req.nextly`.
+ * hook is handed on `ctx.req.nextly`. The index rows themselves live in the
+ * plugin's own tables (`usage-index-tables`).
  *
  * Kept separate from both so the decisions stay testable without a database,
  * and so everything that knows how this runtime addresses a locale or a variant
@@ -14,11 +15,9 @@
  * @module class-usage-runtime
  */
 import type { ClassUsageDocumentStore } from "./class-usage-index-rebuild";
-import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
-import type { UsageRowReader } from "./usage-count";
-import type { GroupedUsageReader } from "./usage-index";
+import type { UsageScope } from "./usage-index";
 
 /**
  * The part of the Direct API this needs.
@@ -103,72 +102,32 @@ export interface ClassUsageDirectApi {
     id: string;
     overrideAccess?: boolean;
   }): Promise<unknown>;
+  /**
+   * A Single's one document, read without creating it: `createIfMissing:
+   * false` answers `null` for a Single nobody has saved, where any other read
+   * writes its default document as a side effect. With `whenAbsent:
+   * "default"` it answers, for such a Single, the default document that first
+   * read will store, still without storing it.
+   */
+  findSingle(args: {
+    slug: string;
+    createIfMissing: false;
+    whenAbsent?: "default";
+    draft?: boolean;
+    status?: "all";
+    locale?: string;
+    fallbackLocale?: false;
+    depth?: number;
+    overrideAccess?: boolean;
+  }): Promise<unknown>;
 }
 
 /**
- * The index table is written on the system's behalf, never a user's.
- *
- * Its access rules deny everything, which is what keeps these rows private —
- * `internal` only sets `admin.hidden`, so the rules are the single layer and
- * not a second one behind a first. A maintenance write that respected the
- * acting user would therefore fail for every user, and the index would simply
- * never be maintained.
+ * Documents are read on the system's behalf, never a user's: a document the
+ * acting user cannot see still renders what it places, and an index built
+ * from what one user may read would answer "used nowhere" for the rest.
  */
 const AS_THE_SYSTEM = { overrideAccess: true } as const;
-
-/**
- * The index store, backed by the Direct API.
- *
- * The paging shape is translated here rather than at the call site: the Direct
- * API answers `{ docs, hasNextPage }` and the reconciler asks for
- * `{ items, meta: { hasNext } }`. A missing `docs` becomes an EMPTY page rather
- * than an error, because the reconciler reads a page of no rows as "this
- * subject has no rows recorded" — which is the correct reading of a collection
- * that has never been written to.
- */
-export function classUsageIndexStore(
-  nextly: ClassUsageDirectApi,
-  /**
-   * The index collection's RESOLVED slug.
-   *
-   * Passed in rather than read from the module constant, because an integrator
-   * may rename a plugin's collections and the schema then creates only the
-   * renamed one. A store holding the declared name would issue every write
-   * against a collection that does not exist, and each save would report a
-   * maintenance failure on an installation that is otherwise correct.
-   */
-  indexCollection: string
-): ClassUsageIndexStore {
-  return {
-    // Passed through, not translated. The Direct API already answers
-    // `{ items, meta: { hasNext } }` — the same envelope the reconciler asks
-    // for. An adapter here would be a second statement of one shape, and the
-    // one it stated was the SERVICE's inner `{ docs, hasNextPage }`, which this
-    // never sees: every page came back empty, so no stored row was ever found,
-    // nothing was removed, and every save re-inserted rows it already had.
-    find: args =>
-      nextly.find({
-        collection: indexCollection,
-        where: args.where,
-        limit: args.limit,
-        page: args.page,
-        sort: args.sort,
-        ...AS_THE_SYSTEM,
-      }),
-    create: args =>
-      nextly.create({
-        collection: indexCollection,
-        data: args.data,
-        ...AS_THE_SYSTEM,
-      }),
-    delete: args =>
-      nextly.delete({
-        collection: indexCollection,
-        id: args.id,
-        ...AS_THE_SYSTEM,
-      }),
-  };
-}
 
 /**
  * Resolve a subject to the document behind it.
@@ -205,10 +164,12 @@ export function classUsageDocumentReader(
  * is not part of addressing a row. Separating them is what lets both callers
  * share one variant rule.
  */
-export interface UsageDocumentAddress {
-  /** The collection holding it. */
+interface UsageDocumentAddress {
+  /** Whether `entity` is a collection or a Single; a collection when absent. */
+  scope?: UsageScope;
+  /** The collection holding it, or the Single. */
   entity: string;
-  /** The document's id. */
+  /** The document's id; empty for a Single. */
   entityKey: string;
   /** The locale to resolve, or the empty string for a shared field. */
   locale: string;
@@ -227,7 +188,7 @@ export interface UsageDocumentAddress {
  * re-decide draft-versus-published for itself, or index the published row
  * under the draft subject the first time the two disagreed.
  */
-export function classUsageDocumentRowReader(
+function classUsageDocumentRowReader(
   nextly: ClassUsageDirectApi
 ): (address: UsageDocumentAddress) => Promise<unknown> {
   return async address => {
@@ -235,9 +196,9 @@ export function classUsageDocumentRowReader(
     // empty string is what the shared subject shape requires, never a claim
     // that some field is named that.
     const subject: ClassUsageSubject = {
-      scope: "collection",
       field: "",
       ...address,
+      scope: address.scope ?? "collection",
     };
     return subject.variant === "draft"
       ? readDraft(nextly, subject)
@@ -318,6 +279,7 @@ async function readById(
   subject: ClassUsageSubject,
   options: { draft?: boolean }
 ): Promise<Record<string, unknown> | undefined> {
+  if (subject.scope === "single") return readSingle(nextly, subject, options);
   const row = await nextly.findByID({
     collection: subject.entity,
     id: subject.entityKey,
@@ -333,6 +295,39 @@ async function readById(
     ...AS_THE_SYSTEM,
   });
   return recordOf(row, subject);
+}
+
+/**
+ * A Single's one document, as the system and without creating it.
+ *
+ * `status: "all"` reads the stored row in whatever state it is in, for the
+ * reason `readPublished` gives about collection entries; the draft read opts
+ * into the working draft the same way. No identity check: a Single is read by
+ * its slug, and the answer carries no key the subject could be compared with.
+ *
+ * A Single nobody has saved answers its default document, built by core as
+ * the first read will store it, and not stored. Its first ordinary read stores
+ * that document without a save hook, so indexing it as empty would leave the
+ * index at an exact zero while the Single renders what its defaults place.
+ */
+async function readSingle(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject,
+  options: { draft?: boolean }
+): Promise<Record<string, unknown> | undefined> {
+  const row = await nextly.findSingle({
+    slug: subject.entity,
+    createIfMissing: false,
+    whenAbsent: "default",
+    status: "all",
+    ...options,
+    ...localeOptions(subject),
+    depth: 0,
+    ...AS_THE_SYSTEM,
+  });
+  return typeof row === "object" && row !== null
+    ? (row as Record<string, unknown>)
+    : undefined;
 }
 
 /**
@@ -416,126 +411,6 @@ function localeOptions(subject: ClassUsageSubject): {
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
   return (row as Record<string, unknown>)[subject.field];
-}
-
-/** How many index rows one page of a batch usage read takes. */
-const USAGE_ROW_PAGE_SIZE = 500;
-
-/**
- * The rows of one usage index a predicate matches, a page at a time, backed by
- * the Direct API: what a batch usage read folds into documents.
- *
- * As the system, for the reason the grouped reader gives: the index denies
- * every access rule it declares, so an untrusted read answers nothing, which
- * reads as "used nowhere".
- */
-export function usageRowReader(
-  nextly: ClassUsageDirectApi,
-  /** The index collection's RESOLVED slug, since an integrator may rename it. */
-  indexCollection: string
-): UsageRowReader {
-  return async args => {
-    const found = await nextly.find({
-      collection: indexCollection,
-      where: args.where,
-      page: args.page,
-      // The Direct API clamps a page at 500 rows, so asking for that many
-      // makes each page the whole page.
-      limit: USAGE_ROW_PAGE_SIZE,
-      depth: 0,
-      ...AS_THE_SYSTEM,
-    });
-    return { items: found.items, hasNext: found.meta.hasNext };
-  };
-}
-
-/**
- * A grouped reader over one usage index, backed by the Direct API.
- *
- * Reads AS THE SYSTEM for the reason every other read of these tables does:
- * the index denies every access rule it declares, so an untrusted read answers
- * an empty set — and an empty set is indistinguishable from a thing nothing
- * uses, which is the answer that makes deleting it look safe.
- *
- * The bucket cap is left to the server rather than named here. Asking for a
- * specific one would be a second opinion about a bound this package does not
- * own, and the answer carries `truncated` either way — so the count reports the
- * limit it actually met rather than the one it hoped for.
- */
-export function usageCountReader(
-  nextly: ClassUsageDirectApi,
-  /** The index collection's RESOLVED slug, since an integrator may rename it. */
-  indexCollection: string
-): GroupedUsageReader {
-  return async args => {
-    const grouped = await nextly.group({
-      collection: indexCollection,
-      groupBy: args.groupBy,
-      where: args.where,
-      ...AS_THE_SYSTEM,
-    });
-    // The bucket KEYS, not the row counts inside them. Each bucket is one
-    // distinct value; the counts inside would put per-row multiplicity back.
-    return {
-      buckets: grouped.buckets.map(bucket => bucket.value),
-      truncated: grouped.truncated,
-    };
-  };
-}
-
-/**
- * A grouped reader over one of the plugin's OWN index collections, read with
- * no site hook shaping the answer.
- *
- * Health asks this whether any document could not be read whole, and the
- * answer decides whether every count is exact. Through the Direct API, a
- * site's `beforeRead` filter or list-query filter on the index collection
- * would hide the marker rows and the index would read as whole while it is
- * not. `ctx.services.ownCollections` reads the collection this plugin
- * declared as it is stored, as the system.
- */
-export function ownIndexReader(
-  own: {
-    group(
-      slug: string,
-      options: { groupBy: string; where?: Record<string, unknown> }
-    ): Promise<{
-      buckets: { value: string | null; count: number }[];
-      truncated: boolean;
-    }>;
-  },
-  /** The index collection's RESOLVED slug, since an integrator may rename it. */
-  indexCollection: string
-): GroupedUsageReader {
-  return async args => {
-    const grouped = await own.group(indexCollection, {
-      groupBy: args.groupBy,
-      where: args.where,
-    });
-    return {
-      buckets: grouped.buckets.map(bucket => bucket.value),
-      truncated: grouped.truncated,
-    };
-  };
-}
-
-/**
- * An index store whose WRITES are fenced by a backfill run.
- *
- * Reads pass straight through. Each create and delete runs only while the run
- * is still the current one, checked in a transaction of its own, so a pass a
- * newer run replaced (the bounds moved, or a maintenance write failed) cannot
- * land rows derived the old way after the new run has walked the document.
- */
-export function fencedIndexStore(
-  store: ClassUsageIndexStore,
-  fenced: <T>(write: () => Promise<T>) => Promise<T>
-): ClassUsageIndexStore {
-  return {
-    find: args => store.find(args),
-    create: args => fenced(() => store.create(args)),
-    delete: args => fenced(() => store.delete(args)),
-  };
 }
 
 /**
@@ -682,5 +557,80 @@ export function usageRebuildDocumentStore(
       });
       return document !== undefined;
     },
+  };
+}
+
+/**
+ * The document store a rebuild walks for one Single: its one document, or
+ * none when nobody has saved it.
+ *
+ * The same variant-scoped read the write path makes, so a backfill and a save
+ * file a Single's rows alike. A walk resuming after a cursor has already
+ * repaired the document, so it answers nothing more; `exists` answers whether
+ * the document is there now, which is what lets the sweep remove the rows of
+ * a draft that was discarded or published.
+ */
+export function singleRebuildDocumentStore(
+  nextly: ClassUsageDirectApi
+): ClassUsageDocumentStore {
+  const readRow = classUsageDocumentRowReader(nextly);
+  const read = (args: {
+    collection: string;
+    locale: string;
+    variant: ClassUsageSubject["variant"];
+  }) =>
+    readRow({
+      scope: "single",
+      entity: args.collection,
+      entityKey: "",
+      locale: args.locale,
+      variant: args.variant,
+    });
+  return {
+    find: async args => {
+      if (args.page !== 1 || args.after !== undefined) {
+        return { items: [], meta: { hasNext: false } };
+      }
+      const document = await read(args);
+      if (document === undefined)
+        return { items: [], meta: { hasNext: false } };
+      // The rebuild files the rows by the Single's slug and records the
+      // document's id as the walk's cursor. Refused without one, as a listed
+      // entry without one is: skipped, the scope would be recorded walked
+      // with the Single's rows never repaired.
+      if (typeof (document as { id?: unknown }).id !== "string") {
+        throw new Error(
+          `[page-builder] the usage backfill read the Single "${args.collection}" without a usable id, so it cannot be recorded`
+        );
+      }
+      return { items: [document], meta: { hasNext: false } };
+    },
+    exists: async args => (await read(args)) !== undefined,
+  };
+}
+
+/**
+ * One stored form of a host's blocks field, as the system reads it: a Single
+ * by its slug, without creating it, and a collection entry by its id.
+ * `undefined` where the document has no such form.
+ */
+export function hostFieldReader(
+  nextly: ClassUsageDirectApi
+): (
+  host: { slug: string; id: string; field: string; single?: boolean },
+  form: ClassUsageSubject["variant"]
+) => Promise<unknown> {
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (host, form) => {
+    const row = await readRow({
+      scope: host.single === true ? "single" : "collection",
+      entity: host.slug,
+      entityKey: host.id,
+      locale: "",
+      variant: form,
+    });
+    return row !== null && typeof row === "object"
+      ? (row as Record<string, unknown>)[host.field]
+      : undefined;
   };
 }
