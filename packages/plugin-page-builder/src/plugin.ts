@@ -74,6 +74,9 @@ import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
+import { registerComponentGuards } from "./component-delete/guards";
+import { componentDeleteRoutes } from "./component-delete/route";
+import { componentDeleteJob } from "./component-delete/sweep";
 import {
   componentFactsRoute,
   componentStoreShape,
@@ -114,9 +117,8 @@ import type {
 import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
-import { registerFencedWriteReport } from "./host-rewrite/after-commit";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
-import { progressStore } from "./host-rewrite/progress";
+import { registerInTransactionFence } from "./host-rewrite/in-transaction";
 import {
   COMPONENT_DELETE_REWRITE_SERVICE,
   componentDeleteRewriteService,
@@ -1317,6 +1319,28 @@ export const pageBuilder = (
     }
     return rewriteInstall;
   };
+  // What Delete component's sweep reads and moves, resolved per pass.
+  const componentDeleteSweepDeps = () => {
+    const installed = requireRewriteInstall();
+    const runs = fenceStore(installed.db, installed.dialect);
+    return {
+      runs: () => runs.openRuns(),
+      store: () => runs,
+      exists: async (componentId: string) => {
+        const nextly = await installed.site.nextly();
+        const found = await nextly.find({
+          collection: installed.store.collection,
+          where: { id: { equals: componentId } },
+          status: "all",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return found.items.length > 0;
+      },
+      now: () => new Date(),
+    };
+  };
 
   /**
    * The installed context, or a refusal naming why it is missing.
@@ -1881,15 +1905,26 @@ export const pageBuilder = (
           walkAgain: () => Promise.resolve(),
         };
       }
-      // A write that keeps a reference to a component being deleted, committed
-      // after the deletion converted that document, sends the document back to
-      // be converted again from what was saved.
-      registerFencedWriteReport({
+      // Every write holding a component being deleted is judged again last
+      // inside its own transaction: before the delete, it sends its document
+      // back to be converted again from what was saved; once the delete is
+      // under way, it is refused as made from a stale copy.
+      registerInTransactionFence({
         ctx,
-        fence: () => fenceStore(ctx.db, ctx.dialect),
-        progress: () => progressStore(ctx.db, ctx.dialect),
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
+      // A component's own delete only through Delete component, and no
+      // unpublish of one documents place. Registered after the Layout guard,
+      // so a component a Layout uses is refused naming the Layout first.
+      {
+        const placing = composition.hostsOf;
+        registerComponentGuards({
+          ctx,
+          components: composition.store.collection,
+          runs: () => fenceStore(ctx.db, ctx.dialect),
+          hostsOf: () => placing,
+        });
+      }
       rewriteInstall = rewriteInstallFor(ctx, opts, composition);
       // The breakpoints the write path judges a save against: one read of
       // the site's style, the same answer the blocks field gets. A removal's
@@ -2046,6 +2081,9 @@ export const pageBuilder = (
         // The breakpoint removal a write opened again, which nobody is
         // waiting on: carried on each pass until it is done.
         breakpointRemovalJob(removalService),
+        // Delete component's sweep: settled runs closed, and a delete that
+        // stopped after its write settled. Never a host write or a delete.
+        componentDeleteJob(componentDeleteSweepDeps),
       ],
       // The index is contributed unconditionally, alongside the pages it
       // describes. Its table existing is what lets the maintenance path write
@@ -2300,6 +2338,19 @@ export const pageBuilder = (
         // under it. The Layout's own delete and unpublish refuse every write
         // that does not come through here.
         removeLayoutRoute(),
+        // Delete component: the dry run, each step of the delete as the
+        // person who started it, and its progress. A component's own delete
+        // refuses every write that does not come through here.
+        ...componentDeleteRoutes({
+          store: componentStoreOf(opts),
+          install: () => {
+            const installed = requireRewriteInstall();
+            return {
+              rewrite: componentDeleteRewriteService(requireRewriteInstall),
+              runs: fenceStore(installed.db, installed.dialect),
+            };
+          },
+        }),
         // The Layouts an author may choose for a page, with the published
         // regions the editor draws around it, read as the author from the
         // component store the editor's library reads, under the bounds the

@@ -37,9 +37,14 @@ import {
   type DefinitionsAnswer,
 } from "./component-delete-step";
 import type { RewriteReport, StoredForm } from "./contract";
-import { fenceStore, type DeletionRun, type RunPurpose } from "./fence";
+import {
+  fenceStore,
+  walkedRuns,
+  type DeletionRun,
+  type RunPurpose,
+} from "./fence";
 import { progressStore, type HostProgress } from "./progress";
-import { rewriteHosts } from "./rewrite";
+import { rewriteHosts, type RunStore } from "./rewrite";
 import {
   siteHostReader,
   siteHostSource,
@@ -84,10 +89,20 @@ export interface ComponentDeleteRewriteService {
   open(
     componentId: string,
     caller: RewriteCaller,
-    purpose?: RunPurpose
+    purpose?: RunPurpose,
+    /** Where a new run starts: the component delete opens at `preflight`. */
+    startAt?: "converting" | "preflight"
   ): Promise<{ readonly opened: boolean; readonly run: DeletionRun }>;
   /** Rewrite the component's hosts for its `delete` run, resuming where it stopped. */
   rewrite(args: ComponentDeleteRewriteArgs): Promise<RewriteReport>;
+  /**
+   * Judge every host as a delete would, writing nothing and opening no run,
+   * so nothing is fenced: what the delete dialog shows before anyone
+   * confirms, and the check a delete makes before converting anything.
+   */
+  plan(
+    args: Pick<ComponentDeleteRewriteArgs, "componentId" | "caller">
+  ): Promise<RewriteReport>;
   /** What a run recorded about each document, or nothing when none is open. */
   progress(
     componentId: string,
@@ -162,8 +177,8 @@ export function componentDeleteRewriteService(
   const fence = () => fenceStore(install().db, install().dialect);
   const progress = () => progressStore(install().db, install().dialect);
   return {
-    open: (componentId, caller, purpose = "delete") =>
-      fence().open(componentId, purpose, runStarterOf(caller)),
+    open: (componentId, caller, purpose = "delete", startAt) =>
+      fence().open(componentId, purpose, runStarterOf(caller), startAt),
     close: (componentId, purpose = "delete") =>
       fence().close(componentId, purpose),
     progress: async (componentId, purpose = "delete") => {
@@ -192,15 +207,38 @@ export function componentDeleteRewriteService(
           },
         });
       }
-      return rewriteAsCaller(install(), fence(), progress(), args, run.id);
+      return rewriteAsCaller(
+        install(),
+        walkedRuns(fence(), args.dryRun === true),
+        progress(),
+        args,
+        run.id
+      );
     },
+    // A dry walk reads the run once, for its phase, and moves nothing: the
+    // stand-in answers that one read and refuses any move.
+    plan: args =>
+      rewriteAsCaller(
+        install(),
+        {
+          runById: runId =>
+            Promise.resolve({ id: runId, phase: "converting", cursor: null }),
+          advance: () => Promise.resolve(false),
+        },
+        progress(),
+        { ...args, dryRun: true },
+        PLAN_RUN_ID
+      ),
   };
 }
+
+/** The id a plan's stand-in run answers to; no stored run has it. */
+const PLAN_RUN_ID = "plan";
 
 /** One call of the rewrite, as the caller, with the component-delete step. */
 function rewriteAsCaller(
   installed: RewriteInstall,
-  fence: ReturnType<typeof fenceStore>,
+  runs: RunStore,
   progress: ReturnType<typeof progressStore>,
   args: ComponentDeleteRewriteArgs,
   /** The run whose starter was just checked against the caller. */
@@ -215,7 +253,7 @@ function rewriteAsCaller(
   const limits = installed.limits();
   return rewriteHosts(
     {
-      fence,
+      fence: runs,
       progress,
       source: siteHostSource(site),
       read: siteHostReader(site),

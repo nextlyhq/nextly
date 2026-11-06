@@ -10,7 +10,7 @@
  *
  * @module host-rewrite/progress
  */
-import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
+import { and, eq } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
@@ -41,12 +41,6 @@ export interface ProgressStore {
     state: HostState,
     reason?: string
   ): Promise<void>;
-  /**
-   * A document holding a reference to one of these components was written
-   * while its `delete` run was open: mark it pending and send the run back to
-   * its converting walk, so it is read again whichever write committed last.
-   */
-  requeue(componentIds: readonly string[], documentKey: string): Promise<void>;
   /**
    * A finished run asked again: mark every document it left as pending and
    * move it from done back to its converting walk, in one transaction, so a
@@ -102,8 +96,9 @@ async function writeRow(
 
 /**
  * Mark one document pending in a run's progress, through `handle`: a caller
- * sending the run back to its converting walk in the same transaction, so the
- * pending row and the run's phase land together or not at all.
+ * sending the run back to its converting walk in the same transaction (a
+ * write's own, for the component delete's fence), so the pending row and the
+ * run's phase land together or not at all.
  */
 export async function markPending(
   handle: ProgressHandle,
@@ -194,28 +189,6 @@ export function progressStore(
   return {
     all,
     record,
-    requeue: async (componentIds, documentKey) => {
-      if (componentIds.length === 0) return;
-      const r = db.table(componentDeletions);
-      const runs = await db
-        .select(componentDeletions)
-        .where(inArray(r.componentId, [...componentIds]))
-        .all();
-      // Only a delete run fences references, so only its documents are
-      // re-queued for holding one.
-      for (const run of runs.filter(row => row.purpose !== "strip-retired")) {
-        // ONE transaction: a pending row with the run left in its final walk,
-        // or done, would never be visited again, so the two land together or
-        // neither does.
-        await db.transaction(async tx => {
-          await markPending(tx, run.id, documentKey);
-          const t = tx.table(componentDeletions);
-          await tx
-            .update(componentDeletions, { phase: "converting", cursor: null })
-            .where(eq(t.id, run.id));
-        });
-      }
-    },
     reopenLeft: runId =>
       db.transaction(async tx => {
         if (!(await leftToPending(tx, runId))) return false;
