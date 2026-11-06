@@ -360,6 +360,8 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(codesOf(refused)).toEqual([REMOVAL_RECOUNT]);
+      // Ended with the refusal, so the publish asked again can take its own.
+      expect((await holdsOver(t).of([heroId])).get(heroId)).toBeUndefined();
       const live = (await t.nextly.findByID({
         collection: COMPONENTS_SLUG,
         id: heroId,

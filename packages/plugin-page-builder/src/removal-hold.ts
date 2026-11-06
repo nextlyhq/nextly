@@ -565,7 +565,7 @@ export function registerPublishRecount(args: {
   readonly ctx: RemovalFenceContext;
   readonly componentCollection: string;
   readonly componentField: string;
-  readonly holds: () => Pick<RemovalHoldStore, "of">;
+  readonly holds: () => Pick<RemovalHoldStore, "of" | "release">;
   readonly count: (componentId: string) => Promise<PlacementCount>;
   /** Whether the component store has the Draft/Published lifecycle. */
   readonly lifecycle: () => Promise<boolean>;
@@ -605,7 +605,14 @@ export function registerPublishRecount(args: {
       });
     }
     const now = await args.count(String(id));
-    if (!removing.some(hold => countGrew(now, hold))) return;
+    const grown = removing.filter(hold => countGrew(now, hold));
+    if (grown.length === 0) return;
+    // A hold whose count has grown is ended with the refusal, so the publish
+    // asked again takes a hold for the new count and is judged on that one
+    // alone, rather than refused until the old lease runs out.
+    for (const hold of grown) {
+      await args.holds().release(String(id), hold.token);
+    }
     throw NextlyError.validation({
       errors: [
         {

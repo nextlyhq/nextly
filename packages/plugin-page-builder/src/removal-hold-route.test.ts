@@ -24,7 +24,12 @@ const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 4_096 };
 
 /** A caller who may read and update components, and, unless said, publish. */
 function contextFor(
-  options: { mayPublish?: boolean; localized?: boolean } = {}
+  options: {
+    mayPublish?: boolean;
+    /** Whether a filter limits the publish right to some entries. */
+    publishFiltered?: boolean;
+    localized?: boolean;
+  } = {}
 ): PluginRouteContext {
   return {
     self: { collections: {} },
@@ -39,8 +44,16 @@ function contextFor(
     },
     caller: {
       authMethod: "session",
-      can: async (action: string) =>
-        action !== "publish" || options.mayPublish !== false,
+      can: async (
+        action: string,
+        _slug: string,
+        asked?: { anyEntry?: boolean }
+      ) => {
+        if (action !== "publish") return true;
+        if (options.mayPublish === false) return false;
+        // A filtered right answers yes only to the type-level question.
+        return options.publishFiltered !== true || asked?.anyEntry === true;
+      },
       identity: async () => ({ user: { id: "u1" } }),
     },
   } as unknown as PluginRouteContext;
@@ -51,6 +64,7 @@ function route(
   count: UsageCount | (() => Promise<UsageCount>),
   options: {
     mayPublish?: boolean;
+    publishFiltered?: boolean;
     localized?: boolean;
     /** Whether the hold is still in force once counted; it is unless said. */
     inForce?: boolean;
@@ -239,6 +253,22 @@ describe("asking for a removal's hold", () => {
     expect(NextlyError.isForbidden(error)).toBe(true);
     expect(held).toEqual([]);
     expect(counted).toEqual([]);
+  });
+
+  it("holds nothing for a caller whose publish right a filter limits, still asking again", async () => {
+    const filtered = { publishFiltered: true };
+    const same = route({ documents: 2, complete: true }, filtered);
+    const grown = route({ documents: 3, complete: true }, filtered);
+
+    const kept = await (await same.ask(BODY)).json();
+    const asked = await (await grown.ask(BODY)).json();
+
+    expect(kept.item.kind).toBe("held");
+    expect(asked.item).toEqual({
+      kind: "recount",
+      reach: { count: 3, complete: true },
+    });
+    expect([...same.held, ...grown.held]).toEqual([]);
   });
 
   it("holds nothing for a localized store, which retires nothing", async () => {

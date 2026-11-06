@@ -103,9 +103,8 @@ export function removalHoldRoutes(
         // component, and may publish the removal a hold is for, which the
         // route's update permission alone does not grant.
         await requireReadable(ctx, slug, body.id);
-        if (
-          (await ctx.caller?.can("publish", slug, { anyEntry: true })) !== true
-        ) {
+        const publishes = await mayPublish(ctx, slug);
+        if (publishes === "none") {
           throw NextlyError.forbidden({
             logContext: { reason: "removal-hold-cannot-publish", id: body.id },
           });
@@ -115,6 +114,15 @@ export function removalHoldRoutes(
         // removal there loses no value and nothing is held.
         if (await isLocalized(ctx, slug)) {
           return held(await count());
+        }
+        // A caller whose publish right some entries' filter limits may not be
+        // allowed to publish THIS component, and a hold fences other
+        // people's writes, so nothing is held for them: they are still asked
+        // again when the count has grown, and their publish is authorized at
+        // the write as every publish is.
+        if (publishes === "some") {
+          const counted = await count();
+          return countGrew(counted, body) ? recount(counted) : held(counted);
         }
         const hold = {
           properties: body.properties,
@@ -137,14 +145,10 @@ export function removalHoldRoutes(
           await args.holds().release(body.id, hold.token);
           throw error;
         }
-        const reach = { count: counted.documents, complete: counted.complete };
         if (countGrew(counted, hold)) {
           // The designer is asked again, so nothing stays held meanwhile.
           await args.holds().release(body.id, hold.token);
-          return respondMutation<RemovalHoldResult>(
-            "More documents place this component than you confirmed.",
-            { kind: "recount", reach }
-          );
+          return recount(counted);
         }
         // The lease ran while counting, so it is run again from now, and only
         // while this request's hold is still in force: one that ran out
@@ -163,6 +167,32 @@ export function removalHoldRoutes(
       },
     },
   ];
+}
+
+/** The answer for a count grown past the one confirmed. */
+function recount(counted: UsageCount): Response {
+  return respondMutation<RemovalHoldResult>(
+    "More documents place this component than you confirmed.",
+    {
+      kind: "recount",
+      reach: { count: counted.documents, complete: counted.complete },
+    }
+  );
+}
+
+/**
+ * Whether the caller may publish components: every one, only those some
+ * filter matches, or none. Asked with no entry named, a filtered right
+ * answers no, so it is told apart from one that holds for every entry.
+ */
+async function mayPublish(
+  ctx: PluginRouteContext,
+  slug: string
+): Promise<"all" | "some" | "none"> {
+  if ((await ctx.caller?.can("publish", slug)) === true) return "all";
+  return (await ctx.caller?.can("publish", slug, { anyEntry: true })) === true
+    ? "some"
+    : "none";
 }
 
 /** The answer for a removal held, or one that needs no hold. */

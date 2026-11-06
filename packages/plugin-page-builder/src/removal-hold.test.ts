@@ -338,7 +338,12 @@ function harness(
     ctx,
     componentCollection: "components",
     componentField: "content",
-    holds: () => ({ of: holdsOf }),
+    holds: () => ({
+      of: holdsOf,
+      release: async (id, token) => {
+        released.push(token === undefined ? id : `${id} ${token}`);
+      },
+    }),
     count: async () => options.count ?? { documents: 0, complete: true },
     lifecycle: async () => options.lifecycle !== false,
   });
@@ -692,6 +697,20 @@ describe("counting again as a held removal is published", () => {
     expect(
       NextlyError.isCode(await publish(both.run, []), "VALIDATION_ERROR")
     ).toBe(true);
+  });
+
+  it("ends the holds whose count grew as it refuses, so the publish asked again can pass", async () => {
+    // Another removal's hold, confirmed at 5, which the count has not passed.
+    const other = { ...HELD, confirmed: 5, token: "t2" };
+    const { run, released } = harness({
+      holds: { hero: [HELD, other] },
+      count: { documents: 3, complete: true },
+    });
+
+    const error = await publish(run, []);
+
+    expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
+    expect(released).toEqual(["hero t1"]);
   });
 
   it("refuses it when a whole count confirmed is now only a floor", async () => {
