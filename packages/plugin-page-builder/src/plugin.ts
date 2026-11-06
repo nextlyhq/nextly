@@ -2266,6 +2266,7 @@ export const pageBuilder = (
           store: componentStoreOf(opts),
           holds: requireRemovalHolds,
           countPlacements,
+          limits: () => opts.limits ?? DEFAULT_LIMITS,
         }),
         // How many placements chose one of a component's variants, for the
         // dialog that confirms deleting it: the usage index lists the hosts,

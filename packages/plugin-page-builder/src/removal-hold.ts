@@ -28,8 +28,8 @@
  *   {@link HOLD_MS}, so a publish that never lands holds nothing for long.
  *
  * Holds are kept in the plugin's bookkeeping table beside the retired ids,
- * under a kind of their own, one row per held field or slot, read and written
- * as the system. Each removal asked for keeps its own hold, so two asked for
+ * under a kind of their own, its ids cut into rows of a bounded size, read
+ * and written as the system. Each removal asked for keeps its own hold, so two asked for
  * at once neither end nor replace each other's.
  *
  * @module removal-hold
@@ -111,12 +111,19 @@ const IDS_PER_READ = 128;
 const ROWS_PER_PAGE = 500;
 
 /**
- * One stored row of a hold. A hold is filed as one row per held field or
- * slot, each a short id as the retired ids are, so no row outgrows the text
- * column on any dialect however many fields a removal names; and a head row
- * with the rest, written LAST and ended FIRST, so a hold is read only whole.
- * A head carries its lease in its key, so renewing it writes a new head
- * before ending the old one, and the hold is never unheld between the two.
+ * How much of a hold's ids one row carries, in UTF-16 units of their JSON.
+ * Each unit is at most three bytes once stored, so a row stays far under
+ * MySQL's 64 KiB TEXT however long an id is or however many a removal names.
+ */
+const IDS_PER_ROW = 8_000;
+
+/**
+ * One stored row of a hold. A hold's ids, as one JSON text, are cut into
+ * parts of {@link IDS_PER_ROW}, one row each, so a hold takes rows in
+ * proportion to its size rather than one per id; and a head row with the
+ * rest, written LAST and ended FIRST, so a hold is read only whole. A head
+ * carries its lease in its key, so renewing it writes a new head before
+ * ending the old one, and the hold is never unheld between the two.
  */
 type HoldRow =
   | {
@@ -125,55 +132,83 @@ type HoldRow =
       readonly until: number;
       readonly confirmed: number;
       readonly confirmedComplete: boolean;
-      readonly properties: number;
-      readonly slots: number;
+      /** How many parts the ids were cut into. */
+      readonly parts: number;
     }
   | {
-      readonly part: "property" | "slot";
+      readonly part: "ids";
       readonly token: string;
-      /** Until when an id with no head is a hold still being written. */
+      /** Until when a part with no head is a hold still being written. */
       readonly until: number;
-      readonly id: string;
+      /** Where the part falls among the hold's parts, from 0. */
+      readonly at: number;
+      readonly text: string;
     };
+
+/** Whether a value is a count: a whole number, none or more. */
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/** A head row's fields, read strictly. */
+function headRowOf(
+  row: Record<string, unknown>,
+  token: string,
+  until: number
+): HoldRow | null {
+  const { confirmed, confirmedComplete, parts } = row;
+  if (typeof confirmed !== "number" || typeof confirmedComplete !== "boolean") {
+    return null;
+  }
+  return isCount(parts)
+    ? { part: "head", token, until, confirmed, confirmedComplete, parts }
+    : null;
+}
 
 /** A stored hold row, read strictly: anything else holds nothing. */
 function holdRowOf(text: unknown): HoldRow | null {
   if (typeof text !== "string") return null;
+  let row: unknown;
   try {
-    const row = JSON.parse(text) as Record<string, unknown> | null;
-    if (
-      !isPlainRecord(row) ||
-      typeof row.token !== "string" ||
-      typeof row.until !== "number"
-    ) {
-      return null;
-    }
-    const { token, until } = row;
-    if (row.part === "property" || row.part === "slot") {
-      return typeof row.id === "string"
-        ? { part: row.part, token, until, id: row.id }
+    row = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isPlainRecord(row)) return null;
+  const { token, until } = row;
+  if (typeof token !== "string" || typeof until !== "number") return null;
+  if (row.part === "head") return headRowOf(row, token, until);
+  if (row.part !== "ids" || !isCount(row.at) || typeof row.text !== "string") {
+    return null;
+  }
+  return { part: "ids", token, until, at: row.at, text: row.text };
+}
+
+/** A hold's ids, cut into the parts its rows carry. */
+function partsOf(ids: RetiredExposures): string[] {
+  const text = JSON.stringify({
+    properties: ids.properties,
+    slots: ids.slots,
+  });
+  const parts: string[] = [];
+  for (let at = 0; at < text.length; at += IDS_PER_ROW) {
+    parts.push(text.slice(at, at + IDS_PER_ROW));
+  }
+  return parts;
+}
+
+/** A hold's ids joined again from its parts, or `null` if they are not. */
+function idsFrom(parts: readonly string[]): RetiredExposures | null {
+  try {
+    const ids = JSON.parse(parts.join("")) as unknown;
+    if (!isPlainRecord(ids)) return null;
+    const list = (value: unknown): string[] | null =>
+      Array.isArray(value) &&
+      value.every((id): id is string => typeof id === "string")
+        ? value
         : null;
-    }
-    const count = (value: unknown): value is number =>
-      typeof value === "number" && Number.isInteger(value) && value >= 0;
-    if (
-      row.part !== "head" ||
-      typeof row.confirmed !== "number" ||
-      typeof row.confirmedComplete !== "boolean" ||
-      !count(row.properties) ||
-      !count(row.slots)
-    ) {
-      return null;
-    }
-    return {
-      part: "head",
-      token,
-      until,
-      confirmed: row.confirmed,
-      confirmedComplete: row.confirmedComplete,
-      properties: row.properties,
-      slots: row.slots,
-    };
+    const properties = list(ids.properties);
+    const slots = list(ids.slots);
+    return properties === null || slots === null ? null : { properties, slots };
   } catch {
     return null;
   }
@@ -224,20 +259,22 @@ function headOf(
 function holdFrom(rows: readonly StoredRow[]): RemovalHold | null {
   const head = headOf(rows);
   if (head === undefined) return null;
-  const properties: string[] = [];
-  const slots: string[] = [];
+  const parts = new Map<number, string>();
   for (const { row } of rows) {
-    if (row.part === "property") properties.push(row.id);
-    if (row.part === "slot") slots.push(row.id);
+    if (row.part === "ids") parts.set(row.at, row.text);
   }
-  // A head is written after its ids and ended before them, so a count that
-  // differs is no hold this store wrote.
-  if (properties.length !== head.properties || slots.length !== head.slots) {
-    return null;
+  // A head is written after its parts and ended before them, so a part
+  // missing is no hold this store wrote.
+  const texts: string[] = [];
+  for (let at = 0; at < head.parts; at += 1) {
+    const text = parts.get(at);
+    if (text === undefined) return null;
+    texts.push(text);
   }
+  const ids = idsFrom(texts);
+  if (ids === null || parts.size !== head.parts) return null;
   return {
-    properties,
-    slots,
+    ...ids,
     confirmed: head.confirmed,
     confirmedComplete: head.confirmedComplete,
     until: head.until,
@@ -279,12 +316,13 @@ export function removalHoldStore(args: {
     componentId: string,
     row: HoldRow
   ) => {
-    // Keyed by what makes the row one of a kind: a head by its lease, an id
-    // by its field or slot, each within its hold.
-    const key =
-      row.part === "head"
-        ? [row.token, row.part, String(row.until)]
-        : [row.token, row.part, row.id];
+    // Keyed by what makes the row one of a kind: a head by its lease, a part
+    // by where it falls, each within its hold.
+    const key = [
+      row.token,
+      row.part,
+      String(row.part === "head" ? row.until : row.at),
+    ];
     await nextly.create({
       collection: args.collection,
       data: {
@@ -356,7 +394,7 @@ export function removalHoldStore(args: {
     hold: async (componentId, hold) => {
       const nextly = await args.nextly();
       // What ran out is ended first: a hold whose lease has passed, and the
-      // ids of one never finished, once they could no longer be one.
+      // parts of one never finished, once they could no longer be one.
       const at = now();
       for (const rows of byToken(
         await rowsOf(nextly, [componentId])
@@ -369,16 +407,15 @@ export function removalHoldStore(args: {
         if (lapsed) await end(nextly, rows);
       }
       const { token, until } = hold;
-      for (const id of hold.properties) {
+      const parts = partsOf(hold);
+      for (const [at, text] of parts.entries()) {
         await write(nextly, componentId, {
-          part: "property",
+          part: "ids",
           token,
           until,
-          id,
+          at,
+          text,
         });
-      }
-      for (const id of hold.slots) {
-        await write(nextly, componentId, { part: "slot", token, until, id });
       }
       await write(nextly, componentId, {
         part: "head",
@@ -386,8 +423,7 @@ export function removalHoldStore(args: {
         until,
         confirmed: hold.confirmed,
         confirmedComplete: hold.confirmedComplete,
-        properties: hold.properties.length,
-        slots: hold.slots.length,
+        parts: parts.length,
       });
     },
   };

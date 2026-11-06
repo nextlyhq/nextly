@@ -136,7 +136,7 @@ describe("the hold store", () => {
     expect(await store.of(["hero"])).toEqual(new Map([["hero", [other]]]));
   });
 
-  it("files a hold of as many fields as an envelope may hold in short rows", async () => {
+  it("files a hold of as many fields as an envelope may hold in a few short rows", async () => {
     const table = memoryTable();
     const store = storeOver(table);
     const many = Array.from({ length: 1000 }, (_, at) =>
@@ -147,11 +147,26 @@ describe("the hold store", () => {
     await store.hold("hero", big);
 
     expect(await store.of(["hero"])).toEqual(new Map([["hero", [big]]]));
-    // Each row far under MySQL's 64 KiB TEXT, whatever the removal names.
+    // Rows in proportion to the hold's size, not one per id (2,001 here),
+    // each far under MySQL's 64 KiB TEXT.
+    expect(table.rows.length).toBeLessThanOrEqual(20);
     const longest = Math.max(
       ...table.rows.map(row => String(row.exposureId).length)
     );
-    expect(longest).toBeLessThan(1_024);
+    expect(longest).toBeLessThan(20_000);
+  });
+
+  it("files an id longer than one row carries, whole", async () => {
+    const table = memoryTable();
+    const store = storeOver(table);
+    // Quotes and a letter outside the BMP, so the cut falls mid-escape too.
+    const long = `"é😀\\`.repeat(5_000);
+    const hold = { ...HELD, properties: [long], slots: [] };
+
+    await store.hold("hero", hold);
+
+    expect(await store.of(["hero"])).toEqual(new Map([["hero", [hold]]]));
+    expect(table.rows.length).toBeGreaterThan(2);
   });
 
   it("reads a hold that has run out as none", async () => {
@@ -171,7 +186,7 @@ describe("the hold store", () => {
     await store.hold("hero", HELD);
     // Its head gone first, as an ending takes it, with its ids still there.
     const head = table.rows.findIndex(row =>
-      String(row.exposureId).includes('"head"')
+      String(row.exposureId).includes('"part":"head"')
     );
     table.rows.splice(head, 1);
     const unparsed = memoryTable([
@@ -192,7 +207,7 @@ describe("the hold store", () => {
     const store = storeOver(table);
     await store.hold("hero", HELD);
     const id = table.rows.findIndex(row =>
-      String(row.exposureId).includes('"property"')
+      String(row.exposureId).includes('"part":"ids"')
     );
     table.rows.splice(id, 1);
 
@@ -204,7 +219,9 @@ describe("the hold store", () => {
     const store = storeOver(table);
     await store.hold("hero", HELD);
     const heads = () =>
-      table.rows.filter(row => String(row.exposureId).includes('"head"'));
+      table.rows.filter(row =>
+        String(row.exposureId).includes('"part":"head"')
+      );
     const before = heads().length;
 
     expect(await store.renew("hero", "t1", 9_000)).toBe(true);
@@ -239,7 +256,7 @@ describe("the hold store", () => {
     now = 1_600;
     await store.hold("hero", HELD);
 
-    // The lapsed hold's two ids and head gone; the new one's three added.
+    // The lapsed hold's part and head gone; the new one's two added.
     expect(table.rows).toHaveLength(rows);
     expect(
       (await store.of(["hero"])).get("hero")!.map(hold => hold.token)

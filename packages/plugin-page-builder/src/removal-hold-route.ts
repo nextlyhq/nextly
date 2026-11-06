@@ -9,7 +9,11 @@
  *
  * @module removal-hold-route
  */
-import { MAX_ENVELOPE_ENTRIES } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  MAX_ENVELOPE_ENTRIES,
+  type DocumentLimits,
+} from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   respondMutation,
@@ -33,20 +37,25 @@ import type { UsageCount } from "./usage-count";
 const ID = z.string().trim().min(1).max(256);
 
 /**
- * A field or slot id as the component envelope stores it: kept exactly as
- * written, since the fence matches it against a placement's own keys.
+ * The body a hold is asked with, parsed at the boundary. A field or slot id
+ * is kept exactly as written, since the fence matches it against a
+ * placement's own keys, and bounded only as the envelope holding it is: no
+ * id outgrows the document it is stored in.
  */
-const EXPOSURE_ID = z.string().min(1).max(256);
+function holdBody(limits: DocumentLimits) {
+  const exposureId = z.string().min(1).max(limits.maxBytes);
+  return z.object({
+    id: ID,
+    // As many as an envelope may hold.
+    properties: z.array(exposureId).max(MAX_ENVELOPE_ENTRIES),
+    slots: z.array(exposureId).max(MAX_ENVELOPE_ENTRIES),
+    confirmed: z.number().int().min(0),
+    confirmedComplete: z.boolean(),
+  });
+}
 
-/** The body a hold is asked with, parsed at the boundary. */
-const HOLD_BODY = z.object({
-  id: ID,
-  // As many as an envelope may hold.
-  properties: z.array(EXPOSURE_ID).max(MAX_ENVELOPE_ENTRIES),
-  slots: z.array(EXPOSURE_ID).max(MAX_ENVELOPE_ENTRIES),
-  confirmed: z.number().int().min(0),
-  confirmedComplete: z.boolean(),
-});
+/** The body a hold is asked with, once parsed. */
+type HoldBody = z.infer<ReturnType<typeof holdBody>>;
 
 /** What the routes are wired with. */
 export interface RemovalHoldRouteArgs {
@@ -56,6 +65,8 @@ export interface RemovalHoldRouteArgs {
   readonly countPlacements: (
     ctx: PluginRouteContext
   ) => (id: string) => Promise<UsageCount>;
+  /** The site's document bounds, which bound an id as its envelope does. */
+  readonly limits?: () => DocumentLimits;
   /** The live clock, injected so a test can move it. */
   readonly clock?: () => number;
 }
@@ -83,7 +94,10 @@ export function removalHoldRoutes(
       path: REMOVAL_HOLD_ROUTE_PATH,
       requiredPermission: updatePermission,
       handler: async (req, ctx) => {
-        const body = parsed(await req.json().catch(() => undefined));
+        const body = parsed(
+          await req.json().catch(() => undefined),
+          args.limits?.() ?? DEFAULT_LIMITS
+        );
         const slug = componentsSlug(ctx, args.store);
         // Preconditions, before anything is held: the caller reads the
         // component, and may publish the removal a hold is for, which the
@@ -182,8 +196,8 @@ async function isLocalized(
 }
 
 /** The hold body, or the validation error naming what is wrong. */
-function parsed(value: unknown): z.infer<typeof HOLD_BODY> {
-  const body = HOLD_BODY.safeParse(value);
+function parsed(value: unknown, limits: DocumentLimits): HoldBody {
+  const body = holdBody(limits).safeParse(value);
   if (!body.success) {
     throw invalid(
       "Name the component, the fields and slots being removed, and the count confirmed."

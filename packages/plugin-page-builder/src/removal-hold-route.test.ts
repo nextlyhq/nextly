@@ -19,6 +19,9 @@ import { REMOVAL_HOLD_ROUTE_PATH } from "./removal-hold-contract";
 import { removalHoldRoutes } from "./removal-hold-route";
 import type { UsageCount } from "./usage-count";
 
+/** The site's document bounds: small, so a test can pass them. */
+const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 4_096 };
+
 /** A caller who may read and update components, and, unless said, publish. */
 function contextFor(
   options: { mayPublish?: boolean; localized?: boolean } = {}
@@ -88,6 +91,7 @@ function route(
       now += options.countTakes ?? 0;
       return typeof count === "function" ? count() : count;
     },
+    limits: () => LIMITS,
     clock: () => now,
   });
   const ask = (body: unknown) =>
@@ -275,6 +279,22 @@ describe("asking for a removal's hold", () => {
     await ask({ ...BODY, properties: [" title "] });
 
     expect(held[0]!.hold.properties).toEqual([" title "]);
+  });
+
+  it("bounds a field id only as the document holding it is bounded", async () => {
+    const { ask, held } = route({ documents: 2, complete: true });
+    // Longer than the 256 every other id here is held to: an envelope may
+    // store one.
+    const long = "f".repeat(306);
+
+    await ask({ ...BODY, properties: [long] });
+    const tooLong = await ask({
+      ...BODY,
+      properties: ["f".repeat(LIMITS.maxBytes + 1)],
+    }).catch((refused: unknown) => refused);
+
+    expect(held[0]!.hold.properties).toEqual([long]);
+    expect(NextlyError.isCode(tooLong, "VALIDATION_ERROR")).toBe(true);
   });
 
   it("accepts a removal of as many fields as an envelope may hold", async () => {
