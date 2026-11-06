@@ -342,7 +342,8 @@ export type AdminContributionAction =
   | { open: ComponentPath }
   | {
       run: {
-        method: RouteMethod;
+        /** A write's method: an action acts on rows. */
+        method: Exclude<RouteMethod, "GET">;
         /** The route's `path`, as the plugin declares it. */
         path: string;
         /** The route's `mount`; the plugin's own, `"plugin"`, when absent. */
