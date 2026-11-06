@@ -31,6 +31,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   Button,
+  IconField,
   Input,
   Label,
   Select,
@@ -45,13 +46,14 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { CollectionControl, SortControl } from "./collection-loop-controls";
-import type { QueryField } from "./list-query-model";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
   type ContentControlType,
 } from "./content-control-types";
 import { propLabel, type EditableProp } from "./inspector";
+import type { QueryField } from "./list-query-model";
+import { loadLucideIcons } from "./lucide-icon-source";
 import type { OpenPassages } from "./open-passages";
 import { RelationControl } from "./relation-control";
 import { radioGroupStep } from "./roving-radios";
@@ -1418,6 +1420,40 @@ export function UnsupportedField({
   );
 }
 
+/**
+ * An `icon` prop: the chosen icon, drawn with its name and set, as one button
+ * that opens a search-first picker, and a clear button. The set loads when
+ * the control first draws an icon or opens its picker. A chosen icon commits
+ * at once, as one undo step; clearing removes the prop. An id the set no
+ * longer draws is shown with a warning and kept until another is chosen.
+ */
+function IconControl({
+  id,
+  prop,
+  disabled,
+  onCommit,
+  label,
+}: ContentControlProps): React.JSX.Element {
+  const name = label ?? propLabel(prop.name, prop.schema);
+  return (
+    <div className="nx-inspector__field" data-content-control="icon">
+      <Label htmlFor={id}>{name}</Label>
+      <IconField
+        id={id}
+        label={name}
+        value={
+          typeof prop.value === "string" && prop.value !== ""
+            ? prop.value
+            : null
+        }
+        disabled={disabled}
+        loadIcons={loadLucideIcons}
+        onChange={next => onCommit(prop.name, next ?? undefined)}
+      />
+    </div>
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
@@ -1427,6 +1463,7 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   checkbox: CheckboxControl,
   select: SelectControl,
   media: MediaControl,
+  icon: IconControl,
   richText: RichTextControl,
   array: ArrayControl,
   relation: RelationControl,

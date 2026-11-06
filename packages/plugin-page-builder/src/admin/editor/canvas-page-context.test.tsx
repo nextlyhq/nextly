@@ -49,6 +49,17 @@ describe("the canvas's page context", () => {
     await expect(result.current.resolveMedia("gone")).resolves.toBeNull();
   });
 
+  it("draws an icon from the set a published page draws with", async () => {
+    const { result } = renderHook(() => useCanvasPageContext());
+    const star = await result.current.resolveIcon?.("lucide:star");
+    expect(star?.id).toBe("lucide:star");
+    expect(star?.body).toContain("<path");
+    // An id the set does not draw answers nothing, so the block draws nothing.
+    await expect(
+      result.current.resolveIcon?.("lucide:not-an-icon")
+    ).resolves.toBeNull();
+  });
+
   it("is one object for the editor's life, which the canvas keeps its drawn blocks by", () => {
     const { result, rerender } = renderHook(() => useCanvasPageContext());
     const first = result.current;
