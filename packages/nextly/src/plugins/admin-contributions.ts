@@ -203,19 +203,20 @@ export interface PluginCollectionView {
 }
 
 /**
+ * The built-in document actions a plugin may hide or replace, as the one list
+ * the boot check, the admin and the type below all read. More may join here,
+ * and only here: the union is derived from this list, so a plugin cannot
+ * compile against an action the boot check would refuse.
+ */
+export const OVERRIDABLE_DOCUMENT_ACTIONS = ["delete", "unpublish"] as const;
+
+/**
  * @experimental The built-in document actions a plugin may hide or replace.
  * More may join; a plugin naming one this version does not know is refused
  * at boot rather than silently ignored.
  */
-export type OverridableDocumentAction = "delete" | "unpublish";
-
-/**
- * The actions `OverridableDocumentAction` names, as a value, for the boot
- * check and the admin to read. Typed against the union so the two cannot
- * name different actions.
- */
-export const OVERRIDABLE_DOCUMENT_ACTIONS: readonly OverridableDocumentAction[] =
-  ["delete", "unpublish"];
+export type OverridableDocumentAction =
+  (typeof OVERRIDABLE_DOCUMENT_ACTIONS)[number];
 
 /**
  * @experimental What a plugin does with one built-in document action.
