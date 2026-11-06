@@ -14,11 +14,13 @@
  *
  * ## Who may ask
  *
- * The route is authenticated, and a read of a collection the caller may not
- * read (`caller.can("read", slug)`) is refused before anything is read, as
- * the loop collections route lists only those. Every read then runs through
- * core's one access gate as the caller (`readingAsUser`), so their row and
- * field rules apply exactly as they do to their own reads in the admin.
+ * The route is authenticated, and every read runs through core's one access
+ * gate as the caller (`readingAsUser`, `overrideAccess: false`): the gate is
+ * the only door. A caller who may not read the collection is refused by it
+ * before any row is read or any read hook runs, with the refusal the admin
+ * gives them, and their row and field rules apply exactly as they do to
+ * their own reads there. No second check is made here, so the two can never
+ * answer one caller differently.
  *
  * ## Caching
  *
@@ -32,7 +34,7 @@ import {
   LIST_MAX_SORT_LENGTH,
   readListQuery,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
@@ -126,49 +128,28 @@ const ListEntriesBody = z
   })
   .strict();
 
-/**
- * What the route reads with, injected so the gate and the read are tested
- * without a server.
- */
+/** What the route reads with, injected so the read is tested without a server. */
 export interface ListEntriesReads {
-  /** Whether the caller may read this collection. */
-  mayRead(slug: string): Promise<boolean>;
   /** One read as the caller reads it, drafts included, in the read's language. */
   find(query: ListEntriesRequest["query"]): Promise<ListEntriesResponse>;
 }
 
 /**
- * Answer one read: refused unless the caller may read the collection, and
- * otherwise the rows as the caller reads them. A refusal of the read itself,
- * a sort the reader will not take or a field the public may not filter by,
- * travels unchanged, so the canvas tells the author what the page would do.
+ * Answer one read: the rows as the caller reads them. Every refusal travels
+ * unchanged: core's refusal of a collection the caller may not read, a sort
+ * the reader will not take, or a field the public may not filter by, so the
+ * canvas tells the author what the page would do.
  */
-export async function readListEntries(
+export function readListEntries(
   request: ListEntriesRequest,
   reads: ListEntriesReads
 ): Promise<ListEntriesResponse> {
-  // The precondition runs first: nothing is read for a caller who may not
-  // read the collection, and the refusal names nothing about it.
-  if (!(await reads.mayRead(request.query.collection))) {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "list-entries-forbidden",
-        collection: request.query.collection,
-      },
-    });
-  }
   return reads.find(request.query);
 }
 
-/** The reads the route binds: the caller's permission and the editor reader. */
+/** The read the route binds: the editor reader, as the caller. */
 function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
   return {
-    // No caller is no reader: the route is authenticated, so this is a guard
-    // for a caller the dispatcher could not resolve.
-    mayRead: slug =>
-      ctx.caller === null
-        ? Promise.resolve(false)
-        : ctx.caller.can("read", slug),
     // Imported at call time, so loading this module costs none of the
     // runtime, as the route's other reads are.
     find: async query => {
@@ -191,7 +172,7 @@ function directListEntriesReads(ctx: PluginRouteContext): ListEntriesReads {
 
 /**
  * The route declaration. Authenticated (no `public: true`), with no
- * permission of its own: the collection read is asked of the caller above.
+ * permission of its own: core's gate judges each read as the caller.
  * A POST because a read carries a query, never because it writes; `noStore`
  * because its answer is one person's.
  */
