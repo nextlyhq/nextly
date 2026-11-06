@@ -65,6 +65,7 @@ const sectionProps: DocumentPanelSectionProps = {
 function panel(mode: "edit" | "create" = "edit") {
   return render(
     <DocumentPanel
+      place={{ place: "collection.edit", context: null }}
       mode={mode}
       entry={{ id: "l1", createdAt: "2026-10-01T09:00:00Z" }}
       hasStatus={false}
