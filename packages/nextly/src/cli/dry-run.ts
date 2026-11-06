@@ -32,8 +32,12 @@ export function withDryRun(
 
 /** One change the real run would make, by what it does to what. */
 export interface DryRunChange {
-  /** The verb after "Would": write, edit, remove, run, record or set. */
-  action: "write" | "edit" | "remove" | "run" | "record" | "set";
+  /**
+   * The verb after "Would": mostly write, edit, remove, run, record or set,
+   * and otherwise the verb the real run's own description of the change
+   * starts with, such as an upgrade step's.
+   */
+  action: string;
   /** A path, a command line, a ledger entry or a setting. */
   target: string;
 }
@@ -65,6 +69,9 @@ export function dryRunLines(plan: DryRunPlan): string[] {
 }
 
 /** Prints `plan` as `dryRunLines` words it. */
-export function reportDryRun(logger: Logger, plan: DryRunPlan): void {
+export function reportDryRun(
+  logger: Pick<Logger, "info">,
+  plan: DryRunPlan
+): void {
   for (const line of dryRunLines(plan)) logger.info(line);
 }

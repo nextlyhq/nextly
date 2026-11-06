@@ -13,30 +13,30 @@
  * published, as in the view. The write is judged as any save of the
  * component is: a dry run makes it and rolls it back (`judged-writes`).
  *
+ * The component may live in the plugin's own store or in a host collection
+ * named by `componentReadiness`: an edit changes only the configured document
+ * field, so it needs none of the title and slug fields a new component does.
+ *
  * @experimental Settles when the composition API ships.
  * @module definition-actions-route
  */
 import {
   isComponentDocument,
-  planAddVariant,
-  planDeleteVariant,
-  planExposeProperty,
-  planRemoveExposedSlot,
-  planRemoveExposure,
-  planRenameExposure,
-  planRenameVariant,
-  planResetVariantValue,
-  planRetargetExposure,
-  planSetVariantValue,
   registryBlockSource,
   type BlockDocument,
   type ComponentDocument,
   type DocumentLimits,
-  type ExposureEditResult,
-  type ExposureTarget,
+  type ExposureEdit,
+  type ExposureEditRefusal,
   type RetiredExposures,
-  type VariantEditResult,
+  type VariantEdit,
+  type VariantEditRefusal,
 } from "@nextlyhq/blocks-engine";
+import {
+  definitionActionJsonSchema,
+  definitionActionSchema,
+  planDefinitionAction,
+} from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
@@ -48,21 +48,23 @@ import {
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
+import type { ActionBy } from "./component-actions-contract";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
-  type DefinitionAction,
+  type DefinitionActionRequest,
   type DefinitionActionResult,
-  type ExposureTargetInput,
 } from "./composition-actions-contract";
 import {
   actingCaller,
   asCaller,
   blocksDocumentOf,
-  readBodyWith,
+  parsedWith,
+  readJsonBody,
   readOrNull,
-  requirePluginStore,
+  requestJsonSchema,
   savesLive,
   storeOf,
+  type ActionAnswer,
   type CompositionRouteContext,
 } from "./composition-route-kit";
 import {
@@ -72,49 +74,45 @@ import {
 } from "./judged-writes";
 import { readingAsUser, type ComponentStore } from "./library-route";
 
-const id = z.string().min(1).max(512);
-const label = z.string().max(200);
-/** A prop path or the visibility switch: exactly one of the two. */
-const target = {
-  nodeId: id,
-  propPath: z.string().min(1).max(512).optional(),
-  visibility: z.literal(true).optional(),
-};
+/** A component id, as a path segment or a service argument carries it. */
+const ComponentId = z.string().min(1).max(512);
 
-const DefinitionActionBody = z.strictObject({
-  action: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("expose"), label, ...target }),
-    z.strictObject({
-      kind: z.literal("rename-exposure"),
-      exposureId: id,
-      label,
-    }),
-    z.strictObject({
-      kind: z.literal("retarget-exposure"),
-      exposureId: id,
-      ...target,
-    }),
-    z.strictObject({ kind: z.literal("remove-exposure"), exposureId: id }),
-    z.strictObject({ kind: z.literal("remove-exposed-slot"), slotId: id }),
-    z.strictObject({ kind: z.literal("add-variant"), label }),
-    z.strictObject({ kind: z.literal("rename-variant"), variantId: id, label }),
-    z.strictObject({ kind: z.literal("delete-variant"), variantId: id }),
-    z.strictObject({
-      kind: z.literal("set-variant-value"),
-      variantId: id,
-      exposureId: id,
-      value: z.unknown(),
-    }),
-    z.strictObject({
-      kind: z.literal("reset-variant-value"),
-      variantId: id,
-      exposureId: id,
-    }),
-  ]),
+/**
+ * The request around the edit: how to apply it. The edit itself is parsed by
+ * the builder's published schema, which also refuses a target naming both a
+ * prop and the visibility switch, or neither.
+ */
+const DefinitionActionEnvelope = z.strictObject({
+  action: z.unknown(),
   dryRun: z.boolean().optional(),
   expect: z.string().max(128).optional(),
   publish: z.boolean().optional(),
 });
+
+/** The JSON Schema of a definition action request, as the route parses it. */
+export function definitionActionRequestJsonSchema(): Record<string, unknown> {
+  return requestJsonSchema(
+    DefinitionActionEnvelope,
+    definitionActionJsonSchema()
+  );
+}
+
+/**
+ * A definition action request read from outside input: a route body, or what
+ * a caller of the service passed. Refused with the path of each problem.
+ */
+function definitionActionRequestOf(raw: unknown): DefinitionActionRequest {
+  const { action, dryRun, expect, publish } = parsedWith(
+    raw,
+    DefinitionActionEnvelope
+  );
+  return {
+    action: parsedWith(action, definitionActionSchema, "action"),
+    ...(dryRun === undefined ? {} : { dryRun }),
+    ...(expect === undefined ? {} : { expect }),
+    ...(publish === undefined ? {} : { publish }),
+  };
+}
 
 /** What the definition actions are built with. */
 export interface DefinitionActionsSetup {
@@ -133,41 +131,37 @@ export interface DefinitionActionsSetup {
  */
 const VERSION_KEY = "_rev";
 
-/** Run one definition edit, as the docblock describes. */
-async function runDefinitionAction(
-  req: Request,
+/**
+ * Run one definition edit, as the docblock describes, for the route and the
+ * service alike.
+ *
+ * `admitted` says the route's declared permission already admitted the
+ * caller to update the store, as the route's dispatch does. A caller reaching
+ * this any other way (the service) is asked it here first, before anything is
+ * read: the precondition is the same whichever door the request came in by.
+ */
+export async function runDefinitionAction(
   ctx: PluginRouteContext,
-  setup: DefinitionActionsSetup
-): Promise<Response> {
-  requirePluginStore(ctx, setup);
-  const store = storeOf(ctx, setup);
-  const body = await readBodyWith(
-    req,
-    DefinitionActionBody,
-    "definition action"
-  );
-  // The declared permission admitted the caller to update components; publish
-  // is asked of any entry, and the write, made as the caller, decides this one.
-  // A store that holds no working draft saves onto the live component, so an
-  // edit there is a publish whether or not it says so.
-  const publishes =
-    body.publish === true ||
-    (await savesLive(ctx.services.collections, store.collection));
-  const by = await actingCaller(
+  rawComponentId: string,
+  rawRequest: unknown,
+  setup: DefinitionActionsSetup,
+  admitted: "update-admitted" | "ask-update"
+): Promise<ActionAnswer<DefinitionActionResult>> {
+  const { store, componentId, body, by } = await admittedEdit(
     ctx,
-    publishes ? [["publish", store.collection]] : [],
-    { anyEntry: true }
+    rawComponentId,
+    rawRequest,
+    setup,
+    admitted
   );
-  const componentId = ctx.params.id ?? "";
   const read = await readForEdit(ctx, store, componentId, body.expect);
-
-  const retired = (await setup.readRetired?.(ctx)(componentId)) ?? undefined;
-  const plan = planEdit(asAction(body.action), read.definition, {
-    limits: setup.limits?.(),
-    retired,
-  });
-  if ("problem" in plan)
-    throw refusedEdit(plan.problem, plan.clash ?? plan.needs);
+  const plan = await plannedEdit(
+    ctx,
+    setup,
+    componentId,
+    read.definition,
+    body
+  );
 
   const data = {
     [store.field]: plan.document,
@@ -209,12 +203,13 @@ async function runDefinitionAction(
     by,
   });
   if (body.dryRun === true) {
-    return respondMutation<DefinitionActionResult>(
-      refusal === null
-        ? "Nothing was written: this is what the edit would do."
-        : "Nothing was written: the site would refuse this edit.",
-      result(true, judged.refusal === null ? judged.written : undefined)
-    );
+    return {
+      message:
+        refusal === null
+          ? "Nothing was written: this is what the edit would do."
+          : "Nothing was written: the site would refuse this edit.",
+      item: result(true, judged.refusal === null ? judged.written : undefined),
+    };
   }
   if (refusal !== null) throw refusedWrite(refusal.messages);
   // The answer is the committed write's: a hook may store something other
@@ -225,10 +220,74 @@ async function runDefinitionAction(
     data,
     asCaller(ctx)
   );
-  return respondMutation<DefinitionActionResult>(
-    "The component was changed.",
-    result(false, applied.item)
+  return {
+    message: "The component was changed.",
+    item: result(false, applied.item),
+    ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
+  };
+}
+
+/**
+ * The caller admitted to the edit, and the edit read: the route's declared
+ * `update` right where the route did not ask it, then the request, then
+ * `publish` where the edit publishes. Each right comes before the request is
+ * read, as the route's dispatch has it.
+ */
+async function admittedEdit(
+  ctx: PluginRouteContext,
+  rawComponentId: string,
+  rawRequest: unknown,
+  setup: DefinitionActionsSetup,
+  admitted: "update-admitted" | "ask-update"
+): Promise<{
+  store: { collection: string; field: string };
+  componentId: string;
+  body: DefinitionActionRequest;
+  by: ActionBy;
+}> {
+  const store = storeOf(ctx, setup);
+  // Asked exactly as the route declares it, of the collection rather than of
+  // any entry, and before the request is read, so the service admits no
+  // caller the route would refuse and tells such a caller nothing the route
+  // would not.
+  if (admitted === "ask-update") {
+    await actingCaller(ctx, [["update", store.collection]]);
+  }
+  // Read here, where every caller passes, so the route's path and body and
+  // the service's arguments are held to one parse.
+  const componentId = parsedWith(rawComponentId, ComponentId, "id");
+  const body = definitionActionRequestOf(rawRequest);
+  // Publish is asked of any entry, and the write, made as the caller, decides
+  // this one. A store that holds no working draft saves onto the live
+  // component, so an edit there is a publish whether or not it says so.
+  const publishes =
+    body.publish === true ||
+    (await savesLive(ctx.services.collections, store.collection));
+  const by = await actingCaller(
+    ctx,
+    publishes ? [["publish", store.collection]] : [],
+    { anyEntry: true }
   );
+  return { store, componentId, body, by };
+}
+
+/** The editor's own planner run over the definition, or its refusal thrown. */
+async function plannedEdit(
+  ctx: PluginRouteContext,
+  setup: DefinitionActionsSetup,
+  componentId: string,
+  definition: BlockDocument,
+  body: DefinitionActionRequest
+): Promise<ExposureEdit | VariantEdit> {
+  const retired = (await setup.readRetired?.(ctx)(componentId)) ?? undefined;
+  const limits = setup.limits?.();
+  const plan = planDefinitionAction(definition, body.action, {
+    definitions: registryBlockSource(),
+    ...(retired === undefined ? {} : { retired }),
+    ...(limits === undefined ? {} : { limits }),
+  });
+  if ("problem" in plan) throw refusedEdit(plan.problem, refusalDetail(plan));
+  return plan;
 }
 
 /**
@@ -301,114 +360,13 @@ function refusedWrite(messages: readonly string[]): NextlyError {
   });
 }
 
-/** The planner each edit is, with the sources it reads. */
-function planEdit(
-  action: DefinitionAction,
-  definition: BlockDocument,
-  sources: {
-    limits: DocumentLimits | undefined;
-    retired: RetiredExposures | undefined;
-  }
-): (ExposureEditResult | VariantEditResult) & {
-  clash?: string;
-  needs?: string;
-} {
-  const { limits, retired } = sources;
-  const exposure = {
-    definitions: registryBlockSource(),
-    ...(retired === undefined ? {} : { retired }),
-    ...(limits === undefined ? {} : { limits }),
-  };
-  switch (action.kind) {
-    case "expose":
-      return planExposeProperty(
-        definition,
-        { ...targetOf(action), label: action.label },
-        exposure
-      );
-    case "rename-exposure":
-      return planRenameExposure(
-        definition,
-        action.exposureId,
-        action.label,
-        limits
-      );
-    case "retarget-exposure":
-      return planRetargetExposure(
-        definition,
-        action.exposureId,
-        targetOf(action),
-        exposure
-      );
-    case "remove-exposure":
-      return planRemoveExposure(definition, action.exposureId, limits);
-    case "remove-exposed-slot":
-      return planRemoveExposedSlot(definition, action.slotId, limits);
-    case "add-variant":
-      return planAddVariant(
-        definition,
-        action.label,
-        limits === undefined ? {} : { limits }
-      );
-    case "rename-variant":
-      return planRenameVariant(
-        definition,
-        action.variantId,
-        action.label,
-        limits
-      );
-    case "delete-variant":
-      return planDeleteVariant(definition, action.variantId, limits);
-    case "set-variant-value":
-      return planSetVariantValue(
-        definition,
-        action.variantId,
-        action.exposureId,
-        action.value,
-        limits
-      );
-    case "reset-variant-value":
-      return planResetVariantValue(
-        definition,
-        action.variantId,
-        action.exposureId,
-        limits
-      );
-  }
-}
-
-/**
- * The parsed action as the contract types it, refusing a target that names
- * both a prop and the visibility switch, or neither.
- */
-function asAction(
-  parsed: z.infer<typeof DefinitionActionBody>["action"]
-): DefinitionAction {
-  if (parsed.kind !== "expose" && parsed.kind !== "retarget-exposure")
-    return parsed;
-  const { propPath, visibility, ...rest } = parsed;
-  if ((propPath === undefined) === (visibility === undefined)) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "action",
-          code: "INVALID",
-          message:
-            "Name the field to expose by `propPath`, or `visibility: true`, but not both.",
-        },
-      ],
-    });
-  }
-  return propPath === undefined
-    ? { ...rest, visibility: true }
-    : { ...rest, propPath };
-}
-
-/** An exposure's target, as the planners take it. */
-function targetOf(input: ExposureTargetInput): ExposureTarget {
-  return "visibility" in input
-    ? { nodeId: input.nodeId, visibility: true }
-    : { nodeId: input.nodeId, propPath: input.propPath };
+/** What a variant refusal adds: the clashing label, or what the field takes. */
+function refusalDetail(
+  refusal: ExposureEditRefusal | VariantEditRefusal
+): string | undefined {
+  return "clash" in refusal || "needs" in refusal
+    ? (refusal.clash ?? refusal.needs)
+    : undefined;
 }
 
 /** The planner's refusal, its problem as the code. */
@@ -440,6 +398,18 @@ export function definitionActionsRoute(setup: DefinitionActionsSetup = {}): {
       setup.store?.collection === undefined
         ? collection(COMPONENTS_SLUG, "update")
         : `update-${setup.store.collection}`,
-    handler: (req, ctx) => runDefinitionAction(req, ctx, setup),
+    handler: async (req, ctx) => {
+      const answered = await runDefinitionAction(
+        ctx,
+        ctx.params.id ?? "",
+        await readJsonBody(req, "definition action"),
+        setup,
+        "update-admitted"
+      );
+      return respondMutation<DefinitionActionResult>(
+        answered.message,
+        answered.item
+      );
+    },
   };
 }

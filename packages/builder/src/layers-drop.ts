@@ -58,7 +58,7 @@ import {
   type LockRefusalFacts,
 } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
-import type { BuilderOp, OpPosition, SlotAddress } from "./ops";
+import type { BuilderOp, OpPosition, SlotAddress } from "./op-vocabulary";
 
 /**
  * How far right the pointer travels to nest a block one level deeper: the

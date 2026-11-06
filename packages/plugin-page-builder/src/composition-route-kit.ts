@@ -21,14 +21,14 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { slugify } from "nextly";
 import { requireNextly } from "nextly/runtime";
-import type { z } from "nextly/zod";
+import { z } from "nextly/zod";
 
 import type { CommittedWriteReconciler } from "./class-usage-hook";
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { COMPONENTS_SLUG } from "./collections/components";
 import type { ActionBy } from "./component-actions-contract";
 import { documentVersionOf } from "./document-version";
-import type { ComponentStore } from "./library-route";
+import { asServiceCaller, type ComponentStore } from "./library-route";
 
 /** The capabilities the composition routes use, named rather than imported whole. */
 export type CompositionRouteContext = Pick<
@@ -184,11 +184,7 @@ export function asCaller(
 ): CallerWriteOptions {
   return {
     ...(locale === undefined ? {} : { locale }),
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
+    ...asServiceCaller(ctx),
   };
 }
 
@@ -355,9 +351,16 @@ export async function readBodyWith<T extends z.ZodType>(
   schema: T,
   action: string
 ): Promise<z.infer<T>> {
-  let raw: unknown;
+  return parsedWith(await readJsonBody(req, action), schema);
+}
+
+/** A request's JSON body, or the refusal saying it is not one. */
+export async function readJsonBody(
+  req: Request,
+  action: string
+): Promise<unknown> {
   try {
-    raw = await req.json();
+    return (await req.json()) as unknown;
   } catch {
     throw NextlyError.validation({
       errors: [
@@ -369,13 +372,94 @@ export async function readBodyWith<T extends z.ZodType>(
       ],
     });
   }
+}
+
+/**
+ * What a schema reads: zod's own, from `nextly/zod` or from the builder's
+ * published actions, without asking that both name one copy of zod.
+ */
+export interface InputSchema<T> {
+  safeParse(value: unknown):
+    | { readonly success: true; readonly data: T }
+    | {
+        readonly success: false;
+        readonly error: {
+          readonly issues: readonly {
+            readonly path: readonly PropertyKey[];
+            readonly message: string;
+          }[];
+        };
+      };
+}
+
+/**
+ * `raw` parsed by `schema`, or the refusal naming what is wrong, each issue's
+ * path under `at` when the value sits inside a larger request.
+ */
+export function parsedWith<T>(
+  raw: unknown,
+  schema: InputSchema<T>,
+  at?: string
+): T {
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw NextlyError.validation({
     errors: parsed.error.issues.map(issue => ({
-      path: issue.path.join(".") || "body",
+      path:
+        [...(at === undefined ? [] : [at]), ...issue.path.map(String)].join(
+          "."
+        ) || "body",
       code: "INVALID",
       message: issue.message,
     })),
   });
 }
+
+/**
+ * A request body's JSON Schema, as a client that does not run zod reads it:
+ * the route's own envelope, with `action` the builder's schema for it. Built
+ * from the envelope the route parses with, so what the manifest advertises
+ * and what the route accepts are one schema.
+ */
+export function requestJsonSchema(
+  envelope: z.ZodType,
+  action: Record<string, unknown>
+): Record<string, unknown> {
+  const body = z.toJSONSchema(envelope, { io: "input" }) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  const { $schema: _schema, ...actionBody } = action;
+  return {
+    ...body,
+    properties: { ...body.properties, action: actionBody },
+    // The envelope admits any `action`, so it does not list it; the route
+    // then refuses a request without one.
+    required: [...new Set([...(body.required ?? []), "action"])],
+  };
+}
+
+/**
+ * What an action answers before it becomes a response: the mutation
+ * envelope's message and item. The route wraps it in `respondMutation`; the
+ * service hands it back as it is.
+ */
+export interface ActionAnswer<T> {
+  readonly message: string;
+  readonly item: T;
+  /**
+   * What the committed write reported beyond its row: a side effect that
+   * failed after the commit, or a notice. Present only when there is one. A
+   * route's `respondMutation` reads the same warnings from the request, so a
+   * caller of the service is told what a caller of the route is told, and
+   * does not retry a write that is already durable.
+   */
+  readonly warnings?: WriteWarnings;
+}
+
+/** The warnings a committed write through the collection service reports. */
+export type WriteWarnings = NonNullable<
+  Awaited<
+    ReturnType<PluginRouteContext["services"]["collections"]["updateEntry"]>
+  >["warnings"]
+>;

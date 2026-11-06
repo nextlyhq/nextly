@@ -137,7 +137,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "pages",
           id,
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         });
       const read = async () =>
@@ -261,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (content: unknown) =>
         t.nextly.updateSingle({
           slug: "home",
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         } as never);
       await save(pageOf(storedNodes()));
@@ -288,7 +288,7 @@ describe.each(getConfiguredTestDialects())(
 
       const result = await entries.updateEntries(
         { collectionName: "pages", overrideAccess: true },
-        [{ id: String(page!.id), data: { content: null } }],
+        [{ id: String(page!.id), data: { content: null, _overwrite: true } }],
         { skipHooks: true }
       );
 
@@ -532,7 +532,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "pages",
             id: String(saved.item.id),
-            data: { content: pageOf(nodes) },
+            data: { content: pageOf(nodes), _overwrite: true },
             overrideAccess: true,
           });
 
@@ -659,6 +659,7 @@ describe.each(getConfiguredTestDialects())(
                 ...stored.content,
                 variants: { dark: { label: "Dark", overrides } },
               },
+              _overwrite: true,
             },
             overrideAccess: true,
           });
@@ -749,7 +750,10 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: COMPONENTS_SLUG,
             id: String(created.item.id),
-            data: { content: promoContent({ dark: { title: "Changed" } }) },
+            data: {
+              content: promoContent({ dark: { title: "Changed" } }),
+              _overwrite: true,
+            },
             overrideAccess: true,
           })
         );
@@ -828,7 +832,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: COMPONENTS_SLUG,
           id,
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         });
         const given = pageOf([placing(id, { title: "Changed" })]);
@@ -840,7 +844,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: COMPONENTS_SLUG,
           id,
-          data: { content },
+          data: { content, _overwrite: true },
           overrideAccess: true,
         });
         await expect(update(given)).resolves.toBeDefined();

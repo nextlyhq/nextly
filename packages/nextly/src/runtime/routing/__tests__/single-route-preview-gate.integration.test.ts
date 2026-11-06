@@ -101,7 +101,7 @@ function route(nextly: TestNextly["nextly"], token?: string) {
 async function seed(nextly: TestNextly["nextly"]): Promise<void> {
   await nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", apiToken: "secret-token" },
+    data: { siteName: "Acme", apiToken: "secret-token", _overwrite: true },
   });
 }
 
@@ -192,6 +192,7 @@ describe("createSingleRoute driven by previewSingleDraftGate", () => {
         siteName: "Acme",
         owner: String(author.item.id),
         status: "published",
+        _overwrite: true,
       },
     });
     // A PENDING edit on top, so the working-draft overlay is what the preview
@@ -200,7 +201,7 @@ describe("createSingleRoute driven by previewSingleDraftGate", () => {
     // produced one leaves that path unexercised.
     await current.nextly.updateSingle({
       slug: "site-settings",
-      data: { siteName: "Acme (pending)" },
+      data: { siteName: "Acme (pending)", _overwrite: true },
     });
     const { token } = await signPreviewToken(
       { kind: "single", single: "site-settings" },

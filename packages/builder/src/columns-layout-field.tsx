@@ -33,7 +33,7 @@ import {
   type StackOn,
 } from "./columns-layout";
 import type { EditorState } from "./editor-state";
-import { radioGroupStep } from "./roving-radios";
+import { arrowTo, SegmentChoices } from "./segment-choices";
 import { readStyleValue } from "./style-values";
 
 const STACK_LABELS: Readonly<Record<StackOn, string>> = {
@@ -73,43 +73,6 @@ function heldReason(
   if (pointed === undefined) return undefined;
   const plan = planLayout(row, pointed, at, inherited);
   return plan.ok ? undefined : plan.reason;
-}
-
-/**
- * The next choice an arrow key moves to, as every radio group here steps,
- * wrapping at either end and passing over the choices that are held.
- */
-function steppedTo(
-  key: string,
-  from: number,
-  allowed: readonly boolean[]
-): number | undefined {
-  const step = radioGroupStep(key);
-  if (step === null) return undefined;
-  for (let offset = 1; offset <= allowed.length; offset += 1) {
-    const index =
-      (from + step * offset + allowed.length * offset) % allowed.length;
-    if (allowed[index] === true) return index;
-  }
-  return undefined;
-}
-
-/** Move to the stepped choice: choose it, and take focus to it. */
-function arrowTo(
-  event: React.KeyboardEvent<HTMLElement>,
-  from: number,
-  allowed: readonly boolean[],
-  choose: (index: number) => void
-): void {
-  const next = steppedTo(event.key, from, allowed);
-  if (next === undefined) return;
-  event.preventDefault();
-  choose(next);
-  const options =
-    event.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
-      '[role="radio"]'
-    );
-  options?.[next]?.focus();
 }
 
 type Row = NonNullable<ReturnType<typeof findNode>>;
@@ -206,48 +169,6 @@ function WidthTiles({
   );
 }
 
-/** Where the row stacks: one tab stop, arrows choosing. */
-function StackChoices({
-  options,
-  on,
-  labelId,
-  onChoose,
-}: {
-  options: readonly StackOn[];
-  on: StackOn;
-  labelId: string;
-  onChoose: (on: StackOn) => void;
-}): React.JSX.Element {
-  const allowed = options.map(() => true);
-  return (
-    <div
-      role="radiogroup"
-      aria-labelledby={labelId}
-      className="nx-columns-layout__stack"
-    >
-      {options.map((option, index) => (
-        <button
-          key={option}
-          type="button"
-          role="radio"
-          aria-checked={on === option}
-          tabIndex={on === option ? 0 : -1}
-          className="nx-columns-layout__stack-option"
-          onKeyDown={event =>
-            arrowTo(event, index, allowed, next => {
-              const target = options[next];
-              if (target !== undefined) onChoose(target);
-            })
-          }
-          onClick={() => onChoose(option)}
-        >
-          {STACK_LABELS[option]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export function ColumnsLayoutControl({
   editor,
   nodeId,
@@ -318,9 +239,10 @@ export function ColumnsLayoutControl({
             <span className="nx-inspector__field-name" id={stackId}>
               Stack on
             </span>
-            <StackChoices
+            <SegmentChoices
               options={options}
               on={stack.on}
+              labels={STACK_LABELS}
               labelId={stackId}
               onChoose={on => restack(on, stack.reversed)}
             />

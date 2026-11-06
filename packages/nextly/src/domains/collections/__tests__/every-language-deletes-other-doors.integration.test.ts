@@ -180,7 +180,7 @@ async function entryIn(
       collection,
       id,
       locale: "de",
-      data: { title: `${title} de` },
+      data: { title: `${title} de`, _overwrite: true },
     } as never);
   }
   return id;

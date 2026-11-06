@@ -176,10 +176,12 @@ async function liveWithEnglishPending(
   const es = await entries.updateEntry(at(id, "es"), {
     title: "Hola",
     status: "published",
+    _overwrite: true,
   });
   expect(es.success, JSON.stringify(es)).toBe(true);
   const held = await entries.updateEntry(at(id, "en"), {
     title: "Hello again",
+    _overwrite: true,
   });
   expect(held.success, JSON.stringify(held)).toBe(true);
   return id;
@@ -269,6 +271,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: POSTS,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       expect(
@@ -292,13 +295,18 @@ describe.each(getConfiguredTestDialects())(
       await entries.updateEntry(at(id, "es"), {
         title: "Hola",
         status: "published",
+        _overwrite: true,
       });
       // Spanish's pending change begins from the live shared value...
-      await entries.updateEntry(at(id, "es"), { title: "Hola otra vez" });
+      await entries.updateEntry(at(id, "es"), {
+        title: "Hola otra vez",
+        _overwrite: true,
+      });
       // ...and English then publishes a new one.
       const newer = await entries.updateEntry(at(id, "en"), {
         tagline: "New",
         status: "published",
+        _overwrite: true,
       });
       expect(newer.success, JSON.stringify(newer)).toBe(true);
 
@@ -306,6 +314,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: POSTS,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(refused.success).toBe(false);
       expect(refused.statusCode).toBe(409);
@@ -325,12 +334,14 @@ describe.each(getConfiguredTestDialects())(
 
       const one = await entries.updateEntry(at(alone, "en"), {
         status: "published",
+        _overwrite: true,
       });
       expect(one.success, JSON.stringify(one)).toBe(true);
       const all = await entries.publishAllLocales({
         collectionName: POSTS,
         entryId: every,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(all.success, JSON.stringify(all)).toBe(true);
 
@@ -365,7 +376,10 @@ describe.each(getConfiguredTestDialects())(
       await current!.adapter.delete(`dc_${POSTS}_locales`, {
         and: [{ column: "_locale", op: "=", value: "en" }],
       });
-      const held = await entries.updateEntry(at(id, "en"), { title: "Hello" });
+      const held = await entries.updateEntry(at(id, "en"), {
+        title: "Hello",
+        _overwrite: true,
+      });
       expect(held.success, JSON.stringify(held)).toBe(true);
       expect(await pendingLocales(id)).toEqual(["en"]);
       // Taken down outside the app while English's change is held.
@@ -384,6 +398,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: POSTS,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(all.success, JSON.stringify(all)).toBe(true);
 
@@ -452,6 +467,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       const held = await entries.updateEntry(at(id, "en", GUARDED), {
         note: "Held",
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       // POPULATION CONTROL: the edit is pending, not live.
@@ -462,12 +478,13 @@ describe.each(getConfiguredTestDialects())(
       const publisher = { overrideAccess: false, user: { id: PUBLISHER } };
       const one = await entries.updateEntry(
         { collectionName: GUARDED, entryId: id, locale: "en", ...publisher },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       const every = await entries.publishAllLocales({
         collectionName: GUARDED,
         entryId: id,
         ...publisher,
+        data: { _overwrite: true },
       });
 
       // The publish of English alone refuses on the field, naming it...
@@ -498,12 +515,14 @@ describe.each(getConfiguredTestDialects())(
 
       const one = await entries.updateEntry(at(alone, "en"), {
         status: "published",
+        _overwrite: true,
       });
       expect(one.success, JSON.stringify(one)).toBe(true);
       const all = await entries.publishAllLocales({
         collectionName: POSTS,
         entryId: every,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(all.success, JSON.stringify(all)).toBe(true);
 
@@ -542,6 +561,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       const held = await entries.updateEntry(at(id, "en", HEROES), {
         hero: { heading: "Held" },
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       const heading = async () =>
@@ -560,6 +580,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: HEROES,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
       expect(await heading()).toBe("Held");
@@ -581,10 +602,12 @@ describe.each(getConfiguredTestDialects())(
       // every language shares; the other translates the title.
       const sharedOnly = await entries.updateEntry(at(blank, "es"), {
         tagline: "From Spanish",
+        _overwrite: true,
       });
       expect(sharedOnly.success, JSON.stringify(sharedOnly)).toBe(true);
       const withTitle = await entries.updateEntry(at(translated, "es"), {
         title: "Hola",
+        _overwrite: true,
       });
       expect(withTitle.success, JSON.stringify(withTitle)).toBe(true);
       // POPULATION CONTROL: each is a change held for a language with no row.
@@ -598,6 +621,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: POSTS,
           entryId: id,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
         expect(published.success, JSON.stringify(published)).toBe(true);
         expect(await pendingLocales(id)).toEqual([]);
@@ -647,6 +671,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       const held = await entries.updateEntry(at(id, "es", REMOVED), {
         note: "Held",
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       // A language the site has since removed keeps its pending change: the
@@ -674,6 +699,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: { id: PUBLISHER },
+        data: { _overwrite: true },
       });
 
       // Told every language, as a write naming a language the site does not
@@ -739,10 +765,12 @@ describe.each(getConfiguredTestDialects())(
         title: "Hola",
         box: { label: "Spanish" },
         status: "published",
+        _overwrite: true,
       });
       expect(live.success, JSON.stringify(live)).toBe(true);
       const held = await entries.updateEntry(at(id, "es", SEALED_BOX), {
         box: { label: "Default" },
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       // The site has since removed that language: its stored components and
@@ -770,6 +798,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: false,
         user: { id: PUBLISHER },
+        data: { _overwrite: true },
       });
 
       // French's stored label is "Spanish": the change edits the protected
@@ -844,6 +873,7 @@ describe.each(getConfiguredTestDialects())(
             { ...at(id, "en", HOOKED), locale },
             {
               title: "Hello again",
+              _overwrite: true,
             }
           );
           expect(held.success, JSON.stringify(held)).toBe(true);
@@ -860,6 +890,7 @@ describe.each(getConfiguredTestDialects())(
           { ...at(alone, "en", HOOKED), locale },
           {
             status: "published",
+            _overwrite: true,
           }
         );
         expect(one.success, JSON.stringify(one)).toBe(true);
@@ -872,6 +903,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: HOOKED,
           entryId: every,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
         expect(all.success, JSON.stringify(all)).toBe(true);
         expect({ hook: durable(), field: [...fieldValues] }).toEqual(byOne);
@@ -916,6 +948,7 @@ describe.each(getConfiguredTestDialects())(
       const spanish = await entries.updateEntry(at(id, "es", LIMITED), {
         title: "Saludos",
         status: "published",
+        _overwrite: true,
       });
       expect(spanish.success, JSON.stringify(spanish)).toBe(true);
       // English's change lowers the shared limit to five, which its own
@@ -923,6 +956,7 @@ describe.each(getConfiguredTestDialects())(
       const held = await entries.updateEntry(at(id, "en", LIMITED), {
         title: "Hi",
         titleLimit: 5,
+        _overwrite: true,
       });
       expect(held.success, JSON.stringify(held)).toBe(true);
       expect(await pendingLocales(id)).toEqual(["en"]);
@@ -931,6 +965,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: LIMITED,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       expect(every.success, JSON.stringify(every)).toBe(false);
@@ -981,6 +1016,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: SEALED,
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published.success, JSON.stringify(published)).toBe(true);
 
@@ -1094,6 +1130,7 @@ describe.each(getConfiguredTestDialects())(
         for (const locale of locales.filter(code => code !== "en")) {
           const saved = await entries.updateEntry(at(id, locale, READS), {
             title: locale,
+            _overwrite: true,
           });
           expect(saved.success, JSON.stringify(saved)).toBe(true);
         }
@@ -1109,6 +1146,7 @@ describe.each(getConfiguredTestDialects())(
           collectionName: READS,
           entryId: id,
           overrideAccess: true,
+          data: { _overwrite: true },
         });
         vi.restoreAllMocks();
         expect(published.success, JSON.stringify(published)).toBe(true);

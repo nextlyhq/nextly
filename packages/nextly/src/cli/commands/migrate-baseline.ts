@@ -76,9 +76,8 @@ import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import { openCommandAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
-import { requireDatabaseEnv } from "../utils/command-prerequisites";
-import { loadConfig } from "../utils/config-loader";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import { openMigrationCommand } from "../utils/command-prerequisites";
 
 import { maybeForceUnlock } from "./migrate";
 import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
@@ -746,28 +745,11 @@ export async function runMigrateBaseline(
   const { logger } = context;
   logger.header("Migrate Baseline");
 
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
-  const configResult = await loadConfig({
-    configPath: options.config,
-    cwd: options.cwd,
-    debug: options.verbose,
-  });
-  const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-
-  const adapter = await openCommandAdapter(
-    {
-      dialect,
-      databaseUrl: dbValidation.databaseUrl,
-      logger: options.verbose ? logger : undefined,
-      dryRun: options.dryRun,
-    },
-    logger
-  );
+  const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
-  if (adapter === undefined) return;
+  if (opened === undefined) return;
+  const { dbValidation, configResult, cwd, migrationsDir, adapter } = opened;
+  const dialect = dbValidation.dialect;
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
