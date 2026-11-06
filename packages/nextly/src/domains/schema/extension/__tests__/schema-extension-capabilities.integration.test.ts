@@ -516,6 +516,7 @@ const CAPABILITIES: Capability[] = [
               columns: ["noteId"],
               references: { table: `fx__${PREFIX}_fkn`, columns: ["id"] },
               onDelete: "cascade",
+              onUpdate: "cascade",
             },
           ],
         }
@@ -532,7 +533,7 @@ const CAPABILITIES: Capability[] = [
       const parent = built.specs[0]!;
       const child = built.specs[1]!;
       // The key the model declares is the key the database holds, with the
-      // declared action.
+      // declared actions.
       const liveChild = (await ctx.live([child.name]))[0] as TableSpec;
       expect(liveChild.foreignKeys).toEqual([
         expect.objectContaining({
@@ -540,6 +541,7 @@ const CAPABILITIES: Capability[] = [
           referencesTable: parent.name,
           referencesColumns: ["id"],
           onDelete: "cascade",
+          onUpdate: "cascade",
         }),
       ]);
 
@@ -556,9 +558,18 @@ const CAPABILITIES: Capability[] = [
       await ctx.execute(
         `INSERT INTO ${q(child.name)} (${q("id")}, ${q("note_id")}) VALUES ('c1', 'p1')`
       );
-      // The declared action fires: deleting the parent takes the child.
+      // The declared update action fires: updating the parent cascades to the child.
       await ctx.execute(
-        `DELETE FROM ${q(parent.name)} WHERE ${q("id")} = 'p1'`
+        `UPDATE ${q(parent.name)} SET ${q("id")} = 'p2' WHERE ${q("id")} = 'p1'`
+      );
+      const updatedChild = (await ctx.execute(
+        `SELECT ${q("note_id")} FROM ${q(child.name)} WHERE ${q("id")} = 'c1'`
+      )) as Array<Record<string, unknown>>;
+      expect(updatedChild[0]?.["note_id"]).toBe("p2");
+
+      // The declared delete action fires: deleting the parent takes the child.
+      await ctx.execute(
+        `DELETE FROM ${q(parent.name)} WHERE ${q("id")} = 'p2'`
       );
       const rows = (await ctx.execute(
         `SELECT ${q("id")} FROM ${q(child.name)}`
@@ -609,6 +620,7 @@ const CAPABILITIES: Capability[] = [
       const orders = defineTable(`${PREFIX}_orders`, {
         id: col.id(),
         state: col.enum(["open", "closed", "it's"]),
+        single: col.enum(["only"], { nullable: true }),
       });
       const built = await buildExtensionSchema(
         schemaInput(ctx.dialect, {
@@ -623,7 +635,7 @@ const CAPABILITIES: Capability[] = [
       expect((live.checks ?? []).map(c => c.name).sort()).toEqual(
         (spec.checks ?? []).map(c => c.name).sort()
       );
-      expect(spec.checks?.length).toBe(1);
+      expect(spec.checks?.length).toBe(2);
       // And it compares equal to its declaration, so no diff proposes
       // dropping and re-adding it on every comparison.
       expect(
@@ -637,11 +649,16 @@ const CAPABILITIES: Capability[] = [
       // THE DATABASE.
       const q = ctx.q;
       await ctx.execute(
-        `INSERT INTO ${q(spec.name)} (${q("id")}, ${q("state")}) VALUES ('a', 'open')`
+        `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("state")}, ${ctx.q("single")}) VALUES ('a', 'open', 'only')`
       );
       await expect(
         ctx.execute(
-          `INSERT INTO ${q(spec.name)} (${q("id")}, ${q("state")}) VALUES ('b', 'banana')`
+          `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("state")}) VALUES ('b', 'banana')`
+        )
+      ).rejects.toThrow();
+      await expect(
+        ctx.execute(
+          `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("state")}, ${ctx.q("single")}) VALUES ('c', 'closed', 'other')`
         )
       ).rejects.toThrow();
     },
@@ -1387,9 +1404,10 @@ const CAPABILITIES: Capability[] = [
       const owned = {
         slug: "posts",
         kind: "collection" as const,
+        owner: "upstream",
         definition: {
           slug: "posts",
-          fields: [{ name: "views", type: "text" }],
+          fields: [{ name: "title", type: "text" }],
         },
       };
       const [after] = runEntityTransforms(
@@ -1398,12 +1416,13 @@ const CAPABILITIES: Capability[] = [
           {
             source: "plugin:fx",
             name: "fx",
+            dependsOn: ["upstream"],
             transforms: [
               {
                 target: "posts",
                 transform: definition => ({
                   ...definition,
-                  fields: [{ name: "views", type: "number" }],
+                  admin: { hidden: true },
                 }),
               },
             ],
@@ -1412,12 +1431,12 @@ const CAPABILITIES: Capability[] = [
       );
       // The transform changed an entity its plugin does not own — the gap
       // `setup(config)` had, because it ran before the merge.
-      expect(after?.definition.fields).toEqual([
-        { name: "views", type: "number" },
-      ]);
+      expect(
+        (after?.definition as { admin?: { hidden?: boolean } })?.admin?.hidden
+      ).toBe(true);
 
-      // The changed definition is storage: the transformed column is what
-      // the database holds.
+      // The changed definition is storage: the entity's columns are what the
+      // database holds.
       const seeded = entitySeedColumns(
         {
           entityKind: "collection",
@@ -1429,10 +1448,10 @@ const CAPABILITIES: Capability[] = [
         },
         ctx.dialect
       );
-      expect(seeded.map(c => c.name)).toContain("views");
+      expect(seeded.map(c => c.name)).toContain("title");
       const base = defineTable(`dc_${PREFIX}_posts`, {
         id: col.id(),
-        views: col.integer({ nullable: true }),
+        title: col.text({ nullable: true }),
       });
       const spec = toTableSpec(
         extensionTable(base, { kind: "app" }),
@@ -1440,35 +1459,37 @@ const CAPABILITIES: Capability[] = [
       );
       await ctx.apply([spec]);
       await ctx.execute(
-        `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("views")}) VALUES ('t1', 5)`
+        `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("title")}) VALUES ('t1', 'hello')`
       );
       const rows = (await ctx.execute(
-        `SELECT ${ctx.q("views")} FROM ${ctx.q(spec.name)} WHERE ${ctx.q("id")} = 't1'`
+        `SELECT ${ctx.q("title")} FROM ${ctx.q(spec.name)} WHERE ${ctx.q("id")} = 't1'`
       )) as Array<Record<string, unknown>>;
-      expect(Number(rows[0]?.["views"])).toBe(5);
+      expect(rows[0]?.["title"]).toBe("hello");
     },
   },
   {
     row: 26,
     title: "a plugin adding fields to another plugin's collections",
     run: async ctx => {
-      const merged = applyPluginSchemaContributions(
-        cfg({
+      const merged = applyPluginSchemaContributions(cfg({ collections: [] }), [
+        plugin("upstream", {
           collections: [
             { slug: "posts", fields: [{ name: "title", type: "text" }] },
           ],
         }),
-        [
-          plugin("fx", {
+        plugin(
+          "fx",
+          {
             extend: [
               {
                 target: "posts",
                 fields: [{ name: "priority", type: "number" }],
               },
             ],
-          }),
-        ]
-      );
+          },
+          { upstream: ">=0.0.0" }
+        ),
+      ]);
       const posts = merged.collections?.find(c => c.slug === "posts");
       expect((posts?.fields ?? []).map(f => f.name)).toContain("priority");
 
@@ -1574,7 +1595,8 @@ function cfg(partial: Partial<NextlyServiceConfig>): NextlyServiceConfig {
 
 function plugin(
   name: string,
-  contributes: PluginContributions
+  contributes: PluginContributions,
+  dependsOn?: Record<string, string>
 ): PluginDefinition {
   return {
     name,
@@ -1582,6 +1604,7 @@ function plugin(
     nextly: ">=0.0.0",
     enabled: true,
     contributes,
+    ...(dependsOn !== undefined ? { dependsOn } : {}),
   };
 }
 
@@ -1617,11 +1640,13 @@ for (const entry of DIALECTS) {
         for (const op of ops) {
           expect(op.type).toBe("add_table");
         }
-        await ctx.applyOps(ops);
+        // Track before executing DDL so rollback and afterAll cleanup reach
+        // whatever was created even if a multi-statement apply throws mid-run.
         for (const spec of specs) {
           current.push(spec.name);
           strays.push(spec.name);
         }
+        await ctx.applyOps(ops);
         return ops;
       },
       applyOps: async ops => {
