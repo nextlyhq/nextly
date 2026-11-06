@@ -68,6 +68,11 @@ export interface BreakpointRun extends WalkedRun {
    * slot, and walked by nobody until that save publishes it (`publish`).
    */
   readonly preparing: boolean;
+  /**
+   * Set on a run that puts a removal back rather than making one: the id of
+   * the removal it undoes. `null` for a removal.
+   */
+  readonly undoes: string | null;
 }
 
 /** The removal runs' table, through the plugin's database surface. */
@@ -79,7 +84,9 @@ export interface RemovalRunStore extends RunStore {
   open(
     removedIds: readonly string[],
     before: { readonly stored: unknown; readonly emitted: unknown },
-    startedBy: string
+    startedBy: string,
+    /** For a run that undoes a removal: that removal's id. */
+    undoes?: string
   ): Promise<BreakpointRun>;
   /** One run by its id, open or done; `null` when there is none. */
   runById(runId: string): Promise<BreakpointRun | null>;
@@ -145,6 +152,16 @@ export interface RemovalRunStore extends RunStore {
   ): Promise<{ runId: string; documentKey: string }[]>;
 }
 
+/**
+ * Every breakpoint id a run removed: those it still claims and those the site
+ * defined again since. What undoing it defines again, and puts back under.
+ */
+export function removedEver(
+  run: Pick<BreakpointRun, "removedIds" | "readdedIds">
+): ReadonlySet<string> {
+  return new Set([...run.removedIds, ...run.readdedIds]);
+}
+
 /** A run that still holds what it removed, and why. */
 export interface HoldingRun {
   readonly run: BreakpointRun;
@@ -193,9 +210,10 @@ function stringsOf(value: unknown): string[] | undefined {
 /**
  * The stored ids, read strictly. A record that cannot be read is refused
  * rather than read as empty: an empty list would strip nothing and report the
- * run finished.
+ * run finished. An undo's run removes nothing, so its list is empty
+ * (`undoing`).
  */
-function storedIdsOf(text: string, runId: string): StoredIds {
+function storedIdsOf(text: string, runId: string, undoing: boolean): StoredIds {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
@@ -208,7 +226,11 @@ function storedIdsOf(text: string, runId: string): StoredIds {
       : {};
   const ids = stringsOf(record.ids);
   const readded = stringsOf(record.readded);
-  if (ids !== undefined && ids.length > 0 && readded !== undefined) {
+  if (
+    ids !== undefined &&
+    (ids.length > 0 || undoing) &&
+    readded !== undefined
+  ) {
     return { ids, readded };
   }
   throw NextlyError.internal({
@@ -243,9 +265,14 @@ function runOf(row: {
   phase: string;
   cursor: string | null;
   openKey: string | null;
+  undoes?: string | null;
 }): BreakpointRun {
   const before = beforeOf(row.before);
-  const stored = storedIdsOf(row.removedIds, row.id);
+  const stored = storedIdsOf(
+    row.removedIds,
+    row.id,
+    row.undoes !== null && row.undoes !== undefined
+  );
   const readded = new Set(stored.readded);
   return {
     id: row.id,
@@ -258,6 +285,7 @@ function runOf(row: {
     cursor: row.cursor,
     open: row.openKey !== null,
     preparing: row.phase === PREPARING,
+    undoes: row.undoes ?? null,
   };
 }
 
@@ -307,7 +335,7 @@ export function removalRunStore(
   // Resolved per call, as the fence's are.
   const columns = () => db.table(breakpointRemovals);
   return {
-    open: async (removedIds, before, startedBy) => {
+    open: async (removedIds, before, startedBy, undoes) => {
       try {
         const row = await db.transaction(tx =>
           tx.insertReturning(breakpointRemovals, {
@@ -322,6 +350,7 @@ export function removalRunStore(
             startedBy,
             phase: PREPARING,
             openKey: OPEN,
+            undoes: undoes ?? null,
           })
         );
         return runOf(row);
@@ -418,7 +447,11 @@ export function removalRunStore(
       for (const first of await db.select(breakpointRemovals).all()) {
         let row: typeof first | null = first;
         for (let attempt = 1; row !== null; attempt += 1) {
-          const stored = storedIdsOf(row.removedIds, row.id);
+          const stored = storedIdsOf(
+            row.removedIds,
+            row.id,
+            row.undoes !== null && row.undoes !== undefined
+          );
           const readded = new Set(stored.readded);
           const fresh = stored.ids.filter(
             id => asked.has(id) && !readded.has(id)

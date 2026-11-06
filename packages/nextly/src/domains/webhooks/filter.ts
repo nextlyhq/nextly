@@ -11,9 +11,9 @@
 import { WEBHOOK_EVENT_WILDCARD } from "./types";
 import type {
   FilterSpec,
+  RecordedEventType,
   WebhookEvent,
   WebhookEventSubscription,
-  WebhookEventType,
 } from "./types";
 
 /**
@@ -25,7 +25,7 @@ import type {
  */
 export function matchesSubscribedTypes(
   subscriptions: readonly WebhookEventSubscription[],
-  type: WebhookEventType
+  type: RecordedEventType
 ): boolean {
   return (
     subscriptions.includes(WEBHOOK_EVENT_WILDCARD) ||
@@ -59,7 +59,7 @@ export function matchesFilter(
   if (
     eventTypes != null &&
     eventTypes.length > 0 &&
-    !eventTypes.includes(envelope.type)
+    !eventTypes.some(type => type === envelope.type)
   ) {
     return false;
   }

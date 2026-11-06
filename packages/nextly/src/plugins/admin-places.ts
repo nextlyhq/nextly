@@ -14,28 +14,115 @@
  */
 
 /**
+ * @experimental The kinds of contribution a plugin may declare at an admin
+ * place: a block of its own drawing, a tab, a list column, an action on one
+ * row or on the selected rows, and a section of the edit page's side panel.
+ */
+export const ADMIN_CONTRIBUTION_KINDS = Object.freeze([
+  "block",
+  "tab",
+  "column",
+  "rowAction",
+  "bulkAction",
+  "sidebarSection",
+] as const);
+
+/** @experimental One kind of contribution; see {@link ADMIN_CONTRIBUTION_KINDS}. */
+export type AdminContributionKind = (typeof ADMIN_CONTRIBUTION_KINDS)[number];
+
+/**
+ * The edit page's side panel, as both editors draw it: its built-in sections,
+ * in order, which a contribution may be placed beside or replace.
+ */
+const EDIT_PANEL_SECTIONS = Object.freeze([
+  "status",
+  "publishing",
+  "language",
+  "details",
+] as const);
+
+/**
  * @experimental Core's admin places, keyed by id: one for each page a plugin
  * may add to, and the entry form, which is part of a collection entry's and a
  * Single's edit pages.
  *
  * Where within its place a contribution appears is said by what it is (a
- * block, a tab, a column, an action) and its order, not by its place.
+ * block, a tab, a column, an action) and its order, not by its place. Each
+ * place says which kinds it `accepts`, and names its `builtIns`, by kind: the
+ * parts the page draws itself that a contribution may be ordered beside or
+ * replace. A built-in is named here only once the page draws it under that
+ * name, so a replacement always has something to replace.
  * Frozen, so no code can add a core place at run time that the type of
  * {@link AdminPlaceId} does not know.
  */
 export const CORE_ADMIN_PLACES = Object.freeze({
-  dashboard: Object.freeze({ page: "dashboard" }),
-  "collection.list": Object.freeze({ page: "a collection's entry list" }),
-  "collection.edit": Object.freeze({ page: "a collection entry's edit page" }),
-  "single.edit": Object.freeze({ page: "a Single's edit page" }),
+  dashboard: Object.freeze({
+    page: "dashboard",
+    accepts: Object.freeze(["block"] as const),
+    builtIns: Object.freeze({}),
+  }),
+  "collection.list": Object.freeze({
+    page: "a collection's entry list",
+    accepts: Object.freeze([
+      "block",
+      "column",
+      "rowAction",
+      "bulkAction",
+    ] as const),
+    builtIns: Object.freeze({}),
+  }),
+  "collection.edit": Object.freeze({
+    page: "a collection entry's edit page",
+    accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
+    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+  }),
+  "single.edit": Object.freeze({
+    page: "a Single's edit page",
+    accepts: Object.freeze(["block", "tab", "sidebarSection"] as const),
+    builtIns: Object.freeze({ sidebarSection: EDIT_PANEL_SECTIONS }),
+  }),
   "entry.form": Object.freeze({
     page: "the entry form, on a collection entry's or a Single's edit page",
+    accepts: Object.freeze(["block"] as const),
+    builtIns: Object.freeze({}),
   }),
-  settings: Object.freeze({ page: "settings" }),
-  "user.detail": Object.freeze({ page: "a user's detail page" }),
-  account: Object.freeze({ page: "the signed-in admin's account page" }),
-  login: Object.freeze({ page: "the login page" }),
+  settings: Object.freeze({
+    page: "settings",
+    accepts: Object.freeze(["block", "tab"] as const),
+    builtIns: Object.freeze({}),
+  }),
+  "user.detail": Object.freeze({
+    page: "a user's detail page",
+    accepts: Object.freeze(["block", "tab"] as const),
+    builtIns: Object.freeze({}),
+  }),
+  account: Object.freeze({
+    page: "the signed-in admin's account page",
+    accepts: Object.freeze(["block", "tab"] as const),
+    builtIns: Object.freeze({}),
+  }),
+  login: Object.freeze({
+    page: "the login page",
+    accepts: Object.freeze(["block"] as const),
+    builtIns: Object.freeze({}),
+  }),
 } as const);
+
+/**
+ * @experimental The built-in parts of one kind at a core place, in the order
+ * the page draws them, or none.
+ */
+export function coreAdminPlaceBuiltIns(
+  place: string,
+  kind: AdminContributionKind
+): readonly string[] {
+  if (!Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place)) {
+    return [];
+  }
+  const builtIns: Partial<Record<AdminContributionKind, readonly string[]>> =
+    CORE_ADMIN_PLACES[place as CoreAdminPlaceId].builtIns;
+  return builtIns[kind] ?? [];
+}
 
 /** @experimental The id of one of core's admin places. */
 export type CoreAdminPlaceId = keyof typeof CORE_ADMIN_PLACES;

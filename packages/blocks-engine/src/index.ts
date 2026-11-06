@@ -6,6 +6,10 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// A document's own metadata, its bound segments filled by the page's binding
+// pass: what a collection template gives each entry's page.
+export { resolveDocumentSeo } from "./document-seo";
+export type { ResolvedDocumentSeo } from "./document-seo";
 // Which Layout a page is drawn inside: the one rule the render, the editor
 // and the tests share.
 export { resolvePageLayout } from "./resolve-layout";
@@ -29,6 +33,8 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
@@ -92,7 +98,10 @@ export type {
   DocumentFormatVersion,
   DocumentKind,
   BlockOrigin,
+  DocumentSeo,
   DocumentSettings,
+  SeoBinding,
+  SeoTextSegment,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -1313,6 +1322,8 @@ export {
   COLLECTION_LIST_TYPE,
   isListDay,
   isListFilterOp,
+  LIST_ENTRY_SLOT,
+  listDayAfter,
   LIST_FIELD_CODES,
   LIST_FILTER_OPS,
   LIST_ISSUE_CODES,
@@ -1321,6 +1332,8 @@ export {
   LIST_FIELD_KINDS,
   LIST_KIND_OPS,
   LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
   LIST_MAX_VALUES,
   isListFieldKind,
   listFieldKind,
@@ -1328,8 +1341,40 @@ export {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  outerListOf,
   readListQuery,
 } from "./list-query";
+
+// A block's visibility conditions: the operator vocabulary and its render
+// classes, the evaluator the renderer asks, and their save-time judgement.
+export {
+  canonicalConditions,
+  CONDITION_FIELD_CODES,
+  CONDITION_ISSUE_CODES,
+  CONDITION_KIND_OPS,
+  CONDITION_MAX,
+  CONDITION_OP_ALIASES,
+  CONDITION_OPS,
+  CONDITION_REGISTRY,
+  conditionFieldKind,
+  conditionIssues,
+  conditionOp,
+  evaluateConditions,
+} from "./visibility-conditions";
+export type {
+  ConditionDayStart,
+  ConditionEvaluation,
+  ConditionFieldKind,
+  ConditionInput,
+  ConditionIssue,
+  ConditionIssueCode,
+  ConditionJudgement,
+  ConditionOp,
+  ConditionRegistry,
+  ConditionRenderClass,
+  ConditionSource,
+  ConditionSubject,
+} from "./visibility-conditions";
 export type {
   ListFieldCode,
   ListFieldKind,

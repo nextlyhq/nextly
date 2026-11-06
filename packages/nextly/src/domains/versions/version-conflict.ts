@@ -12,6 +12,8 @@
  * @module domains/versions/version-conflict
  */
 
+import type { TransactionOptions } from "@nextlyhq/adapter-drizzle/types";
+
 import { NextlyError } from "../../errors/nextly-error";
 
 /**
@@ -85,33 +87,23 @@ export function hasVersionConflict(err: unknown): boolean {
 }
 
 /**
- * Run `fn`, re-running it when a version_no allocation race is detected. A
- * re-run re-reads the current max, so it advances to a free number. Other
- * errors propagate immediately. Defaults: 3 attempts, no delay (the re-read is
- * cheap and the racing writer has already committed). On exhaustion the
- * underlying {@link VersionConflictError} is surfaced (a NextlyError → clean
- * 409) rather than the raw wrapped driver error.
+ * The transaction options that retry a version_no allocation race inside the
+ * adapter: up to three attempts, each re-reading the current max, so a lost
+ * race advances to a free number, with no delay (the re-read is cheap and the
+ * racing writer has already committed). The conflict is an application error,
+ * which `retryWhen` is asked about first.
+ *
+ * Retried inside the adapter, the last attempt is known: a lost attempt's
+ * commit callbacks are dropped with it and its rollback callbacks never run.
+ * On exhaustion the last attempt's {@link VersionConflictError} reaches the
+ * caller as thrown, a clean 409. A call joined to an open transaction is never
+ * retried itself: its conflict reaches the outermost transaction.
+ *
+ * @returns `retryCount`, `retryDelayMs` and `retryWhen` for `adapter.transaction`
  */
-export async function withVersionConflictRetry<T>(
-  fn: () => Promise<T>,
-  opts: { attempts?: number; delayMs?: number } = {}
-): Promise<T> {
-  const attempts = opts.attempts ?? 3;
-  const delayMs = opts.delayMs ?? 0;
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      const conflict = findVersionConflict(err);
-      if (!conflict) throw err;
-      lastError = conflict;
-      if (delayMs > 0 && attempt < attempts - 1) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-
-  throw lastError;
+export function versionConflictRetries(): Pick<
+  TransactionOptions,
+  "retryCount" | "retryDelayMs" | "retryWhen"
+> {
+  return { retryCount: 2, retryDelayMs: 0, retryWhen: hasVersionConflict };
 }

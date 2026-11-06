@@ -32,6 +32,8 @@
  *
  * @module usage-backfill
  */
+import type { PluginTransaction } from "@nextlyhq/plugin-sdk/schema";
+
 import { backfillScopeKey, type BackfillScope } from "./usage-backfill-scope";
 
 /**
@@ -63,9 +65,10 @@ export interface BackfillStateStore {
   checkpoint(key: string, cursor: string): Promise<void>;
   /**
    * Run an index write only while this run is current, so a pass a newer run
-   * replaced writes nothing.
+   * replaced writes nothing. The write is handed the transaction the check
+   * runs in, and makes its write through it.
    */
-  fenced<T>(write: () => Promise<T>): Promise<T>;
+  fenced<T>(write: (tx: PluginTransaction) => Promise<T>): Promise<T>;
   /**
    * Called once every scope is walked: clear the dirty mark a failed
    * maintenance write left, if this run started after it.
@@ -85,8 +88,8 @@ export interface ScopeWalk {
    * nothing done.
    */
   stop(): boolean;
-  /** Run one index write, fenced by the run. */
-  fenced<T>(write: () => Promise<T>): Promise<T>;
+  /** Run one index write, fenced by the run, through the transaction it is handed. */
+  fenced<T>(write: (tx: PluginTransaction) => Promise<T>): Promise<T>;
 }
 
 /** What one walk of a scope reached. */
