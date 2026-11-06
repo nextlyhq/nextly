@@ -68,6 +68,48 @@ export type { CustomEditViewProps, DocumentLockGates } from "@nextlyhq/admin";
 export type { DocumentViewProps } from "@nextlyhq/admin";
 
 /**
+ * What the components a plugin puts on a collection's document screen
+ * receive (@experimental), declared under `contributes.admin.views[slug]`
+ * (see `PluginDocumentActionOverride` and `PluginPanelSection`):
+ *
+ * - `DocumentActionReplacementProps`: the component a replaced action opens,
+ *   mounted when the author chooses the action — so a dialog renders open —
+ *   with `documentLock` and `mayWrite()` (ask it immediately before the
+ *   write, after anything awaited), and `close(result?)` to end it:
+ *   `"deleted"` leaves the document for its
+ *   collection's list as the built-in Delete does, `"changed"` reads it
+ *   again, and nothing means the author backed out.
+ * - `DocumentPanelSectionProps`: a panel section's body, with the document's
+ *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
+ *   `actionsDisabled`), `mayWrite()`, and `documentChanged(result)`, the same
+ *   two results.
+ *
+ * Both are drawn inside the document's editor, so `useDocumentLocale()` names
+ * the language being edited — the one a replaced Unpublish acts on — and
+ * `useDocumentActions()` answers for the same document.
+ *
+ * Republished rather than restated: the admin builds these objects.
+ *
+ * ```tsx
+ * function RemoveLayoutDialog({ entryId, close }: DocumentActionReplacementProps) {
+ *   return (
+ *     <Dialog open onOpenChange={open => !open && close()}>
+ *       …
+ *       <Button onClick={async () => { await removeLayout(entryId); close("deleted"); }}>
+ *         Remove
+ *       </Button>
+ *     </Dialog>
+ *   );
+ * }
+ * ```
+ */
+export type {
+  DocumentActionReplacementProps,
+  DocumentChangeResult,
+  DocumentPanelSectionProps,
+} from "@nextlyhq/admin";
+
+/**
  * @experimental Move to a page of this admin, keeping what the current page
  * holds where the same page answers the new address — opening a document's
  * view from its edit form, for one. Takes a path starting "/admin/" and
@@ -915,9 +957,13 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
   PluginMenuItem,
+  PluginPanelSection,
 } from "nextly";
 
 /**

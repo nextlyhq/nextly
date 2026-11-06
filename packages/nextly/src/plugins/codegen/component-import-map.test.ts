@@ -673,9 +673,15 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
     meta.schemaBuilderSlot,
     meta.entryFormToolbarSlot,
     ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
+    ...(meta.documentActions ?? []).map(each =>
+      typeof each.override === "object" ? each.override.component : undefined
+    ),
+    ...(meta.panelSections ?? []).map(section => section.component),
   ].filter((path): path is string => Boolean(path));
 
   const readsComponents = new Set([
+    "documentActions",
+    "panelSections",
     "pages",
     "settings",
     "headerSlot",
@@ -717,6 +723,17 @@ describe("parity with the admin-meta surface", () => {
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
+          views: {
+            posts: {
+              documentActions: {
+                delete: { component: "@acme/x/admin#RemoveDialog" },
+                unpublish: "hidden",
+              },
+              panelSections: [
+                { title: "Usage", component: "@acme/x/admin#UsageSection" },
+              ],
+            },
+          },
           // A key startup refuses, carried as plain JavaScript can: it must
           // contribute no path at all.
           widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
@@ -742,6 +759,8 @@ describe("parity with the admin-meta surface", () => {
         "@acme/x/admin#HeaderSlot",
         "@acme/x/admin#SchemaSlot",
         "@acme/x/admin#ToolbarSlot",
+        "@acme/x/admin#RemoveDialog",
+        "@acme/x/admin#UsageSection",
       ])
     );
 
