@@ -79,7 +79,6 @@ import {
   registerComponentGuards,
   storedUseCheck,
 } from "./component-delete/guards";
-import { registerDeleteProbe } from "./component-delete/probe";
 import { componentDeleteRoutes } from "./component-delete/route";
 import { componentDeleteJob } from "./component-delete/sweep";
 import {
@@ -1639,15 +1638,6 @@ export const pageBuilder = (
       // separately because they answer it about different things: the index is
       // a count over many pages, this is a refusal over few Layouts, and the
       // refusal has to be exact at the moment it refuses.
-      // Delete component's probe of core's delete gate for one component,
-      // registered before every other delete guard here, so a probe is
-      // answered by the gate alone.
-      registerDeleteProbe(
-        ctx,
-        componentStoreOf(opts).collection ??
-          ctx.self.collections[COMPONENTS_SLUG] ??
-          COMPONENTS_SLUG
-      );
       registerLayoutComponentGuard({
         ctx,
         // RESOLVED slugs. A host may rename either, and a guard holding the

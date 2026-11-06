@@ -91,6 +91,12 @@ interface Switches {
    * after it has read every document, and before the run is done.
    */
   onLayoutRead?: () => Promise<void>;
+  /**
+   * The ids a site's `beforeDelete` hook on components was run for: a hook
+   * with a side effect, which a check of whether a delete is allowed must
+   * never run.
+   */
+  deleteHookRanFor?: string[];
 }
 
 /** A plugin whose hooks time an author's save against the delete. */
@@ -109,6 +115,10 @@ function harness(switches: Switches): PluginDefinition {
         switches.holdAfterValidation = undefined;
         hold.reached();
         await hold.release;
+      });
+      ctx.hooks.on("beforeDelete", COMPONENTS_SLUG, context => {
+        const id = (context as { data?: { id?: unknown } }).data?.id;
+        switches.deleteHookRanFor?.push(String(id));
       });
       ctx.hooks.on("afterRead", LAYOUTS_SLUG, async () => {
         const run = switches.onLayoutRead;
@@ -769,7 +779,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await exists(t, cardId)).toBe(false);
     });
     it("converts nothing for a person a rule lets delete other components but not this one", async () => {
-      const { t, anAuthor } = await boot({}, { rowRule: true });
+      const switches: Switches = { deleteHookRanFor: [] };
+      const { t, anAuthor } = await boot(switches, { rowRule: true });
       const kept = await card(t, "Kept");
       const deletable = await card(t, "Deletable", "deletable");
       const id = await note(t, "Holding", [copyOf("i1", kept)]);
@@ -788,13 +799,17 @@ describe.each(getConfiguredTestDialects())(
       expect(copies(await nodesOf(t, NOTES, id), kept)).toBe(1);
       expect(await exists(t, kept)).toBe(true);
       expect((await call(designer, kept, "GET")).item.status).toBe("idle");
-      // CONTROL: the component the rule allows is deleted, through the probe
-      // and the real delete alike.
+      // Asking ran no delete hook: the check is the gate alone.
+      expect(switches.deleteHookRanFor).toEqual([]);
+      // CONTROL: the component the rule allows is deleted, asked before
+      // every step and then deleted for real, its hook run by that delete
+      // alone.
       expect((await dryRun(designer, deletable)).item.mayDelete).toBe(true);
       expect((await deleteToTheEnd(designer, deletable)).item.status).toBe(
         "done"
       );
       expect(await exists(t, deletable)).toBe(false);
+      expect(switches.deleteHookRanFor).toEqual([deletable]);
     });
 
     it("refuses unpublishing a component a page holds that the index does not name", async () => {

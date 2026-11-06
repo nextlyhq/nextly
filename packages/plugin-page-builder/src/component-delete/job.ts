@@ -5,8 +5,9 @@
  * ## The steps, as the run's row records them
  *
  * 1. **Open** (`preflight`). Inserting the run's row is the fence: from now on
- *    no write may add a copy (`host-rewrite/fence.ts`). Opened by a person core
- *    lets delete THIS component (`probe.ts`), asked again before every step.
+ *    no write may add a copy (`host-rewrite/fence.ts`). Opened by a person core's
+ *    own delete gate lets delete THIS component (`mayDeleteEntry`), asked
+ *    again before every step.
  * 2. **Check before converting** (`preflight`, a slice per step, its cursor on
  *    the row). Every host is judged as the conversion would judge it, writing
  *    nothing. Anything that would stop the delete part way stops it here, with
