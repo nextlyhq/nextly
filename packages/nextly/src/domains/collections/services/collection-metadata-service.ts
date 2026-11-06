@@ -31,12 +31,17 @@ import {
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import {
+  entityAfterUpdate,
+  type UpdateSettings,
+} from "../../schema/builder-save/update-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { loadUiSchema } from "../../schema/ui-schema/loader";
 
 import { collectionSaveIssuesDdl } from "./collection-save-issues-ddl";
 import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
@@ -529,6 +534,69 @@ export class CollectionMetadataService extends BaseService {
     return { rowWritten: false };
   }
 
+  /**
+   * Write an update's definition and migration through the Builder save
+   * writer, recorded applied once `push` (the update's own push, in
+   * development) has run; a settings-only update writes the settings-only
+   * migration, recorded the same way. A refusal or failure comes back as the
+   * result the caller returns.
+   */
+  private async writeUpdate(
+    deps: CollectionSaveDeps,
+    slug: string,
+    before: DeletedCollectionRow,
+    artifacts: { metadataUpdates: { fields?: FieldDefinition[] } },
+    update: UpdateSettings,
+    push: (() => Promise<void>) | undefined
+  ): Promise<MetadataServiceResult | undefined> {
+    try {
+      const definition = await loadUiSchema({
+        projectRoot: deps.projectRoot,
+        uiSchemaFile: deps.config.db.uiSchemaFile,
+      });
+      const previous =
+        definition.collections.find(c => c.slug === slug) ??
+        definitionOfRow(slug, before);
+      const beforeFields = before.fields ?? [];
+      const fields = artifacts.metadataUpdates.fields ?? beforeFields;
+      await writeCollectionSave(
+        deps,
+        {
+          slug,
+          previous,
+          entity: entityAfterUpdate(previous, update, fields),
+          change: "update",
+          junctions: this.collectionService.junctionStatements(
+            before.tableName,
+            beforeFields,
+            fields
+          ),
+          keys: {
+            before: this.collectionService.relationshipForeignKeys(
+              before.tableName,
+              beforeFields
+            ),
+            after: this.collectionService.relationshipForeignKeys(
+              before.tableName,
+              fields
+            ),
+          },
+        },
+        { appliedBy: push ?? (() => Promise.resolve()) }
+      );
+      return undefined;
+    } catch (error: unknown) {
+      return errorToMetadataResult(
+        error,
+        {
+          statusCode: 500,
+          defaultMessage: "The schema change could not be applied",
+        },
+        this.dialect
+      );
+    }
+  }
+
   private async createCollectionExcluded(
     data: Parameters<CollectionMetadataService["createCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -959,75 +1027,96 @@ export class CollectionMetadataService extends BaseService {
           body
         );
 
+      // In development the update takes its change through one push of the
+      // schema pipeline, with the archive it needs and what the push leaves
+      // out of its diff (a renamed field group's association, the junction
+      // tables), as it always has.
+      const pushUpdate = async (): Promise<void> => {
+        // The file is what a database built from migrations replays; this database takes the
+        // change through one apply of the schema pipeline, as the schema dialog's does, which
+        // diffs the table as it is, so a save the database refused part-way is finished by the
+        // next. The file creates the archive when it is missing but cannot add the kind column
+        // to an archive from before rows recorded it, which the apply's writes name.
+        if (updateArtifacts.needsArchive) {
+          const { ensureI18nArchive } = await import(
+            "../../i18n/migration/ensure-archive"
+          );
+          await ensureI18nArchive(
+            this.adapter,
+            this.adapter.getCapabilities().dialect
+          );
+        }
+        const wasLocalized =
+          (before as { localized?: boolean }).localized === true;
+        const wasStatus = (before as { status?: boolean }).status === true;
+        const beforeFields = (before.fields ?? []) as FieldDefinition[];
+        await applyCollectionSchemaChange({
+          slug: params.collectionName,
+          collection: { tableName: before.tableName, fields: beforeFields },
+          fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+          wasLocalized,
+          isLocalized:
+            body.localized !== undefined
+              ? body.localized === true
+              : wasLocalized,
+          status: body.status !== undefined ? body.status === true : wasStatus,
+          wasStatus,
+          renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+          eventResolutions: [],
+          legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+          fills: updateArtifacts.pushAnswers.fills,
+          // The save detects its own renames; every other pair is a drop and an add.
+          dropAndAddUnansweredRenames: true,
+        });
+        // What the push leaves out of its diff, once it has run: a renamed field group's
+        // association and the junction tables, as the file carries them.
+        if (updateArtifacts.besideStatements) {
+          await this.fileManager.runMigration(updateArtifacts.besideStatements);
+        }
+      };
+      // With the Builder save writer set up, the update's migration is
+      // `migrate:create`'s, recorded applied once the push has run, and a
+      // settings-only update writes the settings-only migration.
+      const writerDeps = this.saveDeps();
+      if (writerDeps !== undefined) {
+        const refused = await this.writeUpdate(
+          writerDeps,
+          params.collectionName,
+          before,
+          updateArtifacts,
+          body,
+          updateArtifacts.migrationSQL ? pushUpdate : undefined
+        );
+        if (refused !== undefined) return refused;
+      }
+
       // If the data table changed, persist the SQL migration. No Drizzle
       // `.ts` schema is written — the runtime regenerates it from the
       // dynamic_collections metadata, matching singles/components.
       if (updateArtifacts.migrationSQL) {
-        // A save applies whole or fails whole: in development the migration runs before anything is
-        // recorded, so a change the database refuses leaves no file, an unchanged registry and
-        // nothing reported as applied.
-        if (this.isDevelopment()) {
-          try {
-            // The file is what a database built from migrations replays; this database takes the
-            // change through one apply of the schema pipeline, as the schema dialog's does, which
-            // diffs the table as it is, so a save the database refused part-way is finished by the
-            // next. The file creates the archive when it is missing but cannot add the kind column
-            // to an archive from before rows recorded it, which the apply's writes name.
-            if (updateArtifacts.needsArchive) {
-              const { ensureI18nArchive } = await import(
-                "../../i18n/migration/ensure-archive"
-              );
-              await ensureI18nArchive(
-                this.adapter,
-                this.adapter.getCapabilities().dialect
+        if (writerDeps === undefined) {
+          // A save applies whole or fails whole: in development the migration runs before anything is
+          // recorded, so a change the database refuses leaves no file, an unchanged registry and
+          // nothing reported as applied.
+          if (this.isDevelopment()) {
+            try {
+              await pushUpdate();
+            } catch (migrationError: unknown) {
+              return errorToMetadataResult(
+                migrationError,
+                {
+                  statusCode: 500,
+                  defaultMessage: "The schema change could not be applied",
+                },
+                this.dialect
               );
             }
-            const wasLocalized =
-              (before as { localized?: boolean }).localized === true;
-            const wasStatus = (before as { status?: boolean }).status === true;
-            const beforeFields = (before.fields ?? []) as FieldDefinition[];
-            await applyCollectionSchemaChange({
-              slug: params.collectionName,
-              collection: { tableName: before.tableName, fields: beforeFields },
-              fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
-              wasLocalized,
-              isLocalized:
-                body.localized !== undefined
-                  ? body.localized === true
-                  : wasLocalized,
-              status:
-                body.status !== undefined ? body.status === true : wasStatus,
-              wasStatus,
-              renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
-              eventResolutions: [],
-              legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
-              fills: updateArtifacts.pushAnswers.fills,
-              // The save detects its own renames; every other pair is a drop and an add.
-              dropAndAddUnansweredRenames: true,
-            });
-            // What the push leaves out of its diff, once it has run: a renamed field group's
-            // association and the junction tables, as the file carries them.
-            if (updateArtifacts.besideStatements) {
-              await this.fileManager.runMigration(
-                updateArtifacts.besideStatements
-              );
-            }
-          } catch (migrationError: unknown) {
-            return errorToMetadataResult(
-              migrationError,
-              {
-                statusCode: 500,
-                defaultMessage: "The schema change could not be applied",
-              },
-              this.dialect
-            );
           }
+          await this.fileManager.saveMigration(
+            updateArtifacts.migrationSQL,
+            updateArtifacts.migrationFileName!
+          );
         }
-
-        await this.fileManager.saveMigration(
-          updateArtifacts.migrationSQL,
-          updateArtifacts.migrationFileName!
-        );
 
         if (this.isDevelopment()) {
           try {

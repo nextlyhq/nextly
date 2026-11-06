@@ -226,8 +226,8 @@ export async function writeCollectionSave(
       written.push(...names)
     );
     if (deps.applies && options.appliedBy !== undefined) {
-      pushed = true;
       await options.appliedBy();
+      pushed = true;
       await recordWhatWasPushed(deps, files, plan.table);
     } else if (deps.applies) {
       await runWritten(deps, files, plan.table);

@@ -392,6 +392,60 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it("writes a plugin's update as an applied migration once its push has run", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(created("articles"), {});
+
+      await service.updateCollection(
+        "articles",
+        {
+          fields: [
+            { name: "body", type: "text" },
+            { name: "rating", type: "number" },
+          ],
+        } as Parameters<CollectionService["updateCollection"]>[1],
+        {}
+      );
+      await service.updateCollection(
+        "articles",
+        { label: "Story" } as Parameters<
+          CollectionService["updateCollection"]
+        >[1],
+        {}
+      );
+
+      const folder = join(t.basePath, "database", "history");
+      const files = readdirSync(folder)
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      expect(files.map(f => f.replace(/^\d{8}_\d{6}_\d{3}_/, ""))).toEqual([
+        "articles_create.sql",
+        "articles_update.sql",
+        "articles_update.sql",
+      ]);
+      expect(existsSync(join(t.basePath, "src", "db", "migrations"))).toBe(
+        false
+      );
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect,
+        ["dc_articles"]
+      );
+      expect(live.tables[0]?.columns.map(c => c.name)).toContain("rating");
+      const repo = new SchemaEventsRepository(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect
+      );
+      expect(
+        (await repo.listFileApplies())
+          .filter(row => row.status === "applied")
+          .map(row => row.filename)
+          .sort()
+      ).toEqual(files);
+    });
+
     it("outside development writes them and runs nothing", async () => {
       vi.stubEnv("NODE_ENV", "production");
       const service = t.getService("collectionService");
