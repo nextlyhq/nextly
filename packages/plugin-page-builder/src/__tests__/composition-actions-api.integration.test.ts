@@ -119,13 +119,37 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      options: { hostComponents?: boolean } = {}
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), stampingPages],
+        plugins: [
+          options.hostComponents === true
+            ? pageBuilder({
+                componentReadiness: {
+                  collection: "site_components",
+                  field: "blocks",
+                },
+              })
+            : pageBuilder(),
+          stampingPages,
+        ],
         collections: [
           // A host collection with a lifecycle but no working drafts: a save
           // that names no status lands on the live entry.
+          // Where a host keeps its components, named by `componentReadiness`.
+          defineCollection({
+            slug: "site_components",
+            fields: [
+              text({ name: "title" }),
+              {
+                name: "blocks",
+                type: BLOCKS_TYPE,
+                blocks: { kinds: ["component"] },
+              } as never,
+            ],
+          }),
           defineCollection({
             slug: "articles",
             status: true,
@@ -706,6 +730,43 @@ describe.each(getConfiguredTestDialects())(
         });
         expect(badValue.status).toBe(422);
         expect(await stored(t, COMPONENTS_SLUG, card)).toEqual(before);
+      });
+
+      it("edits a component kept in the host's own collection", async () => {
+        const t = await boot({ hostComponents: true });
+        const card = await created(t, "site_components", {
+          title: "Card",
+          blocks: {
+            formatVersion: 1,
+            kind: "component",
+            nodes: [heading("t", "Card title")],
+            exposed: [
+              {
+                id: "title",
+                label: "Title",
+                nodeId: "t",
+                propPath: "text",
+                type: "text",
+              },
+            ],
+          },
+        });
+        const { cookie } = await holding(t, [
+          "read-site_components",
+          "update-site_components",
+        ]);
+
+        const added = await edit(cookie, card, {
+          action: { kind: "add-variant", label: "Dark" },
+        });
+
+        expect(added.status).toBe(200);
+        const variantId = (added.body.item as DefinitionActionResult).targetId;
+        const row = await stored(t, "site_components", card);
+        expect(
+          (row.blocks as { variants?: Record<string, { label: string }> })
+            .variants?.[variantId]?.label
+        ).toBe("Dark");
       });
 
       it("refuses an edit planned against a definition that has changed since", async () => {

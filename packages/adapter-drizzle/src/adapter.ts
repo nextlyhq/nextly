@@ -2274,7 +2274,8 @@ export abstract class DrizzleAdapter {
         if (options?.where) {
           const whereCondition = buildDrizzleWhere(
             tableObj as never,
-            options.where
+            options.where,
+            this.dialect
           );
           if (whereCondition) {
             query = query.where(whereCondition);
@@ -2460,7 +2461,7 @@ export abstract class DrizzleAdapter {
       const db = (executor ??
         this.getDrizzle<CountCapableDb>()) as CountCapableDb;
       const where = options?.where
-        ? buildDrizzleWhere(tableObj as never, options.where)
+        ? buildDrizzleWhere(tableObj as never, options.where, this.dialect)
         : undefined;
       const projection = this.countProjection(tableObj, table, options);
       return projection
@@ -2652,7 +2653,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         let query = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -2713,7 +2718,11 @@ export abstract class DrizzleAdapter {
         const mappedData = this.mapDataToColumnNames(tableObj, data);
         const statement = db.update(tableObj).set(mappedData);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         const result = await (whereCondition
           ? statement.where(whereCondition)
           : statement);
@@ -2764,7 +2773,11 @@ export abstract class DrizzleAdapter {
         const db = executor ?? this.getDrizzle<any>();
         let query = db.delete(tableObj);
 
-        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const whereCondition = buildDrizzleWhere(
+          tableObj as never,
+          where,
+          this.dialect
+        );
         if (whereCondition) {
           query = query.where(whereCondition);
         }
@@ -3605,6 +3618,7 @@ export abstract class DrizzleAdapter {
       tableObj,
       data,
       where,
+      dialect: this.dialect,
       bindUnmodeled: binding.bindUnmodeled,
       returning: binding.returning,
     });

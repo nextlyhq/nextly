@@ -519,25 +519,24 @@ export async function claimCompanionRevision(
     return rows.length === 1;
   }
 
-  // The bare row, named in the statement as the upsert above names its
-  // columns: its values follow in that upsert, on the same transaction.
-  const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
-  const p = (n: number) => (dialect === "postgresql" ? `$${n}` : "?");
-  // Who and when, encoded as the row's other writes encode them.
-  const changer = translationChangeColumns(savedBy, dialect);
-  const changerNames = Object.keys(changer);
-  const columns = ["_parent", "_locale", ...changerNames];
-  const values = [
-    parentId,
-    locale,
-    ...changerNames.map(name => changer[name]),
-  ] as SqlParam[];
-  const insert = `INSERT INTO ${q(companionTableName)} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`;
+  // The bare row, through the same revision model: its values follow in the
+  // upsert above, on the same transaction. Its counter takes the column's
+  // default, 1.
+  const table = languageRevisionTable(dialect, companionTableName);
+  const insert = tx
+    .getDrizzle<InsertsRows>()
+    .insert(table as never)
+    .values({
+      _parent: parentId,
+      _locale: locale,
+      ...changerColumns(savedBy),
+      [CHANGED_AT_COLUMN]: new Date(),
+    });
   if (dialect === "mysql") {
     // A duplicate fails this statement alone: MySQL keeps the transaction,
     // which the rest of a batch goes on with.
     try {
-      await tx.execute(insert, values);
+      await insert;
       return true;
     } catch (error) {
       if (isUniqueViolation(dialect, error)) return false;
@@ -546,14 +545,24 @@ export async function claimCompanionRevision(
   }
   // PostgreSQL would abort the whole transaction on a failed insert, so the
   // conflict is answered by the statement itself, with the row it inserted.
-  const rows = await tx.execute(
-    `${insert} ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO NOTHING RETURNING ${q("_parent")}`,
-    values
-  );
+  const rows = await insert
+    .onConflictDoNothing()
+    .returning({ parent: table._parent });
   return rows.length === 1;
 }
 
 /** A Drizzle handle that updates rows, as `getDrizzle()` answers it. */
+/** A Drizzle handle that inserts rows, as `getDrizzle()` answers it. */
+interface InsertsRows {
+  insert(table: never): {
+    values(values: Record<string, unknown>): PromiseLike<unknown> & {
+      onConflictDoNothing(): {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
+}
+
 interface ClaimsRows {
   update(table: never): {
     set(values: Record<string, unknown>): {

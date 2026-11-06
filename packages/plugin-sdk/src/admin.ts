@@ -178,7 +178,11 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
  *   handler that asked the author and was told no. Its second argument,
  *   `store.writesSettled()`, waits for the tracked writes below and answers
  *   whether they all landed: a handler that acts on the server for the store
- *   asks it first, since the store is refused when one failed.
+ *   asks it first, since the store is refused when one failed. And
+ *   `store.checkBeforeWrite(check)` (@experimental) has the store make
+ *   `check` immediately before it writes, after every handler and tracked
+ *   write: a handler that judged the work checks there that it is unchanged,
+ *   and `false` runs every handler again.
  * - `useTrackedWrite()` counts a write the document depends on but does not
  *   contain. Storing actions wait for it and are refused, naming it, while its
  *   latest attempt has failed.
@@ -731,6 +735,13 @@ export type { MediaPickerDialogProps } from "@nextlyhq/admin";
  * the value reaches anonymous callers and must hold nothing secret.
  */
 export { usePluginClientConfig } from "@nextlyhq/admin";
+
+/**
+ * @experimental The translator for this plugin's own admin strings, declared
+ * in `contributes.translations`: `t("acme-shop.cart.title")`, read in the
+ * interface language in effect, then English, then the key itself.
+ */
+export { usePluginTranslate } from "@nextlyhq/admin";
 
 /**
  * @experimental Read a route this plugin contributed, from this plugin's own

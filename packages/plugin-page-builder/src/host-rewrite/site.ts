@@ -5,13 +5,15 @@
  * Read as the SYSTEM, because a host the person running the rewrite cannot see
  * still renders the component. Written as that PERSON, through the identity
  * their request resolved, so a host they may not update (or, for a live row,
- * publish) is refused by the same rules their own save would meet.
+ * publish) is refused by the same rules their own save would meet. A run no
+ * person started writes as the system instead (see `WriteIdentity`).
  *
  * @module host-rewrite/site
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import { blocksFieldReach } from "../class-usage-blocks-fields";
+import { documentVersionOf, withVersionFrom } from "../document-version";
 import {
   layoutPageReader,
   type LayoutGuardDirectApi,
@@ -68,10 +70,14 @@ export interface RewriteDirectApi extends LayoutGuardDirectApi {
   }): Promise<unknown>;
 }
 
-/** The identity a write runs as, as the caller's request resolved it. */
-export type WriteIdentity = Record<string, unknown> & {
-  readonly overrideAccess: false;
-};
+/**
+ * The identity a write runs as: the caller's request, as it resolved it, or
+ * the system, for a run no person started (removing a component's retired
+ * field values, which no reader is ever shown and every write already drops).
+ */
+export type WriteIdentity =
+  | (Record<string, unknown> & { readonly overrideAccess: false })
+  | { readonly overrideAccess: true };
 
 /** What the rewrite needs from the installed plugin and the person running it. */
 export interface RewriteSite {
@@ -95,7 +101,10 @@ export interface RewriteSite {
   >;
   /** The component being converted, for the Layout scan. */
   readonly componentId: string;
-  /** Who the writes are made as, resolved from the caller's own request. */
+  /**
+   * Who the writes are made as: resolved from the caller's own request, or the
+   * system for a run no person started.
+   */
   readonly identity: () => Promise<WriteIdentity>;
 }
 
@@ -204,14 +213,36 @@ export function siteDocuments(
   return cursor => walkDocuments(site, collection, cursorFrom(cursor));
 }
 
+/** The walk over every document, and where it resumes, with one resolver. */
+function walkWith(
+  site: DocumentSite,
+  collection: (slug: string) => Promise<unknown>
+): Pick<HostSource, "documents" | "cursorOf"> {
+  return {
+    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
+    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+  };
+}
+
 /** The walk's hosts on a real site. */
 export function siteHostSource(site: RewriteSite): HostSource {
   const collection = collectionResolver(site);
   return {
-    documents: cursor => walkDocuments(site, collection, cursorFrom(cursor)),
-    cursorOf: document => JSON.stringify(cursorOfDocument(document)),
+    ...walkWith(site, collection),
     hinted: () => hintedDocuments(site, collection),
     outside: () => layoutsNaming(site),
+  };
+}
+
+/**
+ * Every document on the site, for a run that has no component to hint at and
+ * nothing outside the walk: a Layout is a document like any other to it.
+ */
+export function siteWalkSource(site: DocumentSite): HostSource {
+  return {
+    ...walkWith(site, collectionResolver(site)),
+    hinted: () => Promise.resolve([]),
+    outside: () => Promise.resolve([]),
   };
 }
 
@@ -483,7 +514,10 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
       pending !== null && pending._isWorkingDraft === true
         ? valueAt(pending, host.path)
         : null;
+    // The version a read gives is the live row's, with or without a draft.
+    const rev = documentVersionOf(live);
     return {
+      ...(rev === undefined ? {} : { rev }),
       published: live === null ? { kind: "absent" } : valueAt(live, host.path),
       draft,
       // A row with no lifecycle has no state to keep: it is saved, not
@@ -494,6 +528,34 @@ export function siteHostReader(site: Pick<RewriteSite, "nextly">): HostReader {
           : null,
     };
   };
+}
+
+/**
+ * Whether a document has a pending working draft in any of the site's
+ * languages, read as the system. A document that cannot be read, or that is
+ * not there, answers `true`: the caller then leaves alone what waits on the
+ * draft, rather than acting on a guess.
+ */
+export async function documentHasWorkingDraft(
+  site: Pick<RewriteSite, "nextly" | "locales">,
+  document: Pick<HostAddress, "kind" | "slug" | "id">
+): Promise<boolean> {
+  try {
+    const nextly = await site.nextly();
+    const locales = site.locales();
+    for (const locale of locales.length === 0 ? [undefined] : locales) {
+      const host: HostAddress = {
+        ...document,
+        path: [],
+        ...(locale === undefined ? {} : { locale }),
+      };
+      const row = await readRow(nextly, host, "draft");
+      if (row === null || row._isWorkingDraft === true) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -595,9 +657,19 @@ function expectationFor(
   };
 }
 
+/** The identity a write made as the system runs as: past every access rule. */
+interface SystemIdentity {
+  readonly overrideAccess: true;
+}
+
+/** Who a writer's writes are made as: a person, or the system. */
+type WriterIdentity = WriteIdentity | SystemIdentity;
+
 /** Writes a host as the person running the rewrite, checked against what was read. */
 export function siteHostWriter(
-  site: Pick<RewriteSite, "nextly" | "identity" | "defaultLocale">
+  site: Pick<RewriteSite, "nextly" | "defaultLocale"> & {
+    readonly identity: () => Promise<WriterIdentity>;
+  }
 ): HostWriter {
   return async write => {
     const field = write.host.path[0];
@@ -607,12 +679,15 @@ export function siteHostWriter(
         detail: "This value has no address a write can name.",
       };
     }
-    const data: Record<string, unknown> = {
-      [field]: write.value,
-      // Published again in the public state it was read in, which is the one
-      // its workflow already chose.
-      ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
-    };
+    const data = withVersionFrom(
+      {
+        [field]: write.value,
+        // Published again in the public state it was read in, which is the
+        // one its workflow already chose.
+        ...(write.publishAs === undefined ? {} : { status: write.publishAs }),
+      },
+      write.rev
+    );
     const nextly = await site.nextly();
     const identity = await site.identity();
     const inLocale =
@@ -645,12 +720,35 @@ export function siteHostWriter(
   };
 }
 
+/**
+ * Writes a host as the system, checked against what was read like any other
+ * rewrite's write: for a run that strips what no person may keep, so a host
+ * the person who started it cannot open is stripped too. Every other rule of
+ * the write still applies.
+ */
+export function systemHostWriter(
+  site: Pick<RewriteSite, "nextly" | "defaultLocale">
+): HostWriter {
+  return siteHostWriter({
+    ...site,
+    identity: () => Promise.resolve({ overrideAccess: true as const }),
+  });
+}
+
 /** What a failed write came to; anything this does not recognise is thrown. */
 function writeFailure(error: unknown): WriteResult {
   if (NextlyError.isForbidden(error)) return { kind: "forbidden" };
   if (NextlyError.isNotFound(error)) return { kind: "changed" };
   if (NextlyError.isCode(error, "CONFLICT")) return { kind: "changed" };
+  // Refused as made from an out-of-date version: the row was saved since the
+  // read the write was made from.
+  if (NextlyError.isCode(error, "STALE_VERSION")) return { kind: "changed" };
   if (!NextlyError.isCode(error, "VALIDATION_ERROR")) throw error;
+  return validationFailure(error);
+}
+
+/** What a validation refusal came to: the host changed, or refused, and why. */
+function validationFailure(error: NextlyError): WriteResult {
   const issues = (error.publicData as { errors?: unknown } | undefined)?.errors;
   const list = Array.isArray(issues)
     ? (issues as { code?: unknown; message?: unknown }[])

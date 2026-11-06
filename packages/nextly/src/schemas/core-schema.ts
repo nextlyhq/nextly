@@ -58,6 +58,7 @@ import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
 import { reviewStatesTables } from "./review-states";
+import { scheduleWindowsTables } from "./schedule-windows";
 import { schemaEventsTables } from "./schema-events";
 import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import {
@@ -245,6 +246,9 @@ export function getCoreSchema(
     // `nextly_versions`.
     ...Object.values(reviewStatesTables(dialect)),
     ...Object.values(workflowSettingsTables(dialect)),
+    // A plugin schedule's windows. Nothing writes them before they exist, so
+    // core-reconcile creating them is sufficient.
+    ...Object.values(scheduleWindowsTables(dialect)),
     // The record of content events and the parts each one involved. Nothing
     // records into them before they exist, so core-reconcile creating them is
     // sufficient, as for `nextly_versions`.
@@ -370,6 +374,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_version_views",
   "nextly_review_states",
   "nextly_workflow_settings",
+  "nextly_schedule_windows",
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_preview_links",

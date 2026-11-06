@@ -22,6 +22,7 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { MEDIA } from "./categories";
+import { imageLooks } from "./looks";
 import {
   fetchableUrl,
   flag,
@@ -160,9 +161,9 @@ export async function renderImage({
 
 /**
  * The picture's classes: the node's own where it is the root, else the type
- * class and the part that takes the fit and focal point from the root (where
- * the node's Style values land, and `object-fit` does nothing), plus the part
- * that fills a link's box when it is linked.
+ * class and the part that takes the corners, proportion, fit and focal point
+ * from the root (where the node's classes land), plus the part that fills a
+ * link's box when it is linked.
  */
 function pictureClass(
   className: string,
@@ -292,15 +293,24 @@ const IMAGE_PARTS = {
       },
     },
   },
-  // The picture inside a wrapper (a figure, a link) takes the fit and focal
-  // point the node's Style values set on the root, and may shrink to the room
-  // the wrapper leaves it, where the fit then crops or fits it.
+  // The picture inside a wrapper (a figure, a link) takes its corners,
+  // proportion, fit and focal point from the root, from every tier that styles
+  // it (a look, a shared style, the node's own values), so the wrapper's box,
+  // and a caption inside it, is never rounded or squared by them. It may
+  // shrink to the room the wrapper leaves it, where the fit crops or fits it.
   picture: {
+    takesFromRoot: {
+      properties: [
+        "borderRadius",
+        "aspectRatio",
+        "objectFit",
+        "objectPosition",
+      ],
+      whenRootIs: ["frame", "link"],
+    },
     baseStyles: {
       base: {
         base: {
-          objectFit: "inherit",
-          objectPosition: "inherit",
           // The wrapper's width, which the block's width sets: the box the fit
           // crops or fits the picture to.
           width: "100%",
@@ -325,7 +335,7 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Clipped, so a radius set on the block rounds the picture inside.
+          // Clipped, so nothing the picture draws past its corners shows.
           overflow: "hidden",
         },
       },
@@ -364,6 +374,8 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     icon: "image",
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: imageLooks(),
   },
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,

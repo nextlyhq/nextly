@@ -56,22 +56,47 @@ export function registerFencedWriteReport(args: FencedWriteReportArgs): void {
   }
 }
 
+/** One committed write, as a report after it reads it. */
+interface CommittedWrite {
+  /** The collection written, or the Single's hook namespace and slug. */
+  readonly collection: string;
+  /** Every blocks document the write holds, as values of its data. */
+  readonly documents: readonly unknown[];
+  /** Which document was written, as the walk keys it; unknown without an id. */
+  readonly at: ReturnType<typeof hookDocumentOf>;
+}
+
+/**
+ * What a committed create or update holds: `undefined` for a write carrying no
+ * blocks document, which is most of them, so its report reads nothing.
+ */
+function committedWrite(context: unknown): CommittedWrite | undefined {
+  const fields = context as { collection?: unknown; data?: unknown };
+  const data = fields.data;
+  if (typeof fields.collection !== "string" || !isPlainRecord(data)) {
+    return undefined;
+  }
+  const documents = Object.values(data).flatMap(value => {
+    const document = asDocument(value);
+    return document === null ? [] : [document];
+  });
+  if (documents.length === 0) return undefined;
+  return {
+    collection: fields.collection,
+    documents,
+    at: hookDocumentOf(fields.collection, data),
+  };
+}
+
 /** Re-queue the written document when it holds a fenced reference. */
 async function reportWrite(
   args: FencedWriteReportArgs,
   context: unknown
 ): Promise<void> {
-  const fields = context as { collection?: unknown; data?: unknown };
-  const data = fields.data;
-  if (typeof fields.collection !== "string" || !isPlainRecord(data)) return;
-  // Asked of the values first, so a write carrying no document, which is most
-  // of them, reads nothing.
-  const documents = Object.values(data).flatMap(value => {
-    const document = asDocument(value);
-    return document === null ? [] : [document];
-  });
-  if (documents.length === 0) return;
-  const at = documentOf(fields.collection, data);
+  const written = committedWrite(context);
+  if (written === undefined) return;
+  const { documents, at } = written;
+  const fields = { collection: written.collection };
   try {
     const fenced = await args.fence().fenced();
     if (fenced.size === 0) return;
@@ -105,7 +130,7 @@ function fencedReferences(
 }
 
 /** Which document a hook's write is to, as the walk keys it. */
-function documentOf(
+export function hookDocumentOf(
   collection: string,
   data: Record<string, unknown>
 ):

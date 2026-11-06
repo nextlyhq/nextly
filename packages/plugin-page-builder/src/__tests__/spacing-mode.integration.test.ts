@@ -402,10 +402,12 @@ describe.each(getConfiguredTestDialects())(
     it("decides nothing while a Layout is the only content and no seed is recorded", async () => {
       const t = await boot();
       // As between another instance creating its seed and recording it.
-      await writeLayoutSettings(t.nextly, SLUGS, {
-        defaultLayout: null,
-        seededLayout: null,
-      });
+      await writeLayoutSettings(
+        t.nextly,
+        SLUGS,
+        await readLayoutSettings(t.nextly, SLUGS),
+        { defaultLayout: null, seededLayout: null }
+      );
 
       expect(await settleSpacingModeAtStart(deps(t))).toBe("deferred");
       expect(await modelRows()).toHaveLength(0);

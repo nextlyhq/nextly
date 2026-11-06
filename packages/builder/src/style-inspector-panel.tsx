@@ -34,6 +34,8 @@ import {
   isRawColour,
   isStyleLeaf,
   isTokenRef,
+  OVERLAY_STRENGTH,
+  paintsBackgroundImage,
   STYLE_CATALOG,
   trimCssWhitespace,
   walkNodes,
@@ -42,6 +44,7 @@ import {
   type ContrastResult,
   type FontFaceDef,
   type NodeStyles,
+  type StyleValues,
   type SiteTokenSet,
   type TokenMode,
   type StyleLeaf,
@@ -82,6 +85,11 @@ import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
+import { reachingBeneath } from "./block-shortcuts";
+import {
+  BlockShortcutsControl,
+  MinHeightPresets,
+} from "./block-shortcuts-field";
 import {
   breakpointQueries,
   editedTierLive,
@@ -89,8 +97,11 @@ import {
 } from "./breakpoints";
 import { useSurvivingReport } from "./builder-notices";
 import { useCanvasFrame } from "./canvas-frame-context";
+import { breakpointsAtWidth } from "./canvas-width";
 import { ChoiceList } from "./choice-list";
 import { ChromeTooltip } from "./chrome-tooltip";
+import { COLUMNS_ROW, type AppliedAt } from "./columns-layout";
+import { ColumnsLayoutControl } from "./columns-layout-field";
 import { commitOnEnter } from "./commit-on-enter";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { isElement } from "./dom-kind";
@@ -273,6 +284,11 @@ const BLOCK_TARGET: StyleTarget = { kind: "block", worn: [] };
 const StyleTargetContext = React.createContext<StyleTarget>(BLOCK_TARGET);
 
 export interface StyleInspectorPanelProps {
+  /**
+   * The mode the selected block is drawn in, when the caller already reads
+   * it for a sibling surface: one canvas subscription, not two.
+   */
+  tokenMode?: TokenMode;
   /**
    * The editor whose selected block this styles.
    *
@@ -536,9 +552,21 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      <StyleInspectorBody {...props} />
+      {props.tokenMode === undefined ? (
+        <StyleInspectorOwnMode {...props} />
+      ) : (
+        <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+      )}
     </FontChoicesContext.Provider>
   );
+}
+
+/** The panel reading its block's mode itself, where no caller hands it one. */
+function StyleInspectorOwnMode(
+  props: StyleInspectorPanelProps
+): React.JSX.Element {
+  const tokenMode = useCanvasTokenModeAt(props.editor.selectedId);
+  return <StyleInspectorBody {...props} tokenMode={tokenMode} />;
 }
 
 function StyleInspectorBody({
@@ -556,7 +584,8 @@ function StyleInspectorBody({
   onJumpToBreakpoint,
   target = BLOCK_TARGET,
   showReadOnlyReason = true,
-}: StyleInspectorPanelProps): React.JSX.Element {
+  tokenMode,
+}: StyleInspectorPanelProps & { tokenMode: TokenMode }): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
   // two collapsed onto one value made the first section impossible to close,
@@ -570,8 +599,7 @@ function StyleInspectorBody({
     {}
   );
   // The mode the selected block is drawn in, its nearest theme marker first
-  // and the device after, read once here and handed to every control below.
-  const tokenMode = useCanvasTokenModeAt(editor.selectedId);
+  // and the device after, read once above and handed to every control below.
   const prefersDark = tokenMode === "dark";
   /*
    * What the browser is applying, or `undefined` when nobody can say.
@@ -720,27 +748,38 @@ function StyleInspectorBody({
     provenanceOf,
     editing,
     onChooseForm: chooseForm,
+    breakpoints,
   };
 
   return (
     <StyleTargetContext.Provider value={target}>
-      <CanvasTokenModeProvider value={tokenMode}>
-        <div className="nx-style-inspector" data-style-target={target.kind}>
-          {showReadOnlyReason ? (
-            <ReadOnlyNote target={target} reason={readOnlyReason} />
-          ) : null}
-          <NoStyleProperties count={inspected.sections.length} />
-          <StyleSections
-            sections={inspected.sections}
-            nodeId={inspected.nodeId}
-            open={open}
-            onOpen={setOpenGroup}
-            readOnlyReason={readOnlyReason}
-            surroundings={surroundings}
-            fit={inspected.objectFit}
-          />
-        </div>
-      </CanvasTokenModeProvider>
+      <AppliedAtTier.Provider
+        value={appliedAtReader({
+          cascade,
+          subject,
+          state: inspected.state,
+          breakpoints,
+          nodeId: inspected.nodeId,
+        })}
+      >
+        <CanvasTokenModeProvider value={tokenMode}>
+          <div className="nx-style-inspector" data-style-target={target.kind}>
+            {showReadOnlyReason ? (
+              <ReadOnlyNote target={target} reason={readOnlyReason} />
+            ) : null}
+            <NoStyleProperties count={inspected.sections.length} />
+            <StyleSections
+              sections={inspected.sections}
+              nodeId={inspected.nodeId}
+              open={open}
+              onOpen={setOpenGroup}
+              readOnlyReason={readOnlyReason}
+              surroundings={surroundings}
+              fit={inspected.objectFit}
+            />
+          </div>
+        </CanvasTokenModeProvider>
+      </AppliedAtTier.Provider>
     </StyleTargetContext.Provider>
   );
 }
@@ -769,9 +808,9 @@ function StyleSections({
   fit: string | undefined;
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
-  const { picture } = React.useContext(FocalFrame);
+  const { picture, position } = React.useContext(FocalFrame);
   return (
-    <FocalFrame.Provider value={{ picture, fit }}>
+    <FocalFrame.Provider value={{ picture, position, fit }}>
       <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
         {sections.map(section => (
           <StyleSectionItem
@@ -927,6 +966,8 @@ interface StyleFieldSurroundings {
   provenanceOf: ProvenanceOf;
   editing: EditedAddress;
   onChooseForm: ChooseForm;
+  /** The site's devices, for a control that writes at another one. */
+  breakpoints: BreakpointSet | undefined;
 }
 
 /**
@@ -1040,6 +1081,7 @@ function StyleSectionItem({
   provenanceOf,
   editing,
   onChooseForm,
+  breakpoints,
 }: {
   section: StyleSection;
   /** Why every control is read-only, which also withholds "+ More". */
@@ -1076,6 +1118,7 @@ function StyleSectionItem({
     provenanceOf,
     editing,
     onChooseForm,
+    breakpoints,
   };
   return (
     <AccordionItem value={section.key} data-section={section.key}>
@@ -1142,6 +1185,7 @@ function SectionFields({
   readOnly: boolean;
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element {
+  const target = React.useContext(StyleTargetContext);
   const rings =
     sectionKey === "spacing"
       ? spacingRings(shown, surroundings.orientation)
@@ -1149,6 +1193,17 @@ function SectionFields({
   return (
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
+        {sectionKey === "layout" ? (
+          <ColumnsLayoutFields surroundings={surroundings} />
+        ) : null}
+        {sectionKey === "size" ? (
+          <BlockShortcutsFields
+            surroundings={surroundings}
+            minHeightDrawn={(rings?.rest ?? shown).some(
+              property => property.property === "minHeight"
+            )}
+          />
+        ) : null}
         {rings === undefined ? null : (
           <SpacingBox
             margin={rings.margin}
@@ -1157,12 +1212,16 @@ function SectionFields({
           />
         )}
         {(rings?.rest ?? shown).map(property => (
-          <StylePropertyFields
-            key={`${surroundings.nodeId}:${property.property}`}
-            property={property}
-            namesSection={property.property === sectionKey}
-            {...surroundings}
-          />
+          <React.Fragment key={`${surroundings.nodeId}:${property.property}`}>
+            {property.property === "minHeight" ? (
+              <BlockPresetsOver surroundings={surroundings} />
+            ) : null}
+            <StylePropertyFields
+              property={withOverlayOffered(property, surroundings, target)}
+              namesSection={property.property === sectionKey}
+              {...surroundings}
+            />
+          </React.Fragment>
         ))}
         {shown.length === 0 ? (
           <p className="nx-inspector__note">
@@ -1172,6 +1231,253 @@ function SectionFields({
       </SectionHeld.Provider>
     </fieldset>
   );
+}
+
+/**
+ * A Columns row's layout tiles and stacking, at the top of its Layout
+ * section. Only for the row itself: a shared style's values reach many rows,
+ * and its tiles would add or remove columns in none of them.
+ */
+function ColumnsLayoutFields({
+  surroundings,
+}: {
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
+  if (
+    target.kind !== "block" ||
+    surroundings.editing.blockType !== COLUMNS_ROW
+  ) {
+    return null;
+  }
+  return (
+    <ColumnsLayoutControl
+      editor={surroundings.editor}
+      nodeId={surroundings.nodeId}
+      state={surroundings.state}
+      breakpoint={surroundings.breakpoint}
+      breakpoints={surroundings.breakpoints}
+      inherited={reachingLayout(surroundings.provenanceOf)}
+      applied={applied}
+    />
+  );
+}
+
+/**
+ * What the cascade applies to the edited block at another tier, lent to a
+ * control that writes at tiers other than the one being edited (where a row
+ * stacks). Absent where the host compiles no cascade.
+ */
+const AppliedAtTier = React.createContext<AppliedAt | undefined>(undefined);
+
+/**
+ * The same provenance reading the dots use, asked at a tier: what a canvas at
+ * that tier's width applies, through the one ranking of the trace.
+ */
+function appliedAtReader({
+  cascade,
+  subject,
+  state,
+  breakpoints,
+  nodeId,
+}: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  state: StyleState;
+  breakpoints: BreakpointSet | undefined;
+  nodeId: string;
+}): AppliedAt | undefined {
+  if (cascade === undefined || subject === undefined) return undefined;
+  return (tier, cssProperty) => {
+    const width = breakpoints?.viewport.find(
+      each => each.id === tier
+    )?.maxWidth;
+    const read = provenanceReader({
+      cascade,
+      subject,
+      live: breakpointsAtWidth(breakpoints, width),
+      state,
+      breakpoint: tier,
+      breakpoints,
+      onJumpToBreakpoint: undefined,
+    });
+    const provenance = read({
+      kind: "cssValue",
+      cssProperty,
+      tokenKinds: [],
+    })?.provenance;
+    if (provenance === undefined || provenance.kind === "unset")
+      return undefined;
+    const { entry } = provenance;
+    return {
+      value: entry.value,
+      breakpoint: entry.breakpoint,
+      own: entry.origin.kind === "node" && entry.origin.id === nodeId,
+    };
+  };
+}
+
+/**
+ * A Section's Height and a Button's Size and Full width, at the top of its
+ * Size section. Only for the block itself: a shared style's values are not
+ * the block's to size.
+ */
+function BlockShortcutsFields({
+  surroundings,
+  minHeightDrawn,
+}: {
+  surroundings: StyleFieldSurroundings;
+  /** Whether the Min height field is drawn, which then carries its presets. */
+  minHeightDrawn: boolean;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  if (target.kind !== "block") return null;
+  const where = shortcutWhere(surroundings);
+  return (
+    <>
+      <BlockShortcutsControl {...where} />
+      {minHeightDrawn ? null : <MinHeightPresets {...where} over={false} />}
+    </>
+  );
+}
+
+/** A Section's Min height presets, over the Min height field it presets. */
+function BlockPresetsOver({
+  surroundings,
+}: {
+  surroundings: StyleFieldSurroundings;
+}): React.JSX.Element | null {
+  const target = React.useContext(StyleTargetContext);
+  if (target.kind !== "block") return null;
+  return <MinHeightPresets {...shortcutWhere(surroundings)} over />;
+}
+
+/**
+ * Where a shortcut writes, and what reaches it from elsewhere: the value the
+ * panel's own provenance reports as inherited, the one ranking of the trace.
+ */
+function shortcutWhere(surroundings: StyleFieldSurroundings) {
+  return {
+    editor: surroundings.editor,
+    nodeId: surroundings.nodeId,
+    state: surroundings.state,
+    breakpoint: surroundings.breakpoint,
+    reaching: reachingBeneath(cssProperty =>
+      surroundings.provenanceOf({
+        kind: "cssValue",
+        cssProperty,
+        tokenKinds: [],
+      })
+    ),
+  };
+}
+
+/** The background's overlay fields, offered only over an image. */
+const OVERLAY_FIELDS: ReadonlySet<string> = new Set([
+  "overlay",
+  "overlayStrength",
+]);
+
+/** The leaf an image or a gradient is traced by. */
+const BACKGROUND_IMAGE_LEAF: StyleLeaf = {
+  kind: "cssValue",
+  cssProperty: "background-image",
+  tokenKinds: [],
+};
+
+/**
+ * The background's controls without its overlay while there is nothing for
+ * one to cover: no image or gradient reaching what is edited (from the
+ * cascade where it answers, else from what the target stores anywhere), and
+ * no overlay of its own to clear.
+ */
+function withOverlayOffered(
+  property: InspectedStyleProperty,
+  surroundings: StyleFieldSurroundings,
+  target: StyleTarget
+): InspectedStyleProperty {
+  if (property.property !== "background") return property;
+  if (overlayCovers(surroundings, target)) return property;
+  return {
+    ...property,
+    controls: property.controls.filter(
+      control => !OVERLAY_FIELDS.has(control.path[0] ?? "")
+    ),
+  };
+}
+
+/**
+ * Whether an image or a gradient, or an overlay itself, reaches what is
+ * edited: read from the styles the fields show, the shared style's while it
+ * is the target, whose cascade the panel does not trace.
+ */
+function overlayCovers(
+  surroundings: StyleFieldSurroundings,
+  target: StyleTarget
+): boolean {
+  const { styles } = fieldStyles(
+    target,
+    surroundings.editor,
+    surroundings.nodeId
+  );
+  if (storesBackgroundImage(styles)) return true;
+  const answer = surroundings.provenanceOf(BACKGROUND_IMAGE_LEAF);
+  return answer !== undefined && answer.provenance.kind !== "unset";
+}
+
+/**
+ * Whether styles store, at any state or device, an image, a gradient or an
+ * overlay: what keeps the overlay offered where no cascade answers.
+ */
+function storesBackgroundImage(styles: NodeStyles | undefined): boolean {
+  return Object.values(styles ?? {}).some(byBreakpoint =>
+    Object.values(byBreakpoint ?? {}).some(paintsOrOverlays)
+  );
+}
+
+/**
+ * Whether one address's values paint an image or a gradient, judged as the
+ * compiler judges it (`none` clears an image, and an overlay over it would
+ * cover nothing), or store an overlay of their own.
+ */
+function paintsOrOverlays(values: StyleValues | undefined): boolean {
+  if (paintsBackgroundImage("gradient", values?.backgroundGradient)) {
+    return true;
+  }
+  const background = values?.background;
+  if (
+    typeof background !== "object" ||
+    background === null ||
+    Array.isArray(background)
+  ) {
+    return false;
+  }
+  return (
+    paintsBackgroundImage("url", (background as { url?: unknown }).url) ||
+    [...OVERLAY_FIELDS].some(field => Object.hasOwn(background, field))
+  );
+}
+
+/** The catalog's leaf for a row's column template, which the trace records. */
+const TEMPLATE_LEAF: StyleLeaf | undefined = (() => {
+  const shape = STYLE_CATALOG.find(
+    entry => entry.property === "gridTemplateColumns"
+  )?.shape;
+  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
+})();
+
+/**
+ * The column template reaching the row from elsewhere (a wider device, a
+ * shared style it wears, another state), as the cascade the dots read
+ * answers it: one reading of the cascade, never a second walk of it.
+ */
+function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
+  const answer =
+    TEMPLATE_LEAF === undefined ? undefined : provenanceOf(TEMPLATE_LEAF);
+  return answer?.provenance.kind === "inherited"
+    ? answer.provenance.entry.value
+    : undefined;
 }
 
 /** Margin and padding drawn as one box, and what the section shows besides. */
@@ -2688,6 +2994,7 @@ function ControlValue({
         labelledBy={labelledBy}
         leaf={variableLeafOf(control.leaf, fold)}
         identity={stored.$token}
+        times={stored.times}
         actionName={actionName}
         tokens={tokens}
         compact={compact}
@@ -2730,11 +3037,24 @@ function ControlValue({
  * another, or, in a side of the spacing box, where there is no room for both,
  * the chip alone with its name as the way to choose.
  */
+/**
+ * The reference a chip commits when another variable replaces its own: the
+ * new variable at the held one's scale, which is the size it was set to (a
+ * Small button's padding), not a property of the variable.
+ */
+export function pickedReference(
+  picked: string,
+  times: number | undefined
+): { $token: string; times?: number } {
+  return { $token: picked, ...(times === undefined ? {} : { times }) };
+}
+
 function HeldVariable({
   id,
   labelledBy,
   leaf,
   identity,
+  times,
   actionName,
   tokens,
   compact,
@@ -2746,12 +3066,17 @@ function HeldVariable({
   /** The leaf the field's variables are offered for; see `variableLeafOf`. */
   leaf: StyleLeaf;
   identity: string;
+  /** The factor the variable is scaled by, if it is. */
+  times?: number | undefined;
   actionName: string;
   tokens: SiteTokenSet | undefined;
   compact: boolean;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const pick = (picked: string): CommitOutcome => onCommit({ $token: picked });
+  // A scaled variable stays scaled when another replaces it: the factor is
+  // the size it was set to (a Small button's padding), not the variable's.
+  const pick = (picked: string): CommitOutcome =>
+    onCommit(pickedReference(picked, times));
   const clear = (): void => {
     // Removing the variable puts the typed field back in the chip's place, and
     // the ✕ that held focus is gone: focus goes to that field once it is
@@ -2769,6 +3094,7 @@ function HeldVariable({
         leaf={leaf}
         tokens={tokens}
         identity={identity}
+        times={times}
         label={actionName}
         labelledBy={labelledBy}
         onClear={clear}
@@ -5263,10 +5589,23 @@ function ValueField({
       />
     );
   }
-  const Field =
-    control.leaf.cssProperty === "opacity" ? OpacityField : NumericField;
+  const scale = PERCENT_SCALES[control.leaf.cssProperty];
+  if (scale !== undefined) {
+    return (
+      <PercentField
+        scale={scale}
+        id={id}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
   return (
-    <Field
+    <NumericField
       id={id}
       control={control}
       stored={stored}
@@ -5329,9 +5668,28 @@ function fractionOf(percent: number): number {
   return Number((percent / 100).toPrecision(12));
 }
 
-/** A stored opacity as the percent the field shows; anything else as stored. */
-function toPercent(value: StyleValue | undefined): StyleValue | undefined {
-  return typeof value === "number" ? percentOf(value) : value;
+/**
+ * How a value an author reads in percent is stored: opacity as the fraction
+ * CSS takes, an overlay's strength as the percent itself; and where the
+ * slider rests while nothing is set.
+ */
+interface PercentScale {
+  readonly fraction: boolean;
+  readonly unset: number;
+}
+
+/** The values drawn in percent, by CSS property. */
+const PERCENT_SCALES: Readonly<Record<string, PercentScale>> = {
+  opacity: { fraction: true, unset: 100 },
+  [OVERLAY_STRENGTH]: { fraction: false, unset: 50 },
+};
+
+/** A stored value as the percent the field shows; anything else as stored. */
+function toPercent(
+  value: StyleValue | undefined,
+  scale: PercentScale
+): StyleValue | undefined {
+  return typeof value === "number" && scale.fraction ? percentOf(value) : value;
 }
 
 /**
@@ -5339,14 +5697,18 @@ function toPercent(value: StyleValue | undefined): StyleValue | undefined {
  * number typed as text, is divided by 100; a CSS-wide keyword is a whole
  * value and passes through unscaled.
  */
-function fromPercent(value: StyleValue | null): StyleValue | null {
+function fromPercent(
+  value: StyleValue | null,
+  scale: PercentScale
+): StyleValue | null {
   const number =
     typeof value === "number"
       ? value
       : typeof value === "string"
         ? textNumber(value)
         : undefined;
-  return number === undefined ? value : fractionOf(number);
+  if (number === undefined) return value;
+  return scale.fraction ? fractionOf(number) : number;
 }
 
 /**
@@ -5359,14 +5721,18 @@ function fromPercent(value: StyleValue | null): StyleValue | null {
  * passed through, the variables at its end) is the same here. The inherited
  * value it shows as a hint is converted the same way.
  */
-function OpacityField(
-  props: React.ComponentProps<typeof NumericField>
-): React.JSX.Element {
+function PercentField({
+  scale,
+  ...props
+}: React.ComponentProps<typeof NumericField> & {
+  scale: PercentScale;
+}): React.JSX.Element {
   const { control, stored, actionName, describedBy, onCommit } = props;
   const unitId = React.useId();
-  const { shown, inheritedShown, resting } = opacityReading(
+  const { shown, inheritedShown, resting } = percentReading(
     stored,
-    React.useContext(InheritedValue)
+    React.useContext(InheritedValue),
+    scale
   );
   const leaf = control.leaf;
   const percentControl =
@@ -5376,11 +5742,11 @@ function OpacityField(
   return (
     <div className="nx-style-inspector__opacity">
       {resting === undefined ? null : (
-        <OpacitySlider
+        <PercentSlider
           resting={resting}
           actionName={actionName}
           describedBy={describedBy}
-          onCommit={onCommit}
+          onCommit={next => onCommit(fromPercent(next, scale))}
         />
       )}
       <InheritedValue.Provider value={inheritedShown}>
@@ -5389,7 +5755,7 @@ function OpacityField(
             {...props}
             control={percentControl}
             stored={shown}
-            onCommit={value => onCommit(fromPercent(value))}
+            onCommit={value => onCommit(fromPercent(value, scale))}
           />
         </UnitWords.Provider>
       </InheritedValue.Provider>
@@ -5413,21 +5779,26 @@ function OpacityField(
  * no resting place and no slider: no position stands for it, and a nudge
  * would replace it with a number built from a position it never had.
  */
-function opacityReading(
+function percentReading(
   stored: StyleValue | undefined,
-  inherited: string | undefined
+  inherited: string | undefined,
+  scale: PercentScale
 ): {
   shown: StyleValue | undefined;
   inheritedShown: string | undefined;
   resting: number | undefined;
 } {
-  const shown = toPercent(stored);
+  const shown = toPercent(stored, scale);
   const inheritedNumber =
     inherited === undefined ? undefined : textNumber(inherited);
   const inheritedPercent =
-    inheritedNumber === undefined ? undefined : percentOf(inheritedNumber);
+    inheritedNumber === undefined
+      ? undefined
+      : scale.fraction
+        ? percentOf(inheritedNumber)
+        : inheritedNumber;
   const unsetResting =
-    inheritedPercent ?? (inherited === undefined ? 100 : undefined);
+    inheritedPercent ?? (inherited === undefined ? scale.unset : undefined);
   return {
     shown,
     inheritedShown:
@@ -5442,10 +5813,10 @@ function opacityReading(
 }
 
 /**
- * Opacity's slider, 0 to 100: the thumb follows a drag, and the value is
+ * A percent's slider, 0 to 100: the thumb follows a drag, and the value is
  * written once it settles.
  */
-function OpacitySlider({
+function PercentSlider({
   resting,
   actionName,
   describedBy,
@@ -5471,7 +5842,7 @@ function OpacitySlider({
       onValueChange={([next]) => setPreview(next)}
       onValueCommit={([next]) => {
         setPreview(undefined);
-        if (next !== undefined) onCommit(fractionOf(next));
+        if (next !== undefined) onCommit(next);
       }}
       thumbs={[
         {

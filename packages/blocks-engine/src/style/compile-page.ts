@@ -54,12 +54,13 @@ import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
-  namedClassName,
   namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  classNameOf,
+  isLook,
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
@@ -70,6 +71,12 @@ import {
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
+import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import {
+  partRouting,
+  routeDeclarations,
+  type PartRouting,
+} from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
 import type { SpacingMode } from "./spacing-mode";
@@ -416,7 +423,7 @@ export interface CompiledPageCss {
  * specificity are separated by source order, so the order they are emitted in
  * is part of the contract rather than an artifact of iteration.
  */
-export const TYPOGRAPHIC_ELEMENTS = [
+const TYPOGRAPHIC_ELEMENTS = [
   "h1",
   "h2",
   "h3",
@@ -1261,6 +1268,12 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
+  /**
+   * The properties block parts take from a wrapping root, for the tiers that
+   * style a node's root (its own values, shared styles, looks). Absent for
+   * the defaults tiers, whose type class sits on the part itself.
+   */
+  routing?: PartRouting;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1327,7 +1340,14 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  const {
+    origin,
+    trace,
+    mayFetchUrl,
+    weightlessAnchor,
+    previewStates,
+    routing,
+  } = about;
   // Chosen ONCE per envelope rather than per rule: it is a property of the
   // compile, and re-deciding it inside the loop invites the two forms to
   // disagree between a node's base rule and its hover one.
@@ -1414,7 +1434,12 @@ function envelopeRules(
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
-      for (const rule of groupByDescendant(compiled.declarations)) {
+      for (const rule of anchoredGroups(
+        compiled.declarations,
+        selector,
+        stateSelectors[state],
+        weightlessAnchor === undefined ? routing : undefined
+      )) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
           // Everything after the anchor is wrapped, state and descendant
@@ -1423,15 +1448,18 @@ function envelopeRules(
           // itself would outrank a host rule of the same shape. The anchor is
           // the only part that weighs.
           selector:
-            weightlessAnchor === undefined
+            rule.selector ??
+            (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
-        if (trace === undefined) continue;
+        // A routed declaration is written twice (off the wrapper, onto the
+        // part) and traced once: it is one value the node was given.
+        if (trace === undefined || rule.traced === false) continue;
         for (const declaration of rule.declarations) {
           trace.push({
             origin,
@@ -1447,6 +1475,46 @@ function envelopeRules(
     }
   }
   return rules;
+}
+
+/**
+ * The rules one compiled style map writes: grouped by the descendant each
+ * declaration attaches to, root first, with the root's declarations a block
+ * part takes from a wrapping root split off to their own selectors. A routed
+ * group's second rule carries `traced: false`, so the trace records each
+ * value once.
+ */
+function anchoredGroups(
+  declarations: readonly Declaration[],
+  selector: string,
+  state: string,
+  routing: PartRouting | undefined
+): {
+  descendant: string;
+  declarations: Declaration[];
+  selector?: string;
+  traced?: false;
+}[] {
+  const groups = groupByDescendant(declarations);
+  if (routing === undefined || routing.size === 0) return groups;
+  return groups.flatMap(group => {
+    if (group.descendant !== "") return [group];
+    const { kept, routed } = routeDeclarations(
+      selector,
+      state,
+      group.declarations,
+      routing
+    );
+    return [
+      ...(kept.length === 0 ? [] : [{ descendant: "", declarations: kept }]),
+      ...routed.map((rule, index) => ({
+        descendant: "",
+        declarations: rule.declarations,
+        selector: rule.selector,
+        ...(index % 2 === 1 ? { traced: false as const } : {}),
+      })),
+    ];
+  });
 }
 
 /** Split declarations by the descendant they attach to, root first. */
@@ -1910,6 +1978,9 @@ export function compilePageCss(
     scope === ""
       ? `.${PAGE_ROOT_CLASS}`
       : `.${PAGE_ROOT_CLASS}:where(${scope})`;
+  // Which root properties block parts take from a wrapping root, read once
+  // for the node and class tiers below.
+  const routing = partRouting(ctx.blockParts);
 
   const nodes = documentNodes(
     doc,
@@ -2337,7 +2408,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         cls.styles,
-        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        `${pageRoot} .${escapeIdentifier(classNameOf(cls))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
         pointer(pointer("/classes", String(position)), "styles"),
@@ -2352,17 +2423,25 @@ export function compilePageCss(
         newStyleIssueBudget(),
         warningAllowance,
         {
-          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          origin: {
+            kind: "class",
+            id: cls.id,
+            slug: cls.slug,
+            // A look reaches only its own block type, so a reader of the
+            // trace can refuse it on any other, as the compiler does.
+            ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+          },
           previewStates,
           trace,
           mayFetchUrl,
+          routing,
         }
       )
     );
     // A class that makes a container flex or grid swaps the flow margin for
     // `gap` on each container type that wears it here, exactly as a node's
     // own display does below.
-    const classSelector = `.${escapeIdentifier(namedClassName(cls.slug))}`;
+    const classSelector = `.${escapeIdentifier(classNameOf(cls))}`;
     for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
       const flow = flowGaps.get(type);
       if (flow === undefined) continue;
@@ -2418,6 +2497,7 @@ export function compilePageCss(
           trace,
           mayFetchUrl,
           previewStates,
+          routing,
         }
       ),
       ...visibilityRules(
@@ -2600,7 +2680,19 @@ export function compilePageCss(
           )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
-        names.push(namedClassName(cls.slug));
+        // A look is bound to one block type: on any other block it is not applied, and said
+        // so, as a class the library does not define is.
+        if (isLook(cls) && cls.blockType !== node.type) {
+          pushBoundedWarning(warningAllowance, warnings, {
+            path: pointer(path, "classes"),
+            code: "look-for-another-block",
+            severity: "warning",
+            message: `This node lists the look ${describeValue(cls.id)}, which belongs to ${describeValue(cls.blockType)} blocks, so it was not applied.`,
+            suggestion: "Pick one of this block's own looks instead.",
+          });
+          continue;
+        }
+        names.push(classNameOf(cls));
       }
     }
     attributeClasses.set(node.id, names.join(" "));
@@ -2611,7 +2703,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: serializeRules(rules),
+    css: withOverlayReset(rules, gated),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -2621,4 +2713,29 @@ export function compilePageCss(
     // the shape it did before this field existed.
     ...(Object.keys(gated).length === 0 ? {} : { gated }),
   };
+}
+
+/**
+ * The page's rules, preceded by the overlay's reset when a rule reads it: so a
+ * section's overlay stops at its own image rather than reaching nested ones.
+ */
+function withOverlayReset(
+  rules: readonly CssRule[],
+  gated: Readonly<Record<string, string>>
+): string {
+  const css = serializeRules(rules);
+  // Any of the overlay's properties read: the image's layer, or a longhand's
+  // entry lined up with it.
+  const reading = `var(${OVERLAY_PREFIX}`;
+  // A gated node's rules are kept apart, and appended for a reader who sees
+  // it: the reset stays in the sheet, so the page put back together is the
+  // one an ungated compile writes.
+  const reads =
+    rules.some(rule =>
+      rule.declarations.some(declaration => declaration.value.includes(reading))
+    ) || Object.values(gated).some(fragment => fragment.includes(reading));
+  if (!reads) return css;
+  // Joined only to what is there: a sheet whose every rule is gated is the
+  // reset alone, so the page put back together has no blank line in it.
+  return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
 }

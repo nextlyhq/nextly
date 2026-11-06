@@ -704,7 +704,7 @@ function DocumentBarLive({
   pendingRecovery: boolean;
   entry: EntryData | null | undefined;
 }) {
-  const { defaultLocale, locales } = useLocalization();
+  const { locales } = useLocalization();
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which the region treats as
   // "nothing to report" rather than as zero progress.
@@ -713,8 +713,7 @@ function DocumentBarLive({
     | undefined;
   const counts = translationCounts(
     entryTranslations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
   return (
     <DocumentStatusLive

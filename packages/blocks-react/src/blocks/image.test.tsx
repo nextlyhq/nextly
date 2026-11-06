@@ -21,7 +21,7 @@ import { image, renderImage } from "./image";
 
 const TYPE_CLASS = "nx-bt-core--image";
 
-async function draw(caption: string) {
+async function draw(caption: string, extra = "") {
   const { container } = render(
     await renderImage({
       props: {
@@ -29,7 +29,7 @@ async function draw(caption: string) {
         alt: "a wide asset",
         ...(caption === "" ? {} : { caption }),
       },
-      className: `nx-pb-node1 ${TYPE_CLASS}`,
+      className: `nx-pb-node1 ${TYPE_CLASS}${extra}`,
       // Required by the render contract; these fixtures declare no parts.
       partClass: () => "",
     } as never)
@@ -54,6 +54,28 @@ describe("core/image, whichever branch it renders", () => {
     expect(container.querySelector("img")?.className).toContain(TYPE_CLASS);
   });
 
+  it("keeps the image's look on the figure with its shared style and its own class", async () => {
+    // Every tier is ranked on one element, the root; the corners, proportion
+    // and fit they set reach the picture through its part, never the figure's
+    // box (`image-routing.test.tsx` reads that off the compiled sheet).
+    const container = await draw(
+      "a caption",
+      " nx-l-image-circle nx-c-card nx-l-image-rounded-2"
+    );
+    const figure = container.querySelector("figure")?.className ?? "";
+    for (const name of [
+      "nx-pb-node1",
+      "nx-c-card",
+      "nx-l-image-circle",
+      "nx-l-image-rounded-2",
+    ]) {
+      expect(figure).toContain(name);
+    }
+    expect(container.querySelector("img")?.className ?? "").not.toContain(
+      "nx-l-"
+    );
+  });
+
   it("leaves the node's own classes on the figure, which is the root", async () => {
     // The type class rides both; the per-node class must not, or two elements
     // answer to one node's identity.
@@ -73,7 +95,8 @@ async function drawWith(
   resolveEntryPath: (
     collection: string,
     id: string
-  ) => Promise<string | null> = async () => null
+  ) => Promise<string | null> = async () => null,
+  extra = ""
 ) {
   const { container } = render(
     await renderImage({
@@ -82,7 +105,7 @@ async function drawWith(
         alt: "The team",
         ...props,
       },
-      className: `nx-pb-node1 ${TYPE_CLASS}`,
+      className: `nx-pb-node1 ${TYPE_CLASS}${extra}`,
       partClass: (part: string) => `part-${part}`,
       ctx: { resolveMedia: async () => null, resolveEntryPath },
     } as never)
@@ -104,6 +127,18 @@ describe("core/image with a link", () => {
     expect(img?.className).not.toContain("nx-pb-node1");
     // The alt text is what names the link.
     expect(img?.getAttribute("alt")).toBe("The team");
+  });
+
+  it("keeps its look on the link with its own class, where the link is the root", async () => {
+    const container = await drawWith(
+      { href: "/about" },
+      undefined,
+      " nx-l-image-circle"
+    );
+    const link = container.firstElementChild;
+    expect(link?.className).toContain("nx-l-image-circle");
+    expect(link?.className).toContain("nx-pb-node1");
+    expect(link?.querySelector("img")?.className).not.toContain("nx-l-");
   });
 
   it("links only the picture, leaving the caption outside the link", async () => {
@@ -172,5 +207,53 @@ describe("core/image as content", () => {
     // With alt text the picture names it, and the link says nothing over it.
     const named = await drawWith({ href: "/about" });
     expect(named.querySelector("a")?.hasAttribute("aria-label")).toBe(false);
+  });
+});
+
+describe("core/image's picture inside a wrapper", () => {
+  it("takes its corners, proportion, fit and focal point from the root", () => {
+    // Declared on the part the compiler routes them to, from a figure or a
+    // link: the structure `image-routing.test.tsx` renders and matches.
+    const picture = (
+      image.parts as Record<string, { takesFromRoot?: unknown }> | undefined
+    )?.picture;
+    expect(picture?.takesFromRoot).toEqual({
+      properties: [
+        "borderRadius",
+        "aspectRatio",
+        "objectFit",
+        "objectPosition",
+      ],
+      whenRootIs: ["frame", "link"],
+    });
+  });
+
+  it("sits directly in the link inside a figure, with nothing between", async () => {
+    const container = await drawWith({ href: "/about", caption: "Our team" });
+    expect(
+      container.querySelector("figure > a > img.part-picture")
+    ).not.toBeNull();
+  });
+});
+
+describe("core/image's link with no caption", () => {
+  it("takes no fit or focal point from above the block", async () => {
+    // The link is the root here and holds the node's own values; asked to
+    // inherit, an unset fit would come from whatever ancestor sets one.
+    const container = await drawWith({ href: "/about" });
+    const root = container.querySelector("a");
+    const parts = (image.parts ?? {}) as Record<
+      string,
+      { baseStyles?: { base?: { base?: Record<string, unknown> } } }
+    >;
+    const worn = [...(root?.classList ?? [])]
+      .filter(name => name.startsWith("part-"))
+      .map(name => name.slice("part-".length));
+    expect(worn.length).toBeGreaterThan(0);
+    for (const part of worn) {
+      const declared = parts[part]?.baseStyles?.base?.base ?? {};
+      expect(declared).not.toHaveProperty("objectFit");
+      expect(declared).not.toHaveProperty("objectPosition");
+    }
   });
 });

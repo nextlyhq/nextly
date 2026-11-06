@@ -19,12 +19,14 @@ import {
   generateSetupToken,
   replaceSetupToken,
   type SetupTokenMeta,
+  operatorSetupToken,
 } from "../../auth/setup-token/setup-token";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { MetaService } from "../../domains/meta/services/meta-service";
 import { superAdminRoleHeld } from "../../domains/users/services/last-super-admin";
 import { NextlyError } from "../../errors/index";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { exitWithError, type CliError } from "../errors";
 import {
   setupAlreadyComplete,
@@ -32,7 +34,7 @@ import {
   setupTokenSetByEnv,
 } from "../errors/areas/commands";
 import type { CommandContext, GlobalOptions } from "../program";
-import { withAdapter } from "../utils/adapter";
+import { openCommandAdapter, withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
 /**
@@ -88,8 +90,44 @@ export async function setupTokenCommand(input: {
   return { ok: true, lines: [outcome.line] };
 }
 
+/**
+ * What replacing the setup token would do, asked as the command asks it and
+ * written by nothing: no setup claim is taken and no token is made, so none
+ * is printed. Each refusal is the real run's.
+ */
+export async function previewSetupToken(input: {
+  hasAdministrator: () => Promise<boolean>;
+  env?: Readonly<Record<string, string | undefined>>;
+}): Promise<DryRunPlan> {
+  if (await input.hasAdministrator()) {
+    return {
+      changes: [],
+      refusals: [setupAlreadyComplete("setup-token").what],
+    };
+  }
+  // The question `replaceSetupToken` asks before it stores anything.
+  if (operatorSetupToken(input.env ?? process.env).kind !== "absent") {
+    return {
+      changes: [],
+      refusals: [setupTokenSetByEnv(SETUP_TOKEN_ENV).what],
+    };
+  }
+  return {
+    changes: [
+      {
+        action: "write",
+        target:
+          "a new setup token in the install's store, replacing any current one",
+      },
+    ],
+    notes: ["The new token is printed by a real run only."],
+  };
+}
+
 interface SetupTokenCommandOptions {
   generate?: boolean;
+  /** `--dry-run`: name the replacement, make and print no token. */
+  dryRun?: boolean;
 }
 
 export async function runSetupTokenCommand(
@@ -105,6 +143,11 @@ export async function runSetupTokenCommand(
       configPath: context.options.config,
       cwd: context.options.cwd,
     });
+  }
+  // `--generate` touches nothing, so a dry run of it is the same run.
+  if (options.dryRun === true && !options.generate) {
+    await previewOverStore(logger);
+    return;
   }
   // `--generate` touches nothing, so it needs no database; otherwise the
   // connection refuses a missing or unusable database setting itself.
@@ -137,13 +180,43 @@ export async function runSetupTokenCommand(
 }
 
 /**
+ * The dry run over the install's store, opened read-only: a database that is
+ * not there is named as the refusal.
+ */
+async function previewOverStore(
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const adapter = await openCommandAdapter({ dryRun: true }, logger);
+  if (adapter === undefined) return;
+  try {
+    const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+    const { dialect } = drizzleAdapter.getCapabilities();
+    const schemaRegistry = new SchemaRegistry(dialect);
+    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
+    drizzleAdapter.setTableResolver(schemaRegistry);
+    reportDryRun(
+      logger,
+      await previewSetupToken({
+        hasAdministrator: () =>
+          superAdminRoleHeld(
+            drizzleAdapter.getDrizzle(),
+            getDialectTables(dialect)
+          ),
+      })
+    );
+  } finally {
+    await adapter.disconnect();
+  }
+}
+
+/**
  * The action of `nextly setup-token`, loaded when it runs, building its
  * context with the factory the program hands in.
  */
 export function setupTokenAction(
   createContext: (options: GlobalOptions) => CommandContext
-): (cmdOptions: { generate?: boolean }, cmd: Command) => Promise<void> {
-  return async (cmdOptions: { generate?: boolean }, cmd: Command) => {
+): (cmdOptions: SetupTokenCommandOptions, cmd: Command) => Promise<void> {
+  return async (cmdOptions: SetupTokenCommandOptions, cmd: Command) => {
     const context = createContext(cmd.optsWithGlobals());
     try {
       await runSetupTokenCommand(cmdOptions, context);

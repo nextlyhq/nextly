@@ -126,7 +126,7 @@ export function FocalPointField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
-  const { picture, fit } = React.useContext(FocalFrame);
+  const { picture, fit, position } = React.useContext(FocalFrame);
   const inherited = React.useContext(InheritedValue);
   const text = typeof stored === "string" ? stored : undefined;
   const chosen = text === undefined ? undefined : pointOf(text);
@@ -134,7 +134,9 @@ export function FocalPointField({
     text === undefined && inherited !== undefined
       ? pointOf(inherited)
       : undefined;
-  const shownPosition = text ?? inherited;
+  // Where the canvas places it, which resolves a point the inspector cannot;
+  // else the point as stored or inherited.
+  const shownPosition = position ?? text ?? inherited;
   const [writing, setWriting] = React.useState(false);
   const grid = React.useRef<HTMLDivElement>(null);
   // One tab stop: the chosen point, else the one shown, else the middle.

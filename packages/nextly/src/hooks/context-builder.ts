@@ -77,6 +77,9 @@ export interface BuildContextOptions<T = any> {
    * pool (see {@link HookContext.executor}). Omitted outside a transaction.
    */
   executor?: unknown;
+
+  /** Holds an effect until the write is durable; see {@link HookContext.afterCommit}. */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
 }
 
 /**
@@ -150,6 +153,7 @@ export function buildContext<T = any>(
     context,
     req: options.req,
     executor: options.executor,
+    afterCommit: options.afterCommit,
   };
 }
 
@@ -231,5 +235,9 @@ export function cloneContext<T>(context: HookContext<T>): HookContext<T> {
           http: context.req.http,
         }
       : undefined,
+    // Shared, not rebuilt: it holds an effect for the write this context
+    // belongs to, and a clone handed on without it would leave its receiver
+    // no way to wait for that write, so it would act at once.
+    afterCommit: context.afterCommit,
   };
 }

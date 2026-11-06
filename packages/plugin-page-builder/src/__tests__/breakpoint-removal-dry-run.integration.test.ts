@@ -301,6 +301,45 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("names a page by its saved title, as the editor shows it", async () => {
+      // Published as Home, then renamed in a pending working draft: someone
+      // who may edit it knows it by the draft's title, as the editor shows.
+      const t = await boot();
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          status: "published",
+          content: doc("page", [heading("a", atMobile)]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.update({
+        collection: "pages",
+        id: String(created.item.id),
+        data: { title: "Home, renamed" },
+        overrideAccess: true,
+      });
+      const set = {
+        breakpoints: { viewport: [TABLET], container: [] },
+        dryRun: true,
+      };
+      const editor = await holding(
+        t,
+        "manage-page-builder-site",
+        "read-pages",
+        "update-pages"
+      );
+      const edited = await ask(editor, set);
+      const [mobile] = (edited.body.item as Record<string, unknown>)
+        .removed as Record<string, unknown>[];
+      expect(mobile?.documents).toEqual({
+        named: ["Home, renamed"],
+        unnamed: 0,
+      });
+    });
+
     it("answers that nothing is dropped when nothing is removed", async () => {
       const t = await boot();
       const designer = await holding(t, "manage-page-builder-site");

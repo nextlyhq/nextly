@@ -151,7 +151,7 @@ describe("the breakpoints route", () => {
     expect(MANAGE_SITE_PERMISSION).toBe("manage-page-builder-site");
   });
 
-  it("stores the set on the RESOLVED Single, marked as the Settings write", async () => {
+  it("stores the set on the RESOLVED Single, marked as the Settings write, whatever is stored", async () => {
     const updateSingle = vi.fn<SiteSettingsDirectApi["updateSingle"]>(
       async () => ({})
     );
@@ -163,7 +163,8 @@ describe("the breakpoints route", () => {
     expect(response.status).toBe(200);
     expect(updateSingle).toHaveBeenCalledWith({
       slug: "site_style",
-      data: { breakpoints: CHANGED },
+      // The screen saves the whole set it shows, without reading first.
+      data: { breakpoints: CHANGED, _overwrite: true },
       overrideAccess: true,
       context: SITE_SETTINGS_WRITE_CONTEXT,
       user: author,

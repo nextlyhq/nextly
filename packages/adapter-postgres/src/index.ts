@@ -241,6 +241,27 @@ async function ensureSchemaExists(
   }
 }
 
+/** PostgreSQL's code for a schema that does not exist. */
+const INVALID_SCHEMA_NAME = "3F000";
+
+/**
+ * Fails, without creating it, when the database has no schema of this name:
+ * a read-only connect must not change the database, and a `search_path` that
+ * names a missing schema would quietly fall through to `public`.
+ */
+async function assertSchemaExists(
+  client: PoolClient,
+  schema: string
+): Promise<void> {
+  const name = assertSchemaName(schema);
+  if (await schemaExists(client, name)) return;
+  throw createDatabaseError({
+    kind: "connection",
+    message: `schema "${name}" does not exist`,
+    code: INVALID_SCHEMA_NAME,
+  });
+}
+
 /** Whether the database has a schema of this name. Needs no privilege. */
 async function schemaExists(
   client: PoolClient,
@@ -502,7 +523,9 @@ export class PostgresAdapter extends DrizzleAdapter {
           // there does not fail — it falls through to whatever else is on the
           // path — so the first migration would create its tables in `public`
           // and the setting would appear to do nothing.
-          if (this.config.schema) {
+          if (this.config.schema && this.config.readOnly) {
+            await assertSchemaExists(client, this.config.schema);
+          } else if (this.config.schema) {
             await ensureSchemaExists(client, this.config.schema);
           }
           await checkDialectVersion(client, "postgresql", {

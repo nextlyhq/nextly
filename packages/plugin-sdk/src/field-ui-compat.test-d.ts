@@ -87,7 +87,11 @@ expectTypeOf<TodayFieldUiExport>().toExtend<keyof typeof adminEntry>();
 // ---------------------------------------------------------------------------
 // Today's vocabularies, as literal unions.
 
-/** The built-in field types a picker's `types` may name today. */
+/**
+ * The built-in field types a picker's `types` may name today. `icon` is a
+ * deliberate, compatible addition: a picker that names it is a new caller,
+ * and every list that compiled before still does.
+ */
 type TodayFieldType =
   | "text"
   | "textarea"
@@ -95,6 +99,7 @@ type TodayFieldType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   | "number"
   | "checkbox"
   | "date"

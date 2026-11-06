@@ -261,6 +261,8 @@ const DECLARED_DEFAULT: Record<
   email: (_f, d) => d ?? "",
   password: (_f, d) => d ?? "",
   code: (_f, d) => d ?? "",
+  // Empty is "", as for the text types: the form clears the field to it.
+  icon: (_f, d) => d ?? "",
   checkbox: (_f, d) => d ?? false,
   select: fromMultiplicityDefault,
   radio: fromMultiplicityDefault,
