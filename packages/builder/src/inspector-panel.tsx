@@ -70,6 +70,7 @@ import {
   ComponentVariantsContext,
   ComponentVariantsSection,
 } from "./component-variants-panel";
+import { ShowWhen } from "./condition-controls";
 import {
   ContentServicesContext,
   contentControlFor,
@@ -919,6 +920,18 @@ function ContentTab({
         breakpoints={breakpoints}
         editing={breakpoint}
         status={breakpointsStatus}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
+      {/* Whether the block shows at all, by the entry or list item it is drawn
+          with: beside where it shows, as the design draws the Content tab. */}
+      {/* Keyed by the block, so a row added and not yet finished stays with
+          the block it was added to rather than moving to the next one. */}
+      <ShowWhen
+        key={block.nodeId}
+        editor={editor}
+        nodeId={block.nodeId}
+        services={services}
         heldBy={designLocked}
         reasonId={reasonId}
       />

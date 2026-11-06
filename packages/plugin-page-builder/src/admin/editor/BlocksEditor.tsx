@@ -125,6 +125,7 @@ import {
 } from "./use-host-commit";
 import { useOpenAtSection } from "./use-open-at-section";
 import {
+  useBoundCanvasRender,
   useCanvasInputs,
   useSiteStyleInputs,
   type CanvasInputs,
@@ -1069,6 +1070,15 @@ function EditorBody<TFieldValues extends FieldValues>({
     here: page.title,
     inline,
   });
+  // The canvas's render inputs with the sources its bindings read, asked of
+  // the tree the canvas draws (in a component's view, the open variant's)
+  // and of the Layout regions drawn around it, together.
+  const canvasRender = useBoundCanvasRender(
+    canvas.canvasRender,
+    { document: componentView.preview.document, regions: panels.canvasRegions },
+    mount.locale,
+    mount.initialDocument.kind === "component"
+  );
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
     mount.offerEditComponent,
@@ -1100,6 +1110,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...style,
     ...canvas,
     ...panels,
+    canvasRender,
     documentDirty,
     pageTitle,
     componentView,

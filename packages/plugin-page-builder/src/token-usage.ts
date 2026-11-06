@@ -138,6 +138,14 @@ export function tokenUsageOf(
   };
 }
 
+/** A shared style naming a variable: its id, its name, and a look's block type. */
+export interface SharedStyleNaming {
+  readonly id: string;
+  readonly name: string;
+  /** The block type a look is bound to; absent for a shared style. */
+  readonly blockType?: string;
+}
+
 /**
  * The shared styles whose own styles name each variable asked about, by
  * identity: a shared style's reference is a use whether or not any block
@@ -149,11 +157,19 @@ export function tokenUsageOf(
 export function sharedStylesUsing(
   classes: readonly unknown[],
   identities: ReadonlySet<string>
-): ReadonlyMap<string, readonly { id: string; name: string }[]> {
-  const using = new Map<string, { id: string; name: string }[]>();
+): ReadonlyMap<string, readonly SharedStyleNaming[]> {
+  const using = new Map<string, SharedStyleNaming[]>();
   for (const entry of classes) {
     if (!isPlainRecord(entry) || typeof entry.id !== "string") continue;
-    const style = { id: entry.id, name: classNameOf(entry) };
+    // A look keeps its block type: two types' own looks may share an id, and
+    // only the pair tells them apart. Each entry is its own style here.
+    const style: SharedStyleNaming = {
+      id: entry.id,
+      name: classNameOf(entry),
+      ...(typeof entry.blockType === "string"
+        ? { blockType: entry.blockType }
+        : {}),
+    };
     for (const identity of sharedStyleVariables(entry)) {
       if (!identities.has(identity)) continue;
       using.set(identity, [...(using.get(identity) ?? []), style]);

@@ -337,9 +337,9 @@ export async function renderCollectionLoop({
         href={paging.href}
         parts={{
           nav: partClass("pages"),
-          link: partClass("pageLink"),
-          current: partClass("currentPage"),
-          gap: partClass("pageGap"),
+          link: partClass("page-link"),
+          current: partClass("current-page"),
+          gap: partClass("page-gap"),
         }}
       />
     );
@@ -441,7 +441,7 @@ const COLLECTION_LOOP_PARTS = {
       },
     },
   },
-  pageLink: {
+  "page-link": {
     baseStyles: {
       base: {
         base: {
@@ -467,7 +467,7 @@ const COLLECTION_LOOP_PARTS = {
       },
     },
   },
-  currentPage: {
+  "current-page": {
     baseStyles: {
       base: {
         base: {
@@ -483,7 +483,7 @@ const COLLECTION_LOOP_PARTS = {
       },
     },
   },
-  pageGap: {
+  "page-gap": {
     baseStyles: {
       base: {
         base: {
