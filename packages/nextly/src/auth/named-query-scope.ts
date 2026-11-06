@@ -122,10 +122,14 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
   if (known !== undefined) return known as T;
   const proxy = new Proxy(value, {
     get(target, prop) {
+      // Refused before the property is read, since reading one runs its
+      // getter, which can read data as a method can.
+      const at = `${path}.${String(prop)}`;
+      const refusedHere = refusedInsideNamedQuery(at);
+      if (refusedHere !== undefined) throw refusedHere;
       // Read with the target as the receiver, so a getter reading a private
       // field reads it from the object that holds it.
       const member = Reflect.get(target, prop, target) as unknown;
-      const at = `${path}.${String(prop)}`;
       if (typeof member === "function") {
         const method = member as (...args: unknown[]) => unknown;
         return (...args: unknown[]) => {
@@ -135,6 +139,13 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
         };
       }
       return refusingInsideNamedQuery(member, at);
+    },
+    // A property's descriptor hands out its getter itself, to be called
+    // with any receiver: refused inside the frame for the same reason.
+    getOwnPropertyDescriptor(target, prop) {
+      const refused = refusedInsideNamedQuery(`${path}.${String(prop)}`);
+      if (refused !== undefined) throw refused;
+      return Reflect.getOwnPropertyDescriptor(target, prop);
     },
   });
   guardedObjects.set(value, proxy);

@@ -141,10 +141,14 @@ anonymous visitor: published entries only, and only the fields the public may re
 Each read counts against the page's read allowance, so a query that loops over its reader
 is bounded like nested lists are.
 
+Named queries run as your app's code. The reader keeps them to what visitors may read; it isn't a sandbox for untrusted code.
+
 `run` gets no other handle: no instance, request or user. While it runs, the Direct API
-refuses every call made beside the reader, a visitor's read included, so a query cannot
-read past its reader by importing the API: everything it reads is declared, counted and
-refreshes the page when it changes. Rows are then cut to the fields the
+and the services plugins contribute refuse every call made beside the reader, a visitor's
+read included, so a query that reaches for them by mistake fails rather than reading more
+than visitors may: everything it reads is declared, counted and refreshes the page when it
+changes. This is a guardrail against mistakes in your own code, not a boundary against code
+written to get round it. Rows are then cut to the fields the
 query declares, or to the public fields of the collection its rows are entries of, and
 each row's key must be present and unique.
 

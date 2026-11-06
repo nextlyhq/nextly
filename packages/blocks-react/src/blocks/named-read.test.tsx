@@ -623,6 +623,43 @@ describe("a list whose source is a named query", () => {
     expect(new Set(keys).size).toBe(2);
   });
 
+  it("reads what run returns while its frame is open, getters included", async () => {
+    let inFrame = false;
+    const evaluated: boolean[] = [];
+    const frame: NamedQueryHost["frame"] = () => ({
+      run: async operation => {
+        inFrame = true;
+        try {
+          return await operation();
+        } finally {
+          inFrame = false;
+        }
+      },
+      read: operation => operation(),
+    });
+    const row = {
+      id: "e1",
+      get title() {
+        evaluated.push(inFrame);
+        return "From a getter";
+      },
+    };
+    const result = {
+      get rows() {
+        evaluated.push(inFrame);
+        return [row];
+      },
+    };
+    const { element } = await draw(
+      eventsQuery(() => Promise.resolve(result as never)),
+      { host: { frame } }
+    );
+    expect(headings(element)).toEqual(["From a getter"]);
+    // Every getter ran inside the frame, and none ran after it closed.
+    expect(evaluated.length).toBeGreaterThan(0);
+    expect(evaluated.every(Boolean)).toBe(true);
+  });
+
   it("reads only through the frame's door, with the query as plain data", async () => {
     let inFrame = false;
     const seen: string[] = [];

@@ -402,6 +402,8 @@ export interface NamedQueryDefinition<
 /**
  * Declare a named query. Returns it unchanged; its types are what it adds.
  *
+ * Named queries run as your app's code. The reader keeps them to what visitors may read; it isn't a sandbox for untrusted code.
+ *
  * @experimental
  */
 export function defineNamedQuery<
@@ -925,32 +927,44 @@ function rowKeyProblem(
   return undefined;
 }
 
+/** Why one declared row field is not one a binding can address, or nothing. */
+function rowFieldProblem(
+  field: unknown,
+  at: string,
+  seen: Set<string>
+): string | undefined {
+  if (!isPlainRecord(field) || typeof field.type !== "string") {
+    return `${at} hold a field that is not { name, type }`;
+  }
+  if (!isTopLevelFieldName(field.name)) {
+    return `${at} hold a field named "${describeValue(field.name)}", which is not a field name a binding can address: letters, digits and underscores`;
+  }
+  // A binding finds a row field by its name, so a second field of one name
+  // would be advertised and never judged by.
+  if (seen.has(field.name))
+    return `${at} hold two fields named "${field.name}"`;
+  seen.add(field.name);
+  if (field.fields === undefined) return undefined;
+  const group = `${at}' field "${field.name}"`;
+  return Array.isArray(field.fields)
+    ? rowFieldsProblem(field.fields, group)
+    : `${group} holds fields that are not a list`;
+}
+
 /**
  * Why declared row fields are not ones a binding can address, or nothing:
- * each a field shape with a type and a top-level field name, as a list's
- * filter or a binding's path names one, a group's own fields likewise.
+ * each a field shape with a type and a top-level field name, each name once
+ * at its level, as a list's filter or a binding's path names one, a group's
+ * own fields likewise.
  */
 function rowFieldsProblem(
   fields: readonly unknown[],
   at: string
 ): string | undefined {
+  const seen = new Set<string>();
   for (const field of fields) {
-    if (!isPlainRecord(field) || typeof field.type !== "string") {
-      return `${at} hold a field that is not { name, type }`;
-    }
-    if (!isTopLevelFieldName(field.name)) {
-      return `${at} hold a field named "${describeValue(field.name)}", which is not a field name a binding can address: letters, digits and underscores`;
-    }
-    if (field.fields !== undefined) {
-      if (!Array.isArray(field.fields)) {
-        return `${at}' field "${field.name}" holds fields that are not a list`;
-      }
-      const nested = rowFieldsProblem(
-        field.fields,
-        `${at}' field "${field.name}"`
-      );
-      if (nested !== undefined) return nested;
-    }
+    const problem = rowFieldProblem(field, at, seen);
+    if (problem !== undefined) return problem;
   }
   return undefined;
 }

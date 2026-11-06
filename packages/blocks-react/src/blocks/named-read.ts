@@ -37,7 +37,6 @@ import {
   type NamedQueryDeclaration,
   type NamedQueryDefinition,
   type NamedQueryReader,
-  type NamedQueryResult,
 } from "@nextlyhq/blocks-engine";
 
 import type {
@@ -176,6 +175,15 @@ function projectRow(
   return kept;
 }
 
+/**
+ * A run's result as plain data: its JSON copy, which reads every own
+ * enumerable property (running any getter) now, so nothing after reads a
+ * live value `run` handed back. A cached result is this same copy.
+ */
+function asPlainResult(result: unknown): unknown {
+  return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
+}
+
 /** The rows a run returned, cut to its window, or why they cannot be shown. */
 function checkedRows(
   result: unknown,
@@ -308,16 +316,21 @@ async function execute(
   );
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  const call = () =>
-    definition.run({
-      params: args.params as never,
-      window: args.window,
-      reader,
-      ...(args.locale === undefined ? {} : { locale: args.locale }),
-      today: args.today,
-      signal: controller.signal,
-    });
-  let result: NamedQueryResult;
+  // The result is copied to plain data inside the frame, as `run`'s own
+  // code: a getter on it, or on a row, runs there, under the frame's
+  // refusals, never later while the rows are checked and projected.
+  const call = async () =>
+    asPlainResult(
+      await definition.run({
+        params: args.params as never,
+        window: args.window,
+        reader,
+        ...(args.locale === undefined ? {} : { locale: args.locale }),
+        today: args.today,
+        signal: controller.signal,
+      })
+    );
+  let result: unknown;
   try {
     result = await untilAborted(
       (async () => await (frame === undefined ? call() : frame.run(call)))(),
