@@ -12,10 +12,12 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  isRawColour,
   validateDocument,
   type BlockDocument,
   type BlockNode,
   type NestingSource,
+  type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -56,6 +58,57 @@ function walk(nodes: readonly BlockNode[]): BlockNode[] {
       walk(children ?? [])
     ),
   ]);
+}
+
+/**
+ * Properties whose value may carry a colour inside other text: a shadow, a
+ * gradient, a filter. A colour is found in them by allowing none of them at
+ * all, rather than by recognising every way CSS spells a colour.
+ */
+const COLOUR_BEARING = new Set([
+  "boxShadow",
+  "textShadow",
+  "background",
+  "backgroundGradient",
+  "filter",
+]);
+
+/**
+ * Every place in `nodes`' styles that holds a colour of its own rather than a
+ * site token, as `<node id>.<property path>`. A colour property, at any depth
+ * (a border's `color` included), is judged by the engine's own rule, the one
+ * the editor marks "not adapted to dark mode" by. A literal colour would hold
+ * its light value on a dark page.
+ */
+function rawColoursIn(nodes: readonly BlockNode[]): string[] {
+  const found: string[] = [];
+  const visit = (value: unknown, path: string, key: string): void => {
+    if (COLOUR_BEARING.has(key)) {
+      found.push(path);
+      return;
+    }
+    if (/colou?r$/i.test(key)) {
+      if (isRawColour(value as StyleValue)) found.push(path);
+      return;
+    }
+    if (typeof value === "object" && value !== null && !("$token" in value)) {
+      for (const [inner, next] of Object.entries(value)) {
+        visit(next, `${path}.${inner}`, inner);
+      }
+    }
+  };
+  for (const node of walk(nodes)) {
+    for (const states of Object.values(node.styles ?? {})) {
+      for (const set of Object.values(states ?? {})) {
+        for (const [property, value] of Object.entries(
+          (set ?? {}) as Record<string, unknown>
+        )) {
+          visit(value, `${node.id}.${property}`, property);
+        }
+      }
+    }
+  }
+  return found;
 }
 
 function errorsOf(document: BlockDocument): string[] {
@@ -116,29 +169,32 @@ describe("the demo site's documents", () => {
   });
 
   it.each(DOCUMENTS)("%s names a token for every colour", (_, doc) => {
-    // A literal colour would hold its light value on a dark page, whether it
-    // is a colour property's whole value or part of a shadow or gradient.
-    const LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|lab|lch)\(/i;
-    const literal = walk(doc.nodes).flatMap(node =>
-      Object.values(node.styles ?? {}).flatMap(states =>
-        Object.values(states ?? {}).flatMap(set =>
-          Object.entries((set ?? {}) as Record<string, unknown>)
-            .filter(
-              ([property, value]) =>
-                (/colou?r$/i.test(property) &&
-                  value !== "transparent" &&
-                  !(
-                    typeof value === "object" &&
-                    value !== null &&
-                    "$token" in value
-                  )) ||
-                LITERAL.test(JSON.stringify(value))
-            )
-            .map(([property]) => `${node.id}.${property}`)
-        )
-      )
-    );
-    expect(literal).toEqual([]);
+    expect(rawColoursIn(doc.nodes)).toEqual([]);
+  });
+
+  it("REPORTS a literal colour wherever a style holds one", () => {
+    // The control for the case above, which passes by finding nothing.
+    const styled = (set: Record<string, unknown>): BlockNode => ({
+      id: Object.keys(set)[0] ?? "none",
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: { base: { base: set } } as BlockNode["styles"],
+    });
+    expect(
+      rawColoursIn([
+        styled({ color: "red" }),
+        styled({ border: { color: "#000", style: "solid" } }),
+        styled({ boxShadow: "0 0 4px red" }),
+        styled({ textShadow: "0 1px hwb(0 0% 0%)" }),
+        styled({ backgroundColor: { $token: "color.surface" } }),
+      ])
+    ).toEqual([
+      "color.color",
+      "border.border.color",
+      "boxShadow.boxShadow",
+      "textShadow.textShadow",
+    ]);
   });
 });
 
