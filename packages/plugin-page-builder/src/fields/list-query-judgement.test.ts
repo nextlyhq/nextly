@@ -256,4 +256,16 @@ describe("a write's visibility conditions, judged by the server", () => {
       ).map(issue => issue.code)
     ).toEqual(["condition-field-unknown"]);
   });
+
+  it("leaves a problem unjudged when the stored page can't be read", async () => {
+    // A language whose store is not ready: the stored page may already hold
+    // the problem, so nothing can tell it from a new one.
+    const value = conditioned([[{ field: "internalScore", op: "exists" }]]);
+    expect(
+      await newConditionIssues(value, args({}), "Content", {
+        fieldsOf,
+        storedForms: async () => ({ readable: false, forms: [] }),
+      })
+    ).toEqual([]);
+  });
 });

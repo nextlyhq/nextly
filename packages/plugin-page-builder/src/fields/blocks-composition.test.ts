@@ -2552,6 +2552,25 @@ describe("a placed block's visibility conditions, judged as the page composes th
     expect(issues[0]!.message).toContain('"secret"');
   });
 
+  it("refuses a page newly placing a component stored with an operator conditions don't have", async () => {
+    const legacy = component([
+      {
+        ...node("b1", "acme/box", { children: [] }),
+        visibility: { conditions: [[{ field: "title", op: "matches" }]] },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: { old: { published: legacy } },
+    });
+    const issues = await judge(
+      page([placing("i1", "old")]),
+      write(readStored, "pages", "p1"),
+      { listFields }
+    );
+    expect(codes(issues)).toEqual(["condition-op-unknown"]);
+    expect(issues[0]!.message).toContain('"old"');
+  });
+
   it("keeps a placed condition the stored page already composed to", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { hidden: { published: gatedOn("secret") } },
