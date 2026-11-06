@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Collection list can take a named query as its source: a query a developer declares in code with `defineNamedQuery` (experimental), with typed inputs authors set on the list. It reads only what it declares, as an anonymous visitor, and the Direct API refuses any trusted read made while it runs. `set-list-query` takes `namedQuery`, and the composition manifest lists the site's queries.
+A Collection list can take a named query as its source: a query a developer declares in code with `defineNamedQuery` (experimental), with typed inputs authors set on the list. It reads only what it declares, as an anonymous visitor, and the Direct API refuses every other read made while it runs. `set-list-query` takes `namedQuery`, and the composition manifest lists the site's queries.

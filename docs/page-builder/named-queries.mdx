@@ -123,8 +123,9 @@ Each read counts against the page's read allowance, so a query that loops over i
 is bounded like nested lists are.
 
 `run` gets no other handle: no instance, request or user. While it runs, the Direct API
-refuses any call that would read with more access than a visitor has, so a query cannot
-read past its reader by importing the trusted API. Rows are then cut to the fields the
+refuses every call made beside the reader, a visitor's read included, so a query cannot
+read past its reader by importing the API: everything it reads is declared, counted and
+refreshes the page when it changes. Rows are then cut to the fields the
 query declares, or to the public fields of the collection its rows are entries of, and
 each row's key must be present and unique.
 
