@@ -4,11 +4,20 @@
  * and a refusal handed back in the shape the renderer recognises, so a sort
  * the reader refused falls back to id order on the canvas.
  */
+import {
+  createBlockResolver,
+  createStandaloneContext,
+  PageRenderer,
+  type PageContext,
+} from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
 
-const { canvasListCount, canvasListData } = await import(
+const { canvasListCount, canvasListData, canvasListReadsIn } = await import(
   "./list-entries-client"
 );
 
@@ -86,30 +95,68 @@ describe("the editor's count of a list", () => {
     meta: { ...ANSWER.meta, total },
   });
 
-  it("is one read of the list's filtered ids, its window applied to the total", async () => {
+  /** Draw a list as the canvas does: the renderer, reading through `data`. */
+  async function drawList(
+    props: Record<string, unknown>,
+    context: Pick<PageContext, "data" | "locale">
+  ): Promise<void> {
+    const stream = await renderToReadableStream(
+      createElement(PageRenderer, {
+        document: {
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            { id: "list", type: "core/collection-loop", version: 1, props },
+          ],
+        },
+        blocks: createBlockResolver(coreBlocks),
+        context: { ...createStandaloneContext(), ...context },
+        bindings: {},
+      })
+    );
+    await stream.allReady;
+    await new Response(stream).text();
+  }
+
+  it("is taken from the canvas's own read of the list, reading nothing more", async () => {
     const read = vi.fn(async () => counted(7));
-    const count = canvasListCount(canvasListData(read, () => 0));
+    const data = canvasListData(read, () => 0);
+    const count = canvasListCount(data, { locale: "fr" });
     const filters = [{ field: "title", op: "contains", value: "build" }];
-    const props = { collection: "posts", filters, limit: 3, offset: 5 };
-    expect(await count(props)).toEqual({ matching: 7, shown: 2 });
-    // The list's own filters, one row of ids, no sort and no window.
-    expect(read).toHaveBeenCalledWith({
+    const props = {
       collection: "posts",
       filters,
-      limit: 1,
-      select: ["id"],
-    });
-    // Another window or sort over the same entries counts nothing again.
-    expect(await count({ ...props, offset: 0, sort: "-title" })).toEqual({
-      matching: 7,
-      shown: 3,
-    });
+      sort: "-title",
+      limit: 3,
+      offset: 5,
+    };
+    await drawList(props, { data, locale: "fr" });
     expect(read).toHaveBeenCalledTimes(1);
+    expect(await count(props)).toEqual({ matching: 7, shown: 2 });
+    // The rows drawn and the count are one answer: no second read.
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads in the language being edited, as the canvas does", async () => {
+    const reads = canvasListReadsIn("fr");
+    expect(canvasListReadsIn("fr")).toBe(reads);
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(4));
+    await expect(
+      reads.count({ collection: "posts", limit: 2 })
+    ).resolves.toEqual({ matching: 4, shown: 2 });
+    expect(vi.mocked(writePluginRoute).mock.calls[0]?.[0]).toMatchObject({
+      body: { query: { collection: "posts", locale: "fr" } },
+    });
   });
 
   it("reads nothing for a list one read cannot count", async () => {
     const read = vi.fn(async () => counted(7));
-    const count = canvasListCount(canvasListData(read, () => 0));
+    const count = canvasListCount(
+      canvasListData(read, () => 0),
+      {}
+    );
     await expect(
       count({
         collection: "posts",

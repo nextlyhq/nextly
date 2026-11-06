@@ -21,7 +21,10 @@ import type {
   BlocksQuery,
   PageContext,
 } from "@nextlyhq/blocks-react";
-import { listCountRead, listShownOf } from "@nextlyhq/blocks-react/blocks";
+import {
+  listEntryCount,
+  type ListEntryCount,
+} from "@nextlyhq/blocks-react/blocks";
 import { writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -110,34 +113,54 @@ export function canvasListData(
   };
 }
 
-/**
- * The terms the canvas reads its lists under, beyond the data: none, so a
- * date filter compares in UTC and no language is asked for. One object, for
- * the canvas's page context and the editor's count alike, so the count is of
- * the very read the canvas draws.
- */
-export const CANVAS_LIST_TERMS: Readonly<
-  Pick<PageContext, "locale" | "timeZone" | "fieldShapes">
-> = Object.freeze({});
+/** The terms a list is read under on the canvas, beyond the data. */
+type CanvasListTerms = Pick<PageContext, "locale" | "timeZone" | "fieldShapes">;
 
 /**
  * The editor's count of a list's matching entries, for the list selected in
- * its inspector: one read of the list's filtered ids, through the canvas's
- * own data, whose total is the answer, as the public reader counts. Its
- * window is applied to the total here, so a new limit, offset or sort over
- * the same entries reads nothing again. A list one read cannot count reads
- * nothing.
+ * its inspector: taken from the list's own read through `data`, the very
+ * reads the canvas draws the list with, whose answer's total is the count.
+ * With the canvas's provider, which keeps its answers, the count is of the
+ * rows on the canvas and reads nothing of its own. A list whose read does
+ * not say reads nothing.
  */
 export function canvasListCount(
-  data: BlocksDataProvider = canvasListData()
+  data: BlocksDataProvider,
+  terms: CanvasListTerms
 ): (
   props: Readonly<Record<string, unknown>>
-) => Promise<{ matching: number; shown: number } | undefined> {
-  return async props => {
-    const read = listCountRead(props, CANVAS_LIST_TERMS);
-    if (read === undefined) return undefined;
-    const found = await data.find({ ...read.query, limit: 1, select: ["id"] });
-    if (typeof found.total !== "number") return undefined;
-    return { matching: found.total, shown: listShownOf(found.total, read) };
-  };
+) => Promise<ListEntryCount | undefined> {
+  return props => listEntryCount(props, terms, data);
+}
+
+/**
+ * The canvas's list reads in one language: the provider the canvas draws
+ * its lists with, the terms it reads them under, and the editor's count,
+ * taken from the same provider's answers.
+ */
+export interface CanvasListReads {
+  readonly terms: CanvasListTerms;
+  readonly data: BlocksDataProvider;
+  readonly count: ReturnType<typeof canvasListCount>;
+}
+
+/** One set of reads per language, shared by the canvas and the inspector. */
+const READS_BY_LANGUAGE = new Map<string, CanvasListReads>();
+
+/**
+ * The canvas's list reads in `locale`, the language being edited: one object
+ * per language, so the canvas's page context and the inspector's count read
+ * through ONE provider and its kept answers. A date filter still compares
+ * in UTC: the canvas reads no site time zone.
+ */
+export function canvasListReadsIn(locale: string | undefined): CanvasListReads {
+  const key = locale ?? "";
+  let reads = READS_BY_LANGUAGE.get(key);
+  if (reads === undefined) {
+    const terms: CanvasListTerms = locale === undefined ? {} : { locale };
+    const data = canvasListData();
+    reads = { terms, data, count: canvasListCount(data, terms) };
+    READS_BY_LANGUAGE.set(key, reads);
+  }
+  return reads;
 }

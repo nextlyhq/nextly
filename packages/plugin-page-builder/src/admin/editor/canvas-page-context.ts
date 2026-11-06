@@ -15,24 +15,29 @@
  * and the page is drawn again under a context naming them, while none being
  * chosen is the editor's one object again, with everything it kept.
  *
- * A collection list draws the entries a visitor would see (`canvasListData`),
- * and, since an author is looking, says what it could not do as stored
- * (`diagnostics`): a sort that fell back to id order, a read that failed.
+ * A collection list draws the entries a visitor would see, read in the
+ * language being edited through the reads the inspector's count shares
+ * (`canvasListReadsIn`), and, since an author is looking, says what it could
+ * not do as stored (`diagnostics`): a sort that fell back to id order, a read
+ * that failed. Its reads are bounded per draw as a published page's are
+ * (`queries`), so lists nested in lists cannot read without end.
  *
  * @module canvas-page-context
  */
 import {
+  createQueryBudget,
   createStandaloneContext,
   type PageContext,
+  type QueryBudget,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
 import {
   useDocumentIdentity,
   useMediaResolver,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
-import { CANVAS_LIST_TERMS, canvasListData } from "../list-entries-client";
+import { canvasListReadsIn } from "../list-entries-client";
 
 /** What a media item read through the admin gives a block to draw. */
 interface MediaItem {
@@ -54,13 +59,40 @@ function drawnMedia(item: MediaItem | null): ResolvedMedia | null {
 }
 
 /**
+ * A read budget the canvas renews for each draw: one object, so the context
+ * holding it stays the editor's one object, whose allowance is a published
+ * page's (`createQueryBudget`) and is begun afresh by `renew`.
+ */
+interface CanvasQueryBudget extends QueryBudget {
+  renew(): void;
+}
+
+function canvasQueryBudget(): CanvasQueryBudget {
+  let current = createQueryBudget();
+  return {
+    take: () => current.take(),
+    renew: () => {
+      current = createQueryBudget();
+    },
+  };
+}
+
+/**
  * The canvas's page context: its images resolve through the admin's media
- * read, which caches each item by id and shares a read in flight.
+ * read, which caches each item by id and shares a read in flight, and its
+ * lists read in `locale`, the language being edited.
  */
 export function useCanvasPageContext(
-  listsShowingEmpty?: ReadonlySet<string>
+  listsShowingEmpty?: ReadonlySet<string>,
+  locale?: string
 ): PageContext {
   const readMedia = useMediaResolver();
+  const budget = useMemo(canvasQueryBudget, []);
+  // Renewed once each draw has been committed, so the next draw has the
+  // whole allowance and one draw's reads stay within it.
+  useEffect(() => {
+    budget.renew();
+  });
   // The entry the document is stored on, by its collection and id, so a list
   // of its related entries reads the relation as a visitor reads the entry:
   // again, through the canvas's reader, never from the form's values.
@@ -69,12 +101,15 @@ export function useCanvasPageContext(
     identity?.kind === "collection" ? identity.slug : undefined;
   const entryId =
     identity?.kind === "collection" ? identity.documentId : undefined;
+  // The language's one set of list reads, which the inspector's count shares.
+  const lists = canvasListReadsIn(locale);
   const base = useMemo(
     () =>
       createStandaloneContext({
         resolveMedia: async id => drawnMedia(await readMedia(id)),
-        ...CANVAS_LIST_TERMS,
-        data: canvasListData(),
+        ...lists.terms,
+        data: lists.data,
+        queries: budget,
         diagnostics: true,
         // The canvas acts on a note's action: see `onListSortField`.
         listNoteActions: true,
@@ -82,7 +117,7 @@ export function useCanvasPageContext(
           ? {}
           : { entry: { id: entryId }, entryCollection }),
       }),
-    [readMedia, entryCollection, entryId]
+    [readMedia, entryCollection, entryId, lists, budget]
   );
   return useMemo(
     () =>

@@ -18,9 +18,11 @@ const identity = vi.fn<() => unknown>(() => null);
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
   useDocumentIdentity: () => identity(),
+  writePluginRoute: vi.fn(),
 }));
 
 const { useCanvasPageContext } = await import("./canvas-page-context");
+const { canvasListReadsIn } = await import("../list-entries-client");
 
 describe("the canvas's page context", () => {
   it("resolves a media id through the admin's media read", async () => {
@@ -94,5 +96,27 @@ describe("the canvas's page context", () => {
     expect(result.current.entry).toEqual({ id: "s1" });
     expect(result.current.entryCollection).toBe("stories");
     identity.mockReturnValue(null);
+  });
+
+  it("reads its lists in the language being edited, through the reads its count shares", () => {
+    const { result } = renderHook(() => useCanvasPageContext(undefined, "fr"));
+    expect(result.current.locale).toBe("fr");
+    expect(result.current.data).toBe(canvasListReadsIn("fr").data);
+  });
+
+  it("bounds each draw's reads, with a fresh allowance for the next draw", () => {
+    const { result, rerender } = renderHook(() => useCanvasPageContext());
+    const first = result.current;
+    const budget = first.queries;
+    expect(budget).toBeDefined();
+    let taken = 0;
+    while (budget?.take() === true && taken <= 10_000) taken += 1;
+    // The published page's own allowance, then nothing more this draw.
+    expect(taken).toBe(500);
+    rerender();
+    // Drawn again: the same object, which the canvas keeps its blocks by,
+    // with its allowance renewed.
+    expect(result.current).toBe(first);
+    expect(result.current.queries?.take()).toBe(true);
   });
 });

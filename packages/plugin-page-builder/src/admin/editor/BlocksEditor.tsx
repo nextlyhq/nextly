@@ -66,7 +66,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
-import { canvasListCount } from "../list-entries-client";
+import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -367,9 +367,6 @@ function borrowedServices(): ContentServices {
     findEntries,
     findLinkTargets,
     listLoopCollections,
-    // The selected list's "N entries match, so M show", read as the canvas
-    // reads the list; one count kept for the module's life.
-    countListEntries: canvasListCount(),
   };
   return contentServices;
 }
@@ -410,6 +407,9 @@ function servicesFor(
       // The same language for a link's search, so a page is found and named
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
+      // The selected list's "N entries match, so M show", taken from the
+      // canvas's own read of the list in this language.
+      countListEntries: canvasListReadsIn(locale).count,
       ...(entryCollection === undefined ? {} : { entryCollection }),
     };
     byLocale.set(key, services);

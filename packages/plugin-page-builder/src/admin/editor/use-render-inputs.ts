@@ -268,9 +268,10 @@ function useCanvasRender({
   canvasSiteStyle,
   stylePolicy,
   editor,
+  locale,
 }: Pick<
   EditorMount,
-  "clientConfig" | "documentLimits" | "componentLibrary" | "editor"
+  "clientConfig" | "documentLimits" | "componentLibrary" | "editor" | "locale"
 > &
   Pick<SiteStyleInputs, "canvasSiteStyle" | "stylePolicy">): CanvasRender {
   /*
@@ -335,8 +336,9 @@ function useCanvasRender({
 
   // The canvas's own page context, one object for the editor's life: see
   // `canvas-page-context.ts`.
-  // The lists the author chose to see empty, drawn so on the canvas.
-  const canvasContext = useCanvasPageContext(editor.listsShowingEmpty);
+  // The lists the author chose to see empty, drawn so on the canvas, and
+  // every list read in the language being edited.
+  const canvasContext = useCanvasPageContext(editor.listsShowingEmpty, locale);
   const canvasRender = useMemo(
     () => ({
       ...pageRenderInputs({
