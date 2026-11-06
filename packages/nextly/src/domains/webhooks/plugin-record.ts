@@ -124,22 +124,29 @@ function asDelivered(
   field: "data" | "previous",
   value: Record<string, unknown>
 ): Record<string, unknown> {
-  let text: string;
+  // The whole round trip, so every way it can fail is the one refusal: a
+  // `bigint` or a cycle throws in `stringify`, and an object whose own
+  // `toJSON` returns nothing or something other than an object reads back as
+  // no JSON object at all.
+  let delivered: unknown;
   try {
-    text = JSON.stringify(value);
+    const text = JSON.stringify(value);
+    delivered = text === undefined ? undefined : JSON.parse(text);
   } catch {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: field,
-          code: "INVALID_WEBHOOK_EVENT",
-          message: `\`${field}\` must be JSON: it holds a bigint or refers to itself.`,
-        },
-      ],
-      logContext: { operation: OPERATION, plugin: pluginName, field },
-    });
+    delivered = undefined;
   }
-  return jsonObjectSchema.parse(JSON.parse(text));
+  const parsed = jsonObjectSchema.safeParse(delivered);
+  if (parsed.success) return parsed.data;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: field,
+        code: "INVALID_WEBHOOK_EVENT",
+        message: `\`${field}\` must be a JSON object: it holds a bigint, refers to itself, or turns into something else as JSON.`,
+      },
+    ],
+    logContext: { operation: OPERATION, plugin: pluginName, field },
+  });
 }
 
 /** Refuse an event that is malformed or not of one of the plugin's own types. */
