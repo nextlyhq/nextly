@@ -402,6 +402,21 @@ export function usePluginDocumentSurfaces({
     onOwnChange,
   });
 
+  // The document on screen now, read when a section reports late: a section
+  // keeps the props of the document it was drawn for after the editor moves.
+  const shownNow = useRef({ collectionSlug, entryId });
+  shownNow.current = { collectionSlug, entryId };
+  // A section's report, bound to the document it was drawn for: once another
+  // is on screen it does nothing, so a late "deleted" leaves nobody and a late
+  // "changed" arms no expectation on the document now shown.
+  const sectionDocumentChanged = (result: DocumentChangeResult): void => {
+    const shown = shownNow.current;
+    if (shown.collectionSlug !== collectionSlug || shown.entryId !== entryId) {
+      return;
+    }
+    documentChanged(result);
+  };
+
   const { open, openReplacement, closeRequest, failed } =
     useReplacementRequests({ collectionSlug, entryId, documentChanged });
 
@@ -446,7 +461,7 @@ export function usePluginDocumentSurfaces({
             entryId,
             documentLock,
             mayWrite,
-            documentChanged,
+            documentChanged: sectionDocumentChanged,
           },
   };
 }

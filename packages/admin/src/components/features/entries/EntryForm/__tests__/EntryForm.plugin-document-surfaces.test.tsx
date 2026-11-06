@@ -598,6 +598,42 @@ describe("a plugin's replacement over time", () => {
     expect(deleteEntry).not.toHaveBeenCalled();
   });
 
+  it("ignores a section's late report for the entry it was drawn for once another is shown", async () => {
+    const onDelete = vi.fn();
+    const drawAgain = renderLive(entry as never, onDelete);
+    await screen.findByText("Used by 2 pages");
+    const forFirst = section.current!;
+    expect(forFirst.entryId).toBe("l1");
+
+    // The route moves to another entry, where the author starts editing.
+    const second = { ...(entry as object), id: "l2", title: "Other layout" };
+    drawAgain(second);
+    await waitFor(() => expect(section.current?.entryId).toBe("l2"));
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    // The first entry's section reports late: it deleted, then changed, it.
+    act(() => forFirst.documentChanged("deleted"));
+    act(() => forFirst.documentChanged("changed"));
+
+    // Nothing leaves the second entry, and nothing is refreshed for either.
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    // And no expectation was armed on the second entry: its next newer
+    // version is someone else's and replaces the unsaved text.
+    drawAgain({
+      ...second,
+      summary: "Theirs",
+      updatedAt: "2026-10-04T09:00:00Z",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Theirs"
+      )
+    );
+  });
+
   it("ignores a close from a replacement that already closed, once another has opened", async () => {
     const onDelete = vi.fn();
     renderLive(entry as never, onDelete);
