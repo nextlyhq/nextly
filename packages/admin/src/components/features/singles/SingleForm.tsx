@@ -30,6 +30,10 @@ import { z } from "zod";
 
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import {
+  useDocumentPlace,
+  type DocumentPlace,
+} from "@admin/components/features/entries/EntryForm/document-place";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import {
   DocumentActionsHost,
@@ -43,6 +47,7 @@ import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
 } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentPlaceTabs } from "@admin/components/features/entries/EntryForm/DocumentPlaceTabs";
 import { DocumentSidePanel } from "@admin/components/features/entries/EntryForm/DocumentSidePanel";
 import { DocumentTitleBlock } from "@admin/components/features/entries/EntryForm/DocumentTitleBlock";
 import { DocumentTrail } from "@admin/components/features/entries/EntryForm/DocumentTrail";
@@ -554,6 +559,7 @@ function SingleFormRail({
   locale,
   onLocaleChange,
   panel,
+  place,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -568,6 +574,8 @@ function SingleFormRail({
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
+  /** The edit page's place, whose side panel sections the panel draws. */
+  place: DocumentPlace;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -577,6 +585,7 @@ function SingleFormRail({
       onClose={panel.hide}
     >
       <EntryFormSidebar
+        place={place}
         mode="edit"
         entry={entry}
         hasStatus={hasStatus}
@@ -1485,6 +1494,12 @@ export function SingleForm({
     previewOpen: previewOnScreen,
     closePreview: previewPane.onClose,
   });
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    { kind: "single", single: schema.slug },
+    document
+  );
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1754,6 +1769,7 @@ export function SingleForm({
                               editor draws: one bar and one banner order on
                               both. */}
                             <DocumentEditorLayout
+                              place={documentPlace}
                               frameRef={panel.measure}
                               panelMode={panel.mode}
                               bar={
@@ -1850,63 +1866,69 @@ export function SingleForm({
                             >
                               {/* Main column */}
                               <div className="flex-1 min-w-0 flex flex-col">
-                                {/* The title, fixed by the Single's config and
+                                <DocumentPlaceTabs place={documentPlace}>
+                                  {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
                                   is fixed by its config too, and is not part
                                   of its address on most sites. */}
-                                <DocumentTitleBlock
-                                  mode="edit"
-                                  titleField={titleField}
-                                  lockIdentity
-                                  documentLocked={lock.readOnly}
-                                  // A save or a discard alone: the title's own
-                                  // `disabled` follows it, and a recovery
-                                  // holds the title read-only through the lock
-                                  // instead.
-                                  isSubmitting={writePending}
-                                />
-                                <EntryMetaStrip
-                                  panelCarriesId={panel.docked}
-                                  documentId={document.id}
-                                />
+                                  <DocumentTitleBlock
+                                    mode="edit"
+                                    titleField={titleField}
+                                    lockIdentity
+                                    documentLocked={lock.readOnly}
+                                    // A save or a discard alone: the title's own
+                                    // `disabled` follows it, and a recovery
+                                    // holds the title read-only through the lock
+                                    // instead.
+                                    isSubmitting={writePending}
+                                  />
+                                  <EntryMetaStrip
+                                    panelCarriesId={panel.docked}
+                                    documentId={document.id}
+                                  />
 
-                                {/* The language panel, inline: the exact complement
+                                  {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
-                                <SingleFormLanguagePanel
-                                  actionsDisabled={contentHeld}
-                                  publishAllDisabled={publishAllDisabled}
-                                  // A reader may still open the other languages.
-                                  navigationDisabled={navigationHeld}
-                                  enabled={localizationEnabled}
-                                  hasStatus={hasStatus}
-                                  panelDocked={panel.docked}
-                                  {...(singleTranslations === undefined
-                                    ? {}
-                                    : { translations: singleTranslations })}
-                                  {...(locale === undefined ? {} : { locale })}
-                                  {...(switchLocale === undefined
-                                    ? {}
-                                    : { onLocaleChange: switchLocale })}
-                                />
+                                  <SingleFormLanguagePanel
+                                    actionsDisabled={contentHeld}
+                                    publishAllDisabled={publishAllDisabled}
+                                    // A reader may still open the other languages.
+                                    navigationDisabled={navigationHeld}
+                                    enabled={localizationEnabled}
+                                    hasStatus={hasStatus}
+                                    panelDocked={panel.docked}
+                                    {...(singleTranslations === undefined
+                                      ? {}
+                                      : { translations: singleTranslations })}
+                                    {...(locale === undefined
+                                      ? {}
+                                      : { locale })}
+                                    {...(switchLocale === undefined
+                                      ? {}
+                                      : { onLocaleChange: switchLocale })}
+                                  />
 
-                                {/* Reading a past version replaces the document rather
+                                  {/* Reading a past version replaces the document rather
                               than opening beside it — see the fields panel. */}
-                                <SingleFormFieldsPanel
-                                  document={document}
-                                  singleSlug={schema.slug}
-                                  historicalFields={historicalFields}
-                                  historicalValues={historicalValues}
-                                  isSubmitting={isSubmitting}
-                                  mainFields={mainFields}
-                                  readOnly={lock.readOnly}
-                                  // A submit in flight withholds restore too: a
-                                  // restore racing the ordinary save would let
-                                  // completion order decide which contents
-                                  // survive.
-                                  // A reader's page holds restoring as well.
-                                  versionActionsHeld={versionWritesHeld || busy}
-                                  versionBannerSlot={versionBannerSlot}
-                                />
+                                  <SingleFormFieldsPanel
+                                    document={document}
+                                    singleSlug={schema.slug}
+                                    historicalFields={historicalFields}
+                                    historicalValues={historicalValues}
+                                    isSubmitting={isSubmitting}
+                                    mainFields={mainFields}
+                                    readOnly={lock.readOnly}
+                                    // A submit in flight withholds restore too: a
+                                    // restore racing the ordinary save would let
+                                    // completion order decide which contents
+                                    // survive.
+                                    // A reader's page holds restoring as well.
+                                    versionActionsHeld={
+                                      versionWritesHeld || busy
+                                    }
+                                    versionBannerSlot={versionBannerSlot}
+                                  />
+                                </DocumentPlaceTabs>
                               </div>
 
                               {/* The document panel, framed for the editor's
@@ -1920,6 +1942,7 @@ export function SingleForm({
                                 documentStatus={editedStatus}
                                 singleSlug={schema.slug}
                                 panel={panel}
+                                place={documentPlace}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(switchLocale === undefined
                                   ? {}

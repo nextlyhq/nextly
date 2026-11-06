@@ -4,6 +4,7 @@ import type { JSX } from "react";
 
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
+import type { DocumentPlace } from "./document-place";
 import { DocumentPanel } from "./panels";
 import type { PanelDocumentStatus } from "./panels/StatusSection";
 import type { EntryFormMode, EntryData } from "./useEntryForm";
@@ -12,6 +13,8 @@ import type { EntryFormMode, EntryData } from "./useEntryForm";
 // frame it is drawn in, docked, floating or a sheet, is `DocumentSidePanel`'s.
 
 export interface EntryFormSidebarProps {
+  /** The edit page's place, whose side panel sections the panel draws. */
+  place: DocumentPlace;
   /** Form mode — nothing is drawn in create mode, before the document exists. */
   mode: EntryFormMode;
   /** Entry data — the Details section reads id and timestamps. */
@@ -38,6 +41,7 @@ export interface EntryFormSidebarProps {
 }
 
 export function EntryFormSidebar({
+  place,
   mode,
   entry,
   hidden = false,
@@ -55,6 +59,7 @@ export function EntryFormSidebar({
   return (
     <div className="flex flex-col bg-background">
       <DocumentPanel
+        place={place}
         mode={mode}
         entry={entry}
         hasStatus={hasStatus}

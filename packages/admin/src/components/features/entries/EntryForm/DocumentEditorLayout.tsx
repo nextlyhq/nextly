@@ -9,13 +9,22 @@
  * content measure caps. All three share one parent so the bar's stickiness
  * holds for the editor's whole height.
  *
+ * The frame is also where the edit page's place draws its blocks, around the
+ * page's own two: `document-bar`, the bar with the banners under it, which
+ * speak for it (a held Save is explained there); and `editor`, the form's
+ * notices with the row of field column and panel. With nothing contributed
+ * the frame holds exactly what it held before.
+ *
  * @module components/features/entries/EntryForm/DocumentEditorLayout
  */
 
 import type { JSX, ReactNode } from "react";
 
+import { TargetSlot } from "@admin/components/shared/target-slot";
+
 import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
+import type { DocumentPlace } from "./document-place";
 
 /**
  * How the document panel's inner column sticks: under the bar rather than
@@ -48,6 +57,8 @@ export const DOCUMENT_PANEL_STICKY =
 export const DOCUMENT_COLUMN_INSET = "@4xl/content:px-8";
 
 export interface DocumentEditorLayoutProps {
+  /** The edit page's place, whose blocks the frame draws around its own. */
+  place: DocumentPlace;
   /** The document bar. */
   bar: ReactNode;
   /** The banners, drawn directly under the bar. */
@@ -66,6 +77,7 @@ export interface DocumentEditorLayoutProps {
 }
 
 export function DocumentEditorLayout({
+  place,
   bar,
   banners,
   notices,
@@ -84,14 +96,27 @@ export function DocumentEditorLayout({
       {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
       className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]"
     >
-      {bar}
-      {banners}
-      {notices}
-      {/* `relative`: a floating panel's column spans this row, over the
-          fields, rather than the page. */}
-      <div className="relative flex flex-1 flex-col items-stretch @4xl/content:flex-row">
-        {children}
-      </div>
+      <TargetSlot
+        {...place}
+        builtIns={{
+          "document-bar": (
+            <>
+              {bar}
+              {banners}
+            </>
+          ),
+          editor: (
+            <>
+              {notices}
+              {/* `relative`: a floating panel's column spans this row, over
+                  the fields, rather than the page. */}
+              <div className="relative flex flex-1 flex-col items-stretch @4xl/content:flex-row">
+                {children}
+              </div>
+            </>
+          ),
+        }}
+      />
     </div>
   );
 }

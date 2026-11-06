@@ -6,6 +6,10 @@ import { render, screen } from "@admin/__tests__/utils";
 import { formatId } from "../../DocumentIdCopy";
 import { DocumentPanel, pillStateFromForm } from "../DocumentPanel";
 
+// A collection entry's page, before the viewer is known: the panel draws its
+// own sections, as it does with nothing contributed.
+const PLACE = { place: "collection.edit", context: null } as const;
+
 describe("formatId", () => {
   it("returns em-dash for null/undefined/empty", () => {
     expect(formatId(undefined)).toBe("—");
@@ -40,7 +44,7 @@ describe("DocumentPanel", () => {
 
   it("renders nothing in create mode", () => {
     const { container } = render(
-      <DocumentPanel mode="create" entry={null} hasStatus />
+      <DocumentPanel place={PLACE} mode="create" entry={null} hasStatus />
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -48,6 +52,7 @@ describe("DocumentPanel", () => {
   it("renders ID + timestamps in edit mode", () => {
     render(
       <DocumentPanel
+        place={PLACE}
         mode="edit"
         entry={{
           id: "548e813c-8266-40c3-bd9c-ca1816f8",
@@ -74,6 +79,7 @@ describe("DocumentPanel", () => {
     // the status the editor hands it, so the two cannot disagree.
     render(
       <DocumentPanel
+        place={PLACE}
         mode="edit"
         entry={{ id: "x", status: "published", _isWorkingDraft: true }}
         documentStatus={{ status: "published", hasWorkingDraft: true }}
@@ -97,6 +103,7 @@ describe("DocumentPanel", () => {
 
     render(
       <DocumentPanel
+        place={PLACE}
         mode="edit"
         entry={{ id: "548e813c-8266-40c3-bd9c-ca1816f8", status: "draft" }}
         hasStatus={false}
@@ -113,6 +120,7 @@ describe("DocumentPanel", () => {
   it("renders the copy button without requiring hover", () => {
     render(
       <DocumentPanel
+        place={PLACE}
         mode="edit"
         entry={{ id: "abc12345-1234-5678-9012-deadbeefcafe" }}
         hasStatus={false}
