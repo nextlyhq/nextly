@@ -184,6 +184,46 @@ export interface EntryTableRef {
 /**
  * Entry data table with server-side pagination, sorting, and bulk operations.
  */
+/**
+ * The Filter menu's sections for plugins' filters: one per filter, its label
+ * then its options, the chosen one checked. Choosing the checked option again
+ * clears it, as the language filter does.
+ */
+function PluginFilterMenuSections({
+  filters,
+  chosen,
+  onChange,
+  separateFirst,
+}: {
+  filters: readonly OfferedListFilter[];
+  chosen: ReadonlyMap<string, string> | undefined;
+  onChange: ((name: string, value: string | null) => void) | undefined;
+  /** Whether a section of the list's own comes before the first. */
+  separateFirst: boolean;
+}) {
+  return filters.map((filter, index) => (
+    <Fragment key={filter.name}>
+      {(index > 0 || separateFirst) && <DropdownMenuSeparator />}
+      <DropdownMenuLabel>{filter.label}</DropdownMenuLabel>
+      <DropdownMenuSeparator />
+      {filter.options.map(option => {
+        const active = chosen?.get(filter.name) === option.value;
+        return (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={active}
+            onCheckedChange={() =>
+              onChange?.(filter.name, active ? null : option.value)
+            }
+          >
+            {option.label}
+          </DropdownMenuCheckboxItem>
+        );
+      })}
+    </Fragment>
+  ));
+}
+
 export const EntryTable: ForwardRefExoticComponent<
   EntryTableProps & RefAttributes<EntryTableRef>
 > = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
@@ -458,34 +498,16 @@ export const EntryTable: ForwardRefExoticComponent<
               </>
             )}
 
-            {hasPluginFilters &&
-              pluginFilters.map((filter, index) => (
-                <Fragment key={filter.name}>
-                  {(index > 0 ||
-                    (hasStatusField && onStatusChange) ||
-                    hasLanguageFilter) && <DropdownMenuSeparator />}
-                  <DropdownMenuLabel>{filter.label}</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {filter.options.map(option => {
-                    const active =
-                      chosenPluginFilters?.get(filter.name) === option.value;
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={option.value}
-                        checked={active}
-                        onCheckedChange={() =>
-                          onPluginFilterChange?.(
-                            filter.name,
-                            active ? null : option.value
-                          )
-                        }
-                      >
-                        {option.label}
-                      </DropdownMenuCheckboxItem>
-                    );
-                  })}
-                </Fragment>
-              ))}
+            {hasPluginFilters && (
+              <PluginFilterMenuSections
+                filters={pluginFilters}
+                chosen={chosenPluginFilters}
+                onChange={onPluginFilterChange}
+                separateFirst={
+                  !!(hasStatusField && onStatusChange) || hasLanguageFilter
+                }
+              />
+            )}
 
             {hasDateFilters && (
               <>

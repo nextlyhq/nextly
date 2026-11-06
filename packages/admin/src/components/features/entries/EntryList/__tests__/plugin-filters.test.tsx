@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { EntryList } from "../EntryList";
-import { EntryTable } from "../EntryTable";
+import { EntryTable, type EntryTableProps } from "../EntryTable";
 import type { CollectionForColumns } from "../EntryTableColumns";
 import type { OfferedListFilter } from "../plugin-filters";
 
@@ -49,7 +49,9 @@ vi.mock("../EntryTable", async importOriginal => {
     ...actual,
     EntryTable: (props: Record<string, unknown>) => {
       tableProps(props);
-      return table.real ? <actual.EntryTable {...(props as never)} /> : null;
+      return table.real ? (
+        <actual.EntryTable {...(props as unknown as EntryTableProps)} />
+      ) : null;
     },
   };
 });
@@ -83,7 +85,9 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
-  ...(await importOriginal<object>()),
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
   useBranding: () => ({ plugins: plugins.list }),
 }));
 

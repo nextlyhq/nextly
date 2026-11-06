@@ -11,6 +11,7 @@
  *
  * @module components/features/entries/EntryList/plugin-filters
  */
+import type { SearchParams } from "@admin/lib/search-params";
 import type { PluginMetadata } from "@admin/types/branding";
 
 /** A filter the toolbar offers, as its plugin declared it. */
@@ -26,7 +27,14 @@ export interface OfferedListFilter {
 }
 
 /** The URL parameter a chosen option is kept in. */
-export const PLUGIN_FILTER_PARAM = "pf";
+const PLUGIN_FILTER_PARAM = "pf";
+
+/** The URL's `pf` values, however many it holds. */
+export function pluginFilterParamValues(params: SearchParams): string[] {
+  const value = params[PLUGIN_FILTER_PARAM];
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 /** Each plugin's filters this collection's list offers, in the plugins' order. */
 export function listFiltersFor(
@@ -39,7 +47,7 @@ export function listFiltersFor(
         filter.collections === undefined ||
         filter.collections.includes(collection)
     )
-  ) as OfferedListFilter[];
+  );
 }
 
 /**

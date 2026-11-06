@@ -86,6 +86,58 @@ function optionProblem(
   return undefined;
 }
 
+/** The plugin's declared filters as a list, refusing anything else. */
+function declaredFilters(plugin: PluginDefinition): readonly unknown[] {
+  const declared: unknown = plugin.contributes?.admin?.filters;
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) {
+    throw resolutionError(
+      "list-filter-invalid",
+      `Plugin "${plugin.name}" declares \`contributes.admin.filters\` as something other than a list of filters.`,
+      { plugin: plugin.name, filter: undefined }
+    );
+  }
+  return declared;
+}
+
+/**
+ * A declared filter checked whole: its name a name, in the plugin's own
+ * namespace, and the rest usable. Answers it as the declaration it passed as.
+ */
+function checkedFilter(
+  plugin: PluginDefinition,
+  filter: unknown
+): PluginListFilterDeclaration {
+  const name = (filter as { name?: unknown } | null)?.name;
+  if (typeof name !== "string" || !isWellFormedAdminPlaceName(name)) {
+    throw resolutionError(
+      "list-filter-invalid",
+      `Plugin "${plugin.name}" declares an entry-list filter named ${typeof name === "string" ? `"${name}"` : `given as ${typeof name}`}, which is not a name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
+      {
+        plugin: plugin.name,
+        filter: typeof name === "string" ? name : undefined,
+      }
+    );
+  }
+  if (!isInPluginNamespace(plugin.name, name)) {
+    const slug = pluginAdminSlug(plugin.name);
+    throw resolutionError(
+      "list-filter-outside-namespace",
+      `Plugin "${plugin.name}" declares the entry-list filter "${name}", which must start with "${slug}.".`,
+      { plugin: plugin.name, filter: name, expectedPrefix: `${slug}.` }
+    );
+  }
+  const problem = filterProblem(filter);
+  if (problem) {
+    throw resolutionError(
+      "list-filter-invalid",
+      `Plugin "${plugin.name}" declares the entry-list filter "${name}", but ${problem}.`,
+      { plugin: plugin.name, filter: name }
+    );
+  }
+  return filter as PluginListFilterDeclaration;
+}
+
 /**
  * @experimental Every enabled plugin's entry-list filters, refusing one that is
  * outside its plugin's namespace, declared twice, or that offers an option the
@@ -101,56 +153,18 @@ export function contributedListFilters(
   const owners = new Map<string, string>();
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
-    const declared: unknown = plugin.contributes?.admin?.filters;
-    if (declared === undefined) continue;
-    if (!Array.isArray(declared)) {
-      throw resolutionError(
-        "list-filter-invalid",
-        `Plugin "${plugin.name}" declares \`contributes.admin.filters\` as something other than a list of filters.`,
-        { plugin: plugin.name, filter: undefined }
-      );
-    }
-    const slug = pluginAdminSlug(plugin.name);
-    for (const filter of declared as readonly unknown[]) {
-      const name = (filter as { name?: unknown } | null)?.name;
-      if (typeof name !== "string" || !isWellFormedAdminPlaceName(name)) {
-        throw resolutionError(
-          "list-filter-invalid",
-          `Plugin "${plugin.name}" declares an entry-list filter named ${typeof name === "string" ? `"${name}"` : `given as ${typeof name}`}, which is not a name: lower-case letters, digits and single dashes, in segments joined by dots, the first being the plugin's slug.`,
-          {
-            plugin: plugin.name,
-            filter: typeof name === "string" ? name : undefined,
-          }
-        );
-      }
-      if (!isInPluginNamespace(plugin.name, name)) {
-        throw resolutionError(
-          "list-filter-outside-namespace",
-          `Plugin "${plugin.name}" declares the entry-list filter "${name}", which must start with "${slug}.".`,
-          { plugin: plugin.name, filter: name, expectedPrefix: `${slug}.` }
-        );
-      }
-      const problem = filterProblem(filter);
-      if (problem) {
-        throw resolutionError(
-          "list-filter-invalid",
-          `Plugin "${plugin.name}" declares the entry-list filter "${name}", but ${problem}.`,
-          { plugin: plugin.name, filter: name }
-        );
-      }
-      const owner = owners.get(name);
+    for (const declared of declaredFilters(plugin)) {
+      const filter = checkedFilter(plugin, declared);
+      const owner = owners.get(filter.name);
       if (owner !== undefined) {
         throw resolutionError(
           "list-filter-duplicate",
-          `Plugins "${owner}" and "${plugin.name}" both declare the entry-list filter "${name}".`,
-          { filter: name, owners: [owner, plugin.name] }
+          `Plugins "${owner}" and "${plugin.name}" both declare the entry-list filter "${filter.name}".`,
+          { filter: filter.name, owners: [owner, plugin.name] }
         );
       }
-      owners.set(name, plugin.name);
-      filters.push({
-        ...(filter as PluginListFilterDeclaration),
-        plugin: plugin.name,
-      });
+      owners.set(filter.name, plugin.name);
+      filters.push({ ...filter, plugin: plugin.name });
     }
   }
   return filters;

@@ -73,9 +73,9 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import {
-  PLUGIN_FILTER_PARAM,
   chosenPluginFilters,
   listFiltersFor,
+  pluginFilterParamValues,
   pluginFilterWheres,
   writePluginFilterParams,
 } from "./plugin-filters";
@@ -203,18 +203,10 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     () => listFiltersFor(plugins, collectionSlug),
     [plugins, collectionSlug]
   );
-  const pluginFilterParam = searchParams[PLUGIN_FILTER_PARAM];
   const chosenPluginFilterOptions = useMemo(
     () =>
-      chosenPluginFilters(
-        pluginFilters,
-        pluginFilterParam === undefined
-          ? []
-          : Array.isArray(pluginFilterParam)
-            ? pluginFilterParam
-            : [pluginFilterParam]
-      ),
-    [pluginFilters, pluginFilterParam]
+      chosenPluginFilters(pluginFilters, pluginFilterParamValues(searchParams)),
+    [pluginFilters, searchParams]
   );
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
