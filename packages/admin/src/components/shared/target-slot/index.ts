@@ -4,4 +4,3 @@ export {
   type PlaceContributionProps,
   type TargetSlotProps,
 } from "./TargetSlot";
-export { usePlaceContributions, type PlaceKind } from "./usePlaceContributions";
