@@ -689,17 +689,24 @@ export type {
  *   made as the system (`{ overrideAccess: true }`), judged as the Direct
  *   API's own `overrideAccess: true` call is, by no access rule or field
  *   read rule; the system may read any field stored as JSON, and its read
- *   also gives the live row's lifecycle (`PluginStoredLifecycle`).
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`). A
+ *   conditional write may also be made as a caller whose expectation the
+ *   system read (`PluginSystemCheckedWrite`): the update is the caller's,
+ *   under every rule their own update meets, and the expectation the
+ *   system's, so a job that reads as the system and writes as the person who
+ *   started it asks that person for no read access its write does not need.
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
   PluginStoredIdentity,
   PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
@@ -724,6 +731,51 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental A collection's document screen, changed by a plugin for that
+ * collection only (`contributes.admin.views[slug]`):
+ *
+ * - `documentActions` hides a built-in action (`"hidden"`) or replaces it
+ *   with the plugin's own component (`{ component, label? }`), for the
+ *   `OverridableDocumentAction`s `"delete"` and `"unpublish"`. A replaced
+ *   action keeps its row, the permission it needs and every reason it cannot
+ *   run, and opens the component instead of the built-in write.
+ * - `panelSections` adds `PluginPanelSection`s, `{ title, component }`, to the
+ *   document panel after Details, under a heading the admin draws.
+ *
+ * Collections only; a Single's screen is unchanged. Boot refuses an action
+ * that cannot be overridden, an override or section with nothing to draw, and
+ * two plugins overriding one action on one collection. The props the
+ * components receive are on `@nextlyhq/plugin-sdk/admin`.
+ *
+ * ```ts
+ * contributes: {
+ *   admin: {
+ *     views: {
+ *       layouts: {
+ *         documentActions: {
+ *           unpublish: "hidden",
+ *           delete: {
+ *             component: "@acme/plugin-layouts/admin#RemoveLayoutDialog",
+ *             label: "Remove layout…",
+ *           },
+ *         },
+ *         panelSections: [
+ *           { title: "Used by", component: "@acme/plugin-layouts/admin#LayoutUsage" },
+ *         ],
+ *       },
+ *     },
+ *   },
+ * },
+ * ```
+ */
+export type {
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
+  PluginPanelSection,
 } from "nextly";
 
 /**
@@ -783,6 +835,11 @@ export type {
  * `BeforeOperation*` types below are what `ctx.hooks.onBeforeOperation`/
  * `offBeforeOperation` accept, and are exported so a plugin can type a handler
  * it holds in a variable in order to unregister the same function later.
+ *
+ * @experimental `InTransactionHandler`, `InTransactionContext` — what
+ *   `ctx.hooks.onInTransaction`/`offInTransaction` accept: a handler run inside
+ *   a write's own transaction, and the write plus the plugin's database bound
+ *   to that transaction. New, and not yet exercised by a first-party plugin.
  */
 export type {
   BeforeOperationArgs,
@@ -792,7 +849,39 @@ export type {
   HookContextPhase,
   HookHandler,
   HookType,
+  InTransactionContext,
+  InTransactionHandler,
 } from "nextly";
+
+/**
+ * @experimental `recordAdvisoryNotice(notice)` — tell the person whose write
+ * this is something TRUE about the state it leaves behind, from a hook that
+ * runs inside the write's request (an `after*` hook, say): "this page now uses
+ * the site's default layout". The write still reports success, and the admin
+ * shows the notice beside it as its own advisories are shown, in an info
+ * toast, never in failure wording. Throwing from a hook is how a hook says
+ * something FAILED; this is for what did not.
+ *
+ * `AdvisoryNotice` is what it takes: `phase` (the hook's phase), `collection`
+ * (the slug, or `single:<slug>`), a stable `code` of the plugin's own, the
+ * whole `message`, and the `entryId` it is about when there is one. The
+ * message is shown as written: put nothing in it the person could not already
+ * see. A no-op outside a request, where there is nobody to tell. Core's own,
+ * re-exported deliberately; intended to stay as it is once a first-party
+ * plugin has used it in production.
+ *
+ * ```ts
+ * // In an afterChange hook, with `recordAdvisoryNotice` imported from here:
+ * recordAdvisoryNotice({
+ *   phase: "afterChange",
+ *   collection: "pages",
+ *   code: "LAYOUT_FELL_BACK",
+ *   message: "This page now uses the site's default layout.",
+ *   entryId: id,
+ * });
+ * ```
+ */
+export { recordAdvisoryNotice, type AdvisoryNotice } from "nextly";
 
 /**
  * Event bus (D8/D51) — `ctx.events` surface + types.

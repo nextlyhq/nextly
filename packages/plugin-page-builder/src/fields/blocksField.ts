@@ -52,13 +52,14 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
-import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import {
   judgesLayersLocks,
   layersLockIssues,
   withLockIssues,
 } from "./layers-lock-judgement";
+import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
+import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
 const CONTENT_ONLY_BREAK: IssueCode = "locked-slot-content-only";
@@ -328,6 +329,12 @@ export function blocksFieldType(
           })),
           ...(await newBreakpointIssues(value, args, label, {
             breakpointIds: async () => (await definitions()).breakpointIds,
+            limits,
+            storedForms,
+          })),
+          // And the variables it adds, which fences a variable's removal.
+          ...(await newTokenReferenceIssues(value, args, label, {
+            tokenIds: async () => (await definitions()).tokenIds,
             limits,
             storedForms,
           })),

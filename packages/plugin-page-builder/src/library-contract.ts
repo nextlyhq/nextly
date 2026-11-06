@@ -706,6 +706,16 @@ export interface SiteBreakpointRemoval {
 export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
 
 /**
+ * The code an undo is refused with (409) when its breakpoints no longer fit
+ * the set: one is a breakpoint again, would end at another's width, or its
+ * axis is full. Editing the breakpoints is the way on; any other refusal is
+ * answered by reading Settings again.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_DOES_NOT_FIT = "BREAKPOINT_UNDO_DOES_NOT_FIT";
+
+/**
  * Values an undo could not put back into one document, for one reason (a
  * document may be listed once per reason):
  * - `changed`: something else was set there after the removal;
@@ -720,6 +730,16 @@ export interface SiteBreakpointUndoSkipped {
   readonly kind: "collection" | "single";
   readonly slug: string;
   readonly id?: string;
+  /**
+   * What the person asking knows the document by; absent for one they may
+   * not read, or one deleted since.
+   */
+  readonly name?: string;
+  /**
+   * Set on the site's shared styles, whatever slug their Single is
+   * registered under, so the person is told of them as such.
+   */
+  readonly sharedStyles?: true;
   readonly values: number;
   readonly reason:
     | "changed"
@@ -842,6 +862,43 @@ export interface SiteSettingsRead {
    * @experimental
    */
   readonly removals?: readonly SiteBreakpointRemovalStatus[];
+  /**
+   * The removal Settings may still undo: the newest, within its 30 days, not
+   * undone yet. `null` when there is none; absent where the site carries no
+   * removals out.
+   *
+   * @experimental
+   */
+  readonly undoable?: SiteBreakpointUndoable | null;
+}
+
+/**
+ * The removal that can still be undone, as the Site tab offers it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoable {
+  readonly runId: string;
+  /** The breakpoints it removed, by id. */
+  readonly ids: readonly string[];
+  /** The same breakpoints, by the names the author knew them by. */
+  readonly labels: readonly string[];
+  /** When it was made, as an ISO date and time. */
+  readonly removedAt: string;
+  /** When its 30 days end, as an ISO date and time. */
+  readonly until: string;
+}
+
+/**
+ * What reading the removals alone answers (`GET` on the removal route with no
+ * run named): what the Site tab's read reports of them, without the rest of
+ * Settings, for an open Settings watching for a removal another tab started.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalsRead {
+  readonly removals: readonly SiteBreakpointRemovalStatus[];
+  readonly undoable: SiteBreakpointUndoable | null;
 }
 
 /**
@@ -851,8 +908,13 @@ export interface SiteSettingsRead {
  */
 export interface SiteBreakpointRemovalStatus {
   readonly runId: string;
-  /** The breakpoints it removed, by the names the author knew them by. */
+  /**
+   * The breakpoints it removed, by the names the author knew them by; for an
+   * undo, the ones it puts back.
+   */
   readonly labels: readonly string[];
+  /** For an undo: the removal it puts back. */
+  readonly undoes?: string;
   /** Whether it is still walking the site. */
   readonly open: boolean;
   /**
@@ -1001,7 +1063,10 @@ export interface SharedStyleUsage {
 /**
  * The code the remove route's issue carries when a stored document still uses
  * a style, so the editor can tell that refusal from one for a lock or a count
- * no longer whole.
+ * no longer whole. Carried only when every reason a removal is refused for is
+ * a use: a refusal any of whose reasons is not (a lock, a style the site's
+ * code defines, uses that could not all be counted) is a conflict naming
+ * every reason, so the code never marks one that is not a use.
  *
  * @experimental Settles when the Shared styles tab ships.
  */
@@ -1117,4 +1182,154 @@ export interface SharedStylesCountResponse {
 /** What the remove route is sent: the shared styles to remove, by id. */
 export interface SharedStyleRemoveRequest {
   readonly ids: readonly string[];
+}
+
+/**
+ * Where the Design panel's Variables reads how widely its variables are used,
+ * a page of rows at a time, each variable named by its identity (`$token`:
+ * the token's `id`, else its name) with its own `id` parameter.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_USAGE_ROUTE_PATH = "/variables/usage";
+
+/** The query parameter naming one variable, by identity; repeated for several. */
+export const VARIABLE_ID_PARAM = "id";
+
+/** The query parameter naming which page of a where-used list, from 1. */
+export const VARIABLE_PAGE_PARAM = "page";
+
+/** The most variables one usage read or one removal answers for. */
+export const VARIABLE_USAGE_IDS_MAX = 50;
+
+/**
+ * How widely one variable is used: the documents whose blocks or page
+ * settings name it, from the variable usage index; the shared styles whose
+ * own styles name it, from the site style; and the block types whose own
+ * default styles name it, from the block registry. A shared style's reference
+ * is a use whether or not any block applies the style, and a block type's
+ * whether or not any page places the block. The places it is used are
+ * `documents` plus `sharedStyles.length` plus `blockDefaults.length`.
+ */
+export interface VariableUsage {
+  /** How many documents use it, gated and hidden content included. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleUsageKind, number>>;
+  /** The ids of the shared styles whose styles name it, in id order. */
+  readonly sharedStyles: readonly string[];
+  /**
+   * The registered block types (`core/button`) whose own default styles
+   * (`baseStyles`) name it, in type order.
+   */
+  readonly blockDefaults: readonly string[];
+  /** False makes `documents` and `byKind` floors: "at least". */
+  readonly complete: boolean;
+}
+
+/**
+ * What the variables usage read answers: the index's health once for the
+ * screen, whether this caller may ask for a count now, and each variable.
+ *
+ * NOT A SECURITY BOUNDARY: every write is judged on its own.
+ */
+export interface VariablesUsageResponse {
+  /** Whether the usage index covers the whole site, so counts can be exact. */
+  readonly whole: boolean;
+  /** Whether counts that are not whole may still become whole. */
+  readonly counting: boolean;
+  /**
+   * Whether this caller may ask for the pages to be counted now, through
+   * {@link SHARED_STYLE_COUNT_ROUTE_PATH}: one count fills every usage index.
+   */
+  readonly mayCount: boolean;
+  /** Each variable asked about, by identity. */
+  readonly variables: Readonly<Record<string, VariableUsage>>;
+}
+
+/**
+ * Where the Variables panel lists the places a variable is used: first the
+ * shared styles naming it, then the block types whose default styles name
+ * it, then the documents, read as the caller (documents the caller may not
+ * read are counted in `meta.hiddenCount`, not named). The canonical list
+ * envelope, twenty to a page with `?page=` from 1, up to the page the longest
+ * such list ends on: every document one usage listing can name, with every
+ * shared style and block type the site has.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_WHERE_USED_ROUTE_PATH = "/variables/where-used";
+
+/**
+ * Which kind of place a variable is used in: a document's kind, a shared
+ * style, or a block type's own default style.
+ */
+export type VariableUseKind =
+  | SharedStyleUsageKind
+  | "shared-style"
+  | "block-default";
+
+/**
+ * One place a variable is used. A document is named by its collection and id,
+ * as the shared-style where-used names one. A shared style is named by its
+ * class id in `id`, with the site-style Single's slug as its `collection`, so
+ * the panel can open it in Design > Shared styles. A block type's default
+ * style is named by the type in `id` (`core/button`) and its label in
+ * `title`, with an empty `collection`: it is the block's code, not a stored
+ * document.
+ */
+export interface VariableUseItem {
+  readonly id: string;
+  readonly title: string;
+  readonly collection: string;
+  readonly kind: VariableUseKind;
+  /**
+   * For a shared style that is a block look, the block type it is bound to.
+   * Two block types' own looks may share an id, so a look is named by the
+   * pair: the panel opens the look `{ id, blockType }`. Absent for every
+   * other place.
+   *
+   * @experimental Settles when the Variables panel shows usage.
+   */
+  readonly blockType?: string;
+}
+
+/**
+ * Where the Variables panel removes variables the site added: the one write
+ * that checks first, just before it writes, that nothing uses any of them. A
+ * variable the site's code supplies cannot be removed, only reset.
+ *
+ * Refused in use with a validation error whose issues carry
+ * {@link SHARED_STYLE_IN_USE_CODE}: one issue per variable the index, a
+ * shared style or a block type's default style finds in use, its `path` that
+ * variable's identity, or one issue with an empty `path` when the stored
+ * documents themselves still use one. Refused with a conflict naming every
+ * reason when the uses cannot be counted, even if another variable asked
+ * about is in use: no issue carries the in-use code for a variable whose
+ * uses are not known. A page saved while the removal writes, that uses one
+ * of the variables, puts it back and refuses the removal as in use.
+ *
+ * @experimental Settles when the Variables panel shows usage.
+ */
+export const VARIABLE_REMOVE_ROUTE_PATH = "/variables/remove";
+
+/** What the remove route is sent: the variables to remove, by identity. */
+export interface VariableRemoveRequest {
+  readonly ids: readonly string[];
+}
+
+/** The usage route's path for some variables, each named by its own `id`. */
+export function variableUsagePath(ids: readonly string[]): string {
+  const params = new URLSearchParams();
+  for (const id of ids) params.append(VARIABLE_ID_PARAM, id);
+  return `${VARIABLE_USAGE_ROUTE_PATH}?${params.toString()}`;
+}
+
+/** The where-used route's path for one variable and one page, from 1. */
+export function variableWhereUsedPath(id: string, page: number): string {
+  const params = new URLSearchParams({
+    [VARIABLE_ID_PARAM]: id,
+    [VARIABLE_PAGE_PARAM]: String(page),
+  });
+  return `${VARIABLE_WHERE_USED_ROUTE_PATH}?${params.toString()}`;
 }

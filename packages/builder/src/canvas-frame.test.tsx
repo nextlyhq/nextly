@@ -227,7 +227,7 @@ describe("the canvas frame", () => {
       }
       return undefined;
     };
-    const words = ".nx-canvas-region__badge, .nx-canvas-region__tag";
+    const words = ".nx-canvas-region__mark";
     expect(handed(words, "--nx-builder-border")).toBe("rgb(1, 2, 3)");
     expect(handed(words, "--font-sans")).toBe("Inter");
     expect(handed(".nx-canvas-region", "--nx-builder-border")).toBe(

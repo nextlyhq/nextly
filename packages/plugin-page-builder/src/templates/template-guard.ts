@@ -198,13 +198,17 @@ interface GuardContext {
   readonly req?: unknown;
 }
 
-/** The hook registration the guard needs. */
+/**
+ * The hook registration the guard needs, in the shape the plugin's own
+ * context offers it: a handler takes the hook context as it arrives, and the
+ * guard reads only what it checks the shape of.
+ */
 export interface TemplateGuardHooks {
   hooks: {
     on(
-      phase: "beforeChange",
+      type: string,
       collection: string,
-      handler: (context: never) => unknown
+      handler: (context: unknown) => unknown
     ): void;
   };
 }
@@ -220,10 +224,8 @@ export function registerTemplateGuard(
   ctx: TemplateGuardHooks,
   setup: TemplateGuardSetup
 ): void {
-  ctx.hooks.on(
-    "beforeChange",
-    setup.templatesCollection,
-    (context: GuardContext) => guardWrite(setup, context)
+  ctx.hooks.on("beforeChange", setup.templatesCollection, context =>
+    guardWrite(setup, recordOf(context) ?? {})
   );
 }
 

@@ -27,12 +27,15 @@
  */
 import {
   listFieldKind,
+  listPageCount,
   readListQuery,
   safeTimeZone,
   isListDay,
   listDayAfter,
   LIST_LIMIT_MAX,
   LIST_LIMIT_MIN,
+  type BindingFieldShape,
+  type ConditionDayStart,
   type ListFilter,
   type ListFilterOp,
   type ListQuery,
@@ -210,8 +213,34 @@ function dayZoneOf(
     ?.fieldsOf({ collection })
     ?.find(candidate => candidate.name === field);
   if (shape !== undefined && listFieldKind(shape) !== "date") return undefined;
+  return zoneOfDay(shape, ctx.timeZone);
+}
+
+/**
+ * The zone a day on a field is compared in: none for a field holding a
+ * calendar day, which is stored as that day, so UTC; the site's for an
+ * instant, and for a field whose shape is not known. The one rule, for a
+ * list's day filter and a block's day condition alike.
+ */
+function zoneOfDay(
+  shape: BindingFieldShape | undefined,
+  timeZone: string | undefined
+): string {
   if (shape?.dateOnly === true) return "UTC";
-  return safeTimeZone(ctx.timeZone).zone;
+  return safeTimeZone(timeZone).zone;
+}
+
+/**
+ * When a day starts for a block's visibility condition on a date field, in
+ * the zone a list's day filter would compare it in.
+ *
+ * @experimental
+ */
+export function conditionDayStart(
+  timeZone: string | undefined
+): ConditionDayStart {
+  return (day, field) =>
+    Date.parse(dayStartIn(day, zoneOfDay(field, timeZone)));
 }
 
 /** One stored filter row as the reader takes it. */
@@ -645,9 +674,13 @@ function blockingProblem(
   problems: ReturnType<typeof readListQuery>["problems"]
 ): string | undefined {
   // A limit is held to its bounds and a malformed sort lists in id order,
-  // as a stored list always did; anything else would read the wrong entries.
+  // as a stored list always did, and a malformed split into pages shows one
+  // page; anything else would read the wrong entries.
   const blocking = problems.filter(
-    problem => problem.prop !== "limit" && problem.prop !== "sort"
+    problem =>
+      problem.prop !== "limit" &&
+      problem.prop !== "sort" &&
+      problem.prop !== "paginate"
   );
   return blocking.length === 0
     ? undefined
@@ -743,7 +776,12 @@ export interface ListEntryCount {
 export async function listEntryCount(
   props: unknown,
   terms: Pick<PageContext, "locale" | "timeZone" | "fieldShapes">,
-  data: BlocksDataProvider
+  data: BlocksDataProvider,
+  /**
+   * Claim each read after the first, as the list's own reads are claimed
+   * from a page's allowance. Absent, the editor's count reads freely.
+   */
+  claim: () => boolean = () => true
 ): Promise<ListEntryCount | undefined> {
   const named = readListQuery(props).query;
   if (named.collection === undefined || named.relation !== undefined) {
@@ -759,35 +797,90 @@ export async function listEntryCount(
         total = answer.total;
         return answer.items;
       },
-      // The editor's own read, outside any page's allowance.
-      claim: () => true,
+      claim,
     },
     read.base,
     read.sort
   );
-  if (typeof total !== "number") return undefined;
+  // Held to a whole number from 0, as a list's own links hold it.
+  const counted = wholeCount(total);
+  if (counted === undefined) return undefined;
   return {
-    matching: total,
-    shown: Math.max(0, Math.min(total - read.offset, read.limit)),
+    matching: counted,
+    shown: Math.max(0, Math.min(counted - read.offset, read.limit)),
   };
 }
 
 /**
- * Read a list's entries as its stored props ask. Never throws: a read that
- * fails comes back as `failed` with what failed, and the list draws its
- * empty state.
+ * Whether a list's stored props make a read at all: a collection named, no
+ * related source (whose entries are never paged), and nothing stored that
+ * stops the read. The one answer the route's count and the render ask
+ * before claiming a paginated list's read, so neither spends one the list
+ * will not make.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listWillRead(props: unknown): boolean {
+  const { query, problems } = readListQuery(props);
+  return (
+    query.collection !== undefined &&
+    query.relation === undefined &&
+    blockingProblem(problems) === undefined
+  );
+}
+
+/**
+ * A provider's total as a count may be: a whole number from 0, or undefined
+ * for anything else (`NaN`, `Infinity`, a fraction, a negative). The one
+ * reading the route's page count and a list's page links share, so a total
+ * neither trusts can never give one of them pages the other lacks.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function wholeCount(total: unknown): number | undefined {
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+    ? total
+    : undefined;
+}
+
+/**
+ * How many pages a list split into pages has when its query matches
+ * `matching` entries, by its stored offset and limit as its read takes them.
+ *
+ * @experimental Settles with list pagination.
+ */
+export function listPagesOf(props: unknown, matching: number): number {
+  const offset = readListQuery(props).query.offset ?? 0;
+  const limit = safeLimit((props as { limit?: unknown } | null)?.limit);
+  return listPageCount(matching, offset, limit);
+}
+
+/**
+ * Read a list's entries as its stored props ask: page `page` of them, from
+ * 1, where the list is split into pages. Never throws: a read that fails
+ * comes back as `failed` with what failed, and the list draws its empty
+ * state.
  */
 export async function readList(
   props: unknown,
   collection: string,
   ctx: PageContext,
-  reads: ListReads
+  reads: ListReads,
+  page = 1
 ): Promise<ListOutcome> {
   const read = listReadBase(props, collection, ctx);
   if ("blocking" in read) {
     return { items: [], failed: true, diagnostic: failure(read.blocking) };
   }
-  const { query, base, offset, limit, sort, sortProblem } = read;
+  const { query, base: first, limit, sort, sortProblem } = read;
+  // A later page starts `limit` entries further on for each page before it,
+  // the stored offset applied once, before paging. The window moves in the
+  // read itself rather than through the reader's page number, so a provider
+  // that knows nothing of pages still reads the right entries. Related
+  // entries are never paged: they have no count of pages.
+  const paged = page > 1 && query.relation === undefined;
+  const offset = paged ? read.offset + (page - 1) * limit : read.offset;
+  const base = paged ? { ...first, offset } : first;
   try {
     // A related source's ids first, as a visitor reads them; with none to
     // read, the list draws its empty state and an author is told why.

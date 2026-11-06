@@ -2,6 +2,8 @@ import {
   allBlocks,
   breakpointContexts,
   DEFAULT_LIMITS,
+  resolveSiteTokens,
+  tokenIdentity,
   type DocumentLimits,
   type NamedClass,
   type RemotePattern,
@@ -28,6 +30,7 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 // isomorphic and reachable from a browser bundle.
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import {
   BLOCK_SERVICE,
   createBlockRegistrationService,
@@ -43,7 +46,10 @@ import {
   type BreakpointRemovalService,
   type RemovalInstall,
 } from "./breakpoint-removal/service";
-import { countRemovalOnSite } from "./breakpoint-removal/site-counter";
+import {
+  countRemovalOnSite,
+  nameDocumentsOnSite,
+} from "./breakpoint-removal/site-counter";
 import {
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
@@ -58,6 +64,7 @@ import {
 } from "./class-usage-hook";
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
+import { addressClaimsCollection } from "./collections/address-claims";
 import { classUsageIndexCollection } from "./collections/class-usage-index";
 import {
   COMPONENT_RETIRED_SLUG,
@@ -116,6 +123,7 @@ import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { listFieldsFrom } from "./fields/list-query-judgement";
 import { hostFetchPolicy } from "./host-policy";
 import { registerFencedWriteReport } from "./host-rewrite/after-commit";
+import type { HostAddress } from "./host-rewrite/contract";
 import { fencedComponentsReader, fenceStore } from "./host-rewrite/fence";
 import { progressStore } from "./host-rewrite/progress";
 import {
@@ -189,7 +197,10 @@ import {
 } from "./schema/definition";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
+  firstReadableTitle,
   sharedStyleRoutes,
+  storedDocumentsOf,
+  type SharedStyleUsageSource,
 } from "./shared-styles-routes";
 import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
@@ -221,6 +232,7 @@ import {
   readStoredSiteStyleVersioned,
   SITE_STYLE_SLUG,
   siteStyleSingle,
+  type VariablesInUseCheck,
 } from "./site-style-storage";
 import {
   configuredSpacingMode,
@@ -243,6 +255,7 @@ import {
   templateHolderReader,
   type TemplateGuardSetup,
 } from "./templates/template-guard";
+import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { usageBackfillJob } from "./usage-backfill-job";
@@ -258,11 +271,17 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
+import type { UsageIndex, UsageSubject } from "./usage-index";
 import {
   usageIndexStores,
   usageTableOf,
   usageTableRows,
 } from "./usage-index-tables";
+import {
+  variableRemovalChecks,
+  variableRoutes,
+  variablesInUseCheck,
+} from "./variables-routes";
 import { variantUseRoute } from "./variant-use-route";
 import { SINGLE_HOOK_NAMESPACE } from "./write-target";
 
@@ -1409,6 +1428,48 @@ export const pageBuilder = (
     return removalHolds;
   };
   /**
+   * One usage index as the shared-style and variable routes read it: its
+   * health, the documents using each reference in one bounded read, and which
+   * kind of document a collection holds. The composition stores are
+   * components, patterns and Layouts; every other collection with a page
+   * builder field holds pages, as the editor's page search reads them.
+   */
+  const usageSourceOf = <TRow extends UsageSubject>(
+    collections: Readonly<Record<string, string | undefined>>,
+    index: UsageIndex<TRow>
+  ): SharedStyleUsageSource => {
+    const kinds = new Map<string, SharedStyleUsageKind>([
+      [
+        componentStoreOf(opts).collection ??
+          collections[COMPONENTS_SLUG] ??
+          COMPONENTS_SLUG,
+        "components",
+      ],
+      [collections[PATTERNS_SLUG] ?? PATTERNS_SLUG, "patterns"],
+      [collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
+    ]);
+    return {
+      health: () => usageHealthService(requireInstalled).read(index),
+      // One bounded read for a whole page of references.
+      documentsUsingEach: async (ids, health) =>
+        listDocumentsUsingEach({
+          index,
+          rows: usageTableRows(requireInstalled().db, usageTableOf(index)),
+          referenceIds: ids,
+          health,
+        }),
+      kindOf: collection => kinds.get(collection) ?? "pages",
+    };
+  };
+  // The in-use check a write of the site style that drops a variable is
+  // judged by. Set by `init`, which holds the context the stored documents
+  // are listed through; read by the Single's guard on such a write.
+  let variablesInUse: VariablesInUseCheck | undefined;
+  // The booted Direct API through the SDK, imported at call time for the
+  // reason `defaultLayoutDeps` gives.
+  const bootedNextly = async () =>
+    (await import("@nextlyhq/plugin-sdk")).getCachedNextly();
+  /**
    * How many documents place a component directly, from the usage index: the
    * number the removal dialog says, and the one a hold counts again. The
    * index rows live in the plugin's own tables, so no route context is read.
@@ -1495,6 +1556,16 @@ export const pageBuilder = (
   // The open removal as the write path's locks read it: before `init`, the
   // read throws, and a lock then accepts nothing extra.
   const openBreakpointRemoval = () => removalService().openRemoval();
+  // The site as a removal's count and an undo's report read it.
+  const removalSite = () => ({
+    site: () => rewriteInstall?.site ?? null,
+    naming: async () => {
+      const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+      return getCachedNextly();
+    },
+    componentCollection: rewriteInstall?.store.collection,
+    limits: () => opts.limits ?? DEFAULT_LIMITS,
+  });
   // How the breakpoints routes count a removal and carry it out.
   const breakpointRemoval = {
     defaults: configStyle,
@@ -1521,20 +1592,15 @@ export const pageBuilder = (
       deadline?: Date
     ) =>
       countRemovalOnSite(
-        {
-          site: () => rewriteInstall?.site ?? null,
-          naming: async () => {
-            const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-            return getCachedNextly();
-          },
-          componentCollection: rewriteInstall?.store.collection,
-          limits: () => opts.limits ?? DEFAULT_LIMITS,
-        },
+        removalSite(),
         routeCtx,
         removed,
         classes,
         ...(deadline === undefined ? [] : [deadline])
       ),
+    // The documents an undo could not put back, named as the person asking.
+    names: (hosts: readonly HostAddress[], routeCtx: BreakpointsRouteContext) =>
+      nameDocumentsOnSite(removalSite(), routeCtx, hosts),
     // A save counts for the audit, then walks, this long at most before it
     // answers with the run to carry on.
     cascade: {
@@ -1753,6 +1819,11 @@ export const pageBuilder = (
                 context => context.id
               )
             ),
+            // Every tier of variables, as the stylesheet resolves them, so a
+            // page may name exactly the variables it renders with.
+            tokenIds: new Set(
+              resolveSiteTokens(style.tokens).tokens.map(tokenIdentity)
+            ),
           };
         },
         hostsOf: indexHostFinder({
@@ -1844,6 +1915,17 @@ export const pageBuilder = (
         // A failed write marks the index dirty, so health stops calling it
         // whole until a full rebuild has walked the site again.
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
+      });
+      // A write of the site style dropping a variable still in use is
+      // refused, by the check the remove route makes. It names no document,
+      // since the write's author is not a caller this can ask.
+      variablesInUse = variablesInUseCheck({
+        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        // The block types the pages are rendered with, read per check.
+        blocks: allBlocks,
+        documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
+        limits: opts.limits ?? DEFAULT_LIMITS,
+        pathOf: () => "tokens",
       });
       registerReadinessNotice(ctx, opts);
       // A page published naming a Layout that is not: it is served inside the
@@ -2132,6 +2214,8 @@ export const pageBuilder = (
         layoutsCollection(),
         classUsageIndexCollection(),
         componentUsageIndexCollection(),
+        // Who holds each served address, so no two documents share one.
+        addressClaimsCollection(),
         // Each component's retired field and slot ids, recorded when a
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
@@ -2172,7 +2256,9 @@ export const pageBuilder = (
           // A locked shared style may be stripped by an open removal, in the
           // settings write that stores its set: judged by every id it
           // removed, which the site still defines while that write is judged.
-          () => removalService().openRemovalAsSaved()
+          () => removalService().openRemovalAsSaved(),
+          // A write dropping a variable is judged by the remove route's check.
+          () => variablesInUse
         ),
         // Where the site's default Layout is recorded. Contributed whether or
         // not any Layout exists yet, because the repair writes it on a site
@@ -2343,12 +2429,13 @@ export const pageBuilder = (
         // A collection loop's menus: the collections the author may read,
         // the plugin's own stores left out, with each one's sortable fields.
         loopCollectionsRoute(componentStoreOf(opts)),
-        // A collection list's entries on the canvas, read as a visitor reads
-        // them, for a collection the author may read.
+        // A collection list's entries on the canvas, read as the author asking
+        // reads them, drafts included, for a collection they may read.
         listEntriesRoute(),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),
+        addressWaitingRoute(),
         // The Pages panel's writes: create, duplicate, rename and delete a
         // page, each as the author asking, in exactly the collections the
         // search lists.
@@ -2419,39 +2506,33 @@ export const pageBuilder = (
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
           configClassIds,
-          usage: ctx => {
-            const kinds = new Map<string, SharedStyleUsageKind>([
-              [
-                componentStoreOf(opts).collection ??
-                  ctx.self.collections[COMPONENTS_SLUG] ??
-                  COMPONENTS_SLUG,
-                "components",
-              ],
-              [
-                ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
-                "patterns",
-              ],
-              [ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG, "layouts"],
-            ]);
-            return {
-              health: () =>
-                usageHealthService(requireInstalled).read(classUsageIndex),
-              // One bounded read for a whole page of styles.
-              documentsUsingEach: async (classIds, health) =>
-                listDocumentsUsingEach({
-                  index: classUsageIndex,
-                  rows: usageTableRows(
-                    requireInstalled().db,
-                    usageTableOf(classUsageIndex)
-                  ),
-                  referenceIds: classIds,
-                  health,
-                }),
-              // Every other collection with a page builder field holds pages,
-              // as the editor's page search reads them.
-              kindOf: collection => kinds.get(collection) ?? "pages",
-            };
-          },
+          usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+        }),
+        // The Variables panel: how widely each variable is used and where,
+        // from the variable usage index and the site's shared styles, and
+        // removing the ones the site added that nothing uses. A count now is
+        // the shared styles' count route: one sweep fills every index.
+        ...variableRoutes({
+          defaults: configStyle,
+          usage: ctx => usageSourceOf(ctx.self.collections, tokenUsageIndex),
+          // A block type's own default styles are a use, read per request.
+          blocks: allBlocks,
+          inUse: (ctx, readNamed) =>
+            variableRemovalChecks({
+              usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+              blocks: allBlocks,
+              documents: async () =>
+                storedDocumentsOf(ctx, await bootedNextly()),
+              limits: opts.limits ?? DEFAULT_LIMITS,
+              // The first use named only if this caller may open it.
+              firstReadable: uses =>
+                firstReadableTitle(
+                  uses,
+                  readNamed,
+                  async slug => (await ctx.caller?.can("read", slug)) ?? false
+                ),
+              pathOf: id => id,
+            }),
         }),
       ],
       // The grant that lets a role change the site's settings in the editor's

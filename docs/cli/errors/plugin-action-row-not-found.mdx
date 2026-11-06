@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ACTION_ROW_NOT_FOUND
+description: "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run."
+---
+
+## Cause
+
+A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run.
+
+A route that one of a plugin's declared actions runs is reachable only as that action. It reads each row the request names as the caller, and a row the caller may not read is answered the same way as one that does not exist, so the refusal says nothing about which entries exist.
+
+## Fix
+
+- Run the action on an entry the caller can open in the admin.
+- If the caller should be able to read the entry, give their role the read permission on its collection, or check the collection's read rule.
+
+## Example
+
+```text
+✗ A plugin's action named an entry that could not be found for this caller.
+  Why:  An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.
+  Next: Run the action on an entry the caller can open in the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-action-row-not-found  (PLUGIN_ACTION_ROW_NOT_FOUND)
+```

@@ -360,6 +360,9 @@ export function createMockHookRegistry(): MockRecord {
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),
     execute: vi.fn().mockResolvedValue(undefined),
     executeAfterOperation: vi.fn().mockResolvedValue(undefined),
+    // No in-transaction handler, so a write never loads that phase.
+    hasInTransaction: vi.fn().mockReturnValue(false),
+    inTransactionRunners: vi.fn().mockReturnValue([]),
   };
 }
 

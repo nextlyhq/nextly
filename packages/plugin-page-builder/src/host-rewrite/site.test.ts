@@ -8,35 +8,48 @@ import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 
-/** The conditional writes the writer made, and a failure for the next one. */
+/**
+ * The conditional writes the writer made and who each was made as, a failure
+ * for the next one, the forms the stored reads asked for, and the answers the
+ * next stored reads give, in turn.
+ */
 const stored = vi.hoisted(() => ({
   writes: [] as { data: Record<string, unknown> }[],
+  identities: [] as unknown[],
   failNext: undefined as unknown,
+  forms: [] as string[],
+  answers: [] as unknown[],
 }));
 
 // The stored read and the conditional write are core's, which a unit test
-// does not boot: the read answers every field as stored, an empty document,
-// on a live row with no public state and no pending draft, and the write is
-// recorded, or fails as the test says.
+// does not boot: the read answers the next scripted answer where a test gave
+// one, else every field as stored, an empty document, on a live row with no
+// public state and no pending draft; the write is recorded, or fails as the
+// test says.
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readStoredFields: async (
     _identity: unknown,
-    request: { fields: readonly string[] }
-  ) => ({
-    kind: "found",
-    values: Object.fromEntries(
-      request.fields.map(name => [
-        name,
-        { kind: "value", value: { nodes: [] } },
-      ])
-    ),
-    live: { publicState: null, workingDraft: false },
-  }),
+    request: { fields: readonly string[]; form: string }
+  ) => {
+    stored.forms.push(request.form);
+    if (stored.answers.length > 0) return stored.answers.shift();
+    return {
+      kind: "found",
+      values: Object.fromEntries(
+        request.fields.map(name => [
+          name,
+          { kind: "value", value: { nodes: [] } },
+        ])
+      ),
+      live: { publicState: null, workingDraft: false },
+    };
+  },
   updateIfUnchanged: async (
-    _identity: unknown,
+    identity: unknown,
     update: { data: Record<string, unknown> }
   ) => {
+    stored.identities.push(identity);
     const failure = stored.failNext;
     stored.failNext = undefined;
     if (failure !== undefined) throw failure;
@@ -49,6 +62,7 @@ import {
   siteHostReader,
   siteHostSource,
   siteHostWriter,
+  systemHostWriter,
   type RewriteSite,
   type SingleToWalk,
 } from "./site";
@@ -305,5 +319,149 @@ describe("the version a host write sends", () => {
       rev: "7",
     });
     expect(result).toEqual({ kind: "changed" });
+  });
+});
+
+describe("a working draft that moves between the live read and the draft read", () => {
+  const host = {
+    kind: "collection" as const,
+    slug: "notes",
+    id: "n1",
+    path: ["content"],
+  };
+  /** The reader over a row whose version each read gives in turn, or none. */
+  const reader = (versions: string[] = []) =>
+    siteHostReader({
+      ...siteWith({ fields: [] }),
+      nextly: async () =>
+        ({
+          findByID: async () => {
+            const rev = versions.length > 1 ? versions.shift() : versions[0];
+            return { id: "n1", ...(rev === undefined ? {} : { _rev: rev }) };
+          },
+        }) as never,
+    });
+  /** A found stored read of `content`, holding `text`, in this lifecycle. */
+  const found = (text: string, workingDraft: boolean) => ({
+    kind: "found",
+    values: { content: { kind: "value", value: { text } } },
+    live: { publicState: "published", workingDraft },
+  });
+
+  function script(...answers: unknown[]): void {
+    stored.forms.length = 0;
+    stored.answers.length = 0;
+    stored.answers.push(...answers);
+  }
+
+  it("reads the host again rather than taking the live row as a draft discarded after the live read", async () => {
+    // The live read finds a draft pending; by the draft read it was
+    // discarded, so that read falls back to the live row and says so.
+    script(found("live", true), found("live", false), found("live", false));
+
+    const read = await reader()(host);
+
+    expect(stored.forms).toEqual(["published", "draft", "published"]);
+    // No draft to save: the host is judged, and written, as its live row
+    // alone, so the discarded draft is not made again.
+    expect(read.draft).toBeNull();
+    expect(read.published).toEqual({ kind: "value", value: { text: "live" } });
+    expect(read.liveState).toBe("published");
+  });
+
+  it("CONTROL: takes the draft read as the draft while it still reports one pending", async () => {
+    script(found("live", true), found("draft", true));
+
+    const read = await reader()(host);
+
+    expect(stored.forms).toEqual(["published", "draft"]);
+    expect(read.draft).toEqual({ kind: "value", value: { text: "draft" } });
+    expect(read.published).toEqual({ kind: "value", value: { text: "live" } });
+  });
+
+  it("reads the host again when the row's version moved between the live read and the draft read", async () => {
+    // A draft published and a new one saved between the reads: both report a
+    // draft pending in the same state, and only the version tells.
+    script(
+      found("live", true),
+      found("new draft", true),
+      found("live now", true),
+      found("new draft", true)
+    );
+
+    const read = await reader(["1", "2"])(host);
+
+    expect(stored.forms).toEqual(["published", "draft", "published", "draft"]);
+    expect(read.published).toEqual({
+      kind: "value",
+      value: { text: "live now" },
+    });
+    expect(read.draft).toEqual({ kind: "value", value: { text: "new draft" } });
+    expect(read.rev).toBe("2");
+  });
+
+  it("CONTROL: keeps a pair read over one version, and sends that version", async () => {
+    script(found("live", true), found("draft", true));
+
+    const read = await reader(["5"])(host);
+
+    expect(stored.forms).toEqual(["published", "draft"]);
+    expect(read.draft).toEqual({ kind: "value", value: { text: "draft" } });
+    expect(read.rev).toBe("5");
+  });
+
+  it("reads the host again when the document is gone by the draft read", async () => {
+    script(found("live", true), { kind: "absent" }, { kind: "absent" });
+
+    const read = await reader()(host);
+
+    expect(stored.forms).toEqual(["published", "draft", "published"]);
+    expect(read).toMatchObject({ published: { kind: "absent" }, draft: null });
+  });
+
+  it("refuses to judge a host whose draft keeps moving, rather than guessing", async () => {
+    script(
+      ...Array.from({ length: 3 }, () => [
+        found("live", true),
+        found("live", false),
+      ]).flat()
+    );
+
+    await expect(reader()(host)).rejects.toThrow(/kept changing/);
+    expect(stored.forms).toHaveLength(6);
+    stored.answers.length = 0;
+  });
+});
+
+describe("who a host write is made as", () => {
+  const host = {
+    kind: "collection" as const,
+    slug: "notes",
+    id: "n1",
+    path: ["content"],
+  };
+  const write = {
+    host,
+    value: { nodes: [] },
+    mode: "save" as const,
+    expected: { form: "published" as const, hash: "h" },
+  };
+
+  it("makes a person's write as them, with its expectation judged as the system that read it", async () => {
+    stored.identities.length = 0;
+
+    await siteHostWriter(siteWith({ fields: [] }))(write);
+
+    expect(stored.identities).toEqual([
+      { caller: { user: { id: "u1" } }, checkedBy: { overrideAccess: true } },
+    ]);
+  });
+
+  it("makes the system's own run's write as the system alone", async () => {
+    stored.identities.length = 0;
+
+    await systemHostWriter(siteWith({ fields: [] }))(write);
+
+    expect(stored.identities).toEqual([{ overrideAccess: true }]);
   });
 });

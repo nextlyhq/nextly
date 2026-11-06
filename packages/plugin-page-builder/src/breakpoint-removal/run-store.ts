@@ -136,7 +136,11 @@ export interface RemovalRunStore extends RunStore {
    * claim up (`readdedIds`). An open run is never changed here; a set
    * defining an id an open run claims is refused before it is stored.
    */
-  retire(ids: readonly string[]): Promise<void>;
+  retire(
+    ids: readonly string[],
+    /** Only this run gives them up, rather than every run claiming them. */
+    only?: string
+  ): Promise<void>;
   /**
    * The save that opened a run has stored its set: the run goes on its
    * converting walk, where the walk starts. Nothing for a run past preparing.
@@ -436,7 +440,7 @@ export function removalRunStore(
         return "left";
       }
     },
-    retire: async ids => {
+    retire: async (ids, only) => {
       if (ids.length === 0) return;
       const asked = new Set(ids);
       const t = columns();
@@ -444,7 +448,10 @@ export function removalRunStore(
       // save read the runs would otherwise keep its claim. Giving it up is
       // safe for an open run too, since a walk strips only the ids the site
       // does not define, and these are about to be defined.
-      for (const first of await db.select(breakpointRemovals).all()) {
+      const rows = await db.select(breakpointRemovals).all();
+      for (const first of rows.filter(
+        row => only === undefined || row.id === only
+      )) {
         let row: typeof first | null = first;
         for (let attempt = 1; row !== null; attempt += 1) {
           const stored = storedIdsOf(

@@ -81,6 +81,19 @@ import { withOriginalError } from "../../../errors/original-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
 import { emitDocumentEvent } from "../../../events/domain-events";
 import { getEventBus } from "../../../events/event-bus";
+// A working draft as an after-hook compares against it (`markedDraft`): marked
+// as the draft it is diffed with is, so a repeat draft save does not report the
+// marker as changing. Shared with the in-transaction phase, which marks one the
+// same way.
+import {
+  type InTransactionCall,
+  inTransactionHandlersFor,
+  markedDraft,
+  replacedByUpdate,
+  runInTransactionPhaseFor,
+  writtenByUpdate,
+} from "../../../hooks/in-transaction-call";
+import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -415,8 +428,15 @@ import {
   collectionFields,
   collectionTableName,
   generateSlug,
+  normalizeSlugPath,
 } from "./collection-utils";
-import { entryWriteContext, holdStoredExpectation } from "./stored-field-read";
+import {
+  entryWriteContext,
+  fieldAccessPass,
+  holdStoredExpectation,
+  refuseUnlessWhole,
+  refuseUnstoredKeys,
+} from "./stored-field-read";
 import {
   prepareWriteMatch,
   writeMatchOf,
@@ -1683,16 +1703,6 @@ function changesFieldFilterNames(
 }
 
 /**
- * A working draft as an after-hook compares against it: marked as the draft it
- * is diffed with is, so a repeat draft save does not report the marker as
- * changing. A copy, since the stored snapshot (the activity record's
- * `previous`) carries no marker, as the new draft's does not.
- */
-function markedDraft(draft: Record<string, unknown>): Record<string, unknown> {
-  return { ...draft, _isWorkingDraft: true };
-}
-
-/**
  * The update's patch without the stamp the write adds to it: `updatedAt` is
  * set by the write, never sent, so a validator is not shown it as sent.
  */
@@ -2512,10 +2522,14 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
       /** The locale this create's translatable values were written in, if any. */
       localeTag?: string;
+      /** The in-transaction handlers this write took, which will be run. */
+      inTransactionHandlers: InTransactionHandlerSet;
     }
   ): Promise<{
     eventRecorded: boolean;
     revalidationIntent: RevalidationIntent | undefined;
+    /** The created document in read shape, as the outbox event carries it. */
+    document: Record<string, unknown>;
   }> {
     const entryId = args.entry.id as string;
 
@@ -2550,7 +2564,10 @@ export class CollectionMutationService extends BaseService {
       // A curated `webhooks.emit` consumes the assembled document too — its
       // allowlist may include a component/m2m field — so assemble relations
       // even when the raw entry.* recording is opted out for this collection.
-      getWebhookEmitSpec("collection", args.collectionName) !== undefined;
+      getWebhookEmitSpec("collection", args.collectionName) !== undefined ||
+      // An in-transaction handler is handed the whole document, as on the
+      // create that opens its own transaction.
+      args.inTransactionHandlers.length > 0;
     const { documentParts: createdParts, document: createdDocument } =
       await this.readTxDocumentParts(tx, {
         collectionName: args.collectionName,
@@ -2670,6 +2687,7 @@ export class CollectionMutationService extends BaseService {
 
     return {
       eventRecorded,
+      document: createdDocument,
       revalidationIntent: buildEntryRevalidationIntent(
         args.collectionName,
         readRevalidateConfig(args.collection),
@@ -3846,7 +3864,13 @@ export class CollectionMutationService extends BaseService {
 
     if (shouldHandleSlug && data.slug !== undefined) {
       if (typeof data.slug === "string" && data.slug.trim()) {
-        data.slug = generateSlug(data.slug);
+        // The collection's own slug rule: one segment, or a path where it
+        // stores paths, refused here when it cannot be one.
+        const name = (collection as { slug?: unknown }).slug;
+        data.slug =
+          typeof name === "string"
+            ? this.slugAsStored(name, data.slug, true)
+            : generateSlug(data.slug);
       } else {
         // If slug is empty/null, remove it from update to keep existing value
         delete data.slug;
@@ -6884,13 +6908,22 @@ export class CollectionMutationService extends BaseService {
    */
   private async applyGeneratedSlugAndTitle(
     finalData: Record<string, unknown>,
-    isSlugTaken: (slug: string) => Promise<boolean>
+    isSlugTaken: (slug: string) => Promise<boolean>,
+    collectionName: string
   ): Promise<void> {
     const provided =
       typeof finalData.slug === "string" && finalData.slug.trim() !== "";
     if (provided) {
       // Explicit slug: sanitize only, never dedupe — respect the caller's value.
-      const sanitized = generateSlug(finalData.slug as string);
+      // Not refused here: this runs before field write access, and a caller
+      // whose slug write is denied must not be told what was wrong with it.
+      // A path that cannot be stored is kept as given and refused by
+      // `reSanitizeSlug`, after access.
+      const sanitized = this.slugAsStored(
+        collectionName,
+        finalData.slug as string,
+        false
+      );
       // generateSlug strips everything outside [\w-], so an explicit slug of
       // only non-ASCII/punctuation (e.g. "你好") sanitizes to empty. Treat that
       // as unset and derive a valid, unique slug instead of persisting "".
@@ -6948,7 +6981,8 @@ export class CollectionMutationService extends BaseService {
    */
   private async reSanitizeSlug(
     finalData: Record<string, unknown>,
-    isSlugTaken: (slug: string) => Promise<boolean>
+    isSlugTaken: (slug: string) => Promise<boolean>,
+    collectionName: string
   ): Promise<void> {
     // Respect an ABSENT slug. Field-level write access deletes the key when it
     // denies the write, so `undefined` means "stripped by access" (or never
@@ -6964,11 +6998,38 @@ export class CollectionMutationService extends BaseService {
     // strings, so it would not catch it, and this mirrors the empty fallback in
     // applyGeneratedSlugAndTitle.
     const current = finalData.slug;
-    const sanitized = typeof current === "string" ? generateSlug(current) : "";
+    const sanitized =
+      typeof current === "string"
+        ? this.slugAsStored(collectionName, current, true)
+        : "";
     finalData.slug =
       sanitized !== ""
         ? sanitized
         : await this.deriveSlug(finalData, isSlugTaken);
+  }
+
+  /**
+   * `raw` as `collectionName` stores a slug: one segment, normalised by
+   * {@link generateSlug}, or, where the collection's `db.slugPaths` is on, a
+   * path of several, each normalised alike ({@link normalizeSlugPath}). A
+   * path that cannot be stored is refused as a validation error on `slug`
+   * when `refuse` is set, in words an author can act on, and is otherwise
+   * returned as given for a later pass to refuse.
+   */
+  private slugAsStored(
+    collectionName: string,
+    raw: string,
+    refuse: boolean
+  ): string {
+    if (collectionDbOptions(collectionName).slugPaths !== true) {
+      return generateSlug(raw);
+    }
+    const read = normalizeSlugPath(raw);
+    if ("slug" in read) return read.slug;
+    if (!refuse) return raw;
+    throw NextlyError.validation({
+      errors: [{ path: "slug", code: "INVALID_FORMAT", message: read.problem }],
+    });
   }
 
   /**
@@ -7233,7 +7294,11 @@ export class CollectionMutationService extends BaseService {
       // the shared connection (a plain, non-transactional create).
       const isSlugTaken = (slug: string) =>
         this.checkFieldUniqueness(params.collectionName, "slug", slug);
-      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+      await this.applyGeneratedSlugAndTitle(
+        finalData,
+        isSlugTaken,
+        params.collectionName
+      );
 
       // Field-level access: fields the caller may not create are stripped
       // silently (Payload parity); overrideAccess bypasses.
@@ -7260,7 +7325,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeValidate hook can set `slug` after generation ran; re-sanitize
       // so the validated and stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       {
         // i18n M5b: `required` on a localized field is enforced only for the default-locale write;
@@ -7313,7 +7378,7 @@ export class CollectionMutationService extends BaseService {
 
       // A beforeChange hook runs after validation and can also set `slug`;
       // re-sanitize once more so the stored value stays URL-safe.
-      await this.reSanitizeSlug(finalData, isSlugTaken);
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(finalData, fields);
@@ -7526,6 +7591,10 @@ export class CollectionMutationService extends BaseService {
         data: componentFieldData,
         locale: params.locale,
       });
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -7847,6 +7916,18 @@ export class CollectionMutationService extends BaseService {
             ]
           );
         }
+
+        // Last in the transaction: the entry, its field groups, version,
+        // history and outbox event are all written, so a handler sees them
+        // and what it writes commits or rolls back with them.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "create",
+          id: entry.id as string,
+          data: createdDocument,
+          user: params.user,
+          context: sharedContext,
+        });
       });
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -9261,8 +9342,17 @@ export class CollectionMutationService extends BaseService {
       // be stale (a concurrent writer may commit between it and the lock), so a
       // transition detected only under the lock still needs the committed row
       // for its event payload rather than falling back to the stale pre-read.
-      const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
-
+      // An in-transaction handler is handed the entry as this publish leaves
+      // it, so it needs that row too.
+      // The in-transaction handlers, asked once for this write: a retried
+      // attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      const needsFreshParent =
+        !!versionsConfig?.enabled ||
+        hasMainStatus ||
+        inTransactionHandlers.length > 0;
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await this.adapter.transaction(async tx => {
@@ -9519,6 +9609,25 @@ export class CollectionMutationService extends BaseService {
                 })
               : [];
         }
+
+        // What an in-transaction handler is handed as the entry before this
+        // publish: the default language's whole read-shape document (its
+        // components, relations and translated values), read before anything
+        // is written, and only when the write took a handler.
+        const phaseBefore =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
 
         // Where a promotion can rewrite a slug, the ones the entry was
         // reachable at until now: the main row's as locked, and each
@@ -10204,6 +10313,36 @@ export class CollectionMutationService extends BaseService {
             })),
           ]
         );
+
+        // Last in the transaction, as on an update: publishing or withdrawing
+        // every language is an update of the entry, and is retried as one.
+        // The handler is handed the default language's whole read-shape
+        // document as the publish left it, against the one read before
+        // anything was written; both read only when it took a handler. No
+        // hook context is shared on this path, so the handler's is empty.
+        const phaseAfter =
+          inTransactionHandlers.length > 0
+            ? (
+                await this.languageDocumentsOnTx(tx, {
+                  row: publishedParentRow ?? preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                  locales: [null],
+                })
+              ).get(null)
+            : undefined;
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: phaseAfter,
+          originalData: phaseBefore ?? null,
+          user: params.user,
+          context: {},
+        });
       }, versionConflictRetries());
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -13515,6 +13654,18 @@ export class CollectionMutationService extends BaseService {
       }
 
       const tableName = collectionTableName(collection, params.collectionName);
+      // A conditional write naming a key no update stores is refused here: its
+      // access has been judged, so a caller who may not update is refused
+      // alike whatever it names, and no hook has run.
+      refuseUnstoredKeys(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        { tableName, fields }
+      );
 
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,
@@ -13559,23 +13710,36 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      await this.keepDeniedFieldsAtStored({
-        data: finalData,
-        storedId: String(existingEntry.id),
-        collectionName: params.collectionName,
-        stored: await this.storedForCarryForward({
-          row: existingEntry as Record<string, unknown>,
-          fields,
-          tableName,
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          locale: params.locale,
-          overrideAccess: params.overrideAccess,
-        }),
-        tableName,
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
+      const storedForAccess = await this.storedForCarryForward({
+        row: existingEntry as Record<string, unknown>,
         fields,
-        params,
+        tableName,
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        overrideAccess: params.overrideAccess,
       });
+      await fieldAccessPass(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData,
+        () =>
+          this.keepDeniedFieldsAtStored({
+            data: finalData,
+            storedId: String(existingEntry.id),
+            collectionName: params.collectionName,
+            stored: storedForAccess,
+            tableName,
+            fields,
+            params,
+          })
+      );
 
       // Field-level beforeValidate hooks transform values ahead of the
       // validation gate (functions resolved via the field-level registry).
@@ -13636,6 +13800,17 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is shaped and written.
+      await refuseUnlessWhole(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData
+      );
 
       // A password the update leaves out of a container keeps its stored hash.
       const reach = await this.passwordReach(fields);
@@ -14147,6 +14322,11 @@ export class CollectionMutationService extends BaseService {
       // with the merged draft's. Never written in place, only rebound, so the
       // reference is the caller's split for every attempt.
       const baseLocalizedUpdate = localizedUpdate;
+      // The in-transaction handlers, asked once for this write: a
+      // retried attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         recorded = false;
         // Reset the payloads the promote fold rebinds, so a retried attempt
@@ -14955,6 +15135,11 @@ export class CollectionMutationService extends BaseService {
           )
         );
 
+        // What the in-transaction phase is handed: the document this attempt
+        // leaves, set below once the row is re-read. Undefined when the row
+        // is gone: then nothing was written, and the phase is not run.
+        let writtenDocument: Record<string, unknown> | undefined;
+
         // Capture a version snapshot of the post-update document atomically
         // with the write when the collection opts into versioning. The parent
         // is re-read fresh here (not the pre-transaction `existingEntry`) so a
@@ -15294,6 +15479,12 @@ export class CollectionMutationService extends BaseService {
             // draft edit records no public event: the live document did not
             // change.
             const updatedDocument = assembleDocument(documentParts);
+            // A held edit left the live row as it was, so what this write
+            // produced is the pending draft, marked as the hooks see it.
+            writtenDocument = writtenByUpdate(
+              updatedDocument,
+              workingDraftDocument
+            );
             if (!storeAsWorkingDraft) {
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
@@ -15612,6 +15803,22 @@ export class CollectionMutationService extends BaseService {
           // As asked: a wildcard write moved every language, and answers
           // for them all.
           locale: rawParams.locale,
+        });
+
+        // Last in the transaction, and so again on each retried attempt,
+        // which is why every handler's writes go through this `tx`: a
+        // discarded attempt's roll back with it.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "update",
+          id: params.entryId,
+          data: writtenDocument,
+          originalData: replacedByUpdate(
+            previousDocument,
+            priorWorkingDraftDocument
+          ),
+          user: params.user,
+          context: sharedContext,
         });
       }, versionConflictRetries());
       // The transaction committed (skipped if the retry ultimately threw), so
@@ -17622,6 +17829,10 @@ export class CollectionMutationService extends BaseService {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
         mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -17754,6 +17965,17 @@ export class CollectionMutationService extends BaseService {
           previous: null,
           fields: webhookFields,
           actor: actorForWrite(params.actor, params.user),
+        });
+
+        // Last in the transaction, with the removed document: a handler that
+        // throws keeps the entry, and what it writes goes with the delete.
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
+          collection: params.collectionName,
+          operation: "delete",
+          id: params.entryId,
+          data: deletedDocument,
+          user: params.user,
+          context: sharedContext,
         });
       });
       // Set only after the transaction resolves: `deletedRow` is true exactly
@@ -18104,7 +18326,11 @@ export class CollectionMutationService extends BaseService {
         );
         return existing != null;
       };
-      await this.applyGeneratedSlugAndTitle(finalData, isSlugTaken);
+      await this.applyGeneratedSlugAndTitle(
+        finalData,
+        isSlugTaken,
+        params.collectionName
+      );
 
       // Field-level write access: fields the caller may not create are
       // stripped (Payload parity); a system write (no user) or an
@@ -18140,7 +18366,11 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
-        await this.reSanitizeSlug(finalData, isSlugTaken);
+        await this.reSanitizeSlug(
+          finalData,
+          isSlugTaken,
+          params.collectionName
+        );
       }
 
       {
@@ -18182,10 +18412,12 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
-        // A beforeChange hook can also set `slug`, so re-sanitize before
-        // storage.
-        await this.reSanitizeSlug(finalData, isSlugTaken);
       }
+      // A beforeChange hook can also set `slug`, so re-sanitize before
+      // storage. Outside the hooks' gate: a write that skips hooks still
+      // stores only a slug its collection can hold, since an early pass
+      // leaves an unstorable slug path as given for this one to refuse.
+      await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(
@@ -18374,10 +18606,16 @@ export class CollectionMutationService extends BaseService {
         return entry;
       });
 
+      // The in-transaction handlers, asked once for this write: the same set
+      // decides how much of the document is assembled and which handlers run.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       // Junction rows, the version snapshot, the outbox event and the
       // revalidation intent, all on the caller's transaction.
       const createEffects = await this.recordCreateSideEffects(tx, {
         collectionName: params.collectionName,
+        inTransactionHandlers,
         tableName,
         entry: entry as Record<string, unknown>,
         collection,
@@ -18392,6 +18630,19 @@ export class CollectionMutationService extends BaseService {
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;
+
+      // Last of the write itself, on the caller's transaction, before the
+      // after-hooks this path runs inside it. Run whether or not hooks are:
+      // see `runInTransactionPhase`. A handler's failure is thrown, not
+      // softened, so the caller's transaction keeps nothing of this entry.
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "create",
+        id: (entry as { id: string }).id,
+        data: createEffects.document,
+        user: params.user,
+        context: sharedContext,
+      });
 
       // Execute afterCreate hooks (unless skipped)
       if (options.runHooks) {
@@ -18511,6 +18762,38 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * The in-transaction handlers a write runs, asked of the registry once per
+   * write. The write keeps the set and uses it both to decide how much of the
+   * document to assemble and to run the phase, so a handler registered in
+   * between waits for the next write instead of being handed a document
+   * assembled for none.
+   */
+  private inTransactionHandlersFor(
+    collection: string
+  ): InTransactionHandlerSet {
+    return inTransactionHandlersFor(this.hookService.hookRegistry, collection);
+  }
+
+  /**
+   * The in-transaction phase for one write, run last on the write's own
+   * transaction (see `hooks/in-transaction-phase`), with the handlers the
+   * write took ({@link inTransactionHandlersFor}).
+   *
+   * A write no handler was registered for loads nothing and does exactly
+   * what it did before the phase existed. It runs whether or not the write
+   * runs its hooks: what a handler writes keeps a plugin's rows in step with
+   * the entry, as the version and the outbox event do, and those are recorded
+   * under `skipHooks` too.
+   */
+  private runInTransactionPhase(
+    tx: TransactionContext,
+    handlers: InTransactionHandlerSet,
+    call: InTransactionCall
+  ): Promise<void> {
+    return runInTransactionPhaseFor(handlers, tx, call);
   }
 
   /**
@@ -18926,6 +19209,22 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           user: params.user,
         });
+      }
+
+      // A collection storing slug paths has its slug held to them here too,
+      // after every hook that may set it: a transactional update must not
+      // store an address (`../admin`) its plain update would refuse. Other
+      // collections keep this path as it was.
+      if (
+        collectionDbOptions(params.collectionName).slugPaths === true &&
+        typeof finalData.slug === "string" &&
+        finalData.slug.trim() !== ""
+      ) {
+        finalData.slug = this.slugAsStored(
+          params.collectionName,
+          finalData.slug,
+          true
+        );
       }
 
       // Read AFTER every hook that may decide it: a `beforeChange` hook can
@@ -19484,9 +19783,17 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         actorForWrite(params.actor, params.user)
       );
+      // An in-transaction handler is handed the whole document and the one
+      // before it, as on the update that opens its own transaction. Asked
+      // once: the same set decides the assembly here and runs below.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      const handsInTransaction = inTransactionHandlers.length > 0;
       const needsRelations =
         !!versionsConfig?.enabled ||
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
       // The `previous` document is carried by the outbox event and by the
       // trail's changed-field names, never by the version snapshot: a
@@ -19494,6 +19801,7 @@ export class CollectionMutationService extends BaseService {
       // paying a second full relational walk whose result is discarded.
       const previousNeedsRelations =
         recordsActivity ||
+        handsInTransaction ||
         !isRecordingDisabledByConfig("collection", params.collectionName);
 
       // Assemble the `previous` document BEFORE the junction rows are rewritten,
@@ -19865,6 +20173,21 @@ export class CollectionMutationService extends BaseService {
       if (workingDraftDocument) {
         written._isWorkingDraft = true;
       }
+
+      // Last of the write itself, on the caller's transaction, handed the
+      // documents the outbox event carries; see the create path.
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "update",
+        id: entryId,
+        data: writtenByUpdate(updatedDocument, workingDraftDocument),
+        originalData: replacedByUpdate(
+          previousDocument,
+          priorWorkingDraftDocument
+        ),
+        user: params.user,
+        context: sharedContext,
+      });
 
       // Execute afterUpdate hooks (unless skipped)
       if (options.runHooks) {
@@ -20384,6 +20707,20 @@ export class CollectionMutationService extends BaseService {
         ),
         actor: actorForWrite(params.actor, params.user),
       });
+      // Last of the write itself, still inside the window whose failure is
+      // thrown: a handler that refuses the delete keeps the entry.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
+        collection: params.collectionName,
+        operation: "delete",
+        id: entryId,
+        data: deletedDocument,
+        user: params.user,
+        context: sharedContext,
+      });
+
       // The event is recorded, so the delete + event are now consistent; a later
       // failure no longer needs to force a rollback.
       deleteNeedsRollback = false;

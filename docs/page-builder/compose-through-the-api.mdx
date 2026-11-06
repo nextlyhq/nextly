@@ -114,7 +114,7 @@ drafts saves an edit straight onto the published entry, so there the caller need
 | `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
 | `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
 | `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
-| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`. See below.                   |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`. See below.       |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -132,10 +132,13 @@ outer list's item; `filters` is a list of `{ "field", "op", "value" }` rows an e
 all meet, `op` one of `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
 `less_than`, `less_than_equal`, `contains`, `in`, `not_in` and `exists`, and a day written
 `"2026-09-01"`; `sort` is comma-separated keys, `-` for descending (`"-publishedAt,title"`);
-`limit` is 1 to 100 and `offset` 0 or more. The write is judged as the editor's save is: a
-field the collection lacks or visitors can't see, a filter on a field holding several values
-and a related list nested more than one level deep are refused, in the words the editor
-shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+`limit` is 1 to 100 and `offset` 0 or more; `paginate: true` splits the list into pages,
+each at its own address (`/news/page/2`), and `null` turns that off. The write is judged as
+the editor's save is: a field the collection lacks or visitors can't see, a filter on a
+field holding several values, a related list nested more than one level deep, and a split
+into pages the page cannot serve (a second list split into pages, one inside another list,
+one of related entries, one in a component or a Layout region) are refused, in the words the
+editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
 
 ## Change a component's definition
 

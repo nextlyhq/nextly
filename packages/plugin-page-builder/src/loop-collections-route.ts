@@ -288,6 +288,8 @@ async function collectionItem(
         : [];
     }),
     declared: [...(fields?.declared ?? [])],
+    // Every key the engine reads to judge a list, so the inspector's
+    // judgement of a time of day or a plugin's type is the save's.
     readable: (fields?.readable ?? []).map(shape => ({
       name: shape.name,
       type: shape.type,
@@ -295,6 +297,8 @@ async function collectionItem(
       ...(shape.relationTo === undefined
         ? {}
         : { relationTo: shape.relationTo }),
+      ...(shape.timeOnly === true ? { timeOnly: true as const } : {}),
+      ...(shape.storage === undefined ? {} : { storage: shape.storage }),
     })),
   };
 }

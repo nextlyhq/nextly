@@ -37,6 +37,7 @@ import { undoMessage, undoReport } from "./breakpoint-removal/undo-report";
 import type { RewriteReport } from "./host-rewrite/contract";
 import { runStarterOf } from "./host-rewrite/service";
 import {
+  SITE_BREAKPOINT_UNDO_DOES_NOT_FIT,
   SITE_BREAKPOINT_UNDO_ROUTE_PATH,
   type SiteBreakpointRemovalRequest,
   type SiteBreakpointsSaved,
@@ -45,6 +46,7 @@ import {
   currentStyle,
   isStaleVersion,
   MANAGE_SITE_PERMISSION,
+  namedUndo,
   NOT_WALKED,
   refuseReadding,
   removalAnswer,
@@ -109,6 +111,20 @@ function cannotPutBack(message: string, reason: string): NextlyError {
   });
 }
 
+/**
+ * An undo refused because its breakpoints no longer fit the set as it is,
+ * under its own code, so Settings offers editing the breakpoints as the way
+ * on (`SITE_BREAKPOINT_UNDO_DOES_NOT_FIT`).
+ */
+function doesNotFit(message: string, reason: string): NextlyError {
+  return new NextlyError({
+    code: SITE_BREAKPOINT_UNDO_DOES_NOT_FIT,
+    statusCode: 409,
+    publicMessage: message,
+    logContext: { reason: `breakpoint-undo-${reason}` },
+  });
+}
+
 /** Where a width is on its axis: an unbounded definition is the widest. */
 function widthOf(def: BreakpointDef): number {
   return def.maxWidth ?? Number.POSITIVE_INFINITY;
@@ -139,20 +155,20 @@ function refusalToPutBack(
   defined: ReadonlySet<string>
 ): NextlyError | undefined {
   if (defined.has(def.id)) {
-    return cannotPutBack(
+    return doesNotFit(
       `“${def.label}” is one of the site's breakpoints again, so this removal can't be undone.`,
       "defined-again"
     );
   }
   const clash = axis.find(other => widthOf(other) === widthOf(def));
   if (clash !== undefined) {
-    return cannotPutBack(
+    return doesNotFit(
       `“${def.label}” would end at the same width as “${clash.label}”, so this removal can't be undone. Change or remove “${clash.label}” first.`,
       "same-width"
     );
   }
   if (axis.length >= MAX_BREAKPOINTS_PER_AXIS) {
-    return cannotPutBack(
+    return doesNotFit(
       `There's no room to put “${def.label}” back: the site already has ${MAX_BREAKPOINTS_PER_AXIS} breakpoints of that kind. Remove one first.`,
       "axis-full"
     );
@@ -290,10 +306,10 @@ async function writeUndo(
       }
       throw error;
     }
-    if (landed === undefined) {
-      await service.publish(undo.id).catch(() => undefined);
-      throw error;
-    }
+    // Unknown: the undo stays preparing, and the request fails. Recovery
+    // publishes it once the site's breakpoints read as the set it recorded,
+    // and drops it otherwise (`service`): never walked unverified.
+    if (landed === undefined) throw error;
     removal.cascade.logError?.(
       "[page-builder] a breakpoint undo's write threw after its set was " +
         "stored; the undo goes on.",
@@ -327,16 +343,15 @@ async function undoRemoval(
   }
   const plan = await planUndo(removal, ctx, service, undone);
   const undo = await service.undo(runId, runStarterOf(ctx), plan.breakpoints);
-  try {
-    // Before the set is stored, as a re-add retires the claims on what it
-    // defines again (`retireReadded`): the removal gives up its ids.
-    await service.retire([...plan.ids]);
-  } catch (error) {
-    await service.abandon(undo.id);
-    throw error;
-  }
   await writeUndo({ ctx, nextly, removal, service, undo }, plan);
+  // Stored: published at once, which marks it landed, so nothing after can
+  // take it for an undo whose write never landed. Then the removal gives up
+  // its claims on the ids the site defines again, as a re-add does: only
+  // now, so an undo whose write is refused leaves the removal holding what it
+  // still protects (its ids defined meanwhile, it strips nothing under them).
+  // The undo's walk gives them up too, so a failure here is made good there.
   await service.publish(undo.id);
+  await service.retire([...plan.ids]);
   await ctx.audit?.write({
     kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
     actorUserId: ctx.user?.id ?? null,
@@ -363,8 +378,12 @@ async function undoRemoval(
     );
     report = NOT_WALKED;
   }
-  const answered = (await undoReport(service, undo, report.finished, () =>
-    sharedStylesNow(removal, ctx)
+  const answered = (await namedUndo(
+    removal,
+    ctx,
+    await undoReport(service, undo, report.finished, () =>
+      sharedStylesNow(removal, ctx)
+    )
   )) ?? { undoes: runId };
   return removalAnswer(
     undoMessage(answered),

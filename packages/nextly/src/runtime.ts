@@ -146,6 +146,15 @@ export type {
   PublicSourceReader,
 } from "./runtime/routing/public-reader";
 
+// The reader a page builder's canvas reads the same lists with: the same
+// queries, read as the person editing, drafts included. `@experimental` with
+// the public reader.
+export {
+  createEditorReader,
+  toEditorFind,
+} from "./runtime/routing/editor-reader";
+export type { EditorReaderPerson } from "./runtime/routing/editor-reader";
+
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
 // to them expires `nextlySiteSettingsTags()`), and the field shapes a binding
@@ -170,6 +179,10 @@ export {
   createSingleRoute,
   createPublicSingleRoute,
   slugToStaticParam,
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
+  slugToPath,
   nextlySitemap,
   nextlyRobots,
   type ContentEntry,

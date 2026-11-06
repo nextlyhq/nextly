@@ -397,8 +397,9 @@ function servicesFor(
     byLocale = new Map();
     servicesByPassages.set(passages, byLocale);
   }
-  // All three in the key, as JSON so no language, collection and author can
-  // collide.
+  // All three in the key, as JSON so no language, collection and person can
+  // collide: the list count below reads as the person signed in, and the
+  // recent icons are theirs.
   const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
   const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
@@ -416,7 +417,7 @@ function servicesFor(
       listLoopCollections: () => listLoopCollections(locale),
       // The selected list's "N entries match, so M show", taken from the
       // canvas's own read of the list in this language.
-      countListEntries: canvasListReadsIn(locale).count,
+      countListEntries: canvasListReadsIn(locale, userId).count,
       ...(entryCollection === undefined ? {} : { entryCollection }),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),
@@ -1106,7 +1107,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     reveal,
     readMedia,
     preview: componentView.preview,
-    entryCollection: listEntryCollectionOf(identity),
+    // The stored document's kind too: a component's lists relate to the
+    // entries of the pages placing it, as its save judges them.
+    entryCollection: listEntryCollectionOf(identity, mount.initialDocument),
   };
   useOpenAtSection({
     sectionId: openAt,

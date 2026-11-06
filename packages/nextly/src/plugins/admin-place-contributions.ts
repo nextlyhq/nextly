@@ -30,6 +30,7 @@ import { orderContributions, type OrderedEntry } from "./contribution-order";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
+import { routePathIsLiteral } from "./routes/route-pattern";
 import type { PluginRoute } from "./routes/route-types";
 import { rowPredicateProblems } from "./row-predicate";
 
@@ -78,7 +79,11 @@ const COLLECTION_PLACES = new Set(["collection.list", "collection.edit"]);
 /** Kinds that act on rows, whose rule judges each row. */
 const ROW_KINDS = new Set<AdminContributionKind>(["rowAction", "bulkAction"]);
 
-const ROUTE_METHODS = new Set(["GET", "POST", "PATCH", "PUT", "DELETE"]);
+/**
+ * The methods an action's route may answer: a write's, since an action acts
+ * on rows, and a write is what the admin sends with its CSRF token.
+ */
+const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
 /** A field's name, or a dotted path into a group. */
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -131,14 +136,24 @@ function runProblem(
   ) {
     return "its `action.run` is not a route's `method`, `path` and optional `mount`";
   }
+  // A path with `:name` parts has nothing to fill them from: the request
+  // names its rows in its body, not in its address.
+  if (!routePathIsLiteral(run.path)) {
+    return `its \`action.run\` names ${run.method} ${run.path}, a route whose path takes parameters an action cannot fill`;
+  }
   const route = runRoute(plugin, run as AdminContributionRun);
   if (route === undefined) {
     return `its \`action.run\` names ${run.method} ${run.path} (${run.mount ?? "plugin"} mount), which is not one of this plugin's routes`;
   }
   // A route for a plugin's own kind of signed-in person reads no staff
-  // session, so an admin could never run it.
-  return route.principal !== undefined
-    ? `its \`action.run\` names ${run.method} ${run.path}, a route for a signed-in person rather than staff`
+  // session, so an admin could never run it; a public route authenticates
+  // nobody, so an action's permission and its rule on each row, judged as
+  // the caller, would have no caller to judge.
+  if (route.principal !== undefined) {
+    return `its \`action.run\` names ${run.method} ${run.path}, a route for a signed-in person rather than staff`;
+  }
+  return route.public === true
+    ? `its \`action.run\` names ${run.method} ${run.path}, a public route, which has no signed-in caller to judge the action for`
     : undefined;
 }
 

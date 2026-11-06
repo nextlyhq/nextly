@@ -18,6 +18,7 @@ const identity = vi.fn<() => unknown>(() => null);
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
   useDocumentIdentity: () => identity(),
+  useCurrentUserId: () => "u1",
   writePluginRoute: vi.fn(),
 }));
 
@@ -35,6 +36,17 @@ describe("the collection a document's lists read the entry of", () => {
     // inspector says as the save refuses it.
     expect(listEntryCollectionOf({ kind: "single", slug: "home" })).toBeNull();
     expect(listEntryCollectionOf(null)).toBeUndefined();
+  });
+
+  it("is not known for a component, whatever entry stores it, as its save judges it", () => {
+    // A component is drawn on the pages placing it, which are the entries.
+    const component = { formatVersion: 1, kind: "component", nodes: [] };
+    const store = { kind: "collection", slug: "nx_pb_components" };
+    expect(listEntryCollectionOf(store, component)).toBeUndefined();
+    // CONTROL: a page stored there is that collection's entry.
+    expect(listEntryCollectionOf(store, { ...component, kind: "page" })).toBe(
+      "nx_pb_components"
+    );
   });
 });
 
@@ -126,7 +138,7 @@ describe("the canvas's page context", () => {
   it("reads its lists in the language being edited, through the reads its count shares", () => {
     const { result } = renderHook(() => useCanvasPageContext(undefined, "fr"));
     expect(result.current.locale).toBe("fr");
-    expect(result.current.data).toBe(canvasListReadsIn("fr").data);
+    expect(result.current.data).toBe(canvasListReadsIn("fr", "u1").data);
   });
 
   it("bounds each draw's reads, with a fresh allowance for the next draw", () => {
