@@ -120,6 +120,31 @@ export function AddDocumentsDialog({
   );
 }
 
+/**
+ * The documents picked so far, by key, and the two ways the set changes: one
+ * document picked or unpicked, and dropping every pick a predicate refuses.
+ */
+function usePickedDocuments() {
+  const [picked, setPicked] = useState<Map<string, PickerDocument>>(
+    () => new Map()
+  );
+  const toggle = (document: PickerDocument, on: boolean) => {
+    setPicked(current => {
+      const next = new Map(current);
+      if (on) next.set(documentKey(document), document);
+      else next.delete(documentKey(document));
+      return next;
+    });
+  };
+  const dropRefused = (refused: (document: PickerDocument) => boolean) => {
+    setPicked(
+      current =>
+        new Map([...current].filter(([, document]) => !refused(document)))
+    );
+  };
+  return { picked, toggle, dropRefused };
+}
+
 /** The first screen: the documents, the action, and the one add. */
 function DocumentPicker({
   release,
@@ -140,9 +165,7 @@ function DocumentPicker({
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<string | null>(null);
   const [pendingOnly, setPendingOnly] = useState(false);
-  const [picked, setPicked] = useState<Map<string, PickerDocument>>(
-    () => new Map()
-  );
+  const { picked, toggle, dropRefused } = usePickedDocuments();
   const sources = useAddDocumentsSources(
     { search, scope, pendingOnly },
     enabled
@@ -162,20 +185,7 @@ function DocumentPicker({
   const changeAction = (next: ReleaseMemberAction) => {
     setAction(next);
     // A document the new action may not take is no longer picked.
-    setPicked(
-      current =>
-        new Map(
-          [...current].filter(([, document]) => !refusalOf(document, next))
-        )
-    );
-  };
-  const toggle = (document: PickerDocument, on: boolean) => {
-    setPicked(current => {
-      const next = new Map(current);
-      if (on) next.set(documentKey(document), document);
-      else next.delete(documentKey(document));
-      return next;
-    });
+    dropRefused(document => Boolean(refusalOf(document, next)));
   };
 
   const submit = () => {
@@ -221,6 +231,58 @@ function DocumentPicker({
         heldSubject="any of these documents"
       />
 
+      <PickerFilters
+        ids={ids}
+        search={search}
+        onSearch={setSearch}
+        scope={scope}
+        onScope={setScope}
+        scopes={sources.scopes}
+        pendingOnly={pendingOnly}
+        onPendingOnly={setPendingOnly}
+      />
+
+      <PickerList
+        label={`${ids}-list`}
+        sources={sources}
+        picked={picked}
+        refusalOf={refusalOf}
+        onToggle={toggle}
+      />
+
+      {add.isError ? <AddFailure error={add.error} /> : null}
+
+      <PickerFooter
+        count={picked.size}
+        adding={add.isPending}
+        onCancel={onCancel}
+      />
+    </form>
+  );
+}
+
+/** The search, the collection filter and Has unpublished changes. */
+function PickerFilters({
+  ids,
+  search,
+  onSearch,
+  scope,
+  onScope,
+  scopes,
+  pendingOnly,
+  onPendingOnly,
+}: {
+  ids: string;
+  search: string;
+  onSearch: (search: string) => void;
+  scope: string | null;
+  onScope: (scope: string | null) => void;
+  scopes: ReturnType<typeof useAddDocumentsSources>["scopes"];
+  pendingOnly: boolean;
+  onPendingOnly: (pendingOnly: boolean) => void;
+}) {
+  return (
+    <>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex flex-1 flex-col gap-1.5">
           <Label htmlFor={`${ids}-search`}>Find a document</Label>
@@ -228,14 +290,14 @@ function DocumentPicker({
             id={`${ids}-search`}
             type="search"
             value={search}
-            onChange={event => setSearch(event.target.value)}
+            onChange={event => onSearch(event.target.value)}
           />
         </div>
         <div className="flex flex-col gap-1.5 sm:w-56">
           <Label htmlFor={`${ids}-scope`}>Collection</Label>
           <Select
             value={scope ?? EVERY_SCOPE}
-            onValueChange={next => setScope(next === EVERY_SCOPE ? null : next)}
+            onValueChange={next => onScope(next === EVERY_SCOPE ? null : next)}
           >
             <SelectTrigger id={`${ids}-scope`}>
               <SelectValue />
@@ -244,7 +306,7 @@ function DocumentPicker({
               <SelectItem value={EVERY_SCOPE}>
                 All collections and Singles
               </SelectItem>
-              {sources.scopes.map(each => (
+              {scopes.map(each => (
                 <SelectItem key={each.slug} value={each.slug}>
                   {each.label}
                 </SelectItem>
@@ -257,52 +319,62 @@ function DocumentPicker({
         <Switch
           id={`${ids}-pending`}
           checked={pendingOnly}
-          onCheckedChange={setPendingOnly}
+          onCheckedChange={onPendingOnly}
         />
         <Label htmlFor={`${ids}-pending`} className="font-normal">
           Has unpublished changes
         </Label>
       </div>
+    </>
+  );
+}
 
-      <PickerList
-        label={`${ids}-list`}
-        sources={sources}
-        picked={picked}
-        refusalOf={refusalOf}
-        onToggle={toggle}
-      />
+/**
+ * Why the add failed: a refusal the server gave, with nothing added, or no
+ * answer at all, when whether anything was added is not known.
+ */
+function AddFailure({ error }: { error: unknown }) {
+  return (
+    <p role="alert" className="text-sm text-destructive">
+      {isDefiniteRefusal(error)
+        ? `${releaseErrorMessage(error, "The documents could not be added.")} Nothing was added.`
+        : "No answer came back. Check the release's documents before trying again."}
+    </p>
+  );
+}
 
-      {add.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {isDefiniteRefusal(add.error)
-            ? `${releaseErrorMessage(add.error, "The documents could not be added.")} Nothing was added.`
-            : "No answer came back. Check the release's documents before trying again."}
-        </p>
-      ) : null}
-
-      <DialogFooter className="items-center sm:justify-between">
-        <p role="status" className="text-sm text-muted-foreground">
-          {picked.size === 0 ? "None picked" : `${picked.size} picked`}
-        </p>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={add.isPending}
-            onClick={onCancel}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" disabled={picked.size === 0 || add.isPending}>
-            {add.isPending
-              ? "Adding…"
-              : picked.size === 0
-                ? "Add documents"
-                : `Add ${documentsCount(picked.size)}`}
-          </Button>
-        </div>
-      </DialogFooter>
-    </form>
+/** How many are picked, Cancel, and the add, named by how many it adds. */
+function PickerFooter({
+  count,
+  adding,
+  onCancel,
+}: {
+  count: number;
+  adding: boolean;
+  onCancel: () => void;
+}) {
+  let addLabel = `Add ${documentsCount(count)}`;
+  if (adding) addLabel = "Adding…";
+  else if (count === 0) addLabel = "Add documents";
+  return (
+    <DialogFooter className="items-center sm:justify-between">
+      <p role="status" className="text-sm text-muted-foreground">
+        {count === 0 ? "None picked" : `${count} picked`}
+      </p>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={adding}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+        <Button type="submit" disabled={count === 0 || adding}>
+          {addLabel}
+        </Button>
+      </div>
+    </DialogFooter>
   );
 }
 
