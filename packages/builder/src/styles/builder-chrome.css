@@ -3897,6 +3897,52 @@
 }
 
 /*
+ * A block whose visibility conditions decide who sees it. The canvas draws it
+ * for whoever the page would show it to, and this badge says it isn't shown
+ * to everyone: a pill outside the block's top right, below it when there's no
+ * room above, so it never covers what the block draws. Red when its
+ * conditions can't be checked, since visitors then never see it.
+ */
+.nx-canvas-mark[data-mark="conditioned"] {
+  outline: none;
+  box-shadow: none;
+}
+
+.nx-canvas-mark__condition {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+}
+
+.nx-canvas-mark__condition > svg {
+  flex: none;
+}
+
+.nx-canvas-mark[data-condition-tag="below"] > .nx-canvas-mark__condition {
+  top: calc(100% + 4px);
+  bottom: auto;
+}
+
+.nx-canvas-mark[data-condition="unchecked"] > .nx-canvas-mark__condition {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/*
  * A selected block locked in Layers, by its own lock or one around it: the
  * ring is dashed, so the canvas says it is held before anything is tried on
  * it.

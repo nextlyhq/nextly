@@ -62,6 +62,7 @@ import {
   DRAG_SOURCE_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
+  CONDITIONED_ATTRIBUTE,
   LOCKED_ATTRIBUTE,
   lockMarksOf,
   SELECTED_ATTRIBUTE,
@@ -1588,6 +1589,55 @@ describe("the drag in flight is drawn on the canvas", () => {
     const locked = container.querySelectorAll(`[${LOCKED_ATTRIBUTE}]`);
     expect(locked).toHaveLength(1);
     expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+  });
+
+  it("draws a conditioned block, marked, whoever the page would show it to", async () => {
+    // The published page leaves a block whose conditions fail out; the
+    // canvas draws it so the author can see and select it, and the mark
+    // says it isn't shown to everyone.
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "gated",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                visibility: { conditions: vip },
+              },
+              {
+                id: "broken",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                visibility: { conditions: vip },
+              },
+              { id: "plain", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        conditionsUnchecked={new Set(["broken"])}
+      />
+    );
+    await act(async () => undefined);
+
+    const markOf = (id: string) =>
+      container
+        .querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`)
+        ?.getAttribute(CONDITIONED_ATTRIBUTE);
+    expect(markOf("gated")).toBe("conditional");
+    expect(markOf("broken")).toBe("unchecked");
+    // CONTROL: drawn, and an ordinary block beside them is not marked.
+    expect(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="plain"]`)
+    ).not.toBeNull();
+    expect(markOf("plain")).toBeNull();
   });
 
   it("marks a locked placement's parts by its address, so their ring is the locked one", async () => {

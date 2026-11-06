@@ -307,6 +307,54 @@ describe("selection marks", () => {
     ).toEqual([true, false]);
   });
 
+  it("badges every conditioned block, selected or not, and red where its conditions can't be checked", async () => {
+    const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const { container } = render(
+      <Canvas
+        document={{
+          formatVersion: 1,
+          kind: "page",
+          nodes: [
+            {
+              id: "a",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+            {
+              id: "b",
+              type: "acme/leaf",
+              version: 1,
+              props: {},
+              visibility: { conditions: vip },
+            },
+            { id: "c", type: "acme/leaf", version: 1, props: {} },
+          ],
+        }}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        conditionsUnchecked={new Set(["b"])}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const badges = () =>
+      Array.from(
+        container.querySelectorAll('.nx-canvas-mark[data-mark="conditioned"]')
+      );
+    // Two badges, none for the plain block, and nothing selected: the badge
+    // is always on, unlike the selection ring.
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(halosIn(container)).toHaveLength(0);
+    expect(badges().map(badge => badge.getAttribute("data-condition"))).toEqual(
+      ["conditional", "unchecked"]
+    );
+    expect(badges().map(badge => badge.textContent)).toEqual([
+      "Conditional",
+      "Can’t be checked",
+    ]);
+  });
+
   it("draws a dashed reach mark on each block a look edit reaches, and clears it", async () => {
     const { container } = render(
       <Canvas
