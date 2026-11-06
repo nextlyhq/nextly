@@ -15,9 +15,10 @@
  *    not signed in: a draft entry never, and the sort and the limit hold.
  *
  * Under Number of items the selected list says how many entries match and
- * how many show, from one count read per query, made only once the list is
- * selected and never on the published page. A second case presses a
- * fallen-back sort's "Choose a field" from the keyboard.
+ * how many show, taken from the canvas's own read of the list: the editor
+ * makes no read of its own for it, and the published page shows none. A
+ * second case presses a fallen-back sort's "Choose a field" from the
+ * keyboard.
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -94,20 +95,22 @@ async function storedList(
   return (list?.props ?? {}) as Record<string, unknown>;
 }
 
-/** The count reads the editor makes: one row of ids, the total the answer. */
-function countReads(page: Page): unknown[] {
-  const reads: unknown[] = [];
+/** Every read the editor makes through the list entries route, in order. */
+function listReads(page: Page): Record<string, unknown>[] {
+  const reads: Record<string, unknown>[] = [];
   page.on("request", request => {
     if (!request.url().includes("/list-entries")) return;
     const body = request.postDataJSON() as {
-      query?: { select?: unknown; limit?: unknown };
+      query?: Record<string, unknown>;
     } | null;
-    const query = body?.query;
-    if (query?.limit === 1 && JSON.stringify(query.select) === '["id"]') {
-      reads.push(query);
-    }
+    if (body?.query !== undefined) reads.push(body.query);
   });
   return reads;
+}
+
+/** A read made only to count: one row of ids, which the canvas never makes. */
+function countOnly(query: Record<string, unknown>): boolean {
+  return query.limit === 1 && JSON.stringify(query.select) === '["id"]';
 }
 
 /** The entries' titles the canvas draws, in order. */
@@ -142,16 +145,14 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
     content: pageDocument(),
   });
 
-  const counts = countReads(page);
+  const reads = listReads(page);
   await gotoAdmin(page, `/collections/pages/${pageId}/builder?field=content`);
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
-  // Drawn but not selected, the list is counted by no one.
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
     .not.toEqual([]);
-  expect(counts).toEqual([]);
   await openLayers(page);
   await layerRow(page, LIST).click();
   const inspector = page.locator(".nx-inspector");
@@ -204,14 +205,14 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await expect(
     inspector.getByText("3 entries match, so 2 show.", { exact: true })
   ).toBeVisible();
-  // One count read per query: the list unfiltered, then filtered. The sort
-  // and the number of items changed no count.
-  expect(counts).toHaveLength(2);
-  expect(counts[1]).toEqual({
+  // The count is the total of the canvas's own read of the list, so the
+  // editor reads nothing to count: every read is the list's.
+  expect(reads.filter(countOnly)).toEqual([]);
+  expect(reads).toContainEqual({
     collection: "bound-entries",
+    limit: 2,
     filters: [{ field: "title", op: "contains", value: mark }],
-    limit: 1,
-    select: ["id"],
+    sort: "-price",
   });
 
   // 3. The empty state, on request, tagged, and the entries again after.
