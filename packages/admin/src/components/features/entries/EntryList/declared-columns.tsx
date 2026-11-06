@@ -44,46 +44,44 @@ export function declaredColumns(
   collection: CollectionForColumns,
   context: DeclaredColumnCellProps["context"]
 ): NextlyColumn<Record<string, unknown>>[] {
-  return delivered.flatMap(
-    (item): NextlyColumn<Record<string, unknown>>[] => {
-      if ("builtIn" in item || item.kind !== "column") return [];
-      const name = `declared:${item.id}`;
-      if (item.field !== undefined) {
-        const field = findFieldByName(collection.fields, item.field);
-        if (!field?.name) return [];
-        const fieldName = field.name;
-        return [
-          {
-            name,
-            header: item.label,
-            sortable: false,
-            accessor: row => row[fieldName],
-            cell: ({ row }) => (
-              <EntryTableCell
-                field={field}
-                value={row[fieldName]}
-                entry={row}
-                collectionSlug={collection.slug}
-              />
-            ),
-          },
-        ];
-      }
-      const component = item.component;
+  return delivered.flatMap((item): NextlyColumn<Record<string, unknown>>[] => {
+    if ("builtIn" in item || item.kind !== "column") return [];
+    const name = `declared:${item.id}`;
+    if (item.field !== undefined) {
+      const field = findFieldByName(collection.fields, item.field);
+      if (!field?.name) return [];
+      const fieldName = field.name;
       return [
         {
           name,
           header: item.label,
           sortable: false,
+          accessor: row => row[fieldName],
           cell: ({ row }) => (
-            <PluginSlot<DeclaredColumnCellProps>
-              path={component}
-              props={{ context, row }}
-              fallback={<PlaceContributionFallback />}
+            <EntryTableCell
+              field={field}
+              value={row[fieldName]}
+              entry={row}
+              collectionSlug={collection.slug}
             />
           ),
         },
       ];
     }
-  );
+    const component = item.component;
+    return [
+      {
+        name,
+        header: item.label,
+        sortable: false,
+        cell: ({ row }) => (
+          <PluginSlot<DeclaredColumnCellProps>
+            path={component}
+            props={{ context, row }}
+            fallback={<PlaceContributionFallback />}
+          />
+        ),
+      },
+    ];
+  });
 }

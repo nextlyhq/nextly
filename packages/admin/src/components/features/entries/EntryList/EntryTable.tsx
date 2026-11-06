@@ -304,13 +304,12 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const columns = useMemo(
-    () =>
-      [
-        ...buildEntryColumns(collection, columnsControl?.isColumnVisible, {
-          openInLocale: (entryId, locale) => onEdit(entryId, locale),
-        }),
-        ...(declaredColumns ?? []),
-      ],
+    () => [
+      ...buildEntryColumns(collection, columnsControl?.isColumnVisible, {
+        openInLocale: (entryId, locale) => onEdit(entryId, locale),
+      }),
+      ...(declaredColumns ?? []),
+    ],
     [collection, columnsControl, onEdit, declaredColumns]
   );
 
