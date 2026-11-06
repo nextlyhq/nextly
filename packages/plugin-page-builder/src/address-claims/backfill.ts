@@ -109,7 +109,14 @@ async function claimPage(
     }
   }
   // Held by another document: wait for each address rather than refuse,
-  // and claim no space, which a later save of the page settles.
+  // and claim no space, which a later save of the page settles (refused,
+  // naming the page in its way, which tells its author).
+  if (wanted.spaces.length > 0) {
+    deps.warn(
+      "A page's list could not hold its later pages: another page is published among them. Its next save is refused, naming that page.",
+      { page: id }
+    );
+  }
   try {
     await deps.withTransaction(async tx => {
       for (const address of wanted.addresses) {
