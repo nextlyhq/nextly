@@ -11,6 +11,7 @@
  *
  * @module components/features/entries/EntryList/plugin-filters
  */
+import { setSearchParams } from "@admin/lib/navigation";
 import type { SearchParams } from "@admin/lib/search-params";
 import type { PluginMetadata } from "@admin/types/branding";
 
@@ -97,19 +98,15 @@ function pluginFilterParams(
 }
 
 /**
- * Keep `chosen` in the page's URL, replacing the history entry so the back
- * button leaves the list rather than stepping through each choice. Every other
- * parameter is kept as it is.
+ * Keep `chosen` in the page's URL, as the list keeps its other state there:
+ * each choice is a history entry, so the back button returns to the choice
+ * before it. Every other parameter is kept as it is.
  */
 export function writePluginFilterParams(
   offered: readonly OfferedListFilter[],
   chosen: ReadonlyMap<string, string>
 ): void {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  url.searchParams.delete(PLUGIN_FILTER_PARAM);
-  for (const value of pluginFilterParams(offered, chosen)) {
-    url.searchParams.append(PLUGIN_FILTER_PARAM, value);
-  }
-  window.history.replaceState(window.history.state, "", url.toString());
+  setSearchParams({
+    [PLUGIN_FILTER_PARAM]: pluginFilterParams(offered, chosen),
+  });
 }

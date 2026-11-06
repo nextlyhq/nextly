@@ -247,7 +247,8 @@ export default defineConfig({
     blockFixturePlugin,
     // Always on: the plugin contributions a page offers (today one entry-list
     // filter on Posts) appear only in its menus until someone chooses them,
-    // and the screenshots and browser tests of them need them in every build.
+    // and their screenshots, and the browser tests to come, need them in every
+    // build.
     // Named as a fixture, and inert: no tables, routes, jobs or hooks.
     contributionsFixturePlugin,
     // The SEO plugin as it ships, for the browser test of its dashboard card

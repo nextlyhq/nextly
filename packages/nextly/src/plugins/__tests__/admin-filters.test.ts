@@ -115,7 +115,8 @@ describe("the filters plugins declare for the entry list", () => {
       )
     ).toMatchObject({
       reason: "list-filter-duplicate",
-      logContext: { filter: "acme-support.state" },
+      logMessage: expect.stringContaining('"acme-support.state" twice'),
+      logContext: { plugin: "@acme/support", filter: "acme-support.state" },
     });
   });
 
@@ -128,6 +129,10 @@ describe("the filters plugins declare for the entry list", () => {
     [
       "an option value a URL can't carry",
       { ...OPEN, options: [{ ...OPEN.options[0], value: "Open now" }] },
+    ],
+    [
+      "an option value with a dot",
+      { ...OPEN, options: [{ ...OPEN.options[0], value: "open.now" }] },
     ],
     [
       "two options with one value",
@@ -211,6 +216,18 @@ describe("the filters plugins declare for the entry list", () => {
         collections: OPEN.collections,
         options: OPEN.options,
       },
+    ]);
+    // A collection the host renamed is named as the admin serves it.
+    const [renamed] = buildPluginAdminMeta(
+      [
+        plugin("@acme/support", [OPEN], {
+          renameMap: { tickets: "helpdesk-tickets" },
+        }),
+      ],
+      undefined
+    );
+    expect(renamed?.listFilters?.[0]?.collections).toEqual([
+      "helpdesk-tickets",
     ]);
     const [disabled] = buildPluginAdminMeta(
       [plugin("@acme/support", [OPEN], { enabled: false })],

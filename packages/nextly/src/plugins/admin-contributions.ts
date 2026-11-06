@@ -301,7 +301,7 @@ export interface PluginAdminContributions {
    * adds its `where` to the list's request, so a filter narrows the list and
    * never widens it; the choice is kept in the page's URL. The app refuses to
    * start on one outside this plugin's namespace, declared twice, or with an
-   * option it cannot apply.
+   * malformed option.
    */
   filters?: PluginListFilterDeclaration[];
   /** Custom admin pages, namespaced + RBAC-gated. */

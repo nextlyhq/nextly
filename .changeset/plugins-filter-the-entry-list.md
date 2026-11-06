@@ -33,5 +33,5 @@ Plugins can add filters to the entry list's toolbar (experimental).
 
 - A plugin declares them in `contributes.admin.filters`. Each filter has options, and each option has a value, a label and a `where`.
 - Choosing an option adds its `where` to the list's request, which the server answers with the reader's access, so a filter only narrows the list. The choice is kept in the page's URL (`?pf=<filter>:<value>`), and one naming an undeclared filter or option is ignored.
-- The app refuses to start, naming the plugin and the filter, when a filter's name is outside the plugin's namespace, a filter is declared twice, or a filter has an option the list cannot apply.
+- The app refuses to start, naming the plugin and the filter, when a filter's name is outside the plugin's namespace, a filter is declared twice, or a filter has a malformed option.
 - Filters reach only signed-in admins, through the workspace meta.

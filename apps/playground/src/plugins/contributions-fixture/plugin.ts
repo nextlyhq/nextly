@@ -1,8 +1,8 @@
 /**
  * A fixture plugin that exists to exercise plugin contributions in the
- * playground: the admin's handling of them, its screenshots and its browser
- * tests. Each contribution kind adds what it needs here rather than a fixture
- * of its own.
+ * playground: the admin's handling of them, and its screenshots. The browser
+ * tests of contributions, and each contribution kind as it is added, use this
+ * fixture rather than one of their own.
  *
  * Minimal and inert by design, because every playground boot loads it: no
  * tables, routes, jobs, hooks or seed writes. Today it declares one entry-list

@@ -216,6 +216,19 @@ describe("the entry list with a plugin's filter", () => {
     expect(lastRead().where).toBeUndefined();
   });
 
+  it("returns to the first page when a filter is chosen", () => {
+    at("");
+    render(<EntryList collectionSlug="tickets" />);
+    const props = tableProps.mock.calls.at(-1)?.[0] as {
+      onPageChange: (page: number) => void;
+    };
+    act(() => props.onPageChange(1));
+    expect(lastRead().page).toBe(2);
+
+    chooseInTable("acme-support.state", "open");
+    expect(lastRead().page).toBe(1);
+  });
+
   it("ignores a pf that names no declared filter or option", () => {
     at("?pf=acme-support.state:everything&pf=other.filter:open&pf=nonsense");
     render(<EntryList collectionSlug="tickets" />);

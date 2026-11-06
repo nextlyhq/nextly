@@ -66,7 +66,11 @@ function optionProblem(
   }
   const { value, label, where } = option as Record<string, unknown>;
   // Spelled as a place-name segment, so the URL carries it unescaped.
-  if (typeof value !== "string" || !isWellFormedAdminPlaceName(value)) {
+  if (
+    typeof value !== "string" ||
+    value.includes(".") ||
+    !isWellFormedAdminPlaceName(value)
+  ) {
     return `the option value ${typeof value === "string" ? `"${value}"` : `given as ${typeof value}`} is not lower-case letters, digits and single dashes`;
   }
   if (values.has(value)) return `two options have the value "${value}"`;
@@ -81,7 +85,7 @@ function optionProblem(
   }
   const problems = filterShapeProblems(where);
   if (problems.length > 0) {
-    return `the option "${value}" narrows by a \`where\` the list cannot apply: ${problems.map(p => `${p.path}: ${p.message}`).join("; ")}`;
+    return `the option "${value}" narrows by a \`where\` is malformed: ${problems.map(p => `${p.path}: ${p.message}`).join("; ")}`;
   }
   return undefined;
 }
@@ -141,7 +145,7 @@ function checkedFilter(
 /**
  * @experimental Every enabled plugin's entry-list filters, refusing one that is
  * outside its plugin's namespace, declared twice, or that offers an option the
- * list cannot apply, naming the plugin and the filter.
+ * malformed, naming the plugin and the filter.
  *
  * A disabled plugin's filters are skipped: it is not running, so nothing it
  * declares is offered.
@@ -159,8 +163,14 @@ export function contributedListFilters(
       if (owner !== undefined) {
         throw resolutionError(
           "list-filter-duplicate",
-          `Plugins "${owner}" and "${plugin.name}" both declare the entry-list filter "${filter.name}".`,
-          { filter: filter.name, owners: [owner, plugin.name] }
+          owner === plugin.name
+            ? `Plugin "${plugin.name}" declares the entry-list filter "${filter.name}" twice.`
+            : `Plugins "${owner}" and "${plugin.name}" both declare the entry-list filter "${filter.name}".`,
+          {
+            plugin: plugin.name,
+            filter: filter.name,
+            owners: [owner, plugin.name],
+          }
         );
       }
       owners.set(filter.name, plugin.name);

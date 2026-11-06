@@ -463,7 +463,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       })),
       ...resolved("list-filter-invalid", error => ({
         what: detail(error),
-        why: "A filter is offered in the entry list's toolbar, so each option needs a value the page's URL can keep, a label, and a `where` the list can apply.",
+        why: "A filter is offered in the entry list's toolbar, so each option needs a value the page's URL can keep, a label, and a well-formed `where`.",
         next: `Correct the filter in \`contributes.admin.filters\` of "${field(error, "plugin")}" as the line above says.`,
       })),
       ...resolved("list-filter-outside-namespace", error => ({
