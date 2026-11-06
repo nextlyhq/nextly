@@ -22,6 +22,11 @@ import {
   type OneTimeSecretsPruneAdapter,
 } from "../../plugins/security/one-time-secrets-prune";
 import {
+  pruneReceivedWebhooks,
+  RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS,
+  type ReceivedWebhooksPruneAdapter,
+} from "../../plugins/security/received-webhooks-prune";
+import {
   ledgerFor,
   LEDGER_PRUNE_INTERVAL_MS,
   LEDGER_RETENTION_MS,
@@ -57,6 +62,7 @@ import {
   NOTICES_RETENTION_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
   PREVIEW_LINKS_RETENTION_GATE_KEY,
+  RECEIVED_WEBHOOKS_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "./gate";
@@ -68,6 +74,7 @@ export interface RetentionPassInput {
     PruneDeps["adapter"] &
     EmailPruneAdapter &
     OneTimeSecretsPruneAdapter &
+    ReceivedWebhooksPruneAdapter &
     NoticesPruneDb &
     ContentEventsPruneDb &
     PreviewLinksPruneAdapter &
@@ -85,6 +92,8 @@ export interface RetentionPassInput {
   emailPolicy?: ResolvedEmailRetentionConfig;
   /** Sweep plugins' one-purpose secrets past their expiry. */
   oneTimeSecrets?: boolean;
+  /** Sweep plugins' received-webhook claims past their retention. */
+  receivedWebhooks?: boolean;
   /** Sweep recorded preview links long past their end. */
   previewLinks?: boolean;
   /** Prune cache tag expiries older than the ledger keeps them. */
@@ -243,6 +252,30 @@ export function buildRetentionPasses(
     });
 
   // On wherever a configuration reached the call site, as the secrets sweep
+  // is: a claim past its retention answers nothing, so there is no policy to
+  // set, only the fixed keeping time the sweep documents.
+  if (input.receivedWebhooks)
+    passes.push({
+      key: RECEIVED_WEBHOOKS_RETENTION_GATE_KEY,
+      intervalMs: () => RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS,
+      run: async maxBatches => {
+        try {
+          await pruneReceivedWebhooks(
+            input.adapter,
+            (input.now ?? (() => new Date()))(),
+            { maxBatches }
+          );
+        } catch (error) {
+          // Quietly, as the secrets sweep: a logger throwing here would reach
+          // the write that offered the pass.
+          warnQuietly(input.logger, "Received webhooks retention pass failed", {
+            error: error instanceof Error ? error.message : "unknown error",
+          });
+        }
+      },
+    });
+
+  // On wherever a configuration reached the call site, as the secrets sweep
   // is: a link long past its end answers nothing, so there is no policy to
   // set, only the fixed keeping time the store documents. Without it the table
   // grows by one row per link for ever.
@@ -325,6 +358,7 @@ export function retentionPoliciesFrom(
   | "auditPolicy"
   | "emailPolicy"
   | "oneTimeSecrets"
+  | "receivedWebhooks"
   | "previewLinks"
   | "cacheTagExpiries"
 > {
@@ -336,6 +370,8 @@ export function retentionPoliciesFrom(
     webhookPolicy: config.webhookRetention,
     // Every install has the table, and its sweep has nothing to configure.
     oneTimeSecrets: true,
+    // So does every received-webhook claim, on a fixed retention.
+    receivedWebhooks: true,
     // The same holds for recorded preview links.
     previewLinks: true,
     // And for the cache tag expiry ledger.

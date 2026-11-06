@@ -56,6 +56,10 @@ import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
+import {
+  RECEIVED_WEBHOOKS_TABLE,
+  receivedWebhooksTables,
+} from "./received-webhooks";
 import { releasesTables } from "./releases";
 import { reviewStatesTables } from "./review-states";
 import { scheduleWindowsTables } from "./schedule-windows";
@@ -201,6 +205,10 @@ export function getCoreSchema(
     // mint, each stored only as a keyed hash. Declared here for the same
     // reason as its neighbours.
     ...Object.values(oneTimeSecretsTables(dialect)),
+    // `nextly_received_webhooks` — the webhooks plugins have received, one
+    // claim per plugin, provider and delivery, with no payload kept. Declared
+    // here for the same reason as its neighbours.
+    ...Object.values(receivedWebhooksTables(dialect)),
     // `nextly_limit_store` — the counts of the database limit store, used only
     // when a site selects it. Declared here for the same reason as its
     // neighbours: a table outside this set is never created on a real
@@ -351,6 +359,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   DELETED_PRINCIPALS_TABLE,
   PLUGIN_SETTINGS_TABLE,
   ONE_TIME_SECRETS_TABLE,
+  RECEIVED_WEBHOOKS_TABLE,
   LIMIT_STORE_TABLE,
   CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,

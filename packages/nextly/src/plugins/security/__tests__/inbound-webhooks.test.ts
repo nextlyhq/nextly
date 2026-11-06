@@ -12,12 +12,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSignatureHeaders } from "../../../domains/webhooks/signing";
 import {
-  createPluginReceivedWebhooks,
   standardWebhooks,
   verifyWebhookDelivery,
   type InboundWebhookScheme,
   type WebhookVerification,
 } from "../inbound-webhooks";
+import { createPluginReceivedWebhooks } from "../received-webhooks";
 
 vi.mock("node:crypto", async importOriginal => {
   const actual = await importOriginal<typeof import("node:crypto")>();
@@ -532,7 +532,14 @@ describe("verifying an inbound webhook", () => {
 });
 
 describe("ctx.security.webhooks.verify", () => {
-  const webhooks = createPluginReceivedWebhooks({ now: () => AT });
+  // Verifying reads no database: an adapter asked for fails the test.
+  const webhooks = createPluginReceivedWebhooks({
+    owner: "@test/verify",
+    adapter: () => {
+      throw new Error("verify reached the database");
+    },
+    now: () => AT,
+  });
 
   function request(delivery: { headers: Headers; bytes: Uint8Array }) {
     return new Request("https://site.example/api/plugins/shop/webhooks", {
