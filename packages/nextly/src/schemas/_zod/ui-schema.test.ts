@@ -199,6 +199,17 @@ describe("parseUiSchema", () => {
     expect(parseUiSchema(VALID).success).toBe(true);
   });
 
+  it("accepts a field named with capitals, as the registry does", () => {
+    const named = (name: string) =>
+      parseUiSchema({
+        collections: [{ slug: "x", fields: [{ name, type: "text" }] }],
+      }).success;
+    expect(named("firstName")).toBe(true);
+    expect(named("first_name")).toBe(true);
+    expect(named("1stName")).toBe(false);
+    expect(named("first-name")).toBe(false);
+  });
+
   it("rejects a relationship without relationTo", () => {
     const r = parseUiSchema({
       collections: [

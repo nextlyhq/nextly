@@ -446,6 +446,74 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(files);
     });
 
+    it("writes a field named with capitals under its own name, its column in snake case", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+
+      await service.createCollection(
+        {
+          name: "people",
+          label: "Person",
+          fields: [{ name: "firstName", type: "text" }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as { collections: { slug: string; fields: { name: string }[] }[] };
+      expect(
+        definition.collections.find(c => c.slug === "people")?.fields[0]?.name
+      ).toBe("firstName");
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect,
+        ["dc_people"]
+      );
+      expect(live.tables[0]?.columns.map(c => c.name)).toContain("first_name");
+    });
+
+    it("changes a field's type through the Builder, and a replay ends with the same table", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      await service.createCollection(created("articles"), {});
+
+      await applyFields("articles", [{ name: "body", type: "number" }]);
+
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const columnsOf = async (on: DrizzleAdapter) =>
+        (
+          await introspectLiveSnapshot(
+            on.getDrizzle(),
+            on.getCapabilities().dialect,
+            ["dc_articles"]
+          )
+        ).tables[0]?.columns.map(c => `${c.name}:${c.type.toLowerCase()}`);
+      const here = await columnsOf(adapter);
+      expect(here?.find(c => c.startsWith("body:"))).not.toMatch(/text|char/);
+
+      const folder = await mkdtemp(join(tmpdir(), "nextly-type-replay-"));
+      try {
+        await cp(join(t.basePath, "database", "history"), folder, {
+          recursive: true,
+        });
+        await t.destroy();
+        instance = await createTestNextly({ dialect });
+        const fresh = instance.adapter as unknown as DrizzleAdapter;
+        await runFileMigrations({
+          adapter: fresh as never,
+          db: fresh.getDrizzle(),
+          dialect: fresh.getCapabilities().dialect,
+          migrationsDir: folder,
+          logger: createLogger({ quiet: true }),
+        });
+        expect(await columnsOf(fresh)).toEqual(here);
+      } finally {
+        await rm(folder, { recursive: true, force: true });
+      }
+    });
+
     it("outside development writes them and runs nothing", async () => {
       vi.stubEnv("NODE_ENV", "production");
       const service = t.getService("collectionService");

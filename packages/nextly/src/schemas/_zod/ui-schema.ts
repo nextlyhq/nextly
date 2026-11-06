@@ -261,7 +261,10 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
     .object({
       name: z
         .string()
-        .regex(/^[a-z][a-z0-9_]*$/, "field name must match ^[a-z][a-z0-9_]*$"),
+        .regex(
+          /^[A-Za-z][A-Za-z0-9_]*$/,
+          "field name must match ^[A-Za-z][A-Za-z0-9_]*$"
+        ),
       // A canonical token, OR a plugin-contributed field type slug. Plugin
       // types aren't in the canonical enum; accept any slug-shaped token so the
       // manifest preserves the real type through to production. The field-type
