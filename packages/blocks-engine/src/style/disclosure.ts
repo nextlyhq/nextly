@@ -76,14 +76,18 @@ export const DISCLOSURE_ICON_EXPANSIONS: Readonly<
   chevron: [
     ...ROW,
     ...painted(CHEVRON),
-    // Turned to point up while the section is open.
+    // Turned to point up while the section is open, its own glyph set there
+    // too, over a minus another device's Plus may have put on the open look.
+    { descendant: OPEN_ICON, property: "mask", value: CHEVRON },
     { descendant: OPEN_ICON, property: "transform", value: "rotate(180deg)" },
   ],
   plus: [
     ...ROW,
     ...painted(PLUS),
-    // A minus while the section is open.
+    // A minus while the section is open, unturned over another device's
+    // Chevron turn.
     { descendant: OPEN_ICON, property: "mask", value: MINUS },
+    { descendant: OPEN_ICON, property: "transform", value: "none" },
   ],
   // A row with no marker and no icon: the whole title still toggles.
   none: [...ROW, { descendant: ICON, property: "display", value: "none" }],

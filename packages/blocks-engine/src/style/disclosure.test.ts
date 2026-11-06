@@ -57,6 +57,21 @@ describe("an Accordion's icon", () => {
     expect(open).not.toMatch(/M8 3\.5v9/);
   });
 
+  it("sets every open look it uses, so a choice made at one device overrides another's", () => {
+    // Plus at a wider device leaves a minus and no turn on open; Chevron at a
+    // narrower one must put its own glyph back as well as turn it, and Plus
+    // must undo a wider Chevron's turn.
+    const chevron = written({ disclosureIcon: "chevron" });
+    expect(
+      decodeURIComponent(
+        chevron.find(each => each.startsWith(`${OPEN_ICON} { mask:`)) ?? ""
+      )
+    ).toMatch(/m4 6 4 4 4-4/);
+    expect(written({ disclosureIcon: "plus" })).toContain(
+      `${OPEN_ICON} { transform: none }`
+    );
+  });
+
   it("draws no icon for None, the whole title still the row", () => {
     const out = written({ disclosureIcon: "none" });
     expect(out).toContain("> details > summary { list-style: none }");
