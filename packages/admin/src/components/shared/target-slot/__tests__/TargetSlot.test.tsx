@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { AdminContributionsMeta } from "nextly/config";
+import type { AdminContributionsMeta, AdminPlaceId } from "nextly/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerComponent } from "@admin/lib/plugins/component-registry";
@@ -183,6 +183,28 @@ describe("TargetSlot", () => {
     );
 
     expect(drawn()).toEqual(["second block"]);
+  });
+
+  it("another plugin's block draws at a plugin's own place", () => {
+    // A place a plugin declared, on its own page: it has no built-in parts,
+    // so only what was sent there is drawn, as sent.
+    meta.contributions = {
+      "acme-billing.invoice": {
+        block: [block("acme-a.first", FIRST), block("acme-a.echo", ECHO)],
+      },
+    };
+
+    render(
+      <TargetSlot
+        place={"acme-billing.invoice" as AdminPlaceId}
+        context={{ invoiceId: "i1" } as never}
+      />
+    );
+
+    expect(screen.getByText("first block")).toBeTruthy();
+    expect(JSON.parse(screen.getByTestId("echo").textContent ?? "")).toEqual({
+      context: { invoiceId: "i1" },
+    });
   });
 });
 

@@ -10,6 +10,7 @@ import type {
   AdminPlaces,
   CoreAdminPlaceId,
 } from "@nextlyhq/plugin-sdk";
+import type { TargetSlotProps } from "@nextlyhq/plugin-sdk/admin";
 
 declare module "@nextlyhq/plugin-sdk" {
   interface AdminPlaces {
@@ -37,3 +38,13 @@ expectTypeOf<CoreAdminPlaceId>().toExtend<AdminPlaceId>();
 expectTypeOf<"acme-billing.invoce">().not.toExtend<AdminPlaceId>();
 expectTypeOf<"colection.list">().not.toExtend<AdminPlaceId>();
 expectTypeOf<string>().not.toExtend<AdminPlaceId>();
+
+// The renderer a plugin's page draws its place with takes the place's own
+// context, so a page handing it the wrong ids does not compile.
+expectTypeOf<
+  TargetSlotProps<"acme-billing.invoice">["context"]
+>().toEqualTypeOf<{ invoiceId: string }>();
+expectTypeOf<TargetSlotProps<"user.detail">["context"]>().toEqualTypeOf<{
+  userId: string;
+  shownUserId: string;
+}>();
