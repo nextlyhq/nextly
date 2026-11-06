@@ -17,6 +17,7 @@ import type {
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
+import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
 import { documentVersionOn } from "../versions/document-revision";
@@ -26,11 +27,16 @@ import {
 } from "../versions/versions-repository";
 
 import type { ReviewDocument } from "./review-state-repository";
+import { withSharedValuesOf } from "./shared-values";
 
-/** Where a collection's documents live: its table, and whether it keeps translations. */
+/**
+ * Where a collection's documents live: its table, whether it keeps translations, and for one that
+ * does, the fields each language keeps on its own (null for one that does not).
+ */
 export interface DocumentTable {
   table: string;
   localized: boolean;
+  translated: readonly string[] | null;
 }
 
 /**
@@ -63,7 +69,16 @@ export async function documentTableOf(
       },
     });
   }
-  return { table: record.tableName, localized: Boolean(record.localized) };
+  const localized = Boolean(record.localized);
+  return {
+    table: record.tableName,
+    localized,
+    // Named as the collection's own writes name them, so a step reads a language's shared
+    // values exactly as a save in place wrote them.
+    translated: localized
+      ? resolveLocalizedFieldNames([...(record.fields ?? [])], true)
+      : null,
+  };
 }
 
 /**
@@ -116,4 +131,43 @@ export async function shownVersionOn(
   if (part === null) return repo.findNewest(ref);
   const newest = (await repo.newestVersionNoByLocale(ref, [part])).get(part);
   return newest === undefined ? undefined : repo.findByVersionNo(ref, newest);
+}
+
+/**
+ * What one part shows now, read on `tx`: its newest recorded version, and for a language of a
+ * translated document, that version with the shared values of the document's newest version laid
+ * over it when a later save in another language wrote them. The version number stays the part's
+ * own: an approval names the version its language was saved as.
+ */
+export async function shownContentOn(
+  tx: TransactionContext,
+  document: ReviewDocument,
+  table: DocumentTable,
+  part: string | null
+): Promise<VersionRow | undefined> {
+  const shown = await shownVersionOn(tx, document, part);
+  if (!shown || part === null || table.translated === null) return shown;
+  const newest = await new VersionsRepository(tx).findNewest(document);
+  if (!laterThan(newest, shown)) return shown;
+  return {
+    ...shown,
+    snapshot: withSharedValuesOf(
+      document,
+      shown.snapshot,
+      newest.snapshot,
+      table.translated
+    ),
+  };
+}
+
+/** Whether `newest` was recorded after `shown`, so its shared values are the later ones. */
+function laterThan(
+  newest: VersionRow | undefined,
+  shown: VersionRow
+): newest is VersionRow {
+  return (
+    newest?.versionNo != null &&
+    shown.versionNo != null &&
+    newest.versionNo > shown.versionNo
+  );
 }

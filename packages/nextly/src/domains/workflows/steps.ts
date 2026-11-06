@@ -94,7 +94,7 @@ import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
 import {
   documentTableOf,
   partVersionOn,
-  shownVersionOn,
+  shownContentOn,
   type DocumentTable,
 } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
@@ -918,9 +918,12 @@ async function readRecorded(
 ): Promise<Map<string | null, VersionRow | undefined>> {
   const recorded = new Map<string | null, VersionRow | undefined>();
   for (const entry of movable) {
+    // What the part shows now, shared values written since through another language included:
+    // the content the hidden-field check judges and the approval's digest covers, so both match
+    // what a later save is compared with.
     recorded.set(
       entry.part,
-      await shownVersionOn(tx, c.input.document, entry.part)
+      await shownContentOn(tx, c.input.document, c.table, entry.part)
     );
   }
   const unrecorded = movable.filter(entry => !recorded.get(entry.part));

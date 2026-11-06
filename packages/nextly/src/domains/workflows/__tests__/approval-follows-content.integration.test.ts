@@ -126,8 +126,9 @@ const app = (): TestNextly => {
 };
 
 /**
- * Boots Posts (translated, with a shared `code`) on `postsWorkflow`, Briefs on `checked` with a
- * secret only bob may not read, and Memos on `handover`; Briefs and Memos keep few versions.
+ * Boots Posts (translated, with a shared `code`, and a shared `legalNote` only rita may not read)
+ * on `postsWorkflow`, Briefs on `checked` with a secret only bob may not read, and Memos on
+ * `handover`; Briefs and Memos keep few versions.
  */
 async function boot(
   dialect: TestDialect,
@@ -148,6 +149,11 @@ async function boot(
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "code", localized: false }),
+          text({
+            name: "legalNote",
+            localized: false,
+            access: { read: ({ user }) => user?.id !== "rita" },
+          }),
         ],
       }),
       defineCollection({
@@ -471,6 +477,80 @@ describe.each(getConfiguredTestDialects())(
           { stage: "legal", approval: null }
         );
         expect(await withdrawals("posts", post)).toHaveLength(1);
+      });
+    });
+
+    describe("a shared field edited through another language", () => {
+      /**
+       * A post whose English and Spanish parts uma approved, then a shared field rita may not read
+       * edited through English, which returns both parts to review.
+       */
+      async function sharedNoteEdited() {
+        const n = app();
+        const uma = await person(n, "uma", [["sign-off", "posts"]]);
+        const rita = await person(n, "rita", [["sign-off", "posts"]]);
+        await person(n, "dave", [["update", "posts"]]);
+        const post = await entry(n, "posts");
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        for (const part of ["en", "es"]) {
+          await seedState(n, partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", uma);
+        }
+        await save(
+          "posts",
+          post,
+          { legalNote: "N1" },
+          {
+            locale: "en",
+            userId: "dave",
+          }
+        );
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+        return { uma, rita, post };
+      }
+
+      it("refuses another language's approval to a reviewer who cannot read the shared field, and lets one who can approve it", async () => {
+        await boot(dialect);
+        const { uma, rita, post } = await sharedNoteEdited();
+
+        // Spanish shows the note English wrote, though its own version predates it.
+        await expect(
+          take("posts", post, "es", "clear", rita)
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicData: { reason: "field-hidden", fields: ["legalNote"] },
+        });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+
+        await take("posts", post, "es", "clear", uma);
+        expect(
+          (await stateOf(app(), partOf("posts", post, "es")))?.approval
+        ).toMatchObject({ by: "uma" });
+      });
+
+      it("keeps that approval through a save that changes nothing and a translation saved in another language", async () => {
+        await boot(dialect);
+        const { uma, post } = await sharedNoteEdited();
+        await take("posts", post, "es", "clear", uma);
+        const approved = await stateOf(app(), partOf("posts", post, "es"));
+
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toEqual(
+          approved
+        );
+
+        // English's own text: Spanish still shows exactly what uma approved.
+        await save("posts", post, { title: "Only English" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, "es"))).toEqual(
+          approved
+        );
       });
     });
 
