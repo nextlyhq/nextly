@@ -451,6 +451,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         (noticesTurn && !done.notices ? 1 : 0) +
         (contentEventsTurn ? 1 : 0) +
         (secretsTurn ? 1 : 0) +
+        (receivedTurn ? 1 : 0) +
         (previewLinksTurn ? 1 : 0) +
         (cacheTagsTurn ? 1 : 0);
 

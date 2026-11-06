@@ -340,6 +340,89 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
   });
 });
 
+describe("the scheduled drain and plugins' received-webhook claims", () => {
+  const claimAll = {
+    claim: async () => true,
+    release: async () => undefined,
+  };
+
+  it("sweeps them with no other retention configured", async () => {
+    const tables: string[] = [];
+    let left = 1;
+    const remove = vi.fn(async (table: string) => {
+      const removed = table === "nextly_received_webhooks" ? left : 0;
+      left = 0;
+      return removed;
+    });
+    const result = await drain({
+      receivedWebhooks: true,
+      prune: {
+        adapter: {
+          select: async (table: string) => {
+            tables.push(table);
+            return left > 0 ? [{ deliveryKey: "old" }] : [];
+          },
+          delete: remove,
+          transaction: async (
+            fn: (tx: { delete: typeof remove }) => Promise<unknown>
+          ) => fn({ delete: remove }),
+        },
+      } as never,
+      gate: claimAll,
+    });
+
+    expect(tables).toContain("nextly_received_webhooks");
+    expect(remove).toHaveBeenCalledWith(
+      "nextly_received_webhooks",
+      expect.anything()
+    );
+    expect(result.pruned.receivedWebhooks).toBe(1);
+  });
+
+  it("is left its share behind earlier passes whose backlogs never end", async () => {
+    // Every table has another batch, and every batch takes time: a pass
+    // before this one that counted it out of the shares would take the whole
+    // remainder, and the claims would never be swept.
+    let clock = 0;
+    const tables: string[] = [];
+    const remove = async () => {
+      clock += 50;
+      return 500;
+    };
+    const select = async (table: string) => {
+      tables.push(table);
+      return Array.from({ length: 500 }, (_, i) => ({
+        id: `row-${i}`,
+        deliveryKey: `key-${i}`,
+      }));
+    };
+    const result = await drain(
+      {
+        auditPolicy: resolveAuditRetentionConfig({ activityMaxAgeMs: 1000 }),
+        receivedWebhooks: true,
+        prune: {
+          adapter: {
+            select,
+            delete: remove,
+            transaction: async (
+              fn: (tx: {
+                delete: typeof remove;
+                select: typeof select;
+              }) => Promise<unknown>
+            ) => fn({ delete: remove, select }),
+          },
+        } as never,
+        gate: claimAll,
+      },
+      () => new Date(clock),
+      1_000
+    );
+
+    expect(tables).toContain("nextly_received_webhooks");
+    expect(result.pruned.receivedWebhooks).toBeGreaterThan(0);
+  });
+});
+
 describe("the scheduled drain and recorded preview links", () => {
   it("leaves them their share behind a secrets backlog that never ends", async () => {
     // Every secrets batch takes time and there is always another, so a sweep

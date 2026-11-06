@@ -208,8 +208,12 @@ async function attemptClaim(
 > {
   const { tx, dialect, at, row } = attempt;
   const token = randomUUID();
+  // Rounded up to a whole second, so a lease is never shorter than asked on
+  // a dialect that keeps times in seconds, and the same length on every one.
   const leaseUntil =
-    attempt.leaseMs === null ? null : new Date(at.getTime() + attempt.leaseMs);
+    attempt.leaseMs === null
+      ? null
+      : new Date(Math.ceil((at.getTime() + attempt.leaseMs) / 1000) * 1000);
   const held = {
     status: leaseUntil === null ? "completed" : "pending",
     claimToken: token,
@@ -330,8 +334,11 @@ export function createPluginReceivedWebhooks(
       },
       async release(txOption) {
         return write("webhooks.claim.release", txOption?.tx, async tx => {
+          // Only a pending claim: a processed delivery's record is what
+          // answers its retries as duplicates, so no handler can undo it,
+          // whatever error it saw after completing.
           const removed = await tx.delete(RECEIVED_WEBHOOKS_TABLE, {
-            and: held,
+            and: [...held, { column: "status", op: "=", value: "pending" }],
           });
           return { released: removed > 0 };
         });

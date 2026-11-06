@@ -460,7 +460,9 @@ await ctx.db.transaction(async tx => {
 
 **Without one.** The claim is a lease, 5 minutes by default (`leaseSeconds`,
 1 to 3600). End it with `claim.complete()` once the work is done, or
-`claim.release()` to give it back at once. A handler that crashes holding it
+`claim.release()` to give it back at once. Once completed, a delivery stays
+processed: `release()` then answers `{ released: false }`, so the catch in the
+example above is safe even when `complete()` itself threw. A handler that crashes holding it
 costs the sender one retry, never the delivery: a retry during the lease is
 `in-progress`, and the first one after it is `first`. Set `leaseSeconds` longer
 than your handler takes. If a lease does run out and a retry takes the claim

@@ -396,6 +396,78 @@ describe.each(getConfiguredTestDialects())(
       expect(await rows()).toHaveLength(1);
     });
 
+    it("release never undoes a processed delivery", async () => {
+      const { a, rows } = await boot();
+      const hooks = a.security.webhooks;
+      const deliver = async (id: string) =>
+        hooks.claimDelivery(await verified(hooks, standardRequest(id)), {
+          provider: "acme",
+        });
+
+      // Completed, then released, as a handler does that saw `complete`
+      // throw after it had in fact committed.
+      const done = await deliver("msg_done_then_released");
+      if (done.status !== "first") throw new Error(done.status);
+      expect(await done.claim.complete()).toEqual({ completed: true });
+      expect(await done.claim.release()).toEqual({ released: false });
+      expect(await deliver("msg_done_then_released")).toEqual({
+        status: "duplicate",
+      });
+
+      // Claimed in the plugin's transaction, so processed at once.
+      let inTx: DeliveryClaimResult | undefined;
+      await a.db.transaction(async tx => {
+        inTx = await hooks.claimDelivery(
+          await verified(hooks, standardRequest("msg_tx_then_released")),
+          { provider: "acme", tx }
+        );
+      });
+      if (inTx?.status !== "first") throw new Error(String(inTx?.status));
+      expect(await inTx.claim.release()).toEqual({ released: false });
+      expect(await deliver("msg_tx_then_released")).toEqual({
+        status: "duplicate",
+      });
+      expect(await rows()).toHaveLength(2);
+    });
+
+    it("an empty delivery id is no id: deliveries are told apart by their body", async () => {
+      const { a } = await boot();
+      const hooks = a.security.webhooks;
+      const claim = async (body: string) =>
+        statusOf(
+          await hooks.claimDelivery(
+            await verified(hooks, standardRequest("", body)),
+            { provider: "acme" }
+          )
+        );
+      expect(await claim('{"event":1}')).toBe("first");
+      // Another delivery with the same empty id is not a duplicate of it.
+      expect(await claim('{"event":2}')).toBe("first");
+      // The same body again still is.
+      expect(await claim('{"event":1}')).toBe("in-progress");
+    });
+
+    it("a lease is never shorter than asked, on every dialect", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // Most of a second past a whole second: a lease end kept in whole
+      // seconds would otherwise lose most of the second asked for.
+      vi.setSystemTime(T0.getTime() + 900);
+      const { a } = await boot();
+      const hooks = a.security.webhooks;
+      const deliver = async () =>
+        hooks.claimDelivery(
+          await verified(hooks, standardRequest("msg_short_lease")),
+          { provider: "acme", leaseSeconds: 1 }
+        );
+      expect((await deliver()).status).toBe("first");
+      // Six tenths of a second later: within the second asked for.
+      vi.setSystemTime(T0.getTime() + 1500);
+      expect(await deliver()).toEqual({ status: "in-progress" });
+      // Past it, and past the whole second it was rounded up to.
+      vi.setSystemTime(T0.getTime() + 2100);
+      expect((await deliver()).status).toBe("first");
+    });
+
     it("complete after the lease was taken over is refused, and two takeovers of one expired lease give one first", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(T0);

@@ -131,7 +131,10 @@ export interface DeliveryClaim {
    * over, so the work may run twice.
    */
   complete(options?: TxOption): Promise<{ completed: boolean }>;
-  /** Give the claim up, so the provider's next retry is processed at once. */
+  /**
+   * Give a pending claim up, so the provider's next retry is processed at
+   * once. A processed delivery stays processed: `released: false`.
+   */
   release(options?: TxOption): Promise<{ released: boolean }>;
 }
 
@@ -355,7 +358,9 @@ export function verifyWebhookDelivery(
   VERIFIED.set(
     verified,
     Object.freeze({
-      ...(reading.deliveryId !== undefined
+      // An empty id names no delivery: such a delivery is claimed by its
+      // body, or every one of them would be the same delivery.
+      ...(reading.deliveryId !== undefined && reading.deliveryId.length > 0
         ? { deliveryId: reading.deliveryId }
         : {}),
       bodyDigest: createHash("sha256").update(delivery.bytes).digest("hex"),
