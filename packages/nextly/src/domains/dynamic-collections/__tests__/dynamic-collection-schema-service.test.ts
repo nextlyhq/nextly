@@ -392,3 +392,44 @@ describe("DynamicCollectionSchemaService — a relationship holding a list gets 
     });
   }
 });
+
+describe("DynamicCollectionSchemaService — a required relation added over rows", () => {
+  // The rows already there are given the empty a relation holding a list accepts, an empty list.
+  // Nothing else is such an empty: a relation to several collections holds one `{ relationTo, value
+  // }` reference, and a list that must hold some entries (`minRows`) holds none in `[]`. Those
+  // keep the refusal every required relation without a backfill gets.
+  const title = { name: "title", type: "text" } as FieldDefinition;
+  const add = (field: Record<string, unknown>) =>
+    new DynamicCollectionSchemaService(
+      undefined,
+      "postgresql"
+    ).generateAlterTableMigration(
+      "dc_posts",
+      [title],
+      [
+        title,
+        {
+          name: "writers",
+          type: "relationship",
+          required: true,
+          ...field,
+        } as FieldDefinition,
+      ]
+    );
+
+  it("fills a list each row can hold empty with an empty list", () => {
+    expect(add({ relationTo: "authors", hasMany: true })).toMatch(
+      /ADD COLUMN "writers" jsonb NOT NULL DEFAULT '\[\]'/
+    );
+  });
+
+  it("refuses a relation to several collections, whose value is one reference", () => {
+    expect(() => add({ relationTo: ["authors", "tags"] })).toThrow();
+  });
+
+  it("refuses a list that must hold entries", () => {
+    expect(() =>
+      add({ relationTo: "authors", hasMany: true, minRows: 1 })
+    ).toThrow();
+  });
+});

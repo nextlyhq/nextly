@@ -53,12 +53,12 @@ const logger = createLogger({ quiet: true });
 
 const A = "3fb954e4-f04c-4de6-b970-d16bf548688a";
 
-const DIALECTS = (
-  [
-    ["postgresql", "TEST_POSTGRES_URL"],
-    ["mysql", "TEST_MYSQL_URL"],
-  ] as const
-).filter(([, env]) => (process.env[env] ?? "") !== "");
+// Each dialect's suite is declared whether or not its database is configured, and skipped when it
+// is not, so a run with neither (the SQLite leg) still finds a suite in this file.
+const DIALECTS = [
+  ["postgresql", "TEST_POSTGRES_URL"],
+  ["mysql", "TEST_MYSQL_URL"],
+] as const;
 
 /** The config as it stands: `author` is a hasMany relationship. */
 const config = defineConfig({
@@ -77,143 +77,149 @@ const config = defineConfig({
   ],
 });
 
-for (const [dialect] of DIALECTS) {
-  describe(`a hasMany column created as one reference, repaired by a migration — ${dialect}`, () => {
-    let scratch: ScratchDatabase;
-    let adapter: DrizzleAdapter;
-    let dir: string;
-    let previousDialect: string | undefined;
-    let previousUrl: string | undefined;
+for (const [dialect, env] of DIALECTS) {
+  describe.skipIf((process.env[env] ?? "") === "")(
+    `a hasMany column created as one reference, repaired by a migration — ${dialect}`,
+    () => {
+      let scratch: ScratchDatabase;
+      let adapter: DrizzleAdapter;
+      let dir: string;
+      let previousDialect: string | undefined;
+      let previousUrl: string | undefined;
 
-    beforeEach(async () => {
-      previousDialect = process.env.DB_DIALECT;
-      previousUrl = process.env.DATABASE_URL;
-      dir = mkdtempSync(join(tmpdir(), "nextly-hm-repair-"));
-      scratch = await createScratchDatabase(dialect, "nextly_hm_repair");
-      process.env.DB_DIALECT = dialect;
-      process.env.DATABASE_URL = scratch.url;
-      adapter = (await createAdapter({
-        type: dialect,
-        url: scratch.url,
-      } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    });
-
-    afterEach(async () => {
-      await adapter.disconnect().catch(() => {});
-      await scratch.drop();
-      rmSync(dir, { recursive: true, force: true });
-      if (previousDialect === undefined) delete process.env.DB_DIALECT;
-      else process.env.DB_DIALECT = previousDialect;
-      if (previousUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = previousUrl;
-    });
-
-    /** The Builder's CREATE for a table, run statement by statement. */
-    async function builderCreate(
-      tableName: string,
-      fields: Parameters<
-        DynamicCollectionSchemaService["generateMigrationSQL"]
-      >[1]
-    ): Promise<void> {
-      const sql = new DynamicCollectionSchemaService(
-        undefined,
-        dialect
-      ).generateMigrationSQL(tableName, fields);
-      for (const statement of sql.split("--> statement-breakpoint")) {
-        const body = statement
-          .split("\n")
-          .filter(line => !line.trim().startsWith("--"))
-          .join("\n")
-          .trim();
-        if (body !== "") await adapter.executeQuery(body);
-      }
-    }
-
-    const q = (name: string) =>
-      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-
-    it("converts the column to a list of the id it held, and drops its key to one row", async () => {
-      // The core tables a site has, the migration lock among them, and the resolver its writes go
-      // through.
-      const registry = new SchemaRegistry(dialect);
-      registry.registerStaticSchemas(getDialectTables(dialect));
-      adapter.setTableResolver(registry);
-      await ensureCoreTables(
-        adapter as unknown as CLIDatabaseAdapter,
-        { cwd: "", autoSync: true } as ResolvedDevOptions,
-        { logger, options: {} } as CommandContext
-      );
-      const posts = resolveCollectionTableName("posts");
-      const authors = resolveCollectionTableName("authors");
-      await builderCreate(authors, [{ name: "name", type: "text" }]);
-      // A single relationship's column: what the Builder gave a hasMany field.
-      await builderCreate(posts, [
-        { name: "title", type: "text" },
-        {
-          name: "author",
-          type: "relationship",
-          options: { target: "authors", relationType: "manyToOne" },
-        },
-      ]);
-      const before = await introspectLiveSnapshot(
-        adapter.getDrizzle(),
-        dialect,
-        [posts]
-      );
-      // The old shape, so the case starts where a site's database does.
-      expect(
-        before.tables[0]?.foreignKeys?.flatMap(fk => fk.columns)
-      ).toContain("author");
-      await adapter.executeQuery(
-        `INSERT INTO ${q(authors)} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("name")}) VALUES ('${A}', 'a', 'A', 'A')`
-      );
-      await adapter.executeQuery(
-        `INSERT INTO ${q(posts)} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("author")}) VALUES ('p1', 'p1', 'P1', '${A}'), ('p2', 'p2', 'P2', NULL)`
-      );
-
-      const migrationsDir = join(dir, "migrations");
-      const deps = {
-        adapter: adapter as unknown as CLIDatabaseAdapter,
-        db: adapter.getDrizzle(),
-        dialect,
-        migrationsDir,
-        logger,
-      };
-      const adopted = await baselineCore(deps);
-      expect(adopted.kind).toBe("baselined");
-
-      const generated = await generateMigration({
-        name: "author_holds_many",
-        dialect,
-        migrationsDir,
-        collections: toMinimalEntities(config.collections, e =>
-          resolveCollectionTableName(e.slug, e.dbName)
-        ),
-        singles: [],
-        components: [],
-        nonInteractive: true,
+      beforeEach(async () => {
+        previousDialect = process.env.DB_DIALECT;
+        previousUrl = process.env.DATABASE_URL;
+        dir = mkdtempSync(join(tmpdir(), "nextly-hm-repair-"));
+        scratch = await createScratchDatabase(dialect, "nextly_hm_repair");
+        process.env.DB_DIALECT = dialect;
+        process.env.DATABASE_URL = scratch.url;
+        adapter = (await createAdapter({
+          type: dialect,
+          url: scratch.url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
       });
-      expect(generated).not.toBeNull();
 
-      await runFileMigrations(deps);
+      afterEach(async () => {
+        await adapter.disconnect().catch(() => {});
+        await scratch.drop();
+        rmSync(dir, { recursive: true, force: true });
+        if (previousDialect === undefined) delete process.env.DB_DIALECT;
+        else process.env.DB_DIALECT = previousDialect;
+        if (previousUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = previousUrl;
+      });
 
-      const rows = await adapter.executeQuery<{ id: string; author: unknown }>(
-        `SELECT ${q("id")}, ${q("author")} FROM ${q(posts)} ORDER BY ${q("id")}`
-      );
-      const read = (value: unknown) =>
-        typeof value === "string" ? (JSON.parse(value) as unknown) : value;
-      expect(rows.map(row => [row.id, read(row.author)])).toEqual([
-        ["p1", [A]],
-        ["p2", null],
-      ]);
-      const after = await introspectLiveSnapshot(
-        adapter.getDrizzle(),
-        dialect,
-        [posts]
-      );
-      expect(
-        (after.tables[0]?.foreignKeys ?? []).flatMap(fk => fk.columns)
-      ).not.toContain("author");
-    });
-  });
+      /** The Builder's CREATE for a table, run statement by statement. */
+      async function builderCreate(
+        tableName: string,
+        fields: Parameters<
+          DynamicCollectionSchemaService["generateMigrationSQL"]
+        >[1]
+      ): Promise<void> {
+        const sql = new DynamicCollectionSchemaService(
+          undefined,
+          dialect
+        ).generateMigrationSQL(tableName, fields);
+        for (const statement of sql.split("--> statement-breakpoint")) {
+          const body = statement
+            .split("\n")
+            .filter(line => !line.trim().startsWith("--"))
+            .join("\n")
+            .trim();
+          if (body !== "") await adapter.executeQuery(body);
+        }
+      }
+
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+      it("converts the column to a list of the id it held, and drops its key to one row", async () => {
+        // The core tables a site has, the migration lock among them, and the resolver its writes go
+        // through.
+        const registry = new SchemaRegistry(dialect);
+        registry.registerStaticSchemas(getDialectTables(dialect));
+        adapter.setTableResolver(registry);
+        await ensureCoreTables(
+          adapter as unknown as CLIDatabaseAdapter,
+          { cwd: "", autoSync: true } as ResolvedDevOptions,
+          { logger, options: {} } as CommandContext
+        );
+        const posts = resolveCollectionTableName("posts");
+        const authors = resolveCollectionTableName("authors");
+        await builderCreate(authors, [{ name: "name", type: "text" }]);
+        // A single relationship's column: what the Builder gave a hasMany field.
+        await builderCreate(posts, [
+          { name: "title", type: "text" },
+          {
+            name: "author",
+            type: "relationship",
+            options: { target: "authors", relationType: "manyToOne" },
+          },
+        ]);
+        const before = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          dialect,
+          [posts]
+        );
+        // The old shape, so the case starts where a site's database does.
+        expect(
+          before.tables[0]?.foreignKeys?.flatMap(fk => fk.columns)
+        ).toContain("author");
+        await adapter.executeQuery(
+          `INSERT INTO ${q(authors)} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("name")}) VALUES ('${A}', 'a', 'A', 'A')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(posts)} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("author")}) VALUES ('p1', 'p1', 'P1', '${A}'), ('p2', 'p2', 'P2', NULL)`
+        );
+
+        const migrationsDir = join(dir, "migrations");
+        const deps = {
+          adapter: adapter as unknown as CLIDatabaseAdapter,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir,
+          logger,
+        };
+        const adopted = await baselineCore(deps);
+        expect(adopted.kind).toBe("baselined");
+
+        const generated = await generateMigration({
+          name: "author_holds_many",
+          dialect,
+          migrationsDir,
+          collections: toMinimalEntities(config.collections, e =>
+            resolveCollectionTableName(e.slug, e.dbName)
+          ),
+          singles: [],
+          components: [],
+          nonInteractive: true,
+        });
+        expect(generated).not.toBeNull();
+
+        await runFileMigrations(deps);
+
+        const rows = await adapter.executeQuery<{
+          id: string;
+          author: unknown;
+        }>(
+          `SELECT ${q("id")}, ${q("author")} FROM ${q(posts)} ORDER BY ${q("id")}`
+        );
+        const read = (value: unknown) =>
+          typeof value === "string" ? (JSON.parse(value) as unknown) : value;
+        expect(rows.map(row => [row.id, read(row.author)])).toEqual([
+          ["p1", [A]],
+          ["p2", null],
+        ]);
+        const after = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          dialect,
+          [posts]
+        );
+        expect(
+          (after.tables[0]?.foreignKeys ?? []).flatMap(fk => fk.columns)
+        ).not.toContain("author");
+      });
+    }
+  );
 }

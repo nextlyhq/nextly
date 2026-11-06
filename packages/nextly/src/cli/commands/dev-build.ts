@@ -35,7 +35,8 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
-import { registryRowsOrNone } from "../../domains/schema/pipeline/recorded-fields";
+import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
+import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -173,11 +174,17 @@ export async function syncCollections(
   // What each collection's registry row records before the sync below replaces it, for the apply
   // that follows: on SQLite a relationship switched between one related entry and many is told by
   // nothing else.
-  const recordedCollections = await registryRowsOrNone(() =>
-    new CollectionRegistryService(
-      adapter as unknown as DrizzleAdapter,
-      serviceLogger
-    ).getAllCollections()
+  const recordedCollections = await registryRows(
+    () =>
+      new CollectionRegistryService(
+        adapter as unknown as DrizzleAdapter,
+        serviceLogger
+      ).getAllCollections(),
+    {
+      kind: "collections",
+      tableExists: name =>
+        (adapter as unknown as DrizzleAdapter).tableExists(name),
+    }
   );
 
   let result: CollectionSyncResultWithValidation;
@@ -396,6 +403,17 @@ export async function syncComponents(
       localized: component.localized === true,
       configPath: `${STORAGE_FORMAT.configPathDir}/${component.slug}.ts`,
     })
+  );
+
+  // A relation an existing field group switches between storage shapes is refused before the
+  // registry records the new shape: this sync never converts an existing field group's columns.
+  refuseFieldGroupSwitches(
+    await registryRows(() => componentRegistry.getAllComponents(), {
+      kind: "components",
+      tableExists: name =>
+        (adapter as unknown as DrizzleAdapter).tableExists(name),
+    }),
+    config.fieldGroups
   );
 
   let result: SyncComponentResult;

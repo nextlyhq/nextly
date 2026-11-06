@@ -11,6 +11,7 @@
  * @module domains/schema/pipeline/recorded-fields
  */
 import type { FieldConfig } from "../../../collections/config/define-collection";
+import { NextlyError } from "../../../errors/nextly-error";
 
 /** A registry row, as each registry service lists it. */
 export interface RegistryFieldsRow {
@@ -39,17 +40,57 @@ export function recordFieldsOnto(
   }
 }
 
+/** The registry tables each kind of entity is recorded in, by the names a database may hold. */
+const REGISTRY_TABLES = {
+  collections: ["dynamic_collections"],
+  singles: ["dynamic_singles"],
+  // Before and after the field-group storage migration.
+  components: ["dynamic_components", "dynamic_field_groups"],
+} as const;
+
 /**
- * The rows `read` lists, or none when it cannot: without them an apply switches nothing on SQLite,
- * which is what it did before any were read, and the apply itself is not held up.
+ * The rows `read` lists. Read before a change replaces them, they are the only record of what a
+ * relation stored on SQLite, so a read that fails refuses the change rather than letting it run
+ * with no history: the switch it would have converted is left unconverted and then forgotten once
+ * the registry records the new fields. A registry that does not exist yet, as on a database being
+ * set up, holds no history to lose, and reads as empty.
+ *
+ * @throws NextlyError (validation, `RELATION_HISTORY_UNREADABLE`) when the registry is there and
+ *   could not be read
  */
-export async function registryRowsOrNone(
-  read: () => Promise<readonly RegistryFieldsRow[] | undefined>
+export async function registryRows(
+  read: () => Promise<readonly RegistryFieldsRow[] | undefined>,
+  registry: {
+    kind: keyof typeof REGISTRY_TABLES;
+    tableExists: (name: string) => Promise<boolean>;
+  }
 ): Promise<readonly RegistryFieldsRow[]> {
   try {
     return (await read()) ?? [];
-  } catch {
-    return [];
+  } catch (error) {
+    const present = await Promise.all(
+      REGISTRY_TABLES[registry.kind].map(name =>
+        registry.tableExists(name).catch(() => true)
+      )
+    );
+    if (!present.some(Boolean)) return [];
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: registry.kind,
+          code: "RELATION_HISTORY_UNREADABLE",
+          message:
+            `The ${registry.kind} registry could not be read, so what each relationship stored ` +
+            `before this change is unknown and a switch between one related entry and many could ` +
+            `not be converted. Nothing was changed; try again.`,
+        },
+      ],
+      cause: error instanceof Error ? error : undefined,
+      logContext: {
+        reason: "relation-history-unreadable",
+        kind: registry.kind,
+      },
+    });
   }
 }
 

@@ -31,7 +31,6 @@ import {
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionHasStatusColumn,
-  convertCompanionRelationShapes,
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
@@ -148,17 +147,6 @@ export async function reconcileSingleCompanion(
     kind: "single",
     slug,
     tableName,
-  });
-  // A translated relation switched between storage shapes, converted on the companion, which
-  // holds its values and which the main table's apply does not reach.
-  await convertCompanionRelationShapes(adapter, {
-    tableName,
-    oldFields,
-    newFields,
-    wasLocalized,
-    isLocalized: localized,
-    dialect,
-    builtBy: "collection",
   });
 
   // Register the companion runtime table (best-effort — next boot re-registers it). Skipped when

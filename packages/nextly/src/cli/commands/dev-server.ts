@@ -52,7 +52,7 @@ import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pip
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
   recordFieldsOnto,
-  registryRowsOrNone,
+  registryRows,
   type RegistryFieldsRow,
 } from "../../domains/schema/pipeline/recorded-fields";
 import {
@@ -686,7 +686,10 @@ export async function performAutoSync(
   recordFieldsOnto(desired.collections, recordedCollections);
   recordFieldsOnto(
     desired.singles,
-    await registryRowsOrNone(() => singleRegistry.getAllSingles())
+    await registryRows(() => singleRegistry.getAllSingles(), {
+      kind: "singles",
+      tableExists: name => drizzleAdapter.tableExists(name),
+    })
   );
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.

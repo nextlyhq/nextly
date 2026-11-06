@@ -60,6 +60,7 @@ import {
   getColumnDescriptor,
   getSystemColumnDescriptors,
   relationshipStoresJson,
+  relationStorageShape,
   renderSystemColumnSql,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
@@ -3779,8 +3780,14 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     field?: Partial<FieldDefinition>
   ): string {
     // The shared backfill decision; this path stores `chips` as a JSON array, and a relationship
-    // holding a list too, whose empty is an empty list rather than no reference.
-    const storesList = field !== undefined && relationshipStoresJson(field);
+    // holding a list of ids too, whose empty is an empty list rather than no reference. Only such
+    // a list, and only one with no minimum: a relation to several collections holds one
+    // `{ relationTo, value }` reference, and a list that must hold entries holds none in `[]`, so
+    // each keeps the refusal a required relation without a backfill gets.
+    const storesList =
+      field !== undefined &&
+      relationStorageShape(field) === "list" &&
+      !((field.minRows ?? 0) > 0);
     return backfillDefaultForType({
       type,
       field,

@@ -73,7 +73,7 @@ const posts = (relationTo: string | string[], hasMany = false) =>
     ],
   });
 /** `posts` translated per language, whose translated `author` holds one entry or many. */
-const translatedPosts = (hasMany: boolean) =>
+const translatedPosts = (hasMany: boolean, translated = true) =>
   defineCollection({
     slug: "posts",
     localized: true,
@@ -83,7 +83,7 @@ const translatedPosts = (hasMany: boolean) =>
         name: "author",
         relationTo: "authors",
         hasMany,
-        localized: true,
+        localized: translated,
       } as never),
     ],
   });
@@ -230,6 +230,28 @@ for (const dialect of DIALECTS) {
       await migrateTo([authors, translatedPosts(true)]);
 
       expect(await valueOf("dc_posts_locales", "author")).toEqual([A]);
+    });
+
+    it("refuses a switch made in the same change that makes the relation translated", async () => {
+      await migrateTo([authors, translatedPosts(false, false)]);
+
+      // Refused before any file is written: on SQLite by this rule, where the columns are text on
+      // both sides; on PostgreSQL and MySQL the move's own check already refuses a field whose
+      // column changes type as it moves. Either way the field is named.
+      const refused = await migrateTo([
+        authors,
+        translatedPosts(true, true),
+      ]).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      const { message, publicData } = (refused ?? {}) as {
+        message?: string;
+        publicData?: unknown;
+      };
+      expect(`${String(message)} ${JSON.stringify(publicData)}`).toMatch(
+        /'author'|"author"/
+      );
     });
 
     it("converts a field group's list back to its one id when its relation becomes one", async () => {

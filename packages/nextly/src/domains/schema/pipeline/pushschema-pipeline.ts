@@ -58,7 +58,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
-import { desiredCompanionSwitchOps } from "./companion-shape-switches";
+import { relationSwitches } from "./companion-shape-switches";
 import {
   canEmitWithoutDrizzleKit,
   emitDdl,
@@ -73,12 +73,7 @@ import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
 } from "./diff/introspect-live";
-import type {
-  ChangeColumnTypeOp,
-  Operation,
-  NextlySchemaSnapshot,
-  TableSpec,
-} from "./diff/types";
+import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
@@ -812,10 +807,24 @@ export class PushSchemaPipeline {
 
       // The live columns given the shape each relation's recorded field stored: a switch the
       // column's type does not show is planned from it (`withRecordedShapes`).
-      const allOperations = diffSnapshots(
-        withRecordedShapes(liveSnapshot, desired),
-        snapshotBeforeRenames
-      );
+      //
+      // A translated relation's switch, planned on its companion from the same rule, joins the
+      // operations here, so the confirmation, the refusals and the apply read one set, as the
+      // preview does (`relationSwitches`).
+      const switches = await relationSwitches({
+        db,
+        dialect,
+        desired,
+        live: liveSnapshot,
+        desiredSnapshot: snapshotBeforeRenames,
+      });
+      const allOperations = [
+        ...diffSnapshots(
+          withRecordedShapes(liveSnapshot, desired),
+          snapshotBeforeRenames
+        ),
+        ...switches.ops,
+      ];
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -968,27 +977,20 @@ export class PushSchemaPipeline {
       // A relationship switched to or from naming several target collections, while a row holds a
       // value no conversion can carry across; then one switched from many related entries to one,
       // while a row holds several.
-      //
-      // The translations tables are judged with the main ones: a translated relation keeps its
-      // values in its companion, which the localization layer converts after this apply, so its
-      // rows are counted now, before any statement runs, and only for a companion that exists.
-      const companions = await existingCompanionSwitches(
-        db,
-        dialect,
-        desiredCompanionSwitchOps(args.desired, dialect)
-      );
+      // A translated relation's companion is among these (`relationSwitches`), its rows counted
+      // with the main tables'.
       await refuseTargetSwitchesOverValues({
         db: args.db,
         dialect: args.dialect,
         desired: args.desired,
-        operations: [...resolvedOps, ...companions.ops],
+        operations: resolvedOps,
       });
       await refuseSeveralReferencesForOne({
         db: args.db,
         dialect: args.dialect,
         desired: args.desired,
-        live: { tables: [...liveSnapshot.tables, ...companions.tables] },
-        operations: [...resolvedOps, ...companions.ops],
+        live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+        operations: resolvedOps,
       });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
@@ -2169,23 +2171,4 @@ async function refuseKitRebuildsLosingConstraints(
       logContext: { table: spec.name, lost },
     });
   }
-}
-
-/**
- * `ops` on companion tables that exist, with those tables as they stand: a companion an entity
- * has not been given yet holds no rows to judge.
- */
-async function existingCompanionSwitches(
-  db: unknown,
-  dialect: SupportedDialect,
-  ops: readonly ChangeColumnTypeOp[]
-): Promise<{ ops: ChangeColumnTypeOp[]; tables: TableSpec[] }> {
-  if (ops.length === 0) return { ops: [], tables: [] };
-  const names = [...new Set(ops.map(op => op.tableName))];
-  const { tables } = await introspectLiveSnapshot(db, dialect, names);
-  const present = new Set(tables.map(table => table.name.toLowerCase()));
-  return {
-    ops: ops.filter(op => present.has(op.tableName.toLowerCase())),
-    tables,
-  };
 }

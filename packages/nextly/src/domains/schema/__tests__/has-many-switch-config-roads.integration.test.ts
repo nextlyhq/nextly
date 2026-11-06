@@ -41,6 +41,7 @@ import {
 import {
   defineCollection,
   defineConfig,
+  defineFieldGroup,
   defineSingle,
   relationship,
   text,
@@ -53,6 +54,8 @@ import {
 import { clearServices } from "../../../di/register";
 import { getService } from "../../../di/service-access";
 import { reloadNextlyConfig } from "../../../init/reload-config";
+import { previewDesiredSchema } from "../pipeline/preview";
+import type { DesiredCollection } from "../pipeline/types";
 import {
   clearCachedSnapshot,
   clearLiveSnapshots,
@@ -248,14 +251,16 @@ for (const dialect of getConfiguredTestDialects()) {
       clearServices();
       await createTestNextly({
         adapter: database.adapter as never,
-        collections: [authors, translatedArticles(false)],
+        collections: [authors, posts(false), translatedArticles(false)],
         localization: LOCALIZATION,
       } as never);
       expect(
         await reload(
           defineConfig({
             localization: LOCALIZATION,
-            collections: [authors, translatedArticles(false)],
+            // The entities the suite set up stay, so the apply weighs dropping none of them.
+            collections: [authors, posts(false), translatedArticles(false)],
+            singles: [site(false)],
           })
         )
       ).toEqual([]);
@@ -267,11 +272,42 @@ for (const dialect of getConfiguredTestDialects()) {
         `INSERT INTO ${c("dc_articles_locales")} (${c("_parent")}, ${c("_locale")}, ${c("author")}) VALUES ('p1', 'es', '${A}')`
       );
 
+      // The preview of the switch shows the translations table's conversion, as the apply plans
+      // it, so what is confirmed is what runs.
+      const preview = await previewDesiredSchema({
+        desired: {
+          collections: {
+            articles: {
+              slug: "articles",
+              tableName: "dc_articles",
+              fields: translatedArticles(true)
+                .fields as DesiredCollection["fields"],
+              localized: true,
+              recordedFields: translatedArticles(false)
+                .fields as DesiredCollection["fields"],
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        db: database.adapter.getDrizzle(),
+        dialect,
+      });
+      expect(preview.operations).toContainEqual(
+        expect.objectContaining({
+          type: "change_column_type",
+          tableName: "dc_articles_locales",
+          columnName: "author",
+          conversion: "referenceList",
+        })
+      );
+
       expect(
         await reload(
           defineConfig({
             localization: LOCALIZATION,
-            collections: [authors, translatedArticles(true)],
+            collections: [authors, posts(false), translatedArticles(true)],
+            singles: [site(false)],
           })
         )
       ).toEqual([]);
@@ -297,6 +333,18 @@ for (const dialect of getConfiguredTestDialects()) {
     });
   });
 }
+
+/** A field group `hero` whose `tag` relation holds one entry or many. */
+const heroConfig = (hasMany: boolean) =>
+  defineConfig({
+    collections: [authors],
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "hero",
+        fields: [relationship({ name: "tag", relationTo: "authors", hasMany })],
+      }),
+    ],
+  });
 
 describe("a relationship switched to many by db:sync — sqlite", () => {
   let dir: string;
@@ -346,6 +394,21 @@ describe("a relationship switched to many by db:sync — sqlite", () => {
     vi.unstubAllEnvs();
     _resetEnvCache();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a field group's switch, which it cannot convert, before recording it", async () => {
+    expect(await dbSync(heroConfig(false))).toBeUndefined();
+
+    expect(await dbSync(heroConfig(true))).toBeDefined();
+
+    // The registry still records one entry, so the rows and the record agree.
+    const [row] = await adapterOf().executeQuery<{ fields: unknown }>(
+      `SELECT "fields" FROM "dynamic_components" WHERE "slug" = 'hero'`
+    );
+    const fields = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as Array<{ name: string; hasMany?: boolean }>;
+    expect(fields.find(f => f.name === "tag")?.hasMany ?? false).toBe(false);
   });
 
   it("keeps the id each row held as a one-item list, on a collection and a Single", async () => {

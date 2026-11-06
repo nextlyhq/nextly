@@ -110,7 +110,7 @@ import {
 } from "../domains/schema/field-types/field-type-registry";
 import {
   holdRecordedAtStart,
-  registryRowsOrNone,
+  registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
 import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type {
@@ -2276,20 +2276,26 @@ async function syncCodeFirstEntities(
   // none.
   if (bootApplyEnabled()) {
     holdRecordedAtStart({
-      collections: await registryRowsOrNone(() =>
-        container
-          .get<CollectionRegistryService>("collectionRegistryService")
-          .getAllCollections()
+      collections: await registryRows(
+        () =>
+          container
+            .get<CollectionRegistryService>("collectionRegistryService")
+            .getAllCollections(),
+        { kind: "collections", tableExists: name => adapter.tableExists(name) }
       ),
-      singles: await registryRowsOrNone(() =>
-        container
-          .get<SingleRegistryService>("singleRegistryService")
-          .getAllSingles()
+      singles: await registryRows(
+        () =>
+          container
+            .get<SingleRegistryService>("singleRegistryService")
+            .getAllSingles(),
+        { kind: "singles", tableExists: name => adapter.tableExists(name) }
       ),
-      components: await registryRowsOrNone(() =>
-        container
-          .get<FieldGroupRegistryService>("fieldGroupRegistryService")
-          .getAllComponents()
+      components: await registryRows(
+        () =>
+          container
+            .get<FieldGroupRegistryService>("fieldGroupRegistryService")
+            .getAllComponents(),
+        { kind: "components", tableExists: name => adapter.tableExists(name) }
       ),
     });
   }

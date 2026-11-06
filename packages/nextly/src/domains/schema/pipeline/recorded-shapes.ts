@@ -18,7 +18,48 @@ import {
 } from "../services/field-column-descriptor";
 
 import type { NextlySchemaSnapshot } from "./diff/types";
-import type { DesiredSchema } from "./types";
+import type {
+  DesiredCollection,
+  DesiredFieldGroup,
+  DesiredSchema,
+  DesiredSingle,
+} from "./types";
+
+/** A collection, Single or field group of a desired schema, with what each reader asks of it. */
+export interface RelationEntity {
+  entity: DesiredCollection | DesiredSingle | DesiredFieldGroup;
+  kind: "collection" | "single" | "fieldGroup";
+  /** How a refusal names its kind. */
+  label: "Collection" | "Single" | "Field group";
+  /** A field group's row, where a many-to-many keeps its list. */
+  component: boolean;
+}
+
+/** Every collection, Single and field group of `desired`. */
+export function relationEntities(
+  desired: Pick<DesiredSchema, "collections" | "singles" | "components">
+): RelationEntity[] {
+  return [
+    ...Object.values(desired.collections).map(entity => ({
+      entity,
+      kind: "collection" as const,
+      label: "Collection" as const,
+      component: false,
+    })),
+    ...Object.values(desired.singles).map(entity => ({
+      entity,
+      kind: "single" as const,
+      label: "Single" as const,
+      component: false,
+    })),
+    ...Object.values(desired.components).map(entity => ({
+      entity,
+      kind: "fieldGroup" as const,
+      label: "Field group" as const,
+      component: true,
+    })),
+  ];
+}
 
 interface RecordedField {
   name?: unknown;
@@ -36,12 +77,7 @@ function recordedShapes(
     string,
     NonNullable<ReturnType<typeof relationStorageShape>>
   >();
-  const entities = [
-    ...Object.values(desired.collections).map(e => [e, false] as const),
-    ...Object.values(desired.singles).map(e => [e, false] as const),
-    ...Object.values(desired.components).map(e => [e, true] as const),
-  ];
-  for (const [entity, component] of entities) {
+  for (const { entity, component } of relationEntities(desired)) {
     for (const field of (entity.recordedFields ??
       []) as readonly RecordedField[]) {
       if (typeof field.name !== "string") continue;

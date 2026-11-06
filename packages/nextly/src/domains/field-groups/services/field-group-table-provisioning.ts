@@ -19,10 +19,7 @@ import {
   buildCompanionTransitionStatements,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
-import {
-  convertCompanionRelationShapes,
-  liveCompanionShape,
-} from "../../i18n/runtime/companion-io";
+import { liveCompanionShape } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
 /**
@@ -232,18 +229,6 @@ export async function reconcileComponentCompanion(args: {
     kind: "fieldGroup",
     slug,
     tableName,
-  });
-  // A translated relation switched between storage shapes, converted on the companion, which
-  // holds its values and which the main table's apply does not reach.
-  await convertCompanionRelationShapes(adapter, {
-    tableName,
-    oldFields,
-    newFields,
-    wasLocalized,
-    isLocalized: localized,
-    dialect,
-    builtBy: "fieldGroup",
-    component: true,
   });
 
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)

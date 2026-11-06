@@ -22,7 +22,6 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
-import type { CompanionSwitchArgs } from "../../schema/pipeline/companion-shape-switches";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -818,55 +817,6 @@ export function versionScopeForEntityKind(
 }
 
 /**
- * Converts the companion's column of each translated relation a change switches between storage
- * shapes: one id to a list of them or back, or, to or from naming several collections, requires
- * the column empty and retypes it (`companionShapeSwitchOps`). The schema push leaves companions
- * to this layer, so the main table's conversion does not reach them. The apply's refusals counted
- * these rows before anything ran, so a guard here only repeats that check. Nothing to do without
- * a companion, or where nothing switches.
- */
-export async function convertCompanionRelationShapes(
-  adapter: CompanionReconcileAdapter,
-  args: CompanionSwitchArgs
-): Promise<void> {
-  const { companionShapeSwitchOps, companionSwitchStatements } = await import(
-    "../../schema/pipeline/companion-shape-switches"
-  );
-  const ops = companionShapeSwitchOps(args);
-  if (ops.length === 0) return;
-  if (!(await companionTableExists(adapter, `${args.tableName}_locales`))) {
-    return;
-  }
-  const statements = companionSwitchStatements(ops, args.dialect);
-  await adapter.transaction(async tx => {
-    for (const statement of statements) await tx.execute(statement);
-  });
-}
-
-/** `convertCompanionRelationShapes` from what the registry recorded, where it recorded anything. */
-async function convertSinceRecorded(
-  adapter: CompanionReconcileAdapter,
-  args: {
-    tableName: string;
-    fields: CompanionFieldLike[];
-    dialect: SupportedDialect;
-    builtBy: ColumnOrigin;
-    recordedBefore?: RecordedEntity | null;
-  }
-): Promise<void> {
-  if (!args.recordedBefore) return;
-  await convertCompanionRelationShapes(adapter, {
-    tableName: args.tableName,
-    oldFields: args.recordedBefore.fields,
-    newFields: args.fields,
-    wasLocalized: args.recordedBefore.localized,
-    isLocalized: true,
-    dialect: args.dialect,
-    builtBy: args.builtBy,
-  });
-}
-
-/**
  * Brings an existing companion's translated columns in step with the entity's fields, additively.
  * Resolves false when it reported a failure through `onError`, a refused column among them, so
  * the caller builds nothing more on the companion's columns this run.
@@ -919,9 +869,6 @@ export async function reconcileCompanionColumns(
     if (!(await companionTableExists(adapter, companionTableName)))
       return !failed;
     if (desired.length === 0) return !failed;
-    // A translated relation the change switched between storage shapes, converted on the
-    // companion, which holds its values. Judged from what the registry recorded before the run.
-    await convertSinceRecorded(adapter, args);
 
     const { introspectLiveSnapshot } = await import(
       "../../schema/pipeline/diff/introspect-live"

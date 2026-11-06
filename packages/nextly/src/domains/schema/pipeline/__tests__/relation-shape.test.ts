@@ -18,6 +18,8 @@ import type {
   NextlySchemaSnapshot,
 } from "../diff/types";
 import { referenceConversionStatements } from "../reference-list-conversion";
+import { relationSwitches } from "../companion-shape-switches";
+import { registryRows } from "../recorded-fields";
 import { withRecordedShapes } from "../recorded-shapes";
 import type { DesiredSchema } from "../types";
 
@@ -344,5 +346,101 @@ describe("a column becoming a list, planned from a table built from config", () 
       beforeConversion: true,
     });
     expect(ops[2]).toMatchObject({ conversion: "referenceList" });
+  });
+});
+
+describe("reading what each relation stored before a change", () => {
+  const failing = () => Promise.reject(new Error("database busy"));
+
+  it("refuses when the registry is there and cannot be read", async () => {
+    await expect(
+      registryRows(failing, {
+        kind: "collections",
+        tableExists: () => Promise.resolve(true),
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({ code: "RELATION_HISTORY_UNREADABLE" }),
+        ],
+      },
+    });
+  });
+
+  it("reads none from a registry not created yet", async () => {
+    await expect(
+      registryRows(failing, {
+        kind: "collections",
+        tableExists: () => Promise.resolve(false),
+      })
+    ).resolves.toEqual([]);
+  });
+});
+
+describe("a switch made while its field moves to or from the translations table", () => {
+  const author = (hasMany: boolean) => ({
+    name: "author",
+    type: "relationship",
+    relationTo: "authors",
+    hasMany,
+  });
+  const withAuthor = posts({});
+  const withoutAuthor: NextlySchemaSnapshot = {
+    tables: [{ name: "dc_posts", columns: [ID] }],
+  };
+
+  it("is refused before anything runs, naming the field", async () => {
+    await expect(
+      relationSwitches({
+        db: undefined,
+        dialect: "sqlite",
+        desired: {
+          collections: {
+            posts: {
+              slug: "posts",
+              tableName: "dc_posts",
+              fields: [author(true)] as never,
+              recordedFields: [author(false)] as never,
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        live: withAuthor,
+        desiredSnapshot: withoutAuthor,
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.author",
+            code: "RELATIONSHIP_SWITCH_WITH_TRANSLATION",
+          }),
+        ],
+      },
+    });
+  });
+
+  it("plans nothing extra where the field stays where it is", async () => {
+    await expect(
+      relationSwitches({
+        db: undefined,
+        dialect: "sqlite",
+        desired: {
+          collections: {
+            posts: {
+              slug: "posts",
+              tableName: "dc_posts",
+              fields: [author(true)] as never,
+              recordedFields: [author(false)] as never,
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        live: withAuthor,
+        desiredSnapshot: withAuthor,
+      })
+    ).resolves.toEqual({ ops: [], tables: [] });
   });
 });
