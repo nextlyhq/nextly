@@ -19,12 +19,11 @@ import {
 import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
-  type OneTimeSecretsPruneAdapter,
 } from "../../plugins/security/one-time-secrets-prune";
+import type { PruneInBatchesAdapter } from "../../plugins/security/prune-in-batches";
 import {
   pruneReceivedWebhooks,
   RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS,
-  type ReceivedWebhooksPruneAdapter,
 } from "../../plugins/security/received-webhooks-prune";
 import {
   ledgerFor,
@@ -73,8 +72,9 @@ export interface RetentionPassInput {
   adapter: AuditPruneAdapter &
     PruneDeps["adapter"] &
     EmailPruneAdapter &
-    OneTimeSecretsPruneAdapter &
-    ReceivedWebhooksPruneAdapter &
+    // What the one-purpose secrets' and received-webhook claims' sweeps
+    // both take.
+    PruneInBatchesAdapter &
     NoticesPruneDb &
     ContentEventsPruneDb &
     PreviewLinksPruneAdapter &
