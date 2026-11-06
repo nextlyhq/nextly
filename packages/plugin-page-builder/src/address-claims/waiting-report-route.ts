@@ -22,6 +22,7 @@ import { z } from "nextly/zod";
 
 import { ADDRESS_CLAIMS_SLUG } from "../collections/address-claims";
 import { PAGES_SLUG } from "../collections/pages";
+import { titleFieldIn } from "../entries-route";
 import { titlesAsCaller } from "../publish-readiness";
 import { parseRouteQuery } from "../route-query";
 
@@ -56,6 +57,8 @@ async function readWaitingReport(
   reads: {
     readonly claims: Claims;
     readonly nextly: Parameters<typeof titlesAsCaller>[1];
+    /** A collection's configuration, for the field that names its entries. */
+    readonly collection: (slug: string) => Promise<unknown>;
   },
   page: number
 ): Promise<{ items: WaitingReportItem[]; meta: PaginationMeta }> {
@@ -78,7 +81,7 @@ async function readWaitingReport(
           { limit: blockingKeys.length }
         );
   const holderOf = new Map(blocking.map(row => [row.key, row.holder]));
-  const named = await titles(ctx, reads.nextly, [
+  const named = await titles(ctx, reads, [
     ...rows.map(row => row.holder),
     ...blocking.map(row => row.holder),
   ]);
@@ -114,7 +117,10 @@ async function readWaitingReport(
  */
 async function titles(
   ctx: Pick<PluginRouteContext, "caller">,
-  nextly: Parameters<typeof titlesAsCaller>[1],
+  reads: {
+    readonly nextly: Parameters<typeof titlesAsCaller>[1];
+    readonly collection: (slug: string) => Promise<unknown>;
+  },
   holders: readonly (Holder | null)[]
 ): Promise<(holder: Holder) => ReportedDocument> {
   const ids = new Map<string, Set<string>>();
@@ -129,15 +135,42 @@ async function titles(
     // A collection the site no longer has (a claim can outlive one removed
     // from its configuration) yields no titles here, like one the caller may
     // not read, so its documents are named by id; a test holds this.
+    // Named by the field its collection names entries by, core's rule as
+    // the entries route asks it, so a report never calls a document
+    // "Untitled" that has a title under another name.
+    const field = await titleFieldOf(reads.collection, collection);
+    if (field === null) {
+      found.set(collection, new Map());
+      continue;
+    }
     found.set(
       collection,
-      await titlesAsCaller(ctx, nextly, collection, [...set])
+      await titlesAsCaller(ctx, reads.nextly, collection, [...set], field)
     );
   }
   return holder => ({
     ...holder,
     title: found.get(holder.collection)?.get(holder.id) ?? null,
   });
+}
+
+/**
+ * The field that names `collection`'s entries, `title` where its
+ * configuration names none, or null where the site no longer has the
+ * collection, whose documents are then named by id.
+ */
+async function titleFieldOf(
+  read: (slug: string) => Promise<unknown>,
+  collection: string
+): Promise<string | null> {
+  let record: unknown;
+  try {
+    record = await read(collection);
+  } catch {
+    return null;
+  }
+  if (typeof record !== "object" || record === null) return null;
+  return titleFieldIn(record)?.name ?? "title";
 }
 
 /**
@@ -176,6 +209,7 @@ export function addressWaitingRoute(): {
           nextly: (await getCachedNextly()) as unknown as Parameters<
             typeof titlesAsCaller
           >[1],
+          collection: slug => ctx.services.collections.getCollection(slug, {}),
         },
         page
       );

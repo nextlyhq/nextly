@@ -28,6 +28,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
+import { defineCollection, text, type CollectionConfig } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -567,10 +568,13 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      collections: readonly CollectionConfig[] = []
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder()],
+        ...(collections.length === 0 ? {} : { collections: [...collections] }),
         seedPublic: true,
       });
       // The first user is the super admin, made here so no one below is.
@@ -734,6 +738,31 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (answered.body.items as { blockedBy: unknown }[])[0]?.blockedBy
       ).toEqual({ collection: "components", id: hidden, title: null });
+    });
+
+    it("names a holder by the field its collection names entries by", async () => {
+      const t = await boot([
+        defineCollection({
+          slug: "ac_articles",
+          admin: { useAsTitle: "headline" },
+          access: { read: () => true },
+          fields: [text({ name: "headline" })],
+        }),
+      ]);
+      const author = await person(t, "author");
+      await grant(t, author, [
+        "read-pages",
+        "update-pages",
+        "read-ac_articles",
+      ]);
+      const waiting = await create(t, "pages", pageData("Waiting page"));
+      const article = await create(t, "ac_articles", { headline: "Big news" });
+      await seedWait(t, waiting, { collection: "ac_articles", id: article });
+
+      const answered = await report(await sessionOf(t, author));
+      expect(
+        (answered.body.items as { blockedBy: unknown }[])[0]?.blockedBy
+      ).toEqual({ collection: "ac_articles", id: article, title: "Big news" });
     });
 
     it("names a holder in a collection the site no longer has by its id", async () => {

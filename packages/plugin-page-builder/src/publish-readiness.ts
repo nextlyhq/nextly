@@ -378,13 +378,17 @@ export async function titlesAsCaller(
   ctx: Pick<PluginRouteContext, "caller">,
   nextly: FindReader,
   collection: string,
-  ids: readonly string[]
+  ids: readonly string[],
+  /** The field naming the collection's entries (`titleFieldIn`). */
+  titleField = "title"
 ): Promise<Map<string, string>> {
   const titles = new Map<string, string>();
   if (ids.length === 0) return titles;
   for (const item of await readableAsCaller(ctx, nextly, collection, ids)) {
     const row = item as Record<string, unknown>;
-    if (typeof row.id === "string") titles.set(row.id, titleOf(row.title));
+    if (typeof row.id === "string") {
+      titles.set(row.id, titleOf(row[titleField]));
+    }
   }
   return titles;
 }

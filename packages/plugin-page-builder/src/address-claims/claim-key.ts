@@ -50,8 +50,11 @@ const NAMESPACE: Readonly<Record<ClaimKind, string>> = {
 /** The segment that numbers a list's later pages: `/news/page/2`. */
 const PAGE_SEGMENT = "page";
 
-/** A page number as a list spells it: no sign, no leading zero. */
-const PAGE_NUMBER = /^[1-9]\d*$/;
+/**
+ * A later page's number as a list spells it: from 2, with no sign and no
+ * leading zero. Page 1 is the list's own address, not one of its space's.
+ */
+const PAGE_NUMBER = /^(?:[2-9]|[1-9]\d+)$/;
 
 /**
  * Whether `path` holds what a browser rewrites before it asks for a path: a
@@ -65,6 +68,20 @@ function rewrittenByBrowsers(path: string): boolean {
     if (char === "\\" || code < 0x20 || code === 0x7f) return true;
   }
   return false;
+}
+
+/**
+ * `path` without what URL parsing itself strips from both ends: control
+ * characters and the ASCII space, and nothing else. A no-break space or
+ * another Unicode space stays, since a browser percent-encodes it and the
+ * route serves the slug holding it at its own address (`/about%C2%A0`).
+ */
+function urlTrimmed(path: string): string {
+  let start = 0;
+  let end = path.length;
+  while (start < end && path.charCodeAt(start) <= 0x20) start += 1;
+  while (end > start && path.charCodeAt(end - 1) <= 0x20) end -= 1;
+  return path.slice(start, end);
 }
 
 /** A URL's scheme and host, which are not part of the address it serves. */
@@ -83,11 +100,9 @@ export function servedAddress(
   path: string
 ): ServedAddress | null {
   if (locale === "" || locale.includes("|")) return null;
-  if (rewrittenByBrowsers(path.trim())) return null;
-  const local = path
-    .trim()
-    .replace(SCHEME_AND_HOST, "")
-    .replace(/[?#].*$/s, "");
+  const trimmed = urlTrimmed(path);
+  if (rewrittenByBrowsers(trimmed)) return null;
+  const local = trimmed.replace(SCHEME_AND_HOST, "").replace(/[?#].*$/s, "");
   const segments: string[] = [];
   // Empty pieces are the leading, trailing and doubled slashes.
   for (const piece of local.split("/").filter(piece => piece !== "")) {
