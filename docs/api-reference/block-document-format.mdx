@@ -297,16 +297,18 @@ as the operators they name. A condition may check only a field the public may
 read, since whether the block shows would otherwise reveal its value. Saving
 refuses any other operator or field.
 
-> **The renderer does not evaluate `conditions` yet, so it currently fails
-> CLOSED.** It omits any node carrying `conditions` **for every visitor**,
-> rather than serving it to those who match.
->
-> This is deliberate: conditions gate personalised and status-restricted
-> content, and showing everyone what was meant for some of them cannot be taken
-> back, while content missing from a page is visible and reportable. The
-> consequence is still worth stating plainly: **a node you condition today
-> disappears from the page entirely.** Leave `conditions` unset until the
-> evaluator ships.
+The published page decides conditions on the server, against the entry as
+an anonymous visitor reads it: its published values, and only the fields the
+public may read. A block whose conditions hold is served; one whose conditions
+don't hold is left out of the HTML, its styles and the page's metadata. A block
+inside a list is decided for each entry the list draws, against that entry.
+
+> **A condition that can't be checked fails CLOSED.** An unknown operator or
+> field, a field the public may not read, a value of the wrong type, or a page
+> with no entry to check all leave the block out for every visitor, and the
+> route logs which block and why. Showing everyone what was meant for some of
+> them cannot be taken back, while content missing from a page is visible and
+> reportable.
 >
 > `devices` is unaffected and works as described.
 
@@ -348,11 +350,11 @@ The frozen surface is:
    locale overlays, the component-instance node shape, and the document limits.
 
    The freeze is over the **stored shape**, not over runtime behaviour. `Binding`
-   is resolved on published pages, and `NodeVisibility.conditions` is frozen and
-   reserved while the code that acts on it is not written yet (see the notes in
-   those sections). That is the intended order: a document written against a
-   frozen shape stays valid when resolution arrives, whereas shipping a shape
-   that later has to change would invalidate everything already stored.
+   is resolved on published pages, and `NodeVisibility.conditions` is decided
+   on them (see the notes in those sections). That was the intended order: a
+   document written against the frozen shape stayed valid when resolution and
+   evaluation arrived, whereas shipping a shape that later had to change would
+   have invalidated everything already stored.
 
 2. **The typed-style envelope** — the states × breakpoints structure and the
    token-reference convention. The style _property catalog_ inside it is
