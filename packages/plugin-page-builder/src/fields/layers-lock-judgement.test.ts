@@ -6,7 +6,9 @@
  * refusals through the Direct API. What it cannot set up is a language whose
  * store is not ready yet, which is the one read that keeps a write unjudged
  * rather than failing it; that, and the exact read asked for, are pinned here
- * against a stored read the test controls.
+ * against a stored read the test controls, as is what an open breakpoint
+ * removal lets a locked block lose: its removed breakpoints' values, and
+ * nothing else.
  */
 import {
   NextlyError,
@@ -17,6 +19,9 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+
+import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
+import type { Removal } from "../breakpoint-removal/strip";
 
 import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
 import { LAYERS_LOCK_CHANGED } from "./layers-lock-wording";
@@ -241,5 +246,92 @@ describe("withLockIssues", () => {
     ]);
     const rule = { path: "content", code: "wrong-parent", message: "y" };
     expect(withLockIssues([rule], [lock], "content")).toEqual([rule, lock]);
+  });
+});
+
+describe("layersLockIssues while a breakpoint removal is open", () => {
+  /** A locked block styled at Mobile and at Tablet. */
+  const lockedStyled = (tone: string, mobile: boolean) => ({
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: [
+      {
+        id: "hero",
+        type: "core/box",
+        version: 1,
+        props: { tone },
+        locked: true,
+        name: "Hero",
+        styles: {
+          base: {
+            tablet: { color: "#444444" },
+            ...(mobile ? { mobile: { color: "#222222" } } : {}),
+          },
+        },
+      },
+    ],
+  });
+  const removingMobile: Removal = {
+    ids: new Set(["mobile"]),
+    before: {
+      viewport: [
+        { id: "tablet", label: "Tablet", maxWidth: 900 },
+        { id: "mobile", label: "Mobile", maxWidth: 600 },
+      ],
+      container: [],
+    },
+  };
+  const stored = writeTo(async () => ({
+    kind: "value",
+    value: lockedStyled("dark", true),
+  }));
+  const judged = (
+    value: unknown,
+    open: OpenRemovalReader | undefined,
+    write: PluginFieldWrite = stored
+  ) => layersLockIssues(value, argsFor(write), "Content", undefined, open);
+
+  it("accepts the locked block stripped of exactly the removed breakpoint", async () => {
+    expect(
+      await judged(lockedStyled("dark", false), async () => removingMobile)
+    ).toEqual([]);
+  });
+
+  it("refuses the strip with anything else changed on the locked block", async () => {
+    expect(
+      await judged(lockedStyled("light", false), async () => removingMobile)
+    ).toHaveLength(1);
+  });
+
+  it("refuses the strip with no removal open, or none to read", async () => {
+    expect(
+      await judged(lockedStyled("dark", false), async () => null)
+    ).toHaveLength(1);
+    expect(await judged(lockedStyled("dark", false), undefined)).toHaveLength(
+      1
+    );
+  });
+
+  it("refuses the strip when the open removal cannot be read", async () => {
+    const unreadable: OpenRemovalReader = async () => {
+      throw new Error("the table cannot be read");
+    };
+    expect(await judged(lockedStyled("dark", false), unreadable)).toHaveLength(
+      1
+    );
+  });
+
+  it("refuses the strip from a write inside a transaction", async () => {
+    const inTransaction = writeTo(
+      async () => ({ kind: "value", value: lockedStyled("dark", true) }),
+      { inTransaction: true }
+    );
+    expect(
+      await judged(
+        lockedStyled("dark", false),
+        async () => removingMobile,
+        inTransaction
+      )
+    ).toHaveLength(1);
   });
 });

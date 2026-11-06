@@ -51,6 +51,7 @@ vi.mock("../../utils/adapter", () => ({
   createCliAdapter: async () => ({
     disconnect: async () => {},
   }),
+  openCommandAdapter: async () => ({ disconnect: async () => {} }),
 }));
 
 vi.mock("../../utils/config-loader", () => ({

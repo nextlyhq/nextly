@@ -411,6 +411,69 @@ describe("restoreVersion (integration)", () => {
     expect(beforeRestore?.snapshot.status).toBe("draft");
   });
 
+  it("restores an untranslated Single stored per language into the language its version was saved in", async () => {
+    // Under per-language storage a Single that is not translated still keeps its translatable
+    // values per language, and a version saved in German holds German's. Restored without its
+    // language, it would land on the default language's row and leave German as it was.
+    current = await createTestNextly({
+      perLanguageStorage: true,
+      singles: [
+        defineSingle({
+          slug: "notice",
+          versions: true,
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+    await singles.update(
+      "notice",
+      { heading: "EN" },
+      { overrideAccess: true, locale: "en" }
+    );
+    await singles.update(
+      "notice",
+      { heading: "DE one" },
+      { overrideAccess: true, locale: "de" }
+    );
+    await singles.update(
+      "notice",
+      { heading: "DE two" },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    interface VRow {
+      scopeSlug: string;
+      entryId: string;
+      locale: string | null;
+      versionNo: number | null;
+      snapshot: { heading?: string };
+    }
+    const deOne = (await current.adapter.select<VRow>("nextly_versions")).find(
+      r => r.scopeSlug === "notice" && r.snapshot.heading === "DE one"
+    );
+    expect(deOne?.locale).toBe("de");
+
+    await restoreVersion({
+      scopeKind: "single",
+      slug: "notice",
+      entryId: deOne!.entryId,
+      versionNo: deOne!.versionNo!,
+      user: await storedSuperAdmin(current),
+    });
+
+    const headingIn = async (locale: string) =>
+      (
+        (await singles.get("notice", { locale, overrideAccess: true })) as {
+          data?: { heading?: unknown };
+        }
+      ).data?.heading;
+    expect(await headingIn("de")).toBe("DE one");
+    expect(await headingIn("en")).toBe("EN");
+  });
+
   it("keeps a component's relationship as a reference id in the pre-restore snapshot", async () => {
     // A component holding a relationship must snapshot the reference id, not the
     // expanded related row: an expanded object is not valid component write

@@ -4,7 +4,11 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { NextlySchemaSnapshot, Operation } from "../../diff/types";
 import { PromptCancelledError } from "../../prompt-dispatcher/errors";
-import type { ClassifierEvent, Resolution } from "../../resolution/types";
+import type {
+  AddNotNullWithNullsEvent,
+  ClassifierEvent,
+  Resolution,
+} from "../../resolution/types";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
@@ -45,7 +49,8 @@ const baseSnapshot: NextlySchemaSnapshot = {
   ],
 };
 
-const notNullEvent: ClassifierEvent = {
+// Typed as its own kind, so a test spreading it may set that kind's fields.
+const notNullEvent: AddNotNullWithNullsEvent = {
   id: "add_not_null_with_nulls:dc_users.email",
   kind: "add_not_null_with_nulls",
   tableName: "dc_users",
@@ -104,7 +109,7 @@ describe("RealPreCleanupExecutor", () => {
   });
 
   /** A Required column added over rows that have none, named as the table names it. */
-  const addedOver = (columnName: string): ClassifierEvent => ({
+  const addedOver = (columnName: string): AddNotNullWithNullsEvent => ({
     ...notNullEvent,
     id: `add_not_null_with_nulls:dc_users.${columnName}`,
     columnName,

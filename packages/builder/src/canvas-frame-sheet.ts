@@ -167,8 +167,10 @@ ${ROOT} [contenteditable="true"] * {
   -webkit-user-select: text;
 }
 
-/* A block that draws nothing still has height enough to be selected. */
-${ROOT} [data-nx-selected]:empty { min-height: 2px; }
+/* A block that draws nothing still has height enough to be selected: at no
+   specificity, so a min height the block sets (a Section at Full screen)
+   wins over it while it is selected, as it does on the page. */
+:where(${ROOT} [data-nx-selected]:empty) { min-height: 2px; }
 
 /* A text block emptied of its words keeps a line, so it can still be clicked:
    see EMPTY_TEXT_SELECTOR. */
@@ -176,10 +178,12 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container always has an area to aim at, since without one it has
    no height and cannot be clicked. Drawn in the page's own text colour, faint,
-   so it reads on a light page and a dark section alike. */
+   so it reads on a light page and a dark section alike. Its height is held
+   apart, at no specificity, so a min height the block sets (a Section at Full
+   screen) wins over it, as it does on the page. */
+:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
-  min-height: 2.75rem;
   border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
   border-radius: 0.25rem;
   background: color-mix(in srgb, currentColor 6%, transparent);

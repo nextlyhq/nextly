@@ -71,6 +71,10 @@ import {
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   applyMigrationStatements,
   applyMigrationWhole,
 } from "../../schema/services/apply-migration-statements";
@@ -2163,7 +2167,8 @@ export class SingleMetadataService {
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
-    const isLocalized = input.localized === true;
+    // Whether its translatable columns live in its companion (`storesPerLanguage`), for the DDL.
+    const isLocalized = storesPerLanguage(input);
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
     const { DynamicCollectionSchemaService } = await import(
@@ -2254,7 +2259,9 @@ export class SingleMetadataService {
         wasLocalized: false,
         // A single being created has no prior state at all.
         wasStatus: false,
-        status: hasStatus,
+        // A `_status` of each language only where each language publishes on its own: an
+        // untranslated Single kept per language under the setting publishes as a document.
+        status: publishesPerLanguage(input),
         adapter,
       });
     } catch (error) {

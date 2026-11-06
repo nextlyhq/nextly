@@ -9,6 +9,10 @@ import {
   orderedMigrations,
 } from "../domains/schema/migrate/plugin/plugin-migration";
 import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
+import {
+  collectPluginWebhookEventTypes,
+  publishWebhookEventTypes,
+} from "../domains/webhooks/event-type-registry";
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
@@ -29,6 +33,7 @@ import {
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
+import { collectPluginTranslations } from "./plugin-translations";
 import {
   collectPrincipalKinds,
   publishPrincipalKinds,
@@ -161,6 +166,15 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // every emit — the per-plugin bus lets a plugin speak neither for core nor
   // for another plugin. Refused here, the mistake is named at boot.
   assertPluginEventNames(plugins);
+  // Webhook event types, checked and published as hook points are: a type
+  // outside the plugin's namespace, one of core's or one declared twice would
+  // otherwise be offered to subscribers as an event nothing may send. The
+  // published list is the one every subscription and the admin's form read.
+  publishWebhookEventTypes(collectPluginWebhookEventTypes(plugins));
+  // Translations, checked here and read again by the admin metadata: a key
+  // outside the plugin's namespace, or one another plugin declares, would
+  // otherwise show one plugin's text in another's screen, or none at all.
+  collectPluginTranslations(plugins);
   // A settings permission with no settings behind it guards nothing, and
   // reads as though the plugin's credentials were kept to a narrower role.
   // Whether the permission is the plugin's own is asked once the entities

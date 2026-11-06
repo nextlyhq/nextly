@@ -134,6 +134,7 @@ export {
   webhookKeys, // Query key factory for stable caching
   useWebhooks,
   useWebhook,
+  useWebhookEventTypes,
   useCreateWebhook,
   useUpdateWebhook,
   useDeleteWebhook,

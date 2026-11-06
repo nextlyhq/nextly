@@ -137,6 +137,7 @@ import {
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { forgetRecoveryPointIn } from "../../i18n/forget-recovery-point";
 import {
   languagesChangedConflict,
   languagesGoingLiveFrom,
@@ -150,6 +151,10 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -568,13 +573,13 @@ export class SingleMutationService extends BaseService {
   private translationsOf(
     singleMeta: DynamicSingleRecord
   ): CompanionSchema | null {
-    if (!this.localization || singleMeta.localized !== true) return null;
+    if (!this.localization || !storesPerLanguage(singleMeta)) return null;
     return buildCompanionSchema({
       slug: singleMeta.slug,
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -1000,6 +1005,19 @@ export class SingleMutationService extends BaseService {
           () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
           { main: undefined, language: undefined }
         );
+        // The author's unsaved work recorded in the discarded language goes
+        // with it; their work recorded in another language stays.
+        // Only where a pending change was removed: a discard that found none
+        // threw nothing away, and the point is then the only copy of the work.
+        if (removed > 0) {
+          await forgetRecoveryPointIn(tx, {
+            ref: discardedRef,
+            author: params.user?.id,
+            slot: draftLocale,
+            documentLocalized: singleMeta.localized === true,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          });
+        }
         // In the Single's history only when there was a draft to discard.
         if (removed > 0) {
           // A reader of the pending change now sees the live document, so the
@@ -1787,13 +1805,13 @@ export class SingleMutationService extends BaseService {
     const meta = singleMeta;
     const fieldConfigs = meta.fields ?? [];
     const companion =
-      this.localization && meta.localized === true
+      this.localization && storesPerLanguage(meta)
         ? buildCompanionSchema({
             slug,
             tableName: meta.tableName,
             fields: meta.fields as { name: string; type: string }[],
             dialect: this.adapter.dialect,
-            status: true,
+            status: publishesPerLanguage(meta),
           })
         : null;
     const writeLocale =
@@ -2226,16 +2244,9 @@ export class SingleMutationService extends BaseService {
         autoCreated = true;
       }
 
-      const companion =
-        this.localization && singleMeta.localized === true
-          ? buildCompanionSchema({
-              slug,
-              tableName: singleMeta.tableName,
-              fields: singleMeta.fields as { name: string; type: string }[],
-              dialect: this.adapter.dialect,
-              status: (singleMeta as { status?: boolean }).status === true,
-            })
-          : null;
+      // Where this Single keeps its translatable values, and whether each language publishes on
+      // its own: the same derivation as every other read and write of it.
+      const companion = this.translationsOf(singleMeta);
       const writeLocale =
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)

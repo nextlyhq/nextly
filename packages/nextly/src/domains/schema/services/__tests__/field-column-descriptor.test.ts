@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ICON_ID_MAX_LENGTH } from "../../../../collections/fields/types/icon";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import type { PluginFieldType } from "../../../../plugins/contributions";
 import {
@@ -520,5 +521,62 @@ describe("columnsThatMayHoldNull", () => {
         } as never,
       ])
     ).toEqual([]);
+  });
+});
+
+/**
+ * An icon field stores its id ("lucide:star") in a text column, as an email field does.
+ *
+ * An unregistered type also lands in a text column, so a plain icon field would read the same
+ * whether or not the descriptor knew the type. A declared short width separates the two: the
+ * unregistered fallback answers it with a bounded column, while an icon, like an email, ignores it.
+ */
+describe("getColumnDescriptor — icon", () => {
+  const shortWidth = {
+    options: { variant: "short" },
+    validation: { maxLength: 120 },
+  } as const;
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "stores an icon id as text on %s, the way an email is stored",
+    dialect => {
+      const icon = getColumnDescriptor(
+        field({ type: "icon", ...shortWidth }),
+        dialect,
+        "collection"
+      );
+      const email = getColumnDescriptor(
+        field({ type: "email", ...shortWidth }),
+        dialect,
+        "collection"
+      );
+      expect(icon?.kind).toBe("text");
+      expect(icon?.dialectType).toBe(email?.dialectType);
+    }
+  );
+
+  it("differs from an unregistered type's fallback, which the probe above would otherwise match", () => {
+    const unknown = getColumnDescriptor(
+      contributedField({ type: "not-registered", ...shortWidth }),
+      "postgresql",
+      "collection"
+    );
+    const icon = getColumnDescriptor(
+      field({ type: "icon", ...shortWidth }),
+      "postgresql",
+      "collection"
+    );
+    expect(unknown?.dialectType).toBe("varchar(120)");
+    expect(icon?.dialectType).toBe("text");
+  });
+
+  it("is as wide on MySQL as the longest id the validators accept", () => {
+    const icon = getColumnDescriptor(
+      field({ type: "icon" }),
+      "mysql",
+      "collection"
+    );
+    expect(icon?.length).toBe(ICON_ID_MAX_LENGTH);
+    expect(icon?.dialectType).toBe(`varchar(${String(ICON_ID_MAX_LENGTH)})`);
   });
 });

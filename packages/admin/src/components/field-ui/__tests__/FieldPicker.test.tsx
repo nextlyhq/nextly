@@ -82,7 +82,7 @@ describe("FieldPicker", () => {
       },
       {
         heading: "Basic",
-        types: ["textarea", "email", "password", "number"],
+        types: ["textarea", "email", "password", "number", "icon"],
       },
       {
         heading: "Advanced",

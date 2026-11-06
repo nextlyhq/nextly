@@ -31,6 +31,7 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -44,6 +45,7 @@ import {
 } from "../../domains/schema/services/postgres-schema";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
+import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
 import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
@@ -99,7 +101,13 @@ export function orderConfigPlugins(
   plugins: PluginDefinition[],
   consent: PluginConsent
 ): ReturnType<typeof resolveDeclaredPlugins> {
-  if (plugins.length === 0) return { plugins: [], preSetup: [] };
+  if (plugins.length === 0) {
+    // Resolution is skipped for an empty list, so nothing it would publish is
+    // published. The webhook event types are published empty here, so a config
+    // reloaded down to no plugins stops offering the last one's types.
+    publishWebhookEventTypes([]);
+    return { plugins: [], preSetup: [] };
+  }
   return resolveDeclaredPlugins(plugins, {
     coreVersion: getCoreVersion(),
     consent,
@@ -890,6 +898,9 @@ export async function loadConfig(
     // pipeline both read the active value, so `migrate` cannot end up applying
     // DDL to `public` while the application it is migrating runs in `cms`.
     publishConfiguredPostgresSchema(loaded.config);
+    // Likewise its per-language storage choice, so a command's DDL lays tables out as the site
+    // does. A booted site already chose and keeps its choice.
+    adoptPerLanguageStorage(loaded.config.perLanguageStorage);
     return loaded;
   });
 

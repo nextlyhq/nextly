@@ -38,7 +38,7 @@ import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
 import { lookLineWords, looksOfType, wornLook } from "./look-tiles";
 import { LookTiles } from "./look-tiles-view";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import {
   sharedStyleReachSentence,
   type SharedStyleReach,

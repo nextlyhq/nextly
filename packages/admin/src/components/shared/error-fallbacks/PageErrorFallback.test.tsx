@@ -9,10 +9,10 @@ import { PageErrorFallback } from "./PageErrorFallback";
 const french = {
   ...BUILT_IN_CATALOGS,
   fr: {
-    "errors.page.title": "Un problème est survenu",
-    "errors.page.reload": "Recharger la page",
-    "errors.page.retry": "Réessayer",
-    "errors.page.home": "Accueil",
+    "nextly.errors.page.title": "Un problème est survenu",
+    "nextly.errors.page.reload": "Recharger la page",
+    "nextly.errors.page.retry": "Réessayer",
+    "nextly.errors.page.home": "Accueil",
   },
 };
 
