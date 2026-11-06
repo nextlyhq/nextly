@@ -24,7 +24,10 @@ import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 export interface ServedAddress {
   /** The language it is served in. */
   readonly locale: string;
-  /** The path's segments, decoded and NFC-normalised; none is empty. */
+  /**
+   * The path's segments, decoded and otherwise as the route reads them;
+   * none is empty.
+   */
   readonly segments: readonly string[];
 }
 
@@ -108,7 +111,10 @@ export function servedAddress(
   for (const piece of local.split("/").filter(piece => piece !== "")) {
     let segment: string;
     try {
-      segment = decodeURIComponent(piece).normalize("NFC");
+      // Decoded only. The content route matches the segments a browser
+      // sends without normalising them, so a composed `café` and a
+      // decomposed one are two addresses there and must be two here.
+      segment = decodeURIComponent(piece);
     } catch {
       return null;
     }
