@@ -16,7 +16,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { DeferredExtend } from "../../../plugins/schema/apply-contributions";
-import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import type {
+  UiSchemaEntity,
+  UiSchemaManifest,
+} from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
@@ -58,6 +61,12 @@ export interface AppMigrationInputsArgs {
   deferredExtends?: DeferredExtend[];
   /** The project root, which `db.uiSchemaFile` is read from. */
   projectRoot: string;
+  /**
+   * The Schema Builder's definition to generate from, when the caller holds it
+   * already: a Builder save generates from the definition it is writing, the
+   * same one the file then holds. Absent, it is read from `db.uiSchemaFile`.
+   */
+  manifest?: UiSchemaManifest;
   /** Absolute path to the migrations folder. */
   migrationsDir: string;
   dialect: SupportedDialect;
@@ -103,10 +112,12 @@ export async function appMigrationInputs(
   );
 
   // Load + merge UI-built entities (code-first wins on slug collision).
-  let manifest = await loadUiSchema({
-    projectRoot: input.projectRoot,
-    uiSchemaFile: config.db.uiSchemaFile,
-  });
+  let manifest =
+    input.manifest ??
+    (await loadUiSchema({
+      projectRoot: input.projectRoot,
+      uiSchemaFile: config.db.uiSchemaFile,
+    }));
 
   // Materialize plugin extends that target Builder-made entities (P8): append
   // the deferred extend fields onto the matching ui-schema entity so they land
