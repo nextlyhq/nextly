@@ -634,39 +634,54 @@ describe("a page drawn inside its Layout", () => {
     expect(meta.title).toBe("Entry title");
   });
 
-  it("reads the Layout for metadata when the page's conditions read the entry, as the render does", async () => {
-    // A block shown by a condition on the entry: no binding, but the entry
-    // read it needs spends the budget after the Layout, as in the render.
-    const metadataReadsLayout = async (content: unknown) => {
+  it("spends a tight budget in metadata as the render does, when the page's conditions read the entry", async () => {
+    // A heading shown by a condition on the entry: no binding, but the entry
+    // read it needs comes after the Layout's, in the render and in metadata.
+    const content = doc([
+      {
+        ...heading("c", "Conditioned title", "h1"),
+        visibility: {
+          conditions: [
+            [{ field: "title", op: "equals", value: "Entry title" }],
+          ],
+        },
+      },
+    ]);
+    const routeWith = (maxQueries?: number) => {
       const r = siteReader({ page: { content } });
-      const layouts = provider("main");
-      const route = createBlocksPage({
+      return createBlocksPage({
         collections: ["pages"],
         field: "content",
         nextly: r.nextly,
         blocks: createBlockResolver(coreBlocks),
-        layouts,
+        layouts: provider("main"),
+        metadata: (_entry, _context, derived) => ({
+          title: derived.title ?? "No derived title",
+        }),
+        ...(maxQueries === undefined ? {} : { maxQueries }),
       });
-      await route.generateMetadata({ params: { slug: ["about"] } });
-      return layouts.readDefault.mock.calls.length > 0;
     };
-    const conditioned = doc([
-      {
-        id: "c",
-        type: "core/text",
-        version: 1,
-        props: { text: "Body" },
-        visibility: {
-          conditions: [[{ field: "title", op: "equals", value: "x" }]],
-        },
-      },
-    ]);
-    expect(await metadataReadsLayout(conditioned)).toBe(true);
-    // CONTROL: a page that reads nothing reads no Layout for its metadata.
-    const plain = doc([
-      { id: "t", type: "core/text", version: 1, props: { text: "Body" } },
-    ]);
-    expect(await metadataReadsLayout(plain)).toBe(false);
+    const outcome = async (maxQueries?: number) => {
+      const element = await throughBoundary(
+        routeWith(maxQueries).ContentPage({ params: { slug: ["about"] } })
+      );
+      const html = renderToStaticMarkup(element as ReactElement);
+      const meta = await routeWith(maxQueries).generateMetadata({
+        params: { slug: ["about"] },
+      });
+      return { drawn: html.includes("Conditioned title"), title: meta.title };
+    };
+    // One claim: the Layout takes it, so the entry can't be read and the
+    // block fails closed; metadata, reading in the same order, agrees.
+    expect(await outcome(1)).toEqual({
+      drawn: false,
+      title: "No derived title",
+    });
+    // CONTROL: with room for both, the block shows and names the page.
+    expect(await outcome()).toEqual({
+      drawn: true,
+      title: "Conditioned title",
+    });
   });
 
   it("renders exactly as before when the option is off", async () => {

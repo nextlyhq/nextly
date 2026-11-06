@@ -2067,7 +2067,8 @@ function listsNeedZone(
       (query, list) =>
         query.filters.some(row => isListDay(row.value)) ||
         ordersADay(
-          conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields,
+          conditionDemand(list.slots?.[LIST_ENTRY_SLOT] ?? []).orderedFields ??
+            new Set(),
           query.collection === undefined
             ? undefined
             : shapesOf(query.collection)

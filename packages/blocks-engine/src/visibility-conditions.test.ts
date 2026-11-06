@@ -692,7 +692,10 @@ describe("what a page's conditions read of its entry", () => {
         ],
       ]),
     ]);
-    expect([...demand.orderedFields].sort()).toEqual(["publishedAt", "rating"]);
+    expect([...(demand.orderedFields ?? [])].sort()).toEqual([
+      "publishedAt",
+      "rating",
+    ]);
   });
 
   it("asks nothing of a page with no conditions, or ones that restrict nobody", () => {

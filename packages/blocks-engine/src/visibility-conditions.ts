@@ -1272,9 +1272,11 @@ export interface ConditionDemand {
   /**
    * The fields entry-scoped conditions order by. Only a date one compares
    * days, so a reader that knows the fields' shapes asks for the zone only
-   * when one of these is a date.
+   * when one of these is a date. Always set by `conditionDemand`; optional
+   * so a demand built by hand without it still type-checks, and read as
+   * none when absent.
    */
-  readonly orderedFields: ReadonlySet<string>;
+  readonly orderedFields?: ReadonlySet<string>;
 }
 
 /** The fields one entry-scoped node's conditions read, and those they order by. */
