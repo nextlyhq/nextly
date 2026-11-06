@@ -22,7 +22,12 @@ import type { ValidationIssue } from "../validation";
 
 import { CATALOG_IN_EMISSION_ORDER } from "./catalog";
 import { isStyleLeaf } from "./catalog-types";
-import type { StyleLeaf, StyleShape, UrlLeaf } from "./catalog-types";
+import type {
+  KeywordLeaf,
+  StyleLeaf,
+  StyleShape,
+  UrlLeaf,
+} from "./catalog-types";
 import {
   asciiLower,
   decodeIdentifier,
@@ -450,40 +455,7 @@ function shapeDeclarations(
   walk: Walk
 ): void {
   if (isStyleLeaf(shape)) {
-    const text = scalarText(shape, value, path, walk);
-    if (text === undefined) return;
-    walk.placed.push({
-      path,
-      property: shape.cssProperty,
-      // A longhand paired with the image's layers reads the overlay layer's
-      // entry in front of it, so its list stays lined up with the image.
-      value: alignedWithOverlay(
-        shape.cssProperty,
-        text,
-        isCssWideKeyword(asciiLower(decodeIdentifier(trimCssWhitespace(text))))
-      ),
-      ...(shape.descendant === undefined
-        ? {}
-        : { descendant: shape.descendant }),
-    });
-    // The overlay's colour also writes the layer an image reads in front of
-    // itself: present only where an overlay is, so no other background
-    // changes its layers.
-    if (shape.cssProperty === OVERLAY_COLOR) {
-      walk.placed.push({
-        path,
-        property: OVERLAY_LAYER_PROPERTY,
-        value: OVERLAY_LAYER_VALUE,
-      });
-      // And the layer's own entry in each longhand paired with it.
-      for (const aligned of OVERLAY_ALIGNED.values()) {
-        walk.placed.push({
-          path,
-          property: aligned.property,
-          value: aligned.value,
-        });
-      }
-    }
+    leafDeclarations(shape, value, path, walk);
     return;
   }
   switch (shape.kind) {
@@ -499,6 +471,76 @@ function shapeDeclarations(
     case "union":
       unionDeclarations(shape, value, path, walk);
       return;
+  }
+}
+
+/** Compile one value against one leaf, with what the leaf writes beside it. */
+function leafDeclarations(
+  shape: StyleLeaf,
+  value: unknown,
+  path: string,
+  walk: Walk
+): void {
+  const text = scalarText(shape, value, path, walk);
+  if (text === undefined) return;
+  walk.placed.push({
+    path,
+    property: shape.cssProperty,
+    // A longhand paired with the image's layers reads the overlay layer's
+    // entry in front of it, so its list stays lined up with the image.
+    value: alignedWithOverlay(
+      shape.cssProperty,
+      text,
+      isCssWideKeyword(asciiLower(decodeIdentifier(trimCssWhitespace(text))))
+    ),
+    ...(shape.descendant === undefined ? {} : { descendant: shape.descendant }),
+  });
+  if (shape.kind === "keyword") expandedDeclarations(shape, text, path, walk);
+  if (shape.cssProperty === OVERLAY_COLOR) overlayCompanions(path, walk);
+}
+
+/**
+ * A keyword no one property expresses also writes its fixed declarations,
+ * each under its own descendant; a CSS-wide keyword names none of them.
+ */
+function expandedDeclarations(
+  shape: KeywordLeaf,
+  text: string,
+  path: string,
+  walk: Walk
+): void {
+  const expands = shape.expands;
+  // Read as the validator reads a keyword: case, surrounding space and CSS
+  // escapes aside, so every spelling it accepts draws what it names.
+  const keyword = asciiLower(decodeIdentifier(trimCssWhitespace(text)));
+  if (expands === undefined || !Object.hasOwn(expands, keyword)) return;
+  for (const each of expands[keyword] ?? []) {
+    walk.placed.push({
+      path,
+      property: each.property,
+      value: each.value,
+      descendant: each.descendant,
+    });
+  }
+}
+
+/**
+ * The overlay's colour also writes the layer an image reads in front of
+ * itself, and the layer's own entry in each longhand paired with it: present
+ * only where an overlay is, so no other background changes its layers.
+ */
+function overlayCompanions(path: string, walk: Walk): void {
+  walk.placed.push({
+    path,
+    property: OVERLAY_LAYER_PROPERTY,
+    value: OVERLAY_LAYER_VALUE,
+  });
+  for (const aligned of OVERLAY_ALIGNED.values()) {
+    walk.placed.push({
+      path,
+      property: aligned.property,
+      value: aligned.value,
+    });
   }
 }
 

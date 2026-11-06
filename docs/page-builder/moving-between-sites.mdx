@@ -5,7 +5,8 @@ description: Export an item with everything it depends on as one file, and impor
 
 A pattern, a component or a Layout can be exported as one file and imported into
 another Nextly site. The file holds the item and everything it depends on, so it
-looks the same on the site it goes to.
+looks the same on the site it goes to, apart from the site-wide choices that belong to
+that site, such as its blocks' own looks.
 
 <Callout type="warn">
   Export and import are experimental: the file format and the routes may still
@@ -29,7 +30,10 @@ The file holds:
 - the list of block types it uses.
 
 It never holds a block's code, and it never says which Layout is the site's default:
-that belongs to the site. Exporting needs read access to the item and to everything it
+that belongs to the site. Nor does it hold the site's edits to a block's own look, such
+as a button's Primary: those change every block of that type on a site, so they stay
+with the site they were made on. An imported item draws with the target site's own
+looks, and an import never changes them. Exporting needs read access to the item and to everything it
 depends on; an export that cannot read a part is refused, naming it, rather than
 written incomplete.
 

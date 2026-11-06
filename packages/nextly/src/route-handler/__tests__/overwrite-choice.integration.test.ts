@@ -510,7 +510,7 @@ describe.each(getConfiguredTestDialects())(
     it("names whoever changed another language when an overwrite moves every language", async () => {
       const t = await boot(dialect);
       const id = String((await create(t, PAGES, { title: "en" })).id);
-      await saveAs(t, CLEO, PAGES, id, { title: "es" }, "es");
+      await saveAs(t, CLEO, PAGES, id, { title: "es", _overwrite: true }, "es");
       // Read as every language, then Cleo changes only Spanish again.
       const every = String(
         docOf(
@@ -521,7 +521,7 @@ describe.each(getConfiguredTestDialects())(
           } as never)
         )._rev
       );
-      await saveAs(t, CLEO, PAGES, id, { title: "es 2" }, "es");
+      await saveAs(t, CLEO, PAGES, id, { title: "es 2", _rev: every }, "es");
 
       await saveAs(
         t,

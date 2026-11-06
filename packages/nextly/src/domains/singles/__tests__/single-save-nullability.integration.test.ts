@@ -107,10 +107,11 @@ describeEachDialect(
     ): Promise<void> {
       const singles: SingleEntryService =
         current.getService("singleEntryService");
-      const written = await singles.update("hero", data, {
-        locale,
-        overrideAccess: true,
-      });
+      const written = await singles.update(
+        "hero",
+        { ...data, _overwrite: true },
+        { locale, overrideAccess: true }
+      );
       expect(written.success, JSON.stringify(written)).toBe(true);
     }
 

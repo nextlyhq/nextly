@@ -287,3 +287,15 @@ value, is a document-format migration.
 | Property        | Flag | Value                                            | Tokens | Emits             |
 | --------------- | ---- | ------------------------------------------------ | ------ | ----------------- |
 | `listStyleType` |      | keyword (`revert` restores the element's marker) |        | `list-style-type` |
+
+### disclosure
+
+Offered by a block whose children are disclosures (an Accordion). Each keyword
+also writes fixed declarations on the block's own sections, through child
+selectors (`> details > summary`), so one value reaches every section and never
+a section of an accordion nested inside one.
+
+| Property             | Flag | Value                                         | Tokens | Emits                                                                       |
+| -------------------- | ---- | --------------------------------------------- | ------ | --------------------------------------------------------------------------- |
+| `disclosureIcon`     |      | keyword: `chevron`, `plus`, `none`, `browser` |        | `--nx-pb-disclosure-icon`, and each section's title row, icon and open look |
+| `disclosurePosition` |      | keyword: `before`, `after`                    |        | `--nx-pb-disclosure-position`, and the icon's order and start margin        |

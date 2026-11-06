@@ -171,11 +171,11 @@ sources to `PageRenderer` as `bindings`. A route made with `createBlocksPage`,
 `createPublicBlocksPage` or a Single's page factory reads them for you: the
 entry, each Single and the site settings the page binds, each through the
 route's public reader at one claim on the page's query budget, and the field
-shapes each binding is checked against. A collection loop hands each item to
+shapes each binding is checked against. A collection list hands each item to
 its children. A binding to a source nobody read renders its fallback.
 
 - **Sources.** `entry` is the entry the page shows, `item` the entry a
-  collection loop is drawing, `single` the Single named by `sourceKey`, and
+  collection list is drawing, `single` the Single named by `sourceKey`, and
   `site` the public site settings (`applicationName`, `siteUrl`, `logoUrl`,
   `timezone`).
 - **Public access.** Every source is read as an anonymous visitor reads it:

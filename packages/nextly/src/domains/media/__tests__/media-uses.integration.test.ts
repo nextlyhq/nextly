@@ -437,7 +437,11 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: language,
           },
-          { title: `${collection} ${language}`, body: imageText(url) }
+          {
+            title: `${collection} ${language}`,
+            body: imageText(url),
+            _overwrite: true,
+          }
         );
       }
       return id;
