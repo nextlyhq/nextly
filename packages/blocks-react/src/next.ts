@@ -92,8 +92,9 @@ import {
   listEntryCount,
   listPagesOf,
   listWillRead,
+  namedListBase,
 } from "./blocks/list-read";
-import { namedQueryFailureLine } from "./blocks/named-read";
+import { namedQueryFailureLine, readNamedList } from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -611,6 +612,38 @@ function listPageFor(
 }
 
 /**
+ * The page of its paginated list a render draws, with the list's first read
+ * claimed for it, or nothing where the route serves no later pages (a
+ * Single's gives no addresses, so its list shows one page and claims its
+ * own read) or the list's read cannot be claimed, as the route then serves
+ * none of its later pages either.
+ *
+ * Claimed only for a list that reads: one with no collection yet, or a
+ * stored query it cannot run, spends nothing another list needs. A custom
+ * source claims nothing ahead: its run claims each read it makes, as the
+ * route's count of its pages claimed them.
+ */
+function claimedListPage(
+  list: PaginatedList | undefined,
+  context: RenderContext,
+  budget: QueryBudget
+): ListPageContext | undefined {
+  if (
+    list === undefined ||
+    context.listPagePath === undefined ||
+    !listWillRead(list.props)
+  ) {
+    return undefined;
+  }
+  if (namedListBase(list.props) !== undefined) {
+    return listPageFor(list, context);
+  }
+  if (!budget.take()) return undefined;
+  const page = listPageFor(list, context);
+  return page === undefined ? undefined : { ...page, claimed: true };
+}
+
+/**
  * The instance this route reads through.
  *
  * Resolved the same way `createContentRoute` resolves its own — the caller's
@@ -887,6 +920,45 @@ function namedQueryHostFor(args: {
       );
     },
   };
+}
+
+/**
+ * How many pages a paginated list whose source is a named query has, from
+ * its run's total by the list's own window (`listPagesOf`, the collection
+ * list's count), or `undefined` for a list with another source.
+ *
+ * The run is the one the list's first page makes: the same host (frame,
+ * reader and cache), window, inputs and language, so a result the host
+ * kept serves both, and its reads are claimed from `budget` as the render
+ * claims them, as they are made or replayed. A run that fails, or returns
+ * no total, gives one page: the list draws its empty state, so no later
+ * page exists, and no count is guessed. The render that draws the list
+ * reports its failure; this count only says how many pages there are, so
+ * it logs nothing of its own.
+ */
+async function namedListPages(
+  list: PaginatedList,
+  host: NamedQueryHost,
+  budget: QueryBudget,
+  locale: string | undefined
+): Promise<number | undefined> {
+  const base = namedListBase(list.props);
+  if (base === undefined) return undefined;
+  if ("blocking" in base) return 1;
+  const { report: _report, ...quiet } = host;
+  const outcome = await readNamedList(
+    base.named,
+    { limit: base.limit, offset: base.offset },
+    {
+      ...createStandaloneContext({ locale, queries: budget }),
+      namedQueries: quiet,
+    },
+    list.id,
+    { counted: true }
+  );
+  return outcome.failed || outcome.total === undefined
+    ? 1
+    : listPagesOf(list.props, outcome.total);
 }
 
 /** The instance's Single read, when the reader the route holds has one. */
@@ -3126,6 +3198,22 @@ function blocksRouteConfig(
         window: listWindow,
         context,
       });
+      // A custom source counts its pages from its run's total, as the
+      // render runs it. Its reads claim from the allowance as they are
+      // made, so nothing is claimed ahead of the run.
+      const namedPages = await namedListPages(
+        list,
+        namedQueryHostFor({
+          config,
+          locale: context.locale,
+          window: listWindow,
+          budget,
+          context,
+        }),
+        budget,
+        context.locale
+      );
+      if (namedPages !== undefined) return namedPages;
       // The list's first read, claimed where the render claims it: after
       // the page's inputs and day terms, before any block is drawn.
       if (!budget.take()) return 1;
@@ -3276,22 +3364,12 @@ function blocksRouteConfig(
         page,
         effectiveLimits(config).maxNodes
       );
-      // Claimed only for a list that reads: one with no collection yet, or
-      // a stored query it cannot run, spends nothing another list needs.
-      const listPage =
-        pagedList !== undefined &&
-        context.listPagePath !== undefined &&
-        listWillRead(pagedList.props) &&
-        budget.take()
-          ? listPageFor(pagedList, context)
-          : undefined;
+      const listPage = claimedListPage(pagedList, context, budget);
       const shared: SharedRendererProps = {
         context: {
           ...pageContext,
           ...listDays,
-          ...(listPage === undefined
-            ? {}
-            : { listPage: { ...listPage, claimed: true } }),
+          ...(listPage === undefined ? {} : { listPage }),
         },
         blocks: resolver,
         styleContext,

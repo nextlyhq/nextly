@@ -630,13 +630,19 @@ function renderRun(
  * that fails comes back as `failed` with what failed, and the list draws its
  * empty state.
  *
- * `window` is the list's own limit and offset, as `list-read` reads them.
+ * `window` is the list's own limit and offset, as `list-read` reads them,
+ * moved to the page drawn where the list is split into pages. `counted`
+ * says the list counts its pages from the run's total, so a run that
+ * returns none fails (`uncounted`) rather than letting anything guess how
+ * many pages there are: a query whose declaration changed since the page
+ * was saved.
  */
 export async function readNamedList(
   named: ListNamedQuery,
   window: { readonly limit: number; readonly offset: number },
   ctx: PageContext & { readonly namedQueries: NamedQueryHost },
-  nodeId: string
+  nodeId: string,
+  options: { readonly counted?: boolean } = {}
 ): Promise<NamedListOutcome> {
   const host = ctx.namedQueries;
   const claim = () => ctx.queries?.take() !== false;
@@ -699,6 +705,15 @@ export async function readNamedList(
   // made for it.
   if (!ranHere && !joined && !replayClaims(data.reads, claim)) {
     return failed("budget", NAMED_QUERY_TEXT.budget(declaration.label), at);
+  }
+  // Checked after the run's reads are claimed, so a page costs the same
+  // whether or not its query still counts.
+  if (options.counted === true && data.total === undefined) {
+    return failed(
+      "uncounted",
+      NAMED_QUERY_TEXT.uncounted(declaration.label),
+      at
+    );
   }
   const rows = declaration.rows;
   return {
