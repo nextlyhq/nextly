@@ -135,7 +135,8 @@ describe("an Accordion's Icon section", () => {
 
 describe("an Accordion's icon position, offered where an icon is drawn", () => {
   it("is not offered while the icon is the browser's own or none", () => {
-    for (const icon of ["browser", "none"]) {
+    // An escaped spelling, which the engine reads as the same keyword.
+    for (const icon of ["browser", "none", "br\\6f wser"]) {
       mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: icon } } });
       open("Icon");
       expect(screen.queryByRole("group", { name: "Position" })).toBeNull();

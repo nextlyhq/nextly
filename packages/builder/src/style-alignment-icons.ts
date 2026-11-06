@@ -21,6 +21,7 @@
 
 import {
   BASE_BREAKPOINT,
+  DISCLOSURE_ICON_PROPERTY,
   type NodeStyles,
   type StyleLeaf,
   type StyleState,
@@ -285,7 +286,7 @@ const FIXED_GROUPS: Readonly<
   },
   // An Accordion's icon, each drawn as itself; Browser default as the
   // triangle a browser draws.
-  "--nx-pb-disclosure-icon": {
+  [DISCLOSURE_ICON_PROPERTY]: {
     entries: [
       { value: "chevron", icon: "ChevronDown" },
       { value: "plus", icon: "Plus" },

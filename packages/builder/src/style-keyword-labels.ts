@@ -17,6 +17,8 @@
 import {
   asciiLower,
   decodeIdentifier,
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_POSITION_PROPERTY,
   trimCssWhitespace,
 } from "@nextlyhq/blocks-engine";
 
@@ -140,13 +142,13 @@ const KEYWORD_LABELS: Readonly<
     capitalize: "Capitalize words",
   },
   // An Accordion's icon choices, traced on their own custom properties.
-  "--nx-pb-disclosure-icon": {
+  [DISCLOSURE_ICON_PROPERTY]: {
     chevron: "Chevron",
     plus: "Plus",
     none: "None",
     browser: "Browser default",
   },
-  "--nx-pb-disclosure-position": {
+  [DISCLOSURE_POSITION_PROPERTY]: {
     before: "Before",
     after: "After",
   },

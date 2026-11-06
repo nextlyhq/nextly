@@ -31,13 +31,16 @@
  */
 
 import {
+  asciiLower,
   BASE_BREAKPOINT,
   breakpointContexts,
+  decodeIdentifier,
   DISCLOSURE_ICON_PROPERTY,
   getBlock,
   getStyleProperty,
   STYLE_CATALOG,
   stylePropertiesForSupports,
+  trimCssWhitespace,
   type BlockDocument,
   type BreakpointId,
   type BreakpointSet,
@@ -269,11 +272,10 @@ export function inspectStyle(
     display: cascadedKeyword(styles, at, "display", "display"),
     media: options?.media === true,
     objectFit: cascadedKeyword(styles, at, "object-fit", "objectFit"),
-    disclosureIcon: cascadedKeyword(
-      styles,
-      at,
-      DISCLOSURE_ICON_PROPERTY,
-      "disclosureIcon"
+    // Read as the engine reads the keyword, escapes and all, so the icon a
+    // page draws is the one the tier judges.
+    disclosureIcon: keywordIdentity(
+      cascadedKeyword(styles, at, DISCLOSURE_ICON_PROPERTY, "disclosureIcon")
     ),
     state,
   };
@@ -310,6 +312,13 @@ export function inspectStyle(
     sections,
     ...(tiers.objectFit === undefined ? {} : { objectFit: tiers.objectFit }),
   };
+}
+
+/** A keyword as the engine identifies it: trimmed, unescaped, lowercased. */
+function keywordIdentity(value: string | undefined): string | undefined {
+  return value === undefined
+    ? undefined
+    : asciiLower(decodeIdentifier(trimCssWhitespace(value)));
 }
 
 /**
