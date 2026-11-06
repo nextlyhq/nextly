@@ -152,6 +152,22 @@ describe("verifying an inbound webhook", () => {
       freshness: "checked",
     });
     expect(result.verified && Buffer.from(result.bytes).toString()).toBe(BODY);
+    // Beside a token that matches nothing, the real one still verifies.
+    const sent = standardDelivery();
+    const withJunk = {
+      ...sent,
+      headers: new Headers({
+        ...Object.fromEntries(sent.headers),
+        "webhook-signature": `v1,AAAA ${sent.headers.get("webhook-signature")}`,
+      }),
+    };
+    expect(
+      verifyWebhookDelivery(
+        withJunk,
+        { scheme: standardWebhooks, secrets: [SECRET] },
+        AT
+      ).verified
+    ).toBe(true);
     // The `whsec_` form of the same key verifies too.
     expect(
       verifyWebhookDelivery(
@@ -212,6 +228,12 @@ describe("verifying an inbound webhook", () => {
     ).toBe("expired");
     expect(
       reasonOf(verifyWebhookDelivery(standardDelivery(), options, early))
+    ).toBe("expired");
+    // A clock that reads no time is no reason to call a delivery fresh.
+    expect(
+      reasonOf(
+        verifyWebhookDelivery(standardDelivery(), options, new Date(Number.NaN))
+      )
     ).toBe("expired");
     // At the tolerance itself it is still fresh.
     const edge = new Date((SIGNED_AT + 300) * 1000);
@@ -505,7 +527,7 @@ describe("ctx.security.webhooks.verify", () => {
     expect(await req.text()).toBe(BODY);
   });
 
-  it("refuses a body over the cap as too large, 1 MiB unless the call sets another", async () => {
+  it("a body over the limit is refused as too-large: 1 MiB, unless the call sets another", async () => {
     const options = { scheme: standardWebhooks, secrets: [SECRET] };
     const big = "x".repeat(1024 * 1024 + 1);
     expect(
