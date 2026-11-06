@@ -17,11 +17,18 @@
  * request walking the same run is safe: every write carries the hash of the
  * value it was computed from, and every move of the run is a compare-and-set.
  *
+ * Each pass also deletes what removals took out of the site once it is past
+ * the window they can be undone in (`fragments`).
+ *
  * @module breakpoint-removal/job
  */
 import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 
+import { FRAGMENTS_KEPT_DAYS } from "./fragments";
 import type { BreakpointRemovalService } from "./service";
+
+/** A day, in milliseconds. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The job type this plugin registers, namespaced by the plugin. */
 export const BREAKPOINT_REMOVAL_JOB = "page-builder:breakpoint-removal";
@@ -32,7 +39,7 @@ export const BREAKPOINT_REMOVAL_JOB = "page-builder:breakpoint-removal";
  * walking a half-built configuration.
  */
 export function breakpointRemovalJob(
-  service: () => Pick<BreakpointRemovalService, "carryOn">
+  service: () => Pick<BreakpointRemovalService, "carryOn" | "purgeFragments">
 ): JobDefinition {
   return defineJob({
     slug: BREAKPOINT_REMOVAL_JOB,
@@ -40,7 +47,19 @@ export function breakpointRemovalJob(
     handler: async (_input, context) => {
       // The runner's own deadline: the walk checks the live clock against it
       // between documents.
-      await service().carryOn({ deadline: context.deadline });
+      // The purge runs whether or not the walk does: a walk failing on every
+      // pass must not keep rows past the window. The walk's failure is still
+      // the pass's, once the purge is done.
+      let walkFailed: { error: unknown } | undefined;
+      try {
+        await service().carryOn({ deadline: context.deadline });
+      } catch (error) {
+        walkFailed = { error };
+      }
+      await service().purgeFragments(
+        new Date(Date.now() - FRAGMENTS_KEPT_DAYS * DAY_MS)
+      );
+      if (walkFailed !== undefined) throw walkFailed.error;
     },
   });
 }

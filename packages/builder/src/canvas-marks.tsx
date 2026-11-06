@@ -59,6 +59,7 @@ import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
 import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
 import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
+import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
 /** One box to draw, in the chrome's coordinates. */
 interface Mark {
@@ -75,6 +76,13 @@ interface Mark {
   readonly component: boolean;
   /** A block locked in Layers, by its own lock or one around it: dashed. */
   readonly locked: boolean;
+  /**
+   * An exposed part being edited in place on the canvas: a solid ring, so the
+   * passage the caret is in reads apart from the placement's other parts.
+   */
+  readonly editing?: boolean;
+  /** Another exposed part of a placement while one of its parts is edited. */
+  readonly dimmed?: boolean;
   /**
    * A selected block the page hides on the device shown, drawn because it is
    * selected: hatched, and tagged as hidden.
@@ -197,6 +205,8 @@ function markKey(mark: Mark): string {
     tagInset,
     clipped,
     shaped,
+    editing,
+    dimmed,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -216,6 +226,8 @@ function markKey(mark: Mark): string {
     tagInset.side,
     clipped,
     shaped === true,
+    editing === true,
+    dimmed === true,
     placement,
     placementTagInside,
     hoveredAddress,
@@ -624,7 +636,12 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
         marked.hasAttribute(EXPOSED_ATTRIBUTE) &&
         (selected === null || placement !== "")
       ) {
-        found.push({ ...outline, ...plain, kind: "exposed" });
+        found.push({
+          ...outline,
+          ...plain,
+          kind: "exposed",
+          ...(marked.hasAttribute(EDITING_ATTRIBUTE) ? { editing: true } : {}),
+        });
       }
       // A block an edit to the look being edited reaches, dashed.
       if (marked.hasAttribute(LOOK_REACH_ATTRIBUTE)) {
@@ -686,7 +703,28 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): readonly Mark[] {
       });
     });
   }
-  return found;
+  return dimmedBesideEditing(found);
+}
+
+/** An exposed part's editing state, as the stylesheet reads it. */
+function editingAttributes(mark: Mark): Record<string, string> {
+  return {
+    ...(mark.editing === true ? { "data-editing": "" } : {}),
+    ...(mark.dimmed === true ? { "data-dimmed": "" } : {}),
+  };
+}
+
+/**
+ * The marks with every other exposed part dimmed while one is being edited,
+ * so the passage the caret is in is the one that stands out.
+ */
+function dimmedBesideEditing(marks: Mark[]): Mark[] {
+  if (!marks.some(mark => mark.editing === true)) return marks;
+  return marks.map(mark =>
+    mark.kind === "exposed" && mark.editing !== true
+      ? { ...mark, dimmed: true }
+      : mark
+  );
 }
 
 /**
@@ -771,6 +809,7 @@ export function CanvasMarks({
           data-secondary={mark.secondary ? "" : undefined}
           data-component={mark.component ? "" : undefined}
           data-locked={mark.locked ? "" : undefined}
+          {...editingAttributes(mark)}
           data-hidden={mark.hidden ? "" : undefined}
           // The tag a hidden block's ring carries, drawn by the stylesheet
           // from this attribute; the layer is hidden from assistive
