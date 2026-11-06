@@ -1596,16 +1596,24 @@ export class CollectionBulkService extends BaseService {
     // behind.
     const state = newLegacyBatchState();
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runCreateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
-      });
+      // Read committed on every dialect, as updateEntries is, so an
+      // in-transaction handler that serializes an entry's write with a row
+      // lock then reads what committed before it took it. MySQL's default,
+      // REPEATABLE READ, would answer each later read from the snapshot the
+      // batch's first read took.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runCreateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the
