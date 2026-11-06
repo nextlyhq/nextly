@@ -26,6 +26,7 @@ import {
   evaluateConditions,
   type ConditionRegistry,
   type ConditionSubject,
+  withConditions,
 } from "./visibility-conditions";
 
 const READABLE: readonly BindingFieldShape[] = [
@@ -625,5 +626,39 @@ describe("conditions stored before they were evaluated", () => {
     expect(
       codes([[{ field: "publishedAt", op: "eq", value: "2026-11-01" }]])
     ).toEqual(["condition-unsuited"]);
+  });
+});
+
+describe("setting a block's conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+
+  it("replaces the conditions and keeps the devices", () => {
+    expect(
+      withConditions(
+        {
+          conditions: [[{ field: "old", op: "exists" }]],
+          devices: { mobile: false },
+        },
+        vip
+      )
+    ).toEqual({ conditions: vip, devices: { mobile: false } });
+  });
+
+  it("stores nothing for a block shown everywhere to everyone", () => {
+    expect(withConditions({ conditions: vip }, undefined)).toBeUndefined();
+    expect(withConditions({ conditions: vip }, [])).toBeUndefined();
+    expect(withConditions(undefined, [])).toBeUndefined();
+    expect(
+      withConditions({ conditions: vip, devices: { mobile: false } }, [])
+    ).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("copies what it stores, so a later edit to the input changes nothing", () => {
+    const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const stored = withConditions(undefined, groups);
+    groups[0]![0]!.value = "free";
+    expect(stored).toEqual({ conditions: vip });
   });
 });

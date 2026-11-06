@@ -20,7 +20,12 @@
  * @module visibility-conditions
  */
 import { isEmptyBoundValue, type BindingFieldShape } from "./binding-rules";
-import type { BlockDocument, BlockNode } from "./document";
+import type {
+  BlockDocument,
+  BlockNode,
+  Condition,
+  NodeVisibility,
+} from "./document";
 import { withHeldSeverity } from "./held-findings";
 import { describeValue, pointer } from "./issue-text";
 import {
@@ -1227,4 +1232,28 @@ export function conditionIssues(
     judgement.stored,
     forest => walkConditionFindings(forest, judgement)
   );
+}
+
+/**
+ * A node's visibility with its conditions replaced: the groups given, or
+ * none when `undefined` or empty. Everything else the visibility holds, such
+ * as which devices show the block, is kept. `undefined` when nothing is left
+ * to store, so a block shown everywhere to everyone stores no visibility.
+ * The one writer, for the editor and the API alike.
+ *
+ * @experimental Settles with the editor's condition controls.
+ */
+export function withConditions(
+  visibility: NodeVisibility | undefined,
+  conditions: readonly (readonly Condition[])[] | undefined
+): NodeVisibility | undefined {
+  const { conditions: _old, ...rest } = visibility ?? {};
+  const kept =
+    conditions === undefined || conditions.length === 0
+      ? rest
+      : {
+          ...rest,
+          conditions: conditions.map(group => group.map(c => ({ ...c }))),
+        };
+  return Object.keys(kept).length === 0 ? undefined : kept;
 }
