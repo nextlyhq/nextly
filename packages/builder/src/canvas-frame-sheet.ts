@@ -268,6 +268,36 @@ ${ROOT} [contenteditable="false"] { -webkit-touch-callout: none; }
   outline-offset: 2px;
 }
 
+/* A named query that ran, but reads what visitors can't: amber, as a sort
+   that fell back is, since the page still draws. */
+[data-nx-list-diagnostic="query-caution"] {
+  border-color: color-mix(in srgb, var(--nx-builder-warning, Mark) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-warning, Mark) 12%,
+    var(--nx-builder-surface-raised, Canvas)
+  );
+}
+
+/* The log reference a failed run names: the exact text to quote, set as
+   code and selectable whole, though the canvas selects blocks on a press. */
+[data-nx-list-diagnostic] [data-nx-list-ref] {
+  font-family: var(--font-mono, ui-monospace), monospace;
+  font-size: 0.95em;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+/* Copy ref: its one word, and "Copied" for a moment once pressed. */
+[data-nx-list-diagnostic] [data-nx-list-copy="done"],
+[data-nx-list-diagnostic] [data-nx-list-copied] > [data-nx-list-copy="ready"] {
+  display: none;
+}
+
+[data-nx-list-diagnostic] [data-nx-list-copied] > [data-nx-list-copy="done"] {
+  display: inline;
+}
+
 [data-nx-list-diagnostic="query-failed"] {
   border-color: color-mix(in srgb, var(--nx-builder-danger, CanvasText) 55%, transparent);
   background: color-mix(
@@ -354,6 +384,32 @@ ${ROOT} [data-nx-list-empty-because="none"]::before {
 
 ${ROOT} [data-nx-list-empty-because="failed"]::before {
   content: "Showing When empty";
+}
+
+/* A list whose new source waits for an input wears what it still draws
+   ("Still showing Events"), in the same tag, first in its flow. Written
+   after the empty state's, so the wait is what it says while both hold. */
+${ROOT} [data-nx-list-still]::before {
+  content: attr(data-nx-list-still);
+  display: block;
+  grid-column: 1 / -1;
+  justify-self: start;
+  align-self: start;
+  flex: none;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  margin-block-end: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.1875rem;
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
 }
 
 /* A region of the page's Layout, drawn locked around the page. Its content

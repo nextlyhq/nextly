@@ -20,6 +20,11 @@ export interface ListedChoice {
   readonly label: string;
   /** The group it is listed under, when the list has groups. */
   readonly group?: string;
+  /**
+   * What the search matches it by, when not its label alone: a label and
+   * the line drawn under it, so what is searched is what is seen.
+   */
+  readonly search?: string;
 }
 
 /** How many entries the list holds before it offers a search. */
@@ -43,6 +48,7 @@ export interface ChoiceListProps<C extends ListedChoice> {
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   /** What an entry draws: its label unless said otherwise. */
   readonly renderChoice?: (choice: C) => React.ReactNode;
+
   /**
    * An entry's tooltip: its label unless said otherwise, such as a label and
    * a value the row may cut short.
@@ -79,7 +85,9 @@ function drawnChoices<C extends ListedChoice>(
   const matching =
     needle === ""
       ? choices
-      : choices.filter(choice => choice.label.toLowerCase().includes(needle));
+      : choices.filter(choice =>
+          (choice.search ?? choice.label).toLowerCase().includes(needle)
+        );
   return groups === undefined
     ? matching
     : groups.flatMap(({ group }) =>

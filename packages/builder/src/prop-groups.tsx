@@ -51,6 +51,8 @@ export interface PropGroupContext {
    * list's sort: each new count takes the author to its first sort row.
    */
   readonly sortFieldAsked?: number | undefined;
+  /** Tag a list on the canvas while a new source waits for an input. */
+  readonly onStillShowing?: ((words: string | undefined) => void) | undefined;
 }
 
 /** One group of a block's props. */

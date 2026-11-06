@@ -167,8 +167,15 @@ export function LoopPicker<C extends ListedChoice>({
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(defaultOpen === true);
   const valueId = `${id}-value`;
-  const { choices, currentKey, label, searchLabel, noMatch, ...optional } =
-    list;
+  const {
+    choices,
+    currentKey,
+    label,
+    searchLabel,
+    noMatch,
+    wide,
+    ...optional
+  } = list;
   return (
     <div className="nx-font-pick" {...pickerMarks(value)}>
       <Popover open={open} onOpenChange={setOpen} modal={false}>
@@ -188,6 +195,7 @@ export function LoopPicker<C extends ListedChoice>({
           align="end"
           sideOffset={4}
           className="nx-font-pick__popover"
+          data-wide={wide === true ? "" : undefined}
           onOpenAutoFocus={event => event.preventDefault()}
         >
           <div className="nx-font-pick__body">
@@ -237,6 +245,11 @@ export interface PickerList<C extends ListedChoice> {
   /** The list's group headings, in order, for a list of grouped rows. */
   readonly groups?: ReadonlyArray<{ group: string; heading: string }>;
   readonly renderChoice?: (choice: C) => React.ReactNode;
+  /**
+   * Wider than its control, for rows of two lines that would otherwise be
+   * cut: still aligned to the control's end.
+   */
+  readonly wide?: boolean;
 }
 
 /** The button a picker opens from: its value, named with its field's label. */

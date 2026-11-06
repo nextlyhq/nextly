@@ -130,13 +130,27 @@ function useChosenTitle(
 /** What the control says about the stored entry. */
 function chosenWords(
   stored: string | null,
-  title: string | null | undefined
+  title: string | null | undefined,
+  emptyWords: string | undefined
 ): string {
-  if (stored === null) return "Nothing chosen.";
+  // What an empty choice means where the caller says so ("Any venue"), and
+  // otherwise that nothing is chosen.
+  if (stored === null) return emptyWords ?? "Nothing chosen.";
   if (title === undefined) return "Loading the chosen entry…";
   if (title === null)
     return "An entry you can't open here, or one that was removed.";
   return title;
+}
+
+/** Why no entry can be chosen here, or nothing when one can. */
+function unavailableWords(
+  collection: string | undefined,
+  find: FindEntries | undefined
+): string | undefined {
+  if (collection === undefined) {
+    return "This field names no collection to choose from.";
+  }
+  return find === undefined ? "Entries can't be searched here." : undefined;
 }
 
 export function RelationControl({
@@ -146,7 +160,11 @@ export function RelationControl({
   onCommit,
   services,
   label: labelOverride,
-}: ContentControlProps): React.JSX.Element {
+  emptyWords,
+}: ContentControlProps & {
+  /** What the control says while nothing is chosen, where that means something. */
+  readonly emptyWords?: string | undefined;
+}): React.JSX.Element {
   const label = labelOverride ?? propLabel(prop.name, prop.schema);
   const collection =
     typeof prop.schema.relationTo === "string" && prop.schema.relationTo !== ""
@@ -162,12 +180,7 @@ export function RelationControl({
   const [chosen, setChosen] = React.useState<FoundEntry | null>(null);
   const matches = useMatches(find, collection, search, active && !disabled);
   const title = useChosenTitle(find, collection, stored, chosen);
-  const unavailable =
-    collection === undefined
-      ? "This field names no collection to choose from."
-      : find === undefined
-        ? "Entries can't be searched here."
-        : undefined;
+  const unavailable = unavailableWords(collection, find);
   return (
     <div
       className="nx-inspector__field nx-inspector__field--stacked"
@@ -183,7 +196,7 @@ export function RelationControl({
       >
         <div className="nx-inspector__relation-chosen">
           <p className="nx-inspector__note" data-relation-chosen="">
-            {chosenWords(stored, title)}
+            {chosenWords(stored, title, emptyWords)}
           </p>
           {stored === null ? null : (
             <Button
