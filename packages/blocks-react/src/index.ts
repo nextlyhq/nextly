@@ -248,6 +248,11 @@ export {
  * surface listing a page's parts beside a picture of it.
  */
 export { prepareDocumentAsDrawn } from "./prepare-document";
+/**
+ * @experimental The collections a page's lists draw, whose field shapes judge
+ * their items' bindings: one walk for the published route and the editor.
+ */
+export { listCollections } from "./list-collections";
 export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";

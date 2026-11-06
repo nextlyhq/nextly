@@ -29,6 +29,7 @@ const request = (
     site: false,
     formatsDates: false,
   },
+  lists: [],
 });
 
 describe("the canvas's binding sources", () => {
@@ -88,6 +89,17 @@ describe("the canvas's binding sources", () => {
       },
       { ...valid, demand: { ...valid.demand, extra: true } },
       { ...valid, source: { ...valid.source, kind: "page" } },
+      // Each list within its own cap, but too many lookups in all: 150
+      // Singles each following a relation, beside the entry.
+      request(
+        Object.fromEntries(
+          Array.from({ length: 150 }, (_, index) => [
+            `single_${String(index)}`,
+            { fields: ["title"], follows: { author: ["name"] } },
+          ])
+        )
+      ),
+      { ...valid, lists: ["posts; drop"] },
     ]) {
       await expect(
         canvasBindingsRoute().handler(post(body), ctx)

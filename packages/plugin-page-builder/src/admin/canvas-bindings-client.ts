@@ -18,7 +18,11 @@
  * @module canvas-bindings-client
  */
 import { bindingDemand, type BlockDocument } from "@nextlyhq/blocks-engine";
-import { bindingsFromWire, type PageBindings } from "@nextlyhq/blocks-react";
+import {
+  bindingsFromWire,
+  listCollections,
+  type PageBindings,
+} from "@nextlyhq/blocks-react";
 import {
   useCurrentUserId,
   useDocumentIdentity,
@@ -43,20 +47,28 @@ const KEPT_FOR_MS = 15_000;
 
 /** The asks answered so far, by ask, for the current person only. */
 const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
-/** The person whose answers `KEPT` holds. */
-let keptFor: string | null | undefined;
+/**
+ * The person whose answers `KEPT` holds. Always a known person: until the
+ * signed-in person is known nothing is asked, so no answer is ever kept under
+ * an identity two people could share.
+ */
+let keptFor: string | undefined;
 
 /**
- * What the canvas asks for the document it draws, or nothing when it holds no
+ * What the canvas asks for the page it draws, or nothing when it holds no
  * binding or has no entry to read for.
+ *
+ * `presented` is the tree the canvas draws, prepared by the renderer's own
+ * pipeline (`prepareDocumentForRead`): a component's bound nodes and its
+ * lists are in it, where the stored page holds only the component's instance.
  */
 export function canvasBindingsRequest(
-  document: BlockDocument,
+  presented: BlockDocument | null,
   identity: DocumentIdentity | null,
   locale: string | undefined
 ): CanvasBindingsRequest | undefined {
-  if (identity === null) return undefined;
-  const demand = bindingDemand([document]);
+  if (identity === null || presented === null) return undefined;
+  const demand = bindingDemand([presented]);
   if (!demand.any) return undefined;
   return {
     source: {
@@ -65,6 +77,7 @@ export function canvasBindingsRequest(
       ...(identity.documentId === undefined ? {} : { id: identity.documentId }),
     },
     demand: demandToWire(demand),
+    lists: [...listCollections([presented])].sort(),
     ...(locale === undefined ? {} : { locale }),
   };
 }
@@ -91,7 +104,7 @@ async function askRoute(
  */
 export function canvasBindingsFor(
   request: CanvasBindingsRequest,
-  userId: string | null,
+  userId: string,
   ask: (
     request: CanvasBindingsRequest
   ) => Promise<CanvasBindingsResponse> = askRoute
@@ -115,32 +128,38 @@ export function canvasBindingsFor(
 }
 
 /**
- * The binding sources the canvas draws `document` with, as the person editing
- * reads them. Until the first answer arrives, and for a page with no binding,
- * no source is read: bound props keep their own values or fallbacks, as the
- * canvas always drew them. While a changed ask is answered, the previous
- * answer is kept, so bound values do not blink to their fallbacks; when the
- * changed ask fails, the previous answer goes and the fallbacks are drawn.
+ * The binding sources the canvas draws a page with, as the person editing
+ * reads them. `presented` is the tree the canvas draws (see
+ * {@link canvasBindingsRequest}).
+ *
+ * Until the first answer arrives, for a page with no binding, and while the
+ * signed-in person is not yet known, no source is read: bound props keep
+ * their own values or fallbacks, as the canvas always drew them. While a
+ * changed ask is answered, the previous answer is kept, so bound values do
+ * not blink to their fallbacks; when the changed ask fails, the previous
+ * answer goes and the fallbacks are drawn.
  */
 export function useCanvasBindings(
-  document: BlockDocument,
+  presented: BlockDocument | null,
   locale: string | undefined
 ): PageBindings {
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
   const request = useMemo(
-    () => canvasBindingsRequest(document, identity, locale),
-    [document, identity, locale]
+    () => canvasBindingsRequest(presented, identity, locale),
+    [presented, identity, locale]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
   const [answer, setAnswer] = useState<{
     readonly key: string;
-    readonly userId: string | null;
+    readonly userId: string;
     readonly bindings: PageBindings;
   } | null>(null);
   useEffect(() => {
-    if (key === "") return;
+    // The route answers whoever the session cookie names, so an answer is
+    // only asked for, and kept, under a person known by id.
+    if (key === "" || userId === null) return;
     let current = true;
     canvasBindingsFor(JSON.parse(key) as CanvasBindingsRequest, userId).then(
       bindings => {
@@ -158,7 +177,8 @@ export function useCanvasBindings(
       current = false;
     };
   }, [key, userId]);
-  // Never another person's answer, and nothing for a page with no binding.
+  // Never another person's answer, none for an unknown person, and nothing
+  // for a page with no binding.
   if (key === "" || answer === null || answer.userId !== userId) return NONE;
   return answer.bindings;
 }

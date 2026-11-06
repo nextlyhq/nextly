@@ -22,7 +22,6 @@ import {
   isFetchableUrl,
   isListDay,
   DOCUMENT_FORMAT_VERSION,
-  readListQuery,
   regionDocument,
   resolveDocumentSeo,
   safeTimeZone,
@@ -30,13 +29,11 @@ import {
   type BindingFieldShape,
   type BindingIssue,
   type BlockDocument,
-  type BlockNode,
   type SourceDemand,
   type BlockSeoContribution,
   type DefinitionsById,
   type DocumentLimits,
   type LayoutRegion,
-  type ListQuery,
   type RemotePatternInput,
   type SeoImageCandidate,
   type SiteSheetInput,
@@ -78,7 +75,6 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { recordedFieldShapes, shapeRefKey } from "./binding-wire";
-import { collectionLoop } from "./blocks/collection-loop";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -108,6 +104,7 @@ import type {
   ResolvedMedia,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
+import { listCollections, listCollectionsWhere } from "./list-collections";
 import {
   cappedLifetime,
   checkedLayoutsProvider,
@@ -1965,36 +1962,6 @@ async function readSite(
 }
 
 /**
- * The collections the page's lists read that `wanted` keeps, each list's
- * query read as the engine reads it. One walk for every question about the
- * page's lists, so no two of them disagree about which lists a page holds.
- */
-function listCollectionsWhere(
-  documents: readonly BlockDocument[],
-  wanted: (query: ListQuery) => boolean
-): Set<string> {
-  const found = new Set<string>();
-  const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
-  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    if (node.type === collectionLoop.name) {
-      const { query } = readListQuery(node.props);
-      if (query.collection !== undefined && wanted(query)) {
-        found.add(query.collection);
-      }
-    }
-    for (const children of Object.values(node.slots ?? {})) {
-      stack.push(...children);
-    }
-  }
-  return found;
-}
-
-/** The collections the page's lists draw, whose items its bindings read. */
-function listCollections(documents: readonly BlockDocument[]): Set<string> {
-  return listCollectionsWhere(documents, () => true);
-}
-
-/**
  * The collections whose lists filter by a day, which compares in the site's
  * zone or as a calendar day by the field's shape.
  */
@@ -2096,7 +2063,7 @@ async function cachedFieldShapes(
 async function readFieldShapes(
   entryRef: BlocksFieldShapeRef,
   demand: BindingDemand,
-  documents: readonly BlockDocument[],
+  lists: readonly string[],
   cache: ReadCache
 ): Promise<BlocksFieldShapes> {
   const known = new Map<string, readonly BindingFieldShape[] | undefined>();
@@ -2128,7 +2095,7 @@ async function readFieldShapes(
       if (target !== undefined) await fetch({ collection: target });
     }
   }
-  for (const collection of listCollections(documents)) {
+  for (const collection of lists) {
     await fetch({ collection });
   }
   // Recorded, so the shapes read can be sent whole to an editor's canvas.
@@ -2171,6 +2138,13 @@ export interface BindingSourcesArgs {
    * that. Absent, it is read from `documents`.
    */
   readonly demand?: BindingDemand;
+  /**
+   * The collections the page's lists draw, whose public field shapes judge
+   * their items' bindings, when the caller has worked them out already with
+   * `listCollections`, as the editor's canvas does. Absent, they are read
+   * from `documents`.
+   */
+  readonly lists?: readonly string[];
   /** Whether the page's entry is a collection's entry or a Single. */
   readonly entrySource: "collection" | "single";
   /** The collection, or the Single, the page's entry belongs to. */
@@ -2221,7 +2195,8 @@ export async function readBindingSources(
     args.entrySource === "single"
       ? { single: args.slug }
       : { collection: args.slug };
-  const shapes = await readFieldShapes(entryRef, demand, args.documents, {
+  const lists = args.lists ?? [...listCollections(args.documents)];
+  const shapes = await readFieldShapes(entryRef, demand, lists, {
     scope: args.cacheScope ?? "",
     locale: args.locale,
     window: args.window,

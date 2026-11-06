@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 /** The document the hook test edits; the other tests pass theirs in. */
 const editing = vi.hoisted(() => ({
+  userId: "u1" as string | null,
   identity: null as null | {
     kind: "collection";
     slug: string;
@@ -19,7 +20,7 @@ const editing = vi.hoisted(() => ({
 const writePluginRoute = vi.hoisted(() => vi.fn());
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  useCurrentUserId: () => "u1",
+  useCurrentUserId: () => editing.userId,
   useDocumentIdentity: () => editing.identity,
   writePluginRoute,
 }));
@@ -71,8 +72,40 @@ describe("the canvas's binding sources", () => {
         site: false,
         formatsDates: false,
       },
+      lists: [],
       locale: "en",
     });
+  });
+
+  it("names the collections the page's lists draw", () => {
+    // A list item's binding is judged by its list's public field shapes, so
+    // the canvas asks for them as the published route reads them.
+    const listed: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "list",
+          type: "core/collection-loop",
+          version: 1,
+          props: { collection: "posts" },
+          slots: {
+            template: [
+              {
+                id: "t",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Fallback", level: "h2" },
+                bindings: { text: { $bind: "title", source: "item" } },
+              },
+            ],
+          },
+        },
+      ],
+    } as BlockDocument;
+    expect(canvasBindingsRequest(listed, identity, undefined)?.lists).toEqual([
+      "posts",
+    ]);
   });
 
   it("reads them back as the renderer takes them", async () => {
@@ -126,6 +159,23 @@ describe("the canvas's binding sources", () => {
     rerender({ locale: "de" });
     await waitFor(() => expect(result.current.entry).toBeUndefined());
     expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    editing.identity = null;
+  });
+
+  it("asks nothing while the signed-in person is not known", async () => {
+    // The route answers whoever the session names, and before the person is
+    // known that may already be another account: nothing is asked or kept.
+    editing.identity = identity;
+    editing.userId = null;
+    writePluginRoute.mockClear();
+    writePluginRoute.mockResolvedValue(answer("Someone's draft"));
+    const { result } = renderHook(() =>
+      useCanvasBindings(page({ text: { $bind: "title" } }), "es")
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(writePluginRoute).not.toHaveBeenCalled();
+    expect(result.current.entry).toBeUndefined();
+    editing.userId = "u1";
     editing.identity = null;
   });
 });

@@ -20,7 +20,11 @@ import {
   type RemotePattern,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import type { PageStyleCascade } from "@nextlyhq/blocks-react";
+import {
+  prepareDocumentForRead,
+  registeredBlocks,
+  type PageStyleCascade,
+} from "@nextlyhq/blocks-react";
 import {
   DEFAULT_PREFERENCES,
   fallbackBreakpoint,
@@ -354,11 +358,9 @@ function useCanvasRender({
     locale,
     initialDocument
   );
-  // What the page's bindings read, read as the person editing.
-  const bindings = useCanvasBindings(editor.document, locale);
-  const canvasRender = useMemo(
-    () => ({
-      ...pageRenderInputs({
+  const pageInputs = useMemo(
+    () =>
+      pageRenderInputs({
         siteStyle: canvasSiteStyle,
         clientConfig,
         // None: the canvas is a frame at the previewed device's size, so the
@@ -371,6 +373,34 @@ function useCanvasRender({
         // keystroke.
         definitions: componentLibrary.definitions,
       }),
+    [
+      canvasSiteStyle,
+      clientConfig,
+      documentLimits,
+      componentLibrary.definitions,
+    ]
+  );
+  // The tree the canvas draws, prepared by the renderer's own pipeline:
+  // composed with the components' definitions under the same caps, so a
+  // binding or a list inside a component is read for, as on the published
+  // page, and a block the page does not draw asks for nothing.
+  const presented = useMemo(
+    () =>
+      prepareDocumentForRead(editor.document, {
+        resolver: registeredBlocks(),
+        styleContext: pageInputs.styleContext,
+        definitions: pageInputs.definitions,
+        ...(pageInputs.limits === undefined
+          ? {}
+          : { limits: pageInputs.limits }),
+      }),
+    [editor.document, pageInputs]
+  );
+  // What the page's bindings read, read as the person editing.
+  const bindings = useCanvasBindings(presented, locale);
+  const canvasRender = useMemo(
+    () => ({
+      ...pageInputs,
       context: canvasContext,
       // The binding pass, with the sources the page's bindings read, read as
       // the person editing: the entry, its Singles and the site settings. A
@@ -379,14 +409,7 @@ function useCanvasRender({
       // its own value (or its fallback), as it always drew.
       bindings,
     }),
-    [
-      canvasSiteStyle,
-      clientConfig,
-      documentLimits,
-      componentLibrary.definitions,
-      canvasContext,
-      bindings,
-    ]
+    [pageInputs, canvasContext, bindings]
   );
 
   /*

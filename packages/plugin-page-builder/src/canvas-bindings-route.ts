@@ -68,6 +68,35 @@ const SOURCE_DEMAND = z
   })
   .strict();
 
+/**
+ * How many field-shape lookups an ask can cost: one per source (the entry,
+ * each Single, each list's collection) and one per relation a path follows.
+ * Each list is capped on its own, and this caps them in all, so one ask cannot
+ * name the most Singles each following the most relations.
+ */
+function shapeLookupsOf(body: {
+  readonly demand: {
+    readonly entry?: { readonly follows: Readonly<Record<string, unknown>> };
+    readonly singles: Readonly<
+      Record<string, { readonly follows: Readonly<Record<string, unknown>> }>
+    >;
+  };
+  readonly lists: readonly string[];
+}): number {
+  const sources = [
+    ...(body.demand.entry === undefined ? [] : [body.demand.entry]),
+    ...Object.values(body.demand.singles),
+  ];
+  return (
+    sources.length +
+    sources.reduce(
+      (sum, source) => sum + Object.keys(source.follows).length,
+      0
+    ) +
+    body.lists.length
+  );
+}
+
 /** The body as it is read, before anything else is. */
 const CanvasBindingsBody = z
   .object({
@@ -90,9 +119,13 @@ const CanvasBindingsBody = z
         formatsDates: z.boolean(),
       })
       .strict(),
+    lists: z.array(SLUG).max(MOST),
     locale: z.string().min(1).max(35).optional(),
   })
-  .strict();
+  .strict()
+  .refine(body => shapeLookupsOf(body) <= MOST, {
+    message: `At most ${String(MOST)} sources, relations and lists in all.`,
+  });
 
 /** What the route reads with, injected so the read is tested without a server. */
 export interface CanvasBindingsReads {
@@ -137,6 +170,10 @@ function directCanvasBindingsReads(
       const bindings = await next.readBindingSources({
         documents: [],
         demand: demandFromWire(request.demand),
+        // The lists' collections the canvas found in the tree it draws, so
+        // their public field shapes judge the items' bindings, as on the
+        // published page.
+        lists: request.lists,
         entrySource: request.source.kind,
         slug: request.source.slug,
         ...(request.source.id === undefined

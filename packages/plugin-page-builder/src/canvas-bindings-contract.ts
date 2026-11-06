@@ -43,6 +43,12 @@ export interface CanvasBindingsRequest {
     readonly site: boolean;
     readonly formatsDates: boolean;
   };
+  /**
+   * The collections the page's lists draw. Their public field shapes are read
+   * and sent back, so a list item's binding to a field visitors may not read
+   * falls back on the canvas as it does on the published page.
+   */
+  readonly lists: readonly string[];
   /** The language being edited. */
   readonly locale?: string;
 }

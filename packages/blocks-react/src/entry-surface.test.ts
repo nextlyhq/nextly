@@ -26,6 +26,7 @@ import * as blocksEntry from "./blocks/index";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
 import * as pageRendererModule from "./page-renderer";
@@ -115,6 +116,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     ],
   },
   { name: "context", module: contextModule, internal: [] },
+  {
+    name: "list-collections",
+    module: listCollectionsModule,
+    // The walk behind `listCollections`, shared with the route's other
+    // questions about a page's lists; not a consumer surface.
+    internal: ["listCollectionsWhere"],
+  },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
   // editor's canvas alike.
@@ -452,6 +460,9 @@ describe("the root entry", () => {
       // Which part of a page drawn inside its Layout emits the site sheet, and
       // the scope each part compiles under.
       "layoutPartSheets",
+      // The collections a page's lists draw: the published route and the
+      // editor's canvas ask one walk which lists a page holds.
+      "listCollections",
       "migrationSourceFor",
       "pageBindingRun",
       "pageStyleTrace",
