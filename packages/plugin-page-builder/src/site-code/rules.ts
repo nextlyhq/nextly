@@ -19,6 +19,7 @@
  * @module site-code/rules
  * @experimental
  */
+import { cssFetches } from "./css-urls";
 
 /** Where site code goes on every published page. */
 export type SiteCodeSlot = "head" | "body";
@@ -65,12 +66,47 @@ export const SITE_CODE_LIMITS = {
   attributeLength: 4096,
 } as const;
 
-/** The script types a browser runs as code, or reads as data, and no other. */
-const SCRIPT_TYPES: ReadonlySet<string> = new Set([
-  "module",
+/**
+ * The script types a browser runs as classic scripts: the HTML standard's
+ * JavaScript MIME type essences, matched whole and in any case. A type with
+ * parameters (`text/javascript; charset=utf-8`) matches none, and a browser
+ * keeps such a script as data and never runs it.
+ */
+const JAVASCRIPT_TYPES: ReadonlySet<string> = new Set([
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
   "text/javascript",
-  "application/ld+json",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
 ]);
+
+/**
+ * What a browser does with a script of `type`: runs it as a classic script or
+ * a module, or reads it as structured data (JSON-LD, the one data block site
+ * code may hold); `undefined` for any other type, which site code may not
+ * use. Read as the HTML standard reads it: trimmed, in any case, and no type
+ * or an empty one is a classic script.
+ */
+export function siteCodeScriptKind(
+  type: string | undefined
+): "classic" | "module" | "data" | undefined {
+  if (type === undefined) return "classic";
+  const read = type.trim().toLowerCase();
+  if (read === "" || JAVASCRIPT_TYPES.has(read)) return "classic";
+  if (read === "module") return "module";
+  return read === "application/ld+json" ? "data" : undefined;
+}
 
 /** The link relations site code may use: hints, styles, icons, alternates. */
 const LINK_RELS: ReadonlySet<string> = new Set([
@@ -192,7 +228,7 @@ function attributeProblem(
 /** Why an element's own attribute values may not be used, by element. */
 function valueProblem(tag: string, attrs: SiteCodeAttrs): string | undefined {
   if (tag === "script") {
-    if (attrs.type !== undefined && !SCRIPT_TYPES.has(attrs.type)) {
+    if (siteCodeScriptKind(attrs.type) === undefined) {
       return `a script of type "${attrs.type}" isn't allowed`;
     }
     // Next.js's own ids, in any case (`__NEXT_DATA__`).
@@ -234,6 +270,20 @@ function textProblem(
   }
   if (tag === "style" && /<\/style/i.test(text)) {
     return "its styles contain </style, which would end them early";
+  }
+  return tag === "style" ? cssUrlProblem(text) : undefined;
+}
+
+/**
+ * Why a stylesheet's fetches may not be used: each `@import`, font and image
+ * it loads is held to the same rule as an attribute's URL.
+ */
+function cssUrlProblem(text: string): string | undefined {
+  for (const fetch of cssFetches(text)) {
+    const problem = siteCodeUrlProblem(fetch.url);
+    if (problem !== undefined) {
+      return `its styles load "${fetch.url}", which ${problem}`;
+    }
   }
   return undefined;
 }

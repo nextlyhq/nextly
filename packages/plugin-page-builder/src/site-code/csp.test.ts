@@ -35,9 +35,13 @@ const style = (text: string): SiteCodeEntry => ({
   attrs: {},
   text,
 });
-const pixel = (tag: "img" | "iframe", src: string): SiteCodeEntry => ({
+const pixel = (
+  tag: "img" | "iframe",
+  src: string,
+  more: Record<string, string> = {}
+): SiteCodeEntry => ({
   tag: "noscript",
-  child: { tag, attrs: { src } },
+  child: { tag, attrs: { src, ...more } },
 });
 
 /** The directives that would block `head` and `body` under `policy`. */
@@ -291,6 +295,94 @@ describe("what site code loads", () => {
     ).toEqual(["style-src"]);
   });
 
+  it("reads an import written as a plain string, and no condition after it", async () => {
+    expect(
+      await blockedBy("style-src 'unsafe-inline'", [
+        style('@import "https://fonts.example/a.css";'),
+      ])
+    ).toEqual(["style-src"]);
+    expect(
+      await blockedBy("style-src 'unsafe-inline' https://fonts.example", [
+        style(
+          '@import url(https://fonts.example/a.css) supports(font-family: "x");'
+        ),
+      ])
+    ).toEqual([]);
+  });
+
+  it("judges a manifest by manifest-src, then default-src", async () => {
+    const manifest: SiteCodeEntry = {
+      tag: "link",
+      attrs: { rel: "manifest", href: "https://pwa.example/app.webmanifest" },
+    };
+    expect(await blockedBy("manifest-src 'self'", [manifest])).toEqual([
+      "manifest-src",
+    ]);
+    expect(await blockedBy("default-src 'self'", [manifest])).toEqual([
+      "default-src",
+    ]);
+  });
+
+  it("lets a loaded script the site passes its nonce to run without 'strict-dynamic'", async () => {
+    const policy = "script-src 'nonce-abc'";
+    expect(
+      await blockedBy(policy, [loaded(GTAG)], [], { siteNonce: true })
+    ).toEqual([]);
+    expect(await blockedBy(policy, [loaded(GTAG)])).toEqual(["script-src"]);
+  });
+
+  it("needs every hash a script's integrity holds", async () => {
+    const both = loaded(GTAG, { integrity: "sha256-aaa sha384-bbb" });
+    expect(
+      await blockedBy("script-src 'strict-dynamic' 'sha256-aaa'", [both])
+    ).toEqual(["script-src"]);
+    expect(
+      await blockedBy("script-src 'strict-dynamic' 'sha256-aaa' 'sha384-bbb'", [
+        both,
+      ])
+    ).toEqual([]);
+    // Integrity alone lets a script load where no host is named.
+    expect(
+      await blockedBy("script-src 'sha384-bbb'", [
+        loaded(GTAG, { integrity: "sha384-bbb" }),
+      ])
+    ).toEqual([]);
+  });
+
+  it("judges a pixel's style attribute, which applies with scripting off", async () => {
+    const hidden = pixel("img", "/p.gif", { style: "display:none" });
+    expect(await blockedBy("style-src 'self'", [], [hidden])).toEqual([
+      "style-src",
+    ]);
+    expect(
+      await blockedBy("style-src 'self' 'unsafe-inline'", [], [hidden])
+    ).toEqual([]);
+  });
+
+  it("ignores 'none' beside other sources, as browsers do", async () => {
+    expect(
+      await blockedBy("script-src 'none' https://cdn.example", [
+        loaded("https://cdn.example/a.js"),
+      ])
+    ).toEqual([]);
+    expect(
+      await blockedBy("script-src 'none'", [loaded("https://cdn.example/a.js")])
+    ).toEqual(["script-src"]);
+  });
+
+  it("matches no IP address but the loopback one", async () => {
+    expect(
+      await blockedBy("script-src https://203.0.113.5", [
+        loaded("https://203.0.113.5/a.js"),
+      ])
+    ).toEqual(["script-src"]);
+    expect(
+      await blockedBy("script-src https://127.0.0.1", [
+        loaded("https://127.0.0.1/a.js"),
+      ])
+    ).toEqual([]);
+  });
+
   it("warns rather than errs under a Report-Only policy", async () => {
     const check = await checkSiteCodeAgainstCsp(
       { policy: "script-src 'self'", reportOnly: true, siteOrigin: ORIGIN },
@@ -304,20 +396,23 @@ describe("what site code loads", () => {
 });
 
 describe("what site code needs of a policy", () => {
-  it("hashes inline code and names each other origin once", async () => {
+  it("hashes inline code and keeps each load once, its own site's too", async () => {
     const facts = await siteCodeFacts(
       [
         inline("a()"),
+        inline("a()"),
         loaded(GTAG),
-        loaded("https://www.googletagmanager.com/other.js"),
+        loaded(GTAG),
         loaded("/js/own.js"),
-        loaded(`${ORIGIN}/js/own.js`),
         { tag: "script", attrs: { type: "application/ld+json" }, text: "{}" },
       ],
       ORIGIN
     );
-    expect(facts.scriptHashes).toEqual([await cspHash("a()")]);
-    expect(facts.origins.script).toEqual(["https://www.googletagmanager.com"]);
+    expect(facts.hashes.script).toEqual([await cspHash("a()")]);
+    expect(facts.loads).toEqual([
+      { kind: "script", url: GTAG },
+      { kind: "script", url: "/js/own.js" },
+    ]);
   });
 });
 
@@ -343,10 +438,63 @@ describe("adding what site code needs to a policy", () => {
     ).toBe(`script-src 'self' 'unsafe-inline' ${GTM}`);
   });
 
-  it("leaves a nonce-based, 'strict-dynamic' policy as it is", async () => {
-    const { facts } = await gtagFacts();
+  it("leaves a nonce-based, 'strict-dynamic' policy as it is where the site passes its nonce", async () => {
+    const { facts, hash } = await gtagFacts();
     const policy = "script-src 'nonce-abc' 'strict-dynamic'";
+    expect(mergeSiteCodeIntoCsp(policy, facts, { siteNonce: true })).toBe(
+      policy
+    );
+    // Without the nonce, the inline setup needs its hash; no host is
+    // honoured under 'strict-dynamic', so none is added for the script.
+    expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(`${policy} ${hash}`);
+  });
+
+  it("adds nothing for a load a path-scoped source already allows", async () => {
+    const facts = await siteCodeFacts(
+      [loaded("https://cdn.example/approved/a.js")],
+      ORIGIN
+    );
+    const policy = "script-src https://cdn.example/approved/";
     expect(mergeSiteCodeIntoCsp(policy, facts)).toBe(policy);
+  });
+
+  it("adds 'self' for a load from the site itself", async () => {
+    const facts = await siteCodeFacts([loaded("/analytics.js")], ORIGIN);
+    const merged = mergeSiteCodeIntoCsp("default-src 'none'", facts);
+    expect(merged).toBe("default-src 'none'; script-src 'self'");
+    expect(await blockedBy(merged, [loaded("/analytics.js")])).toEqual([]);
+  });
+
+  it("adds a script's integrity hashes under 'strict-dynamic'", async () => {
+    const facts = await siteCodeFacts(
+      [loaded(GTAG, { integrity: "sha384-abc" })],
+      ORIGIN
+    );
+    expect(
+      mergeSiteCodeIntoCsp("script-src 'strict-dynamic' 'nonce-x'", facts)
+    ).toBe("script-src 'strict-dynamic' 'nonce-x' 'sha384-abc'");
+  });
+
+  it("lets a pixel's style attribute through by its hash alone", async () => {
+    const facts = await siteCodeFacts(
+      [pixel("img", "/p.gif", { style: "display:none" })],
+      ORIGIN
+    );
+    const hash = await cspHash("display:none");
+    const merged = mergeSiteCodeIntoCsp(
+      "style-src 'self'; img-src 'self'",
+      facts
+    );
+    expect(merged).toBe(
+      `style-src 'self'; img-src 'self'; style-src-attr 'self' 'unsafe-hashes' '${hash}'`
+    );
+    expect(
+      await blockedBy(
+        merged,
+        [],
+        [pixel("img", "/p.gif", { style: "display:none" })]
+      )
+    ).toEqual([]);
   });
 
   it("adds to a directive of the kind's own, never widening default-src", async () => {

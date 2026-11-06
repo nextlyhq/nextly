@@ -4,8 +4,8 @@
  * The host app owns its policy: Nextly sets no header on the site's pages. So
  * this reads a policy rather than writing one, and answers three questions:
  * - what the site code needs of a policy (`siteCodeFacts`): the hash of each
- *   inline script and style, and the origins it loads scripts, styles,
- *   images, fonts and frames from;
+ *   inline script, style and no-script style attribute, and every resource it
+ *   loads (scripts, styles, images, fonts, frames and a manifest);
  * - whether a policy lets it run (`checkSiteCodeAgainstCsp`), so a person is
  *   told before saving code the site would block;
  * - how to add what it needs to a policy without harming it
@@ -13,15 +13,20 @@
  *
  * The rules followed are CSP Level 3's: a directive falls back to its parent
  * (`script-src-elem` to `script-src` to `default-src`); a hash or nonce in a
- * list cancels `'unsafe-inline'`; `'strict-dynamic'` ignores host sources.
- * What scripts load once running (their own requests) can't be seen here.
+ * list cancels `'unsafe-inline'`, and for scripts so does `'strict-dynamic'`,
+ * which also ignores host sources; `'none'` counts only alone. What scripts
+ * load once running (their own requests) can't be seen here.
  *
  * @module site-code/csp
  * @experimental
  */
-import { parse, walk, type CssNode, type WalkContext } from "css-tree";
-
-import type { SiteCodeEntry, SiteCodeSlot } from "./rules";
+import { cssFetches, type CssFetch } from "./css-urls";
+import {
+  siteCodeScriptKind,
+  type SiteCodeAttrs,
+  type SiteCodeEntry,
+  type SiteCodeSlot,
+} from "./rules";
 
 /** A parsed policy: each directive's sources, the first of a repeated one kept. */
 export type CspPolicy = ReadonlyMap<string, readonly string[]>;
@@ -46,21 +51,38 @@ function serialiseCsp(policy: CspPolicy): string {
 }
 
 /** What a resource is fetched as, which decides the directive judging it. */
-type ResourceKind = "script" | "style" | "img" | "font" | "frame";
+export type SiteCodeResourceKind =
+  | "script"
+  | "style"
+  | "img"
+  | "font"
+  | "frame"
+  | "manifest";
+
+/**
+ * What inline code is: a script's or a style's text, or a style attribute
+ * (on a no-script pixel, applied only when scripting is off).
+ */
+export type SiteCodeInlineKind = "script" | "style" | "style-attr";
+
+/** A kind of resource or of inline code, each judged by its own directives. */
+type Kind = SiteCodeResourceKind | SiteCodeInlineKind;
 
 /** Each kind's directive, then the ones it falls back to, most specific first. */
-const FALLBACKS: Readonly<Record<ResourceKind, readonly string[]>> = {
+const FALLBACKS: Readonly<Record<Kind, readonly string[]>> = {
   script: ["script-src-elem", "script-src", "default-src"],
   style: ["style-src-elem", "style-src", "default-src"],
+  "style-attr": ["style-src-attr", "style-src", "default-src"],
   img: ["img-src", "default-src"],
   font: ["font-src", "default-src"],
   frame: ["frame-src", "child-src", "default-src"],
+  manifest: ["manifest-src", "default-src"],
 };
 
 /** The directive that judges `kind`, and its sources; none means unrestricted. */
 function governing(
   policy: CspPolicy,
-  kind: ResourceKind
+  kind: Kind
 ):
   | { readonly directive: string; readonly sources: readonly string[] }
   | undefined {
@@ -81,6 +103,11 @@ function isNonce(source: string): boolean {
   return /^'nonce-/i.test(source);
 }
 
+/** Whether a list holds a keyword, in any case. */
+function holds(sources: readonly string[], keyword: string): boolean {
+  return sources.some(source => source.toLowerCase() === keyword);
+}
+
 /**
  * How a list treats inline code: by nonce, by hash, any, or none. For
  * scripts `'strict-dynamic'` cancels `'unsafe-inline'` as a nonce or hash
@@ -92,24 +119,27 @@ function inlineMode(
 ): "nonce" | "hash" | "unsafe-inline" | "none" {
   if (sources.some(isNonce)) return "nonce";
   if (sources.some(isHash)) return "hash";
-  if (script && sources.includes("'strict-dynamic'")) return "none";
-  return sources.includes("'unsafe-inline'") ? "unsafe-inline" : "none";
+  if (script && holds(sources, "'strict-dynamic'")) return "none";
+  return holds(sources, "'unsafe-inline'") ? "unsafe-inline" : "none";
 }
 
 /**
  * Whether a list lets inline code with `hash` run. A nonce or hash in the list
- * cancels `'unsafe-inline'`; a nonce lets it run only where the site passes
- * its nonce to the code.
+ * cancels `'unsafe-inline'`; a nonce lets an element run only where the site
+ * passes its nonce to the code. A style attribute takes no nonce, and is
+ * matched by hash only under `'unsafe-hashes'`.
  */
 function allowsInline(
   sources: readonly string[],
   hash: string,
   siteNonce: boolean,
-  script: boolean
+  kind: SiteCodeInlineKind
 ): boolean {
-  if (sources.includes("'none'")) return false;
-  const mode = inlineMode(sources, script);
+  const mode = inlineMode(sources, kind === "script");
   if (mode === "unsafe-inline") return true;
+  if (kind === "style-attr") {
+    return holds(sources, "'unsafe-hashes'") && sources.includes(`'${hash}'`);
+  }
   if (sources.includes(`'${hash}'`)) return true;
   return mode === "nonce" && siteNonce;
 }
@@ -118,17 +148,25 @@ function allowsInline(
 const HOST_SOURCE =
   /^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|(?:\*\.)?[a-z0-9.-]+)(?::(\*|\d+))?(\/[^?#]*)?$/i;
 
+/** An IPv4 address written as a host. */
+const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
 /** The default port of a scheme a URL may name. */
 function defaultPort(protocol: string): string {
   return protocol === "http:" ? "80" : protocol === "https:" ? "443" : "";
 }
 
-/** Whether a host source's host matches a URL's host. */
+/**
+ * Whether a host source's host matches a URL's host. An IP address matches
+ * nothing but the loopback address, as CSP Level 3 matches hosts.
+ */
 function hostMatches(pattern: string, host: string): boolean {
   if (pattern === "*") return true;
+  if (IPV4.test(pattern)) return pattern === "127.0.0.1" && host === pattern;
   // `*.example.com` matches its subdomains, never example.com itself.
-  if (pattern.startsWith("*."))
+  if (pattern.startsWith("*.")) {
     return host.endsWith(pattern.slice(1).toLowerCase());
+  }
   return pattern.toLowerCase() === host;
 }
 
@@ -160,43 +198,79 @@ function hostSourceMatches(source: string, url: URL): boolean {
   );
 }
 
-/** Whether one source allows a URL, the site's own origin standing for 'self'. */
+/**
+ * Whether one source allows a URL, the site's own origin standing for
+ * 'self'. A keyword matches no URL, so `'none'` beside other sources is
+ * ignored, as browsers ignore it, and alone matches nothing.
+ */
 function sourceMatches(source: string, url: URL, siteOrigin: string): boolean {
   const lower = source.toLowerCase();
   if (lower === "'self'") return url.origin === siteOrigin;
-  if (lower === "*")
+  if (lower === "*") {
     return url.protocol === "https:" || url.protocol === "http:";
+  }
   if (/^[a-z][a-z0-9+.-]*:$/.test(lower)) return url.protocol === lower;
   if (lower.startsWith("'")) return false;
   return hostSourceMatches(source, url);
 }
 
-/** What a loaded resource carries that a strict policy may trust. */
-interface LoadTrust {
-  /** The site passes its nonce to site code. */
-  readonly siteNonce: boolean;
-  /** The resource's `integrity` value, whose hash a list may name. */
+/**
+ * The hashes in an `integrity` value a policy can name: those of the
+ * algorithms CSP knows, without their options.
+ */
+function integrityHashes(integrity: string | undefined): string[] {
+  return (integrity ?? "")
+    .split(/\s+/)
+    .map(token => token.split("?")[0] ?? "")
+    .filter(token => /^sha(256|384|512)-[A-Za-z0-9+/=_-]+$/.test(token));
+}
+
+/** Whether a list names every hash a script's integrity holds. */
+function integrityMatches(
+  sources: readonly string[],
+  integrity: string | undefined
+): boolean {
+  const hashes = integrityHashes(integrity);
+  return (
+    hashes.length > 0 && hashes.every(hash => sources.includes(`'${hash}'`))
+  );
+}
+
+/** One resource site code loads: what it is fetched as, and from where. */
+export interface SiteCodeLoad {
+  readonly kind: SiteCodeResourceKind;
+  /** The URL as written: `https:`, or a path on the site. */
+  readonly url: string;
   readonly integrity?: string;
 }
 
+/** What a load is judged with besides the policy. */
+interface LoadContext {
+  /** The site's own origin, which `'self'` and site paths stand for. */
+  readonly siteOrigin: string;
+  /** Whether the site passes its nonce to site code. */
+  readonly siteNonce: boolean;
+}
+
 /**
- * Whether a list lets a resource at `url` load. Under `'strict-dynamic'` a
- * script's host sources are ignored: it loads by the site's nonce, or by a
- * hash naming its integrity.
+ * Whether a list lets a load at `url` happen. A script or style the site
+ * passes its nonce to loads under a list naming a nonce; a script whose
+ * integrity the list names in full loads too. Under `'strict-dynamic'` a
+ * script's host sources are ignored.
  */
-function allowsUrl(
+function allowsLoad(
   sources: readonly string[],
+  load: SiteCodeLoad,
   url: URL,
-  siteOrigin: string,
-  trust: LoadTrust & { readonly script: boolean }
+  context: LoadContext
 ): boolean {
-  if (sources.includes("'none'")) return false;
-  if (trust.script && sources.includes("'strict-dynamic'")) {
-    if (trust.siteNonce && sources.some(isNonce)) return true;
-    const integrity = trust.integrity?.split(/\s+/) ?? [];
-    return integrity.some(hash => sources.includes(`'${hash}'`));
+  const nonceable = load.kind === "script" || load.kind === "style";
+  if (nonceable && context.siteNonce && sources.some(isNonce)) return true;
+  if (load.kind === "script") {
+    if (integrityMatches(sources, load.integrity)) return true;
+    if (holds(sources, "'strict-dynamic'")) return false;
   }
-  return sources.some(source => sourceMatches(source, url, siteOrigin));
+  return sources.some(source => sourceMatches(source, url, context.siteOrigin));
 }
 
 /** One inline text, hashed as CSP hashes it: SHA-256 of its UTF-8, base64. */
@@ -206,64 +280,48 @@ export async function cspHash(text: string): Promise<string> {
     new TextEncoder().encode(text)
   );
   let binary = "";
-  for (const byte of new Uint8Array(digest))
+  for (const byte of new Uint8Array(digest)) {
     binary += String.fromCharCode(byte);
+  }
   return `sha256-${btoa(binary)}`;
-}
-
-/** One resource site code loads: what it is fetched as, and from where. */
-interface Load {
-  readonly kind: ResourceKind;
-  readonly url: string;
-  readonly integrity?: string;
 }
 
 /** One piece of inline code site code runs. */
 interface Inline {
-  readonly kind: "script" | "style";
+  readonly kind: SiteCodeInlineKind;
   readonly text: string;
 }
 
-/** What a stylesheet loads: `@import` as a style, `url()` as an image or font. */
-function stylesheetLoads(text: string): Load[] {
-  const loads: Load[] = [];
-  let ast: CssNode;
-  try {
-    ast = parse(text);
-  } catch {
-    return loads;
-  }
-  walk(ast, {
-    // The walk's context names the at-rule a url() sits in.
-    enter(this: WalkContext, node: CssNode) {
-      if (node.type !== "Url") return;
-      const inFontFace = this.atrule?.name.toLowerCase() === "font-face";
-      const isImport = this.atrule?.name.toLowerCase() === "import";
-      loads.push({
-        kind: isImport ? "style" : inFontFace ? "font" : "img",
-        url: node.value,
-      });
-    },
-  });
-  return loads;
-}
+/** What a stylesheet fetch loads, as a resource. */
+const FETCH_KINDS: Readonly<Record<CssFetch["via"], SiteCodeResourceKind>> = {
+  import: "style",
+  font: "font",
+  image: "img",
+};
 
 /** What a link loads, by its relation (a preload by its `as`). */
-const LINK_KINDS: ReadonlyMap<string, ResourceKind> = new Map([
+const LINK_KINDS: ReadonlyMap<string, SiteCodeResourceKind> = new Map([
   ["stylesheet", "style"],
   ["icon", "img"],
   ["apple-touch-icon", "img"],
   ["modulepreload", "script"],
+  ["manifest", "manifest"],
 ]);
-const PRELOAD_KINDS: ReadonlyMap<string, ResourceKind> = new Map([
+const PRELOAD_KINDS: ReadonlyMap<string, SiteCodeResourceKind> = new Map([
   ["script", "script"],
   ["style", "style"],
   ["font", "font"],
   ["image", "img"],
 ]);
 
+/** A load with the integrity its element names, when it names one. */
+function withIntegrity(load: SiteCodeLoad, attrs: SiteCodeAttrs): SiteCodeLoad {
+  const integrity = attrs.integrity;
+  return integrity === undefined ? load : { ...load, integrity };
+}
+
 /** What a link loads, by its relation; nothing for hints and alternates. */
-function linkLoad(attrs: Readonly<Record<string, string>>): Load | undefined {
+function linkLoad(attrs: SiteCodeAttrs): SiteCodeLoad | undefined {
   const href = attrs.href;
   if (href === undefined) return undefined;
   const kind =
@@ -275,37 +333,42 @@ function linkLoad(attrs: Readonly<Record<string, string>>): Load | undefined {
     : withIntegrity({ kind, url: href }, attrs);
 }
 
-/** A load with the integrity its element names, when it names one. */
-function withIntegrity(
-  load: Load,
-  attrs: Readonly<Record<string, string>>
-): Load {
-  const integrity = attrs.integrity;
-  return integrity === undefined ? load : { ...load, integrity };
-}
-
 /** What one entry loads and runs inline. */
 interface Parts {
-  readonly loads: Load[];
+  readonly loads: SiteCodeLoad[];
   readonly inline: Inline[];
 }
 
 const NOTHING: Parts = { loads: [], inline: [] };
 
 /** What a script loads by `src`, or runs inline; JSON-LD is data, never run. */
-function scriptParts(
-  attrs: Readonly<Record<string, string>>,
-  text?: string
-): Parts {
+function scriptParts(attrs: SiteCodeAttrs, text?: string): Parts {
+  if (siteCodeScriptKind(attrs.type) === "data") return NOTHING;
   if (attrs.src !== undefined) {
     return {
       loads: [withIntegrity({ kind: "script", url: attrs.src }, attrs)],
       inline: [],
     };
   }
-  return attrs.type === "application/ld+json"
-    ? NOTHING
-    : { loads: [], inline: [{ kind: "script", text: text ?? "" }] };
+  return { loads: [], inline: [{ kind: "script", text: text ?? "" }] };
+}
+
+/**
+ * What a no-script pixel loads, and its style attribute, which applies when
+ * scripting is off and is judged as inline style.
+ */
+function fallbackParts(child: {
+  readonly tag: "img" | "iframe";
+  readonly attrs: SiteCodeAttrs;
+}): Parts {
+  const { src, style } = child.attrs;
+  return {
+    loads:
+      src === undefined
+        ? []
+        : [{ kind: child.tag === "iframe" ? "frame" : "img", url: src }],
+    inline: style === undefined ? [] : [{ kind: "style-attr", text: style }],
+  };
 }
 
 /** What one entry loads and runs inline. */
@@ -315,20 +378,18 @@ function partsOf(entry: SiteCodeEntry): Parts {
       return scriptParts(entry.attrs, entry.text);
     case "style":
       return {
-        loads: stylesheetLoads(entry.text),
+        loads: cssFetches(entry.text).map(fetch => ({
+          kind: FETCH_KINDS[fetch.via],
+          url: fetch.url,
+        })),
         inline: [{ kind: "style", text: entry.text }],
       };
     case "link": {
       const load = linkLoad(entry.attrs);
       return load === undefined ? NOTHING : { loads: [load], inline: [] };
     }
-    case "noscript": {
-      const { tag, attrs } = entry.child;
-      const kind = tag === "iframe" ? "frame" : "img";
-      return attrs.src === undefined
-        ? NOTHING
-        : { loads: [{ kind, url: attrs.src }], inline: [] };
-    }
+    case "noscript":
+      return fallbackParts(entry.child);
     case "meta":
       return NOTHING;
   }
@@ -345,48 +406,42 @@ function urlOf(raw: string, siteOrigin: string): URL | undefined {
 
 /** What site code needs of a policy, gathered once from its entries. */
 export interface SiteCodeFacts {
-  /** The hashes of its inline scripts, as CSP sources (`sha256-…`). */
-  readonly scriptHashes: readonly string[];
-  /** The hashes of its inline styles. */
-  readonly styleHashes: readonly string[];
-  /** The origins it loads from, by what it loads, each once. */
-  readonly origins: Readonly<Record<ResourceKind, readonly string[]>>;
+  /** The site's own origin, which `'self'` and site paths stand for. */
+  readonly siteOrigin: string;
+  /** The hashes of its inline code, as CSP sources (`sha256-…`), by kind. */
+  readonly hashes: Readonly<Record<SiteCodeInlineKind, readonly string[]>>;
+  /** Every resource it loads, each once, as written. */
+  readonly loads: readonly SiteCodeLoad[];
 }
 
-/** What site code needs of a policy: its inline hashes and the origins it loads. */
+/** What site code needs of a policy: its inline hashes and what it loads. */
 export async function siteCodeFacts(
   entries: readonly SiteCodeEntry[],
   siteOrigin: string
 ): Promise<SiteCodeFacts> {
-  const hashes = { script: new Set<string>(), style: new Set<string>() };
-  const origins: Record<ResourceKind, Set<string>> = {
+  const hashes: Record<SiteCodeInlineKind, Set<string>> = {
     script: new Set(),
     style: new Set(),
-    img: new Set(),
-    font: new Set(),
-    frame: new Set(),
+    "style-attr": new Set(),
   };
+  const loads = new Map<string, SiteCodeLoad>();
   for (const entry of entries) {
-    const { loads, inline } = partsOf(entry);
-    for (const code of inline) hashes[code.kind].add(await cspHash(code.text));
-    for (const load of loads) {
-      const url = urlOf(load.url, siteOrigin);
-      // The site's own origin is 'self', which a policy names on its own.
-      if (url !== undefined && url.origin !== siteOrigin) {
-        origins[load.kind].add(url.origin);
-      }
+    const parts = partsOf(entry);
+    for (const code of parts.inline) {
+      hashes[code.kind].add(await cspHash(code.text));
+    }
+    for (const load of parts.loads) {
+      loads.set(`${load.kind} ${load.url} ${load.integrity ?? ""}`, load);
     }
   }
   return {
-    scriptHashes: [...hashes.script],
-    styleHashes: [...hashes.style],
-    origins: {
-      script: [...origins.script],
-      style: [...origins.style],
-      img: [...origins.img],
-      font: [...origins.font],
-      frame: [...origins.frame],
+    siteOrigin,
+    hashes: {
+      script: [...hashes.script],
+      style: [...hashes.style],
+      "style-attr": [...hashes["style-attr"]],
     },
+    loads: [...loads.values()],
   };
 }
 
@@ -425,6 +480,16 @@ interface Blocked {
   readonly message: string;
 }
 
+/** Why a policy blocks inline code of `kind`, in words. */
+const INLINE_BLOCKED: Readonly<Record<SiteCodeInlineKind, string>> = {
+  script:
+    "this inline script is blocked: add its hash, or 'unsafe-inline' where no hash or nonce is used",
+  style:
+    "this inline style is blocked: add its hash, or 'unsafe-inline' where no hash or nonce is used",
+  "style-attr":
+    "this no-script fallback's style attribute is blocked when scripting is off: add 'unsafe-hashes' and its hash",
+};
+
 /** The inline code a policy would block. */
 async function inlineFindings(
   inline: readonly Inline[],
@@ -436,37 +501,40 @@ async function inlineFindings(
     const rule = governing(policy, code.kind);
     if (rule === undefined) continue;
     const hash = await cspHash(code.text);
-    if (allowsInline(rule.sources, hash, siteNonce, code.kind === "script")) {
-      continue;
-    }
+    if (allowsInline(rule.sources, hash, siteNonce, code.kind)) continue;
     findings.push({
       directive: rule.directive,
-      message: `this inline ${code.kind} is blocked: add its hash, or 'unsafe-inline' where no hash or nonce is used`,
+      message: INLINE_BLOCKED[code.kind],
     });
   }
   return findings;
 }
 
+/** A kind as people say it, for a finding's words. */
+const KIND_WORDS: Readonly<Record<SiteCodeResourceKind, string>> = {
+  script: "scripts",
+  style: "styles",
+  img: "images",
+  font: "fonts",
+  frame: "frames",
+  manifest: "a manifest",
+};
+
 /** What a policy would block of what an entry loads. */
 function loadFindings(
-  loads: readonly Load[],
+  loads: readonly SiteCodeLoad[],
   policy: CspPolicy,
-  input: CspCheckInput
+  context: LoadContext
 ): Blocked[] {
   const findings: Blocked[] = [];
   for (const load of loads) {
     const rule = governing(policy, load.kind);
-    const url = urlOf(load.url, input.siteOrigin);
+    const url = urlOf(load.url, context.siteOrigin);
     if (rule === undefined || url === undefined) continue;
-    const trust = {
-      siteNonce: input.siteNonce === true,
-      script: load.kind === "script",
-      ...(load.integrity === undefined ? {} : { integrity: load.integrity }),
-    };
-    if (allowsUrl(rule.sources, url, input.siteOrigin, trust)) continue;
+    if (allowsLoad(rule.sources, load, url, context)) continue;
     findings.push({
       directive: rule.directive,
-      message: `${url.origin} is blocked for ${load.kind === "img" ? "images" : `${load.kind}s`}`,
+      message: `${url.origin} is blocked for ${KIND_WORDS[load.kind]}`,
     });
   }
   return findings;
@@ -476,12 +544,12 @@ function loadFindings(
 async function entryFindings(
   entry: SiteCodeEntry,
   policy: CspPolicy,
-  input: CspCheckInput
+  context: LoadContext
 ): Promise<Blocked[]> {
   const { loads, inline } = partsOf(entry);
   return [
-    ...(await inlineFindings(inline, policy, input.siteNonce === true)),
-    ...loadFindings(loads, policy, input),
+    ...(await inlineFindings(inline, policy, context.siteNonce)),
+    ...loadFindings(loads, policy, context),
   ];
 }
 
@@ -503,10 +571,14 @@ export async function checkSiteCodeAgainstCsp(
   }
   const policy = parseCsp(input.policy);
   const level = input.reportOnly === true ? "warning" : "error";
+  const context = {
+    siteOrigin: input.siteOrigin,
+    siteNonce: input.siteNonce === true,
+  };
   const findings: CspFinding[] = [];
   for (const slot of ["head", "body"] as const) {
     for (const [index, entry] of slots[slot].entries()) {
-      for (const found of await entryFindings(entry, policy, input)) {
+      for (const found of await entryFindings(entry, policy, context)) {
         findings.push({ slot, index, level, ...found });
       }
     }
@@ -514,77 +586,119 @@ export async function checkSiteCodeAgainstCsp(
   return { checked: true, findings };
 }
 
-/** A kind's own directive: `script-src` and `style-src` cover both uses. */
-function ownDirective(kind: ResourceKind): string {
-  return kind === "script" || kind === "style"
-    ? `${kind}-src`
-    : (FALLBACKS[kind][0] ?? "default-src");
-}
+/** Each kind's own directive, which an addition goes to over a fallback. */
+const OWN_DIRECTIVE: Readonly<Record<Kind, string>> = {
+  script: "script-src",
+  style: "style-src",
+  "style-attr": "style-src-attr",
+  img: "img-src",
+  font: "font-src",
+  frame: "frame-src",
+  manifest: "manifest-src",
+};
 
-/** Whether a directive judging `kind` is a fallback shared with other kinds. */
-function isFallback(kind: ResourceKind, directive: string): boolean {
+/**
+ * Whether the directive judging `kind` is a fallback that governs other uses
+ * too: `default-src` for every kind, `child-src` for frames, `style-src` for
+ * style attributes.
+ */
+function isFallback(kind: Kind, directive: string): boolean {
   return (
     directive === "default-src" ||
-    (kind === "frame" && directive === "child-src")
+    (kind === "frame" && directive === "child-src") ||
+    (kind === "style-attr" && directive === "style-src")
   );
 }
 
-/** The sources to add for one kind, by how its directive treats inline code. */
-function sourcesToAdd(
-  kind: ResourceKind,
-  sources: readonly string[],
+/**
+ * Add `sources` to the directive judging `kind`; where that is a fallback, to
+ * the kind's own directive, made from the fallback's sources, so nothing else
+ * the fallback governs is widened.
+ */
+function addTo(
+  policy: Map<string, readonly string[]>,
+  kind: Kind,
+  sources: readonly string[]
+): void {
+  const rule = governing(policy, kind);
+  if (rule === undefined || sources.length === 0) return;
+  const own = isFallback(kind, rule.directive)
+    ? OWN_DIRECTIVE[kind]
+    : rule.directive;
+  const base = (policy.get(own) ?? rule.sources).filter(
+    source => source.toLowerCase() !== "'none'"
+  );
+  const added = [...new Set(sources)].filter(source => !base.includes(source));
+  policy.set(own, [...base, ...added]);
+}
+
+/** The sources letting inline code of `kind` run that the policy blocks. */
+function inlineNeeds(
+  policy: CspPolicy,
+  kind: SiteCodeInlineKind,
   hashes: readonly string[],
-  origins: readonly string[]
+  siteNonce: boolean
 ): string[] {
-  const strict = sources.includes("'strict-dynamic'");
-  const mode = inlineMode(sources, kind === "script");
-  // A nonce covers inline code already; a hash added to a list relying on
-  // 'unsafe-inline' would cancel it and block every other inline script.
-  const addHashes = mode === "hash" || mode === "none";
-  return [
-    ...(addHashes ? hashes.map(hash => `'${hash}'`) : []),
-    // Under 'strict-dynamic' host sources are ignored, so none are added.
-    ...(strict || sources.includes("*") ? [] : origins),
-  ].filter(source => !sources.includes(source));
+  const rule = governing(policy, kind);
+  if (rule === undefined) return [];
+  const blocked = hashes.filter(
+    hash => !allowsInline(rule.sources, hash, siteNonce, kind)
+  );
+  if (blocked.length === 0) return [];
+  const named = blocked.map(hash => `'${hash}'`);
+  return kind === "style-attr" ? ["'unsafe-hashes'", ...named] : named;
 }
 
 /**
- * The host's policy with what site code needs added, and nothing that would
- * harm it: hashes only where the policy already relies on hashes (or allows
- * no inline code at all), never where it relies on `'unsafe-inline'` or a
- * nonce; host origins only where `'strict-dynamic'` doesn't ignore them. A
- * kind no directive restricts is left alone.
+ * The sources letting one blocked load happen: its integrity's hashes for a
+ * script under `'strict-dynamic'` (no host is honoured there, and one without
+ * integrity needs the site's nonce instead), else `'self'` for the site's own
+ * origin or the load's origin. Nothing for a load already allowed.
+ */
+function loadNeeds(
+  policy: CspPolicy,
+  load: SiteCodeLoad,
+  context: LoadContext
+): string[] {
+  const rule = governing(policy, load.kind);
+  const url = urlOf(load.url, context.siteOrigin);
+  if (rule === undefined || url === undefined) return [];
+  if (allowsLoad(rule.sources, load, url, context)) return [];
+  if (load.kind === "script" && holds(rule.sources, "'strict-dynamic'")) {
+    return integrityHashes(load.integrity).map(hash => `'${hash}'`);
+  }
+  return [url.origin === context.siteOrigin ? "'self'" : url.origin];
+}
+
+/**
+ * The host's policy with what site code needs added, and nothing more: only
+ * what the policy blocks now is added, so a load it already allows (under a
+ * path-scoped source, say) adds nothing. Hashes are added only where inline
+ * code is blocked, which never happens under a list relying on
+ * `'unsafe-inline'`, so it is never cancelled. A kind no directive restricts
+ * is left alone. Pass `siteNonce` when the site hands its nonce to site code.
  */
 export function mergeSiteCodeIntoCsp(
   header: string,
-  facts: SiteCodeFacts
+  facts: SiteCodeFacts,
+  options: { readonly siteNonce?: boolean } = {}
 ): string {
   const policy = new Map(parseCsp(header));
-  const hashesOf: Readonly<Record<ResourceKind, readonly string[]>> = {
-    script: facts.scriptHashes,
-    style: facts.styleHashes,
-    img: [],
-    font: [],
-    frame: [],
+  const context = {
+    siteOrigin: facts.siteOrigin,
+    siteNonce: options.siteNonce === true,
   };
-  for (const kind of Object.keys(FALLBACKS) as ResourceKind[]) {
-    const rule = governing(policy, kind);
-    if (rule === undefined) continue;
-    const added = sourcesToAdd(
+  for (const kind of ["script", "style", "style-attr"] as const) {
+    const needs = inlineNeeds(
+      policy,
       kind,
-      rule.sources,
-      hashesOf[kind],
-      facts.origins[kind]
+      facts.hashes[kind],
+      context.siteNonce
     );
-    if (added.length === 0) continue;
-    // Added to the directive that governs the kind; where that is a fallback
-    // (`default-src`, or `child-src` for frames), to the kind's own, made from
-    // the fallback's sources, so nothing else the fallback governs is widened.
-    const own = isFallback(kind, rule.directive)
-      ? ownDirective(kind)
-      : rule.directive;
-    const base = policy.get(own) ?? rule.sources;
-    policy.set(own, [...base.filter(source => source !== "'none'"), ...added]);
+    addTo(policy, kind, needs);
+  }
+  for (const load of facts.loads) {
+    addTo(policy, load.kind, loadNeeds(policy, load, context));
   }
   return serialiseCsp(policy);
 }
