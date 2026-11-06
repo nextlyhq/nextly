@@ -511,6 +511,11 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
         why: "A contribution may replace only a part the page draws itself, of its own kind, at its place.",
         next: `Replace one of the built-in parts named at "${field(error, "place")}", or drop \`replaces\`.`,
       })),
+      ...resolved("contribution-replace-not-allowed", error => ({
+        what: detail(error),
+        why: "Some of a page's own parts stay whatever plugins add, such as the dashboard's grid of cards, which is each person's own arrangement.",
+        next: `Place the contribution beside "${field(error, "replaces")}" with \`before\` or \`after\` instead of \`replaces\`.`,
+      })),
       ...resolved("contribution-replace-twice", error => ({
         what: detail(error),
         why: "A built-in part can be replaced by one contribution only, or which one is drawn would depend on load order.",

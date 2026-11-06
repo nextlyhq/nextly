@@ -19,6 +19,7 @@ import {
   ADMIN_CONTRIBUTION_KINDS,
   type AdminContributionKind,
   coreAdminPlaceBuiltIns,
+  coreAdminPlaceNotReplaceable,
   isWellFormedAdminPlaceName,
 } from "./admin-places";
 import {
@@ -407,10 +408,12 @@ function orderedByPlace(
     for (const [kind, items] of kinds) {
       lists.set(
         kind,
-        orderContributions(items, coreAdminPlaceBuiltIns(place, kind), {
-          place,
-          kind,
-        })
+        orderContributions(
+          items,
+          coreAdminPlaceBuiltIns(place, kind),
+          { place, kind },
+          coreAdminPlaceNotReplaceable(place, kind)
+        )
       );
     }
     ordered.set(place, lists);

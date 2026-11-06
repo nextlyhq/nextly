@@ -135,6 +135,28 @@ describe("contributedAdminContributions", () => {
     ]);
   });
 
+  it("orders the dashboard's blocks around its header and grid: after the grid unless placed before it", () => {
+    const block = (id: string, over: object = {}) => ({
+      id,
+      kind: "block",
+      place: "dashboard",
+      component: "@acme/support/admin#Totals",
+      ...over,
+    });
+    const { ordered } = contributedAdminContributions([
+      plugin("@acme/support", [
+        block("acme-support.below"),
+        block("acme-support.above", { before: "widgets" }),
+      ]),
+    ]);
+    expect(ordered.get("dashboard")?.get("block")).toEqual([
+      { builtIn: "welcome" },
+      { contribution: "acme-support.above" },
+      { builtIn: "widgets" },
+      { contribution: "acme-support.below" },
+    ]);
+  });
+
   it("skips a disabled plugin's contributions", () => {
     const { contributions } = contributedAdminContributions([
       plugin("@acme/support", EACH_KIND, { enabled: false }),
@@ -746,6 +768,21 @@ describe("contributedAdminContributions", () => {
               )
             )
           ),
+        ]),
+    ],
+    [
+      "contribution-replace-not-allowed",
+      () =>
+        contributedAdminContributions([
+          plugin("@acme/support", [
+            {
+              id: "acme-support.grid",
+              kind: "block",
+              place: "dashboard",
+              component: "@acme/support/admin#Grid",
+              replaces: "widgets",
+            },
+          ]),
         ]),
     ],
     [
