@@ -431,6 +431,15 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A field every writer is refused by its own update rule, which an
+            // ordinary update drops silently, writing the rest of the row.
+            slug: "locked",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc", access: { update: () => false } },
+            ],
+          } as unknown as CollectionConfig,
+          {
             slug: "grouped",
             fields: [
               {
@@ -503,6 +512,7 @@ describe.each(getConfiguredTestDialects())(
         "germanless",
         "grouped",
         "guarded",
+        "locked",
         "staged",
         "stagedwords",
       ];
@@ -2221,6 +2231,69 @@ describe.each(getConfiguredTestDialects())(
         expect(await systemValue(page, "body")).toEqual({
           kind: "value",
           value: { v: 0 },
+        });
+      });
+
+      it("refuses a write a field update rule would leave its field out of, whoever read it, and writes nothing", async () => {
+        const id = await created("locked", { title: "t", body: { v: 0 } });
+        const entry = { collection: "locked", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "locked",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: the ordinary update drops the field silently, and writes
+        // the rest of the row without it.
+        await t.nextly.update({
+          collection: "locked",
+          id,
+          data: { title: "ordinary", body: { v: "ordinary" } },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        // The field written, or only expected; as the caller alone, or with
+        // the expectation the system's.
+        for (const identity of [editor, checked(editor)]) {
+          for (const data of [
+            { title: "conditional", body: { v: "conditional" } },
+            { title: "conditional" },
+          ]) {
+            const refusal = await rejectionOf(
+              updateIfUnchanged(identity, {
+                ...entry,
+                data,
+                expect: { field: "body", form: "published", hash },
+              })
+            );
+            expect(NextlyError.isForbidden(refusal)).toBe(true);
+          }
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        // CONTROL: the system, which no field rule judges, writes the field.
+        await updateIfUnchanged(SYSTEM, {
+          ...entry,
+          data: { body: { v: "system" } },
+          expect: { field: "body", form: "published", hash },
+        });
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: "system" },
         });
       });
     });

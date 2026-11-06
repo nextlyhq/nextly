@@ -94,6 +94,8 @@ const PANELS = "panels";
 const ARTICLES = "articles";
 /** A collection whose blocks field a field read rule closes to every reader. */
 const SEALED = "sealed";
+/** A collection whose blocks field a field update rule closes to every writer. */
+const LOCKED = "locked";
 
 type Node = Record<string, unknown>;
 
@@ -326,6 +328,8 @@ describe.each(getConfiguredTestDialects())(
         articles?: boolean;
         /** Whether the site also has sealed notes. */
         sealed?: boolean;
+        /** Whether the site also has locked notes. */
+        locked?: boolean;
       } = {}
     ) {
       const plugin = pageBuilder();
@@ -412,6 +416,21 @@ describe.each(getConfiguredTestDialects())(
                 } as never,
               ]
             : []),
+          ...(site.locked === true
+            ? [
+                {
+                  slug: LOCKED,
+                  fields: [
+                    { name: "title", type: "text" },
+                    {
+                      name: "content",
+                      type: BLOCKS_TYPE,
+                      access: { update: () => false },
+                    },
+                  ],
+                } as never,
+              ]
+            : []),
         ],
         ...(site.singles === undefined
           ? {}
@@ -432,6 +451,7 @@ describe.each(getConfiguredTestDialects())(
           ? [`read-${ARTICLES}`, `update-${ARTICLES}`]
           : []),
         ...(site.sealed === true ? [`read-${SEALED}`, `update-${SEALED}`] : []),
+        ...(site.locked === true ? [`read-${LOCKED}`, `update-${LOCKED}`] : []),
       ];
       /** An author, with every author's grants or only the ones given. */
       const anAuthor = async (
@@ -1539,6 +1559,28 @@ describe.each(getConfiguredTestDialects())(
         })
       );
       expect(copies(await nodesOf(t, NOTES, id), cardId)).toBe(1);
+    });
+
+    it("leaves a document whose blocks field a field update rule closes to its starter, as not permitted, and unchanged", async () => {
+      const { t, cookie } = await boot({}, { locked: true });
+      const cardId = await card(t);
+      const created = await t.nextly.create({
+        collection: LOCKED,
+        data: { title: "Locked", content: pageDoc([copyOf("i1", cardId)]) },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      await open(cookie, cardId);
+
+      const reports = await rewriteToTheEnd(cookie, cardId);
+
+      expect(reports.at(-1)?.left).toContainEqual(
+        expect.objectContaining({
+          host: expect.objectContaining({ slug: LOCKED, id }),
+          reason: "not-permitted",
+        })
+      );
+      expect(copies(await nodesOf(t, LOCKED, id), cardId)).toBe(1);
     });
   }
 );

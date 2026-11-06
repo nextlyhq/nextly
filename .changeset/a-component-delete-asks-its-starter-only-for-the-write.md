@@ -34,3 +34,5 @@ A component delete's rewrite now asks the person who started it only for what th
 The rewrite also no longer saves a page's live content as a draft when the author discards the draft while the page is being read: the page is read again and written as it now stands.
 
 `updateIfUnchanged` (`@experimental`) takes a new identity, `{ caller, checkedBy: { overrideAccess: true } }` (`PluginSystemCheckedWrite`, in `PluginConditionalWriteIdentity`), for a write whose expectation the system read: the update is the caller's and the expectation's read is the system's. Made as a caller alone, it still refuses a field they may not read, so nobody learns whether a value they supplied matches one.
+
+A person's conditional write is now refused with `FORBIDDEN`, writing nothing, when a field update rule would leave out of it a field it writes or the field it expects. An ordinary update drops such a field silently and writes the rest, so a conditional write could have been reported as made while its field never changed. A component delete's rewrite reports such a document as not permitted.
