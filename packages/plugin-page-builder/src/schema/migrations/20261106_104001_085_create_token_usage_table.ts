@@ -5,9 +5,9 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261106_095529_303_create_token_usage_table",
-  schemaVersion: 8,
-  checksum: "9c7586db7e31e1e8664b4628b43c0793fa12e8a828862feb2b72383e400856c8",
+  name: "20261106_104001_085_create_token_usage_table",
+  schemaVersion: 9,
+  checksum: "677b6856df085719792fe7c9a8e7d4e8cb3deda9fd2e142556e0837cfb79baf6",
   dialects: {
     postgresql: {
       up: [
@@ -362,6 +362,12 @@ export default {
               type: "text",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -430,6 +436,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],
@@ -952,6 +963,11 @@ export default {
               type: "varchar(16)",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "char(36)",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -1019,6 +1035,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],
@@ -1541,6 +1562,11 @@ export default {
               type: "text",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "text",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -1608,6 +1634,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],
@@ -2136,6 +2167,12 @@ export default {
               type: "text",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "bpchar",
+              typeModifier: "36",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -2204,6 +2241,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],
@@ -2666,6 +2708,11 @@ export default {
               type: "varchar(16)",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "char(36)",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -2733,6 +2780,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],
@@ -3195,6 +3247,11 @@ export default {
               type: "text",
               nullable: true,
             },
+            {
+              name: "undoes",
+              type: "text",
+              nullable: true,
+            },
           ],
           indexes: [
             {
@@ -3262,6 +3319,11 @@ export default {
             {
               name: "idx_page_builder__breakpoint_removal_fragments_created_at",
               columns: ["created_at"],
+              unique: false,
+            },
+            {
+              name: "idx_page_builder__breakpoint_removal_fragments_run_id_d_04ki5jv",
+              columns: ["run_id", "document_key"],
               unique: false,
             },
           ],

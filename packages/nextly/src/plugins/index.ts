@@ -46,6 +46,9 @@ export {
   type PluginTransaction,
   type PluginFilterRegistry,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
 export type {
@@ -130,11 +133,21 @@ export type {
   PluginDocumentView,
   PluginFieldTypeDocumentView,
   PluginAdminPlaceDeclaration,
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
   PluginListFilterDeclaration,
   PluginListFilterOption,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";
+export type { RowPredicate, RowPredicateValue } from "./row-predicate";
+export type { AdminContributionKind } from "./admin-places";
 
 // The places on admin pages plugins add to, and the ids every surface takes.
 export {

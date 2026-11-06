@@ -1,0 +1,81 @@
+/**
+ * The collection template actions as data: what an API client, a script or an
+ * agent sends to give a collection its template and to publish it, with the
+ * schema that judges it.
+ *
+ * Published from the `ops` subpath beside the composition actions, for the
+ * same reason: the page builder's template route parses its bodies with this
+ * schema, so a client that validates against it is refused for exactly what
+ * the server refuses. What a template may be (which collections can have one,
+ * and that a collection has at most one) is the server's to judge, so the
+ * schema holds the request's shape and no more.
+ *
+ * @experimental Settles when collection templates ship.
+ * @module template-actions
+ */
+import { z } from "zod";
+
+/**
+ * One action on a collection's template.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export type TemplateAction =
+  /**
+   * Give a collection its template: an empty template document, saved as a
+   * draft unless `publish` is set. Refused when the collection already has
+   * one, naming it.
+   */
+  | {
+      readonly kind: "create-template";
+      /** The collection whose entries the template renders, by slug. */
+      readonly collection: string;
+      /** The template's name in the admin; the collection's name by default. */
+      readonly title?: string;
+      readonly publish?: boolean;
+    }
+  /** Publish a template, its working draft included, as the editor's Publish does. */
+  | {
+      readonly kind: "publish-template";
+      readonly id: string;
+    };
+
+const id = z.string().min(1).max(512);
+
+/**
+ * Each template action's shape, once: the schema is their union, and the
+ * kinds a client is told about are read off them, so the two cannot disagree.
+ */
+const templateActionOptions = [
+  z.strictObject({
+    kind: z.literal("create-template"),
+    collection: id,
+    title: z.string().trim().min(1).max(255).optional(),
+    publish: z.boolean().optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("publish-template"),
+    id,
+  }),
+] as const;
+
+/**
+ * A template action, as the template actions route reads `action`.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export const templateActionSchema: z.ZodType<TemplateAction> =
+  z.discriminatedUnion("kind", templateActionOptions);
+
+/** Every template action's `kind`, in the order the schema lists them. */
+export const TEMPLATE_ACTION_KINDS: readonly TemplateAction["kind"][] =
+  templateActionOptions.map(option => option.shape.kind.value);
+
+/**
+ * The JSON Schema form of a template action.
+ *
+ * @experimental Settles when collection templates ship.
+ */
+export function templateActionJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(templateActionSchema, { io: "input" });
+}

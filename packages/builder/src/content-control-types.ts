@@ -18,6 +18,7 @@ export const CONTENT_CONTROL_TYPES = [
   "checkbox",
   "select",
   "media",
+  "icon",
   "richText",
   "array",
   "relation",

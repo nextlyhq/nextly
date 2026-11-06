@@ -12,7 +12,8 @@ import migration3 from "./20261104_115414_028_create_site_options";
 import migration4 from "./20261105_064012_324_create_breakpoint_removals";
 import migration5 from "./20261106_064828_573_create_breakpoint_removal_fragments";
 import migration6 from "./20261106_084948_318_create_usage_index_tables";
-import migration7 from "./20261106_095529_303_create_token_usage_table";
+import migration7 from "./20261106_095219_741_add_breakpoint_removal_undoes";
+import migration8 from "./20261106_104001_085_create_token_usage_table";
 
 export const migrations: PluginMigration[] = [
   migration0,
@@ -23,4 +24,5 @@ export const migrations: PluginMigration[] = [
   migration5,
   migration6,
   migration7,
+  migration8,
 ];

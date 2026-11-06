@@ -148,6 +148,13 @@ type EveryLanguageLifecycleParams = {
    * and every language is judged against that version.
    */
   data?: Readonly<Record<string, unknown>>;
+  /**
+   * The HTTP request behind this transition, when one produced it, told to
+   * its hooks.
+   */
+  request?: Request;
+  /** Seeds the context every hook of this transition shares. */
+  context?: Record<string, unknown>;
 };
 
 /**
@@ -331,6 +338,21 @@ export class CollectionEntryService extends BaseService {
       withRuleLanguage(this.readLanguages(params), () =>
         this.queryService.listEntries(params)
       )
+    );
+  }
+
+  /**
+   * Every reason a list read would refuse this caller's query, or none. See
+   * the query service; judged in the language the read it stands for would
+   * judge its rules in, as `listEntries` is.
+   *
+   * @experimental
+   */
+  async queryReadableProblems(
+    params: Parameters<CollectionQueryService["queryReadableProblems"]>[0]
+  ): ReturnType<CollectionQueryService["queryReadableProblems"]> {
+    return withRuleLanguage(this.readLanguages(params), () =>
+      this.queryService.queryReadableProblems(params)
     );
   }
 

@@ -74,6 +74,7 @@ import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
 import { PAGES_SLUG, pagesCollection } from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
+import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
 import { componentActionRoutes } from "./component-actions-route";
 import {
@@ -196,6 +197,11 @@ import {
   type SharedStyleUsageSource,
 } from "./shared-styles-routes";
 import {
+  BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+  BREAKPOINT_REMOVAL_UNDONE_METADATA,
+  siteBreakpointUndoRoute,
+} from "./site-breakpoint-undo";
+import {
   resolveFontOptions,
   type PageBuilderFontOptions,
 } from "./site-fonts/options";
@@ -237,6 +243,12 @@ import {
 } from "./spacing-mode-reader";
 import { spacingModeRoute } from "./spacing-mode-route";
 import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
+import { templateActionsRoute } from "./templates/template-actions-route";
+import {
+  registerTemplateGuard,
+  templateHolderReader,
+  type TemplateGuardSetup,
+} from "./templates/template-guard";
 import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
@@ -1248,6 +1260,23 @@ export const pageBuilder = (
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
 
   /**
+   * The templates guard's lookups over the installed plugin: the RESOLVED
+   * templates slug, the plugin's own collections, the registry and the
+   * hook-free own read. Published by `init`, and read by the template route
+   * and service per call, so a request reaching them before `init` refuses
+   * rather than judging against slugs nothing resolved.
+   */
+  let templateGuard: TemplateGuardSetup | null = null;
+  const requireTemplateGuard = (): TemplateGuardSetup => {
+    if (templateGuard === null) {
+      throw new Error(
+        "[page-builder] a template action ran before the plugin was installed"
+      );
+    }
+    return templateGuard;
+  };
+
+  /**
    * The repair's deps for one run, the Direct API resolved at call time. A run
    * before `init` refuses with a named reason and the sweep is re-queued,
    * rather than writing to slugs the plugin has not resolved.
@@ -1647,6 +1676,28 @@ export const pageBuilder = (
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
 
+      // One template per collection: the guard that sets each template's
+      // place and names the template already holding it. RESOLVED slugs, for
+      // the reason the guard above takes them.
+      const templates = ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG;
+      templateGuard = {
+        templatesCollection: templates,
+        ownCollections: () => new Set(Object.values(ctx.self.collections)),
+        readCollection: async slug => {
+          try {
+            return (await ctx.services.collections.getCollection(
+              slug,
+              undefined as never
+            )) as unknown as Record<string, unknown>;
+          } catch (error) {
+            if (NextlyError.isNotFound(error)) return null;
+            throw error;
+          }
+        },
+        holderOf: templateHolderReader(ctx.services.ownCollections, templates),
+      };
+      registerTemplateGuard(ctx, templateGuard);
+
       // The site's one default Layout: refuse deleting or unpublishing it, and
       // queue the repair when a write gets past that.
       defaultLayoutSetup = installDefaultLayout(ctx);
@@ -1981,6 +2032,8 @@ export const pageBuilder = (
         site: rewriteInstall.site,
         defaults: configStyle,
         definedBreakpoints,
+        breakpointsNow: async () =>
+          siteBreakpoints(await siteStyleNow()) ?? null,
       };
       removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the
@@ -2027,12 +2080,16 @@ export const pageBuilder = (
       // screen, REST route or Direct API call reaches them.
       schema: pageBuilderSchema,
       // The audit rows this plugin writes: one per breakpoint removed, with
-      // what removing it dropped.
+      // what removing it dropped, and one per removal undone.
       audit: {
         kinds: [
           {
             kind: BREAKPOINT_REMOVED_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVED_METADATA],
+          },
+          {
+            kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+            metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
           },
         ],
       },
@@ -2078,6 +2135,7 @@ export const pageBuilder = (
             store: componentStoreOf(opts),
             limits: () => opts.limits ?? DEFAULT_LIMITS,
             readRetired: readRetiredFor,
+            templates: { guard: requireTemplateGuard },
           }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
@@ -2149,6 +2207,9 @@ export const pageBuilder = (
         // definition that drops one is published. Contributed unconditionally,
         // because every write to a page that places a component reads it.
         componentRetiredCollection(),
+        // The designs a collection's entries are drawn with, one per
+        // collection.
+        templatesCollection(),
         // The backfill's former progress collection. Nothing reads or writes
         // it any more: progress lives in the plugin's own tables. Still
         // declared so an existing site keeps its table and registry row as
@@ -2328,6 +2389,8 @@ export const pageBuilder = (
           limits: () => opts.limits ?? DEFAULT_LIMITS,
           readRetired: readRetiredFor,
         }),
+        // Give a collection its template and publish it, each with a dry run.
+        templateActionsRoute({ guard: requireTemplateGuard }),
         // What an API client or an agent reads before composing: the
         // patterns, components (fields, slots, variants) and Layouts it may
         // read, and the actions above with their request schemas.
@@ -2393,6 +2456,9 @@ export const pageBuilder = (
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // The newest removal undone, within its 30 days; its walk is carried
+        // on through the removal route.
+        siteBreakpointUndoRoute(breakpointRemoval),
         // Where one removal stands, read by its id.
         siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
