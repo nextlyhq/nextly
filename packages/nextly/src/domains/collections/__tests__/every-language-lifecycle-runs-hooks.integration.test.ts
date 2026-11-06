@@ -27,20 +27,16 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
-import { StoredHookExecutor } from "../../../hooks/stored-hook-executor";
+import {
+  prebuiltHooks,
+  type PrebuiltHookConfig,
+} from "../../../hooks/prebuilt";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -187,6 +183,29 @@ function collection(
   });
 }
 
+/**
+ * The phases a stored (admin-configured) hook is asked in by a status change.
+ * Each gets a pre-built hook of its own, configured on every collection's
+ * registry row, so a stored hook runs only where the core hands the
+ * collection's stored hooks to the executor: an implementation that passes
+ * none, or never asks, records nothing and refuses nothing.
+ */
+const STORED_PHASES = ["beforeUpdate", "beforeChange", "afterUpdate"] as const;
+
+const storedProbes: PrebuiltHookConfig<Record<string, unknown>>[] =
+  STORED_PHASES.map(phase => ({
+    id: `lh-stored-${phase}`,
+    name: `Lifecycle probe (${phase})`,
+    description: "Records that the stored hook ran, and refuses when told to.",
+    hookType: phase,
+    category: "validation",
+    configSchema: z.record(z.string(), z.unknown()),
+    execute: (_config, context) => {
+      observe(`stored:${phase}`, context);
+      return Promise.resolve(context.data as Record<string, unknown>);
+    },
+  }));
+
 const DIRECTIONS = [
   { route: "unpublish-all", from: "published", to: "draft" },
   { route: "publish-all", from: "draft", to: "published" },
@@ -208,21 +227,8 @@ describe.each(getConfiguredTestDialects())(
     let key = "";
 
     beforeAll(async () => {
-      // The stored (admin-configured) hooks, observed where the core asks
-      // for them: what each phase is asked, and a refusal from one.
-      const execute = StoredHookExecutor.prototype.execute;
-      vi.spyOn(StoredHookExecutor.prototype, "execute").mockImplementation(
-        function (this: StoredHookExecutor, ...args) {
-          const [phase, , context] = args;
-          observe(`stored:${phase}`, {
-            collection: context.collection,
-            operation: context.operation,
-            data: context.data,
-            context: context.context,
-          });
-          return execute.apply(this, args);
-        }
-      );
+      // The stored probes, findable by id as the admin's pre-built hooks are.
+      prebuiltHooks.push(...storedProbes);
       t = await createTestNextly({
         dialect,
         collections: [
@@ -236,6 +242,23 @@ describe.each(getConfiguredTestDialects())(
       // A PostgreSQL or MySQL leg that silently booted SQLite would prove
       // nothing about those databases.
       expect(t.adapter.dialect).toBe(dialect);
+      // Configured on each collection as the admin configures stored hooks:
+      // on the collection's registry row.
+      for (const slug of SLUGS) {
+        await t.adapter.update(
+          "dynamic_collections",
+          {
+            hooks: STORED_PHASES.map((phase, order) => ({
+              hookId: `lh-stored-${phase}`,
+              hookType: phase,
+              enabled: true,
+              order,
+              config: {},
+            })),
+          },
+          { and: [{ column: "slug", op: "=", value: slug }] }
+        );
+      }
       const admin = await superAdminUser(t, ADMIN_ID);
       const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
       ({ key } = await keys.createApiKey(admin, {
@@ -246,7 +269,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     afterAll(async () => {
-      vi.restoreAllMocks();
+      for (const probe of storedProbes) {
+        const at = prebuiltHooks.indexOf(probe);
+        if (at >= 0) prebuiltHooks.splice(at, 1);
+      }
       await t?.destroy();
     });
 
@@ -466,6 +492,20 @@ describe.each(getConfiguredTestDialects())(
         );
       });
     }
+
+    it("an after hook that throws does not undo the move: it runs once every language is saved", async () => {
+      const id = await seed(PAGES, "published");
+      refuseAt = "plugin:afterUpdate";
+      const moved = await rest(
+        "POST",
+        ["collections", PAGES, "entries", id, "unpublish-all"],
+        {}
+      );
+      // The hook ran, and threw, after the commit: the move stands.
+      expect(calls.map(call => call.hook)).toContain("plugin:afterUpdate");
+      expect(moved.status, JSON.stringify(moved.json)).toBe(200);
+      expect(await statuses(PAGES, id)).toEqual(["draft", "draft"]);
+    });
 
     it("a publish that puts a pending change live runs each before hook once and reports that language once", async () => {
       const id = await seed(DRAFTS, "published");
