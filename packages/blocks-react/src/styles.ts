@@ -2,7 +2,9 @@ import {
   blockDefaultsOf,
   overlaidStyles,
   compilePageCss,
+  conditionScopeIn,
   declaresNoMarkup,
+  isConditionGated,
   hasItemBindings,
   isFetchableUrl,
   nodeAtPointer,
@@ -15,6 +17,7 @@ import {
   type BlockNode,
   type BlockPart,
   type CompiledPageCss,
+  type ConditionScope,
   type DocumentLimits,
   type MayFetchUrl,
   type RemotePatternInput,
@@ -819,7 +822,12 @@ function withGatedRules(
   // short of an explicit `true`, so a block that cannot be asked keeps its
   // styling.
   const surviving = pruneNodes(document, node => !drawsNothing(node));
+  // A block a list's item decides is served only where an item shows it,
+  // which only the list knows as it draws: its rules go out with the first
+  // instance drawn ({@link itemDecidedRules}), never here.
+  const itemDecided = itemDecidedIds(surviving);
   for (const id of documentNodeIds(surviving)) {
+    if (itemDecided.has(id)) continue;
     const rules = entries[id];
     if (isUsableGatedEntry(rules)) appended.push(rules);
   }
@@ -831,6 +839,78 @@ function withGatedRules(
   // rebuilds the classes; this only ever sees what that returned.
   const parts = styles.css === "" ? appended : [styles.css, ...appended];
   return { ...styles, css: parts.join("\n") };
+}
+
+/**
+ * The ids of every block a list's item decides the visibility of, and of
+ * every block inside one: the conditioned blocks in a list's per-entry slot,
+ * whose rules a reader may serve only once an item shows them.
+ */
+function itemDecidedIds(document: BlockDocument): Set<string> {
+  const decided = new Set<string>();
+  const page: ConditionScope = { source: "entry", collection: undefined };
+  const visit = (
+    nodes: readonly BlockNode[],
+    scope: ConditionScope,
+    inside: boolean
+  ): void => {
+    for (const node of nodes) {
+      const mine =
+        inside || (scope.source === "item" && isConditionGated(node));
+      if (mine) decided.add(node.id);
+      for (const [slot, children] of Object.entries(node.slots ?? {})) {
+        visit(children, conditionScopeIn(node, slot, scope), mine);
+      }
+    }
+  };
+  visit(document.nodes, page, false);
+  return decided;
+}
+
+/**
+ * The rules of each block a list's item decides, with those of every block
+ * inside it, by the decided block's id: what a list serves beside the first
+ * instance it draws of one, so the rules of a block no item shows are never
+ * served at all.
+ *
+ * @internal Shared by this package's renderer.
+ */
+export function itemDecidedRules(
+  styles: PageStyles,
+  document: BlockDocument,
+  drawsNothing: (node: BlockNode) => boolean
+): ReadonlyMap<string, string> {
+  const entries = readableGatedRules(styles);
+  const found = new Map<string, string>();
+  if (entries === undefined) return found;
+  // A block's own rules and those of every block inside it that it draws
+  // whenever it is drawn: not a nested conditioned block, whose rules go out
+  // when its own conditions hold, nor a block that draws nothing.
+  const gather = (node: BlockNode, into: string[], root: boolean): void => {
+    if (drawsNothing(node)) return;
+    if (!root && isConditionGated(node)) return;
+    const rules = entries[node.id];
+    if (isUsableGatedEntry(rules)) into.push(rules);
+    for (const children of Object.values(node.slots ?? {})) {
+      for (const child of children) gather(child, into, false);
+    }
+  };
+  const page: ConditionScope = { source: "entry", collection: undefined };
+  const visit = (nodes: readonly BlockNode[], scope: ConditionScope): void => {
+    for (const node of nodes) {
+      if (scope.source === "item" && isConditionGated(node)) {
+        const rules: string[] = [];
+        gather(node, rules, true);
+        if (rules.length > 0) found.set(node.id, rules.join("\n"));
+      }
+      // On inside, so a conditioned block nested in this one has its own.
+      for (const [slot, children] of Object.entries(node.slots ?? {})) {
+        visit(children, conditionScopeIn(node, slot, scope));
+      }
+    }
+  };
+  visit(document.nodes, page);
+  return found;
 }
 
 /**
@@ -1370,7 +1450,13 @@ export function resolvePageStylesWithTrace(
     // only by `PageRenderer` would mean every sheet written through this entry
     // keeps its drawless nodes' rules in `css` and carries no `gated` entry for
     // them, so republishing a page would never enable the drop.
-    return compileToStyles(document, compileContext, options, sharedInputsId);
+    return compileToStyles(
+      document,
+      compileContext,
+      options,
+      sharedInputsId,
+      drawsNothing
+    );
   }
   return {
     styles: {
@@ -1442,7 +1528,8 @@ function untrustedWithoutContext(
     document,
     context,
     options,
-    sharedStyleInputsId(context)
+    sharedStyleInputsId(context),
+    drawsNothing
   );
 }
 
@@ -1475,7 +1562,8 @@ function compileToStyles(
   document: BlockDocument,
   compileContext: StyleCompileContext,
   options: ResolveStyleOptions,
-  sharedInputsId: string | undefined
+  sharedInputsId: string | undefined,
+  drawsNothing: (node: BlockNode) => boolean
 ): ResolvedPageStyles {
   const compiled = compilePageCss(document, {
     ...compileContext,
@@ -1484,12 +1572,16 @@ function compileToStyles(
     // the only consumer of.
     ...(options.trace === true ? { trace: true } : {}),
   });
-  const styles = toPageStyles(
+  const packaged = toPageStyles(
     compiled,
     compileContext.scope,
     options.fetchPolicyId,
     sharedInputsId
   );
+  // The compiler holds every conditioned block's rules apart; the blocks of
+  // this tree are the ones served, so theirs go back in, as a stored sheet's
+  // do, by the same rule.
+  const styles = withGatedRules(packaged, document, drawsNothing);
   return compiled.trace === undefined
     ? { styles }
     : { styles, trace: compiled.trace };

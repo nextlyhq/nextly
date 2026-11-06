@@ -75,6 +75,7 @@ describe("the ops module stays server-safe", () => {
     expect([...new Set(specifiers)].sort()).toEqual([
       "./composition-actions",
       "./op-vocabulary",
+      "./template-actions",
       "@nextlyhq/blocks-engine",
     ]);
   });
@@ -102,6 +103,17 @@ describe("the ops module stays server-safe", () => {
       "zod",
     ]);
   });
+
+  it("reaches through its template actions only zod", () => {
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/template-actions.ts"),
+        "template-actions.ts"
+      ),
+    ];
+
+    expect(specifiers).toEqual(["zod"]);
+  });
 });
 
 describe("the editor does not load the composition schemas", () => {
@@ -116,7 +128,9 @@ describe("the editor does not load the composition schemas", () => {
       .filter(name =>
         importedSpecifiers(read(`src/${name}`), name).some(
           specifier =>
-            specifier === "./ops" || specifier === "./composition-actions"
+            specifier === "./ops" ||
+            specifier === "./composition-actions" ||
+            specifier === "./template-actions"
         )
       );
 

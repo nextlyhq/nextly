@@ -213,6 +213,22 @@ const VARIANTS: readonly Variant[] = [
     is: ["flow", "phrasing", "interactive"],
     without: [],
   },
+  // Phrasing, so it sits on a line beside words; interactive only once it
+  // links, so an unlinked icon can go inside a link.
+  {
+    name: "Icon",
+    type: "core/icon",
+    props: { icon: "lucide:star" },
+    is: ["flow", "phrasing"],
+    without: [],
+  },
+  {
+    name: "Linked icon",
+    type: "core/icon",
+    props: { icon: "lucide:star", href: "/go" },
+    is: ["flow", "phrasing", "interactive"],
+    without: [],
+  },
   {
     name: "Form",
     type: "core/form",

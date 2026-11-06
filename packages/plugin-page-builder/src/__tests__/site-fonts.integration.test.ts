@@ -863,6 +863,7 @@ describe.each(getConfiguredTestDialects())(
         cookie,
         {
           fonts: [...(await storedFonts(t)), uploaded],
+          _overwrite: true,
         }
       );
       expect(written.status).toBe(200);

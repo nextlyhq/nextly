@@ -7,15 +7,15 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 
 ## Entry points
 
-| Import                         | Surface                                                                                                          | React?              |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`            | no                  |
-| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                               | no                  |
-| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult` | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                              | no                  |
+| Import                         | Surface                                                                                                                                                          | React?              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                            | no                  |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                               | no                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`                                                 | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                              | no                  |
 | `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
-| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime    | no                  |
+| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                    | no                  |
 
 ## `definePlugin(def): PluginDefinition`
 
@@ -67,7 +67,7 @@ interface PluginContributions {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
-    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
+    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level or inside named groups
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
     filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
@@ -252,9 +252,18 @@ Reads are unchanged and return their value directly.
 
 ```ts
 ctx.hooks.on(type, collectionSlug | "*", handler); // beforeCreate/afterCreate/… — can modify/abort
+ctx.hooks.onInTransaction(collectionSlug | `single:${slug}` | "*", handler); // @experimental: inside the write's transaction, with a bound `db`; throwing aborts; may run again on a retry
 ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.created`
 ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
 ```
+
+A hook that learns something true about the state a write leaves behind, rather
+than something that failed, tells the person whose write it is with
+`recordAdvisoryNotice({ phase, collection, code, message, entryId? })` from
+`@nextlyhq/plugin-sdk` (`@experimental`). The write still reports success, and
+the admin shows the notice beside it in an info toast, as it shows core's own
+advisories. Put nothing in `message` the person could not already see; outside a
+request it does nothing.
 
 Event-name constants are exported: `DocumentEvents`, `AuthEvents`, `MediaEvents`,
 and `UserEvents` (`@experimental`). Core emits `user.created` and `user.deleted`
@@ -913,8 +922,47 @@ own error boundary; a contributed tab follows the page's own content, which
 stays as it was when no tab is sent. On an edit page the tabs head the field
 column, and the document bar and the side panel stay whichever tab is open.
 The side panel draws contributed sections among its own, each under its
-label. Columns, actions, and blocks at the entry list and the dashboard
-arrive as data and are not drawn yet.
+label. The entry list offers a collection's row actions in each row's menu,
+after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
+and blocks at the entry list and the dashboard arrive as data and are not
+drawn yet.
+
+**Running an action.** An action that `open`s a component draws it with the
+rows it was run on. In a bundled admin, that component resolves only once
+contribution components are collected into the generated import map; until
+then the action shows the slot's fallback. One that `run`s a route calls the plugin's own route,
+which must answer a write (`POST`, `PUT`, `PATCH` or `DELETE`) and must not be
+public or a route for the plugin's own kind of signed-in person. The request
+carries the action and its rows, with the CSRF token the admin sends with
+every write:
+
+```json
+{
+  "action": "acme-support.escalate",
+  "rows": [{ "collection": "tickets", "id": "42" }]
+}
+```
+
+**A route bound to an action is reachable only as that action.** Before its
+handler runs, every request to it must name one of the actions that run it
+and the rows it acts on: a row action exactly one, a bulk action up to 100.
+Declare a second route for any other use. The request is refused, and nothing
+of the plugin's runs:
+
+- `400`, when it names no action that runs this route, no rows, too many
+  rows, or is not such a body;
+- `403`, the route gate's own answer, when the caller lacks the action's
+  `requiredPermission`;
+- `404`, when a row is missing or one the caller may not read; the two are
+  not told apart;
+- `403` `ACTION_NOT_AVAILABLE`, when a row is in a collection the action is
+  not offered on, or its `visibleWhen` does not hold for the row as the caller
+  reads it. A field the caller may not read is missing from that row, so a
+  rule needing it does not hold.
+
+A bulk request is refused whole when any row fails. The rows are read once per
+collection, as the caller. Hiding an action in the admin is not its access
+control; this check is.
 
 Boot fails, naming the plugin and the contribution, on an id outside the
 plugin's slug (`admin-contribution-outside-namespace`), one declared twice
@@ -926,7 +974,8 @@ plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 there (`contribution-replace-unknown`) or replaced twice
 (`contribution-replace-twice`), and one that is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
-component, an action that names none of the plugin's own routes, a permission
+component, an action that names none of the plugin's own routes, or a route
+that is public, a signed-in person's, or answers `GET`, a permission
 on the login page, or a rule where there is no entry to judge.
 
 ### Reading what other plugins declared

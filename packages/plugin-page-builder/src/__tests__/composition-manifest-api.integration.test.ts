@@ -302,6 +302,7 @@ describe.each(getConfiguredTestDialects())(
       expect(manifest.actions.map(action => action.name)).toEqual([
         "pageAction",
         "definitionAction",
+        "templateAction",
       ]);
       expect(manifest.actions[0]?.kinds).toContain("choose-variant");
     });

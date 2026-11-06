@@ -188,6 +188,25 @@ export async function collectionsTheBuilderOpens(
     .filter((type): type is BuilderDocumentType => type !== undefined);
 }
 
+/** The app's configuration, as far as its languages go. */
+export interface LocalizedConfig {
+  readonly localization?: { readonly locales: readonly unknown[] };
+}
+
+/**
+ * The site's configured languages, by code: a locale is a code or an entry
+ * carrying one. Empty for a site with no languages configured.
+ */
+export function siteLocales(config: LocalizedConfig): string[] {
+  return (config.localization?.locales ?? []).flatMap(locale => {
+    const code =
+      typeof locale === "string"
+        ? locale
+        : (locale as { code?: unknown } | null)?.code;
+    return typeof code === "string" ? [code] : [];
+  });
+}
+
 /**
  * Where the site's block documents may live: every collection and live Single
  * holding a blocks field the builder opens, the Singles with the form paths of
@@ -198,9 +217,7 @@ export async function collectionsTheBuilderOpens(
 export async function blocksSurvey(
   ctx: PageCollectionsContext &
     Pick<SiteStyleRouteContext, "services"> & {
-      readonly config: SiteStyleRouteContext["config"] & {
-        readonly localization?: { readonly locales: readonly unknown[] };
-      };
+      readonly config: SiteStyleRouteContext["config"] & LocalizedConfig;
     }
 ): Promise<{
   collections: string[];
@@ -209,14 +226,8 @@ export async function blocksSurvey(
 }> {
   return {
     // The site's languages, since a Single's document may exist in one of
-    // them alone. A locale is a code or an entry carrying one.
-    locales: (ctx.config.localization?.locales ?? []).flatMap(locale => {
-      const code =
-        typeof locale === "string"
-          ? locale
-          : (locale as { code?: unknown } | null)?.code;
-      return typeof code === "string" ? [code] : [];
-    }),
+    // them alone.
+    locales: siteLocales(ctx.config),
     collections: (await collectionsTheBuilderOpens(ctx)).map(type => type.slug),
     singles: (await singlesTheBuilderOpens(ctx)).map(({ slug, paths }) => ({
       slug,

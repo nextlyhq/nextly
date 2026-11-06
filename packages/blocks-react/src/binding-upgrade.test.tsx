@@ -25,7 +25,7 @@ import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
-import type { PageBindings } from "./context";
+import { isBindingIssue, type PageBindings } from "./context";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -151,7 +151,9 @@ describe("stored bindings from before they were checked", () => {
         blocks={resolver}
         siteStyles={false}
         bindings={bindings}
-        onBindingIssues={reported => issues.push(...reported)}
+        onBindingIssues={reported =>
+          issues.push(...reported.filter(isBindingIssue))
+        }
       />
     );
     const shown = [...html.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map(

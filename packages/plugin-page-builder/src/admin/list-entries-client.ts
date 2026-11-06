@@ -2,8 +2,8 @@
 
 /**
  * The canvas's data for its collection lists: each read the renderer's
- * `readList` makes, answered through the list entries route as a visitor
- * reads it.
+ * `readList` makes, answered through the list entries route as the person
+ * editing reads it, drafts included.
  *
  * A data provider rather than a hook, because it is what a page context
  * carries: the canvas draws a list with the same renderer a published page
@@ -144,23 +144,40 @@ export interface CanvasListReads {
   readonly count: ReturnType<typeof canvasListCount>;
 }
 
-/** One set of reads per language, shared by the canvas and the inspector. */
-const READS_BY_LANGUAGE = new Map<string, CanvasListReads>();
+/**
+ * One set of reads per signed-in person and language, shared by the canvas
+ * and the inspector, and only the current person's: the rows read are theirs,
+ * drafts and protected fields included.
+ */
+const READS = new Map<string, CanvasListReads>();
+/** The person whose reads `READS` holds, so another's are dropped first. */
+let readsFor: string | null | undefined;
 
 /**
- * The canvas's list reads in `locale`, the language being edited: one object
- * per language, so the canvas's page context and the inspector's count read
- * through ONE provider and its kept answers. A date filter still compares
- * in UTC: the canvas reads no site time zone.
+ * The canvas's list reads for `userId`, the signed-in person, in `locale`, the
+ * language being edited: one object per person and language, so the canvas's
+ * page context and the inspector's count read through ONE provider and its
+ * kept answers. Its kept answers are that person's, so the moment another
+ * person asks (a sign-out and a sign-in in the same tab), every earlier
+ * person's reads are dropped before anything is answered: no row read for one
+ * account is ever handed to another. A date filter still compares in UTC: the
+ * canvas reads no site time zone.
  */
-export function canvasListReadsIn(locale: string | undefined): CanvasListReads {
+export function canvasListReadsIn(
+  locale: string | undefined,
+  userId: string | null
+): CanvasListReads {
+  if (readsFor !== userId) {
+    READS.clear();
+    readsFor = userId;
+  }
   const key = locale ?? "";
-  let reads = READS_BY_LANGUAGE.get(key);
+  let reads = READS.get(key);
   if (reads === undefined) {
     const terms: CanvasListTerms = locale === undefined ? {} : { locale };
     const data = canvasListData();
     reads = { terms, data, count: canvasListCount(data, terms) };
-    READS_BY_LANGUAGE.set(key, reads);
+    READS.set(key, reads);
   }
   return reads;
 }
