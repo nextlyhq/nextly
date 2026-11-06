@@ -22,4 +22,32 @@ export const en = {
   "nextly.errors.page.retry": "Try again",
   "nextly.errors.page.home": "Go home",
   "nextly.errors.page.details": "View technical details",
+  "nextly.errors.section.title": "Error loading section",
+  "nextly.errors.section.description":
+    "An error occurred while loading this section. Please try again.",
+  "nextly.errors.section.details": "Error details",
+  "nextly.errors.section.retry": "Try Again",
+  "nextly.errors.inline.message": "Error loading content",
+  "nextly.errors.inline.development": "Error: {message}",
+  "nextly.status.back": "Go back",
+  "nextly.status.dashboard": "Go to dashboard",
+  "nextly.status.notFound.label": "Page Not Found",
+  "nextly.status.notFound.title": "Oops! This page doesn't exist",
+  "nextly.status.notFound.description":
+    "The page you're looking for may have been moved, deleted, or the URL might be incorrect.",
+  "nextly.status.noAccess.label": "No access",
+  "nextly.status.noAccess.title.collection":
+    "You don't have access to this collection",
+  "nextly.status.noAccess.title.single": "You don't have access to this Single",
+  "nextly.status.noAccess.title.page": "You don't have access to this page",
+  "nextly.status.noAccess.description":
+    "Your account doesn't have permission to open it. If you need it, ask an admin.",
+  "nextly.pagination.label": "Pagination",
+  "nextly.pagination.first": "Go to first page",
+  "nextly.pagination.previous": "Go to previous page",
+  "nextly.pagination.next": "Go to next page",
+  "nextly.pagination.last": "Go to last page",
+  "nextly.pagination.page": "Go to page {page}",
+  "nextly.search.placeholder": "Search...",
+  "nextly.search.clear": "Clear search",
 } as const;

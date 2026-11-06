@@ -29,7 +29,7 @@ export type PaginationProps = {
   totalItems?: number;
   /** Noun used in the count, e.g. "entries" -> "Showing 1-10 of 42 entries" */
   itemLabel?: string;
-  /** Accessible name for the pagination landmark */
+  /** Accessible name for the pagination landmark; "Pagination", in the interface language, when absent */
   ariaLabel?: string;
   /** Optional custom className for the container */
   className?: string;

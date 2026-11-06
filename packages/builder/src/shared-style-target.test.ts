@@ -5,6 +5,7 @@
 import {
   compilePageCss,
   nodeClassName,
+  overlaidStyles,
   type BlockDocument,
   type BreakpointSet,
   type NamedClass,
@@ -16,7 +17,6 @@ import {
   hasOwnStyles,
   newSharedStyleName,
   nodeSharedStyles,
-  overlaidStyles,
   DETACH_LOOK_NOT_KEPT,
   planDetachSharedStyle,
   moveToSharedStyleClear,

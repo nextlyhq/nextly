@@ -17,11 +17,12 @@ import { useId, type JSX } from "react";
 import { Label, RadioGroup, RadioGroupItem } from "@admin/components/ui";
 import type { ReleaseMemberAction } from "@admin/types/releases";
 
-/** Why an option the reader may not take is held. */
-const HELD: Record<ReleaseMemberAction, string> = {
-  publish: "You do not have permission to publish this document.",
-  unpublish: "You do not have permission to unpublish this document.",
-};
+/** Why an option the reader may not take is held, said of what the choice is about. */
+function heldReason(action: ReleaseMemberAction, subject: string): string {
+  return `You do not have permission to ${
+    action === "publish" ? "publish" : "unpublish"
+  } ${subject}.`;
+}
 
 const LABEL: Record<ReleaseMemberAction, string> = {
   publish: "Goes live",
@@ -41,11 +42,17 @@ export function ReleaseActionChoice({
   onChange,
   canPublishDocument,
   canUnpublishDocument,
+  subject = "this document",
+  heldSubject = subject,
 }: {
   action: ReleaseMemberAction;
   onChange: (next: ReleaseMemberAction) => void;
   canPublishDocument: boolean;
   canUnpublishDocument: boolean;
+  /** What the choice is about, as the legend names it: one document or several. */
+  subject?: string;
+  /** What a held option's reason names, where it differs from the legend's subject. */
+  heldSubject?: string;
 }): JSX.Element {
   const ids = useId();
   const allowed: Record<ReleaseMemberAction, boolean> = {
@@ -55,7 +62,7 @@ export function ReleaseActionChoice({
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="mb-1 text-sm font-medium">
-        At that moment, this document
+        At that moment, {subject}
       </legend>
       <RadioGroup
         value={action}
@@ -81,7 +88,7 @@ export function ReleaseActionChoice({
                 id={`${ids}-${each}-held`}
                 className="pl-6 text-xs text-muted-foreground"
               >
-                {HELD[each]}
+                {heldReason(each, heldSubject)}
               </p>
             )}
           </div>

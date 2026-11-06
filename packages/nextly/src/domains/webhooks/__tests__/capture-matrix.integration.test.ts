@@ -127,7 +127,7 @@ const CELLS: Cell[] = [
     locale: "en",
     ops: [
       { op: "create", data: { title: "a", status: "draft" } },
-      { op: "update", data: { title: "b" } },
+      { op: "update", data: { title: "b", _overwrite: true } },
     ],
     present: ["entry.updated"],
   },
@@ -136,7 +136,7 @@ const CELLS: Cell[] = [
     locale: "en",
     ops: [
       { op: "create", data: { title: "a", status: "draft" } },
-      { op: "update", data: { status: "published" } },
+      { op: "update", data: { status: "published", _overwrite: true } },
     ],
     present: ["entry.published", "entry.status_changed"],
   },
@@ -145,7 +145,7 @@ const CELLS: Cell[] = [
     locale: "en",
     ops: [
       { op: "create", data: { title: "a", status: "published" } },
-      { op: "update", data: { status: "draft" } },
+      { op: "update", data: { status: "draft", _overwrite: true } },
     ],
     present: ["entry.unpublished", "entry.status_changed"],
   },
@@ -170,7 +170,7 @@ const CELLS: Cell[] = [
     locale: "de",
     ops: [
       { op: "create", data: { title: "a", status: "draft" } },
-      { op: "update", data: { title: "b" } },
+      { op: "update", data: { title: "b", _overwrite: true } },
     ],
     present: ["entry.updated"],
     localeChecked: ["entry.updated"],
@@ -180,7 +180,7 @@ const CELLS: Cell[] = [
     locale: "de",
     ops: [
       { op: "create", data: { title: "a", status: "draft" } },
-      { op: "update", data: { status: "published" } },
+      { op: "update", data: { status: "published", _overwrite: true } },
     ],
     present: ["entry.published", "entry.status_changed"],
     localeChecked: ["entry.published"],
@@ -190,7 +190,7 @@ const CELLS: Cell[] = [
     locale: "de",
     ops: [
       { op: "create", data: { title: "a", status: "published" } },
-      { op: "update", data: { status: "draft" } },
+      { op: "update", data: { status: "draft", _overwrite: true } },
     ],
     present: ["entry.unpublished", "entry.status_changed"],
     localeChecked: ["entry.unpublished"],

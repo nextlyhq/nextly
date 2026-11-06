@@ -225,8 +225,8 @@ describe.each(dialects)("a batch in one transaction (%s)", dialect => {
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
       [
-        { id: own, data: { title: "renamed" } },
-        { id: others, data: { title: "renamed" } },
+        { id: own, data: { title: "renamed", _overwrite: true } },
+        { id: others, data: { title: "renamed", _overwrite: true } },
       ]
     );
 
@@ -241,8 +241,8 @@ describe.each(dialects)("a batch in one transaction (%s)", dialect => {
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
       [
-        { id: ownToo, data: { title: "renamed" } },
-        { id: own, data: { owner: OTHER } },
+        { id: ownToo, data: { title: "renamed", _overwrite: true } },
+        { id: own, data: { owner: OTHER, _overwrite: true } },
       ]
     );
 
@@ -274,9 +274,9 @@ describe("an entry the caller may not read", () => {
     const updated = await entriesOf(t).updateEntries(
       { collectionName: POSTS, ...asAuthor } as never,
       [
-        { id: own, data: { title: "renamed" } },
-        { id: others, data: { title: "renamed" } },
-        { id: missing, data: { title: "renamed" } },
+        { id: own, data: { title: "renamed", _overwrite: true } },
+        { id: others, data: { title: "renamed", _overwrite: true } },
+        { id: missing, data: { title: "renamed", _overwrite: true } },
       ]
     );
     const deleted = await entriesOf(t).deleteEntries(
@@ -346,7 +346,7 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
         collection: LOCALIZED,
         id,
         locale: "de",
-        data: { title: germanTitle },
+        data: { title: germanTitle, _overwrite: true },
       } as never);
       return id;
     };

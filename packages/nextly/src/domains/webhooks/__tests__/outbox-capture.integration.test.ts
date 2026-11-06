@@ -424,7 +424,7 @@ describe("webhook outbox capture (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "after" }
+      { title: "after", _overwrite: true }
     );
 
     const rows = await events(current);

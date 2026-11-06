@@ -99,10 +99,15 @@ export function formatLatency(ms: number | null | undefined): string {
 export function describeResource(resource: {
   kind: string;
   collection: string | null;
+  plugin?: string | null;
   id: string | null;
   locale: string | null;
 }): string {
-  const scope = resource.collection ?? resource.kind;
+  // A plugin's event names the plugin, never a collection: "plugin acme-shop".
+  const scope =
+    resource.kind === "plugin"
+      ? ["plugin", resource.plugin].filter(Boolean).join(" ")
+      : (resource.collection ?? resource.kind);
   const parts = [scope];
   if (resource.id) parts.push(resource.id);
   const base = parts.join(" · ");

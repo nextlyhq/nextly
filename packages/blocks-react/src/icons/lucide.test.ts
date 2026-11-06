@@ -88,6 +88,18 @@ describe("searching the Lucide set", () => {
     expect(first?.id).toBe("lucide:square-activity");
   });
 
+  it("ranks a former name's word, then a tag, then a tag's word, then a name's middle", async () => {
+    const found = await names("table");
+    // `columns-3-cog` was named `table-config`; `sheet` is tagged `table`;
+    // `pill` is tagged `tablet`; `turntable` has `table` inside a word. Each
+    // name is longer than the next one's, so a tie on rank would order them
+    // the other way round.
+    const order = ["columns-3-cog", "sheet", "pill", "turntable"];
+    const places = order.map(name => found.indexOf(name));
+    expect(places.every(place => place >= 0)).toBe(true);
+    expect([...places].sort((a, b) => a - b)).toEqual(places);
+  });
+
   it("reads spaces and capitals as a name's hyphens and lower case", async () => {
     expect((await names("Arrow up"))[0]).toBe("arrow-up");
   });

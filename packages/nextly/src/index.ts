@@ -621,6 +621,8 @@ export {
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
   type PluginAdminPlaceDeclaration,
+  type PluginListFilterDeclaration,
+  type PluginListFilterOption,
   type PluginMenuItem,
   type PluginNavSection,
   CORE_ADMIN_PLACES,

@@ -36,6 +36,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { eq } from "@nextlyhq/plugin-sdk/db";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -48,6 +49,11 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  FRAGMENTS_KEPT_DAYS,
+  fragmentStore,
+  type FragmentStore,
+} from "../breakpoint-removal/fragments";
 import { BREAKPOINT_REMOVAL_JOB } from "../breakpoint-removal/job";
 import {
   removalRunStore,
@@ -63,6 +69,7 @@ import { documentKeyOf, type RewriteReport } from "../host-rewrite/contract";
 import { documentHasWorkingDraft } from "../host-rewrite/site";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { breakpointRemovalFragments } from "../schema/tables";
 import { BREAKPOINT_REMOVED_AUDIT } from "../site-settings";
 import {
   SITE_SETTINGS_WRITE_CONTEXT,
@@ -167,6 +174,15 @@ function probePlugin(holder: Probe): PluginDefinition {
     dependsOn: { [PAGE_BUILDER_PLUGIN_NAME]: "*" },
     init(ctx) {
       holder.runs = removalRunStore(ctx.db, ctx.dialect);
+      holder.fragments = fragmentStore(ctx.db);
+      holder.age = async (runId, days) => {
+        const t = ctx.db.table(breakpointRemovalFragments);
+        await ctx.db
+          .update(breakpointRemovalFragments, {
+            createdAt: new Date(Date.now() - days * 24 * 60 * 60 * 1000),
+          })
+          .where(eq(t.runId, runId));
+      };
       // A store whose first read of every run lands another save's write
       // before it answers: how a test races a retirement.
       holder.raced = afterRead => {
@@ -213,6 +229,9 @@ function probePlugin(holder: Probe): PluginDefinition {
 /** What the probe hands the tests. */
 interface Probe {
   runs?: RemovalRunStore;
+  fragments?: FragmentStore;
+  /** Make every kept row of a removal `days` old. */
+  age?: (runId: string, days: number) => Promise<void>;
   raced?: (afterRead: () => Promise<void>) => RemovalRunStore;
 }
 
@@ -247,6 +266,10 @@ describe.each(getConfiguredTestDialects())(
     async function boot(): Promise<{
       t: TestNextly;
       svc: BreakpointRemovalService;
+      fragments: () => {
+        store: FragmentStore;
+        age: (runId: string, days: number) => Promise<void>;
+      };
       cookie: string;
       runs: () => RemovalRunStore;
       raced: (afterRead: () => Promise<void>) => RemovalRunStore;
@@ -303,6 +326,7 @@ describe.each(getConfiguredTestDialects())(
               styles: { base: { mobile: { color: "#555555" } } },
             },
           ],
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -313,6 +337,12 @@ describe.each(getConfiguredTestDialects())(
       return {
         t,
         svc,
+        fragments: () => {
+          if (probe.fragments === undefined || probe.age === undefined) {
+            throw new Error("no probe");
+          }
+          return { store: probe.fragments, age: probe.age };
+        },
         cookie: await manager(t),
         runs: () => {
           if (probe.runs === undefined) throw new Error("no probe");
@@ -604,6 +634,7 @@ describe.each(getConfiguredTestDialects())(
         id: withDraft,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -705,6 +736,137 @@ describe.each(getConfiguredTestDialects())(
       expect(audit[0]?.pages).toBeGreaterThanOrEqual(4);
     });
 
+    it("keeps what each strip took out, every form and the shared styles, before taking it out", async () => {
+      const { t, cookie, fragments } = await boot();
+      const live = await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        status: "published",
+        content: doc("page", [
+          heading("a", styledAtMobile),
+          heading("hidden", { visibility: { devices: { mobile: false } } }),
+          heading("plain"),
+        ]),
+      });
+      const withDraft = await create(t, "pages", {
+        title: "Pending",
+        slug: "pending",
+        status: "published",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      await t.nextly.update({
+        collection: "pages",
+        id: withDraft,
+        data: {
+          content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+        },
+        overrideAccess: true,
+      });
+
+      const saved = await save(cookie, [TABLET]);
+      expect(saved.status).toBe(200);
+      const runId = (
+        (saved.body.item as Record<string, unknown>).removal as {
+          runId: string;
+        }
+      ).runId;
+      const kept = await fragments().store.forRun(runId);
+      const at = (id: string, form: string) =>
+        kept.filter(row => row.host?.id === id && row.form === form);
+      const mobileOf = {
+        styles: {
+          base: { mobile: { color: "#222222" } },
+          hover: { mobile: { color: "#333333" } },
+        },
+      };
+      // The live page: each block that held something, by its id; the
+      // block that held nothing is not there.
+      expect(at(live, "published")).toEqual([
+        expect.objectContaining({
+          runId,
+          host: expect.objectContaining({ id: live, path: ["content"] }),
+          fragment: {
+            nodes: {
+              a: mobileOf,
+              hidden: {
+                visibility: {
+                  before: { devices: { mobile: false } },
+                  after: (await nodesOf(t, "pages", live))[1]?.visibility,
+                },
+              },
+            },
+          },
+        }),
+      ]);
+      // A pending draft over a live row: the draft is stripped and kept; the
+      // live row is left as it is, so nothing of it is kept.
+      expect(at(withDraft, "draft")).toEqual([
+        expect.objectContaining({ fragment: { nodes: { a: mobileOf } } }),
+      ]);
+      expect(at(withDraft, "published")).toEqual([]);
+      // The shared styles, as the set's write took them out.
+      expect(kept.filter(row => row.form === "site")).toEqual([
+        expect.objectContaining({
+          host: null,
+          fragment: {
+            classes: {
+              "c-card": { base: { mobile: { color: "#222" } } },
+              "c-band": { base: { mobile: { color: "#555555" } } },
+            },
+            overridden: [],
+          },
+        }),
+      ]);
+    });
+
+    it("deletes what removals took out once past the window they can be undone in, in the removal job", async () => {
+      const { t, cookie, fragments, jobPass } = await boot();
+      await create(t, "pages", {
+        title: "Home",
+        slug: "home",
+        content: doc("page", [heading("a", styledAtMobile)]),
+      });
+      const saved = await save(cookie, [TABLET]);
+      const runId = (
+        (saved.body.item as Record<string, unknown>).removal as {
+          runId: string;
+        }
+      ).runId;
+      const { store, age } = fragments();
+      const kept = (await store.forRun(runId)).length;
+      expect(kept).toBeGreaterThan(1);
+      // CONTROL: a day short of the window, a pass keeps them.
+      await age(runId, FRAGMENTS_KEPT_DAYS - 1);
+      await jobPass();
+      expect(await store.forRun(runId)).toHaveLength(kept);
+      // Past it, a pass deletes them.
+      await age(runId, FRAGMENTS_KEPT_DAYS + 1);
+      await jobPass();
+      expect(await store.forRun(runId)).toEqual([]);
+    });
+
+    it("discards a row by its id, and forgets every row of a removal that was dropped", async () => {
+      const { svc, fragments } = await boot();
+      const run = await svc.begin(["mobile"], null, "user:test");
+      const row = {
+        runId: run.id,
+        host: null,
+        form: "site" as const,
+        fragment: { classes: {}, overridden: [] },
+      };
+      const first = await svc.keepFragment(row);
+      await svc.keepFragment(row);
+      const { store } = fragments();
+      expect(await store.forRun(run.id)).toHaveLength(2);
+      // Its write was not made: that row alone goes.
+      await svc.discardFragment(first);
+      expect(await store.forRun(run.id)).toHaveLength(1);
+      // The removal is dropped: nothing it kept is owed back.
+      await svc.abandon(run.id);
+      expect(await store.forRun(run.id)).toEqual([]);
+      expect(await svc.runById(run.id)).toBeNull();
+    });
+
     it("refuses a second removal while one is open", async () => {
       const { svc, cookie } = await boot();
       // Open for a breakpoint the set below does not define again.
@@ -728,7 +890,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -760,7 +925,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -817,7 +985,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -863,7 +1034,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -912,6 +1086,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -938,7 +1113,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", draft), status: "published" },
+        data: {
+          content: doc("page", draft),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const carried = await carryOn(cookie, runId);
@@ -1082,7 +1261,10 @@ describe.each(getConfiguredTestDialects())(
       const run = await svc.begin(["mobile"], null, "user:someone");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -1183,6 +1365,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1201,7 +1384,11 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", draft), status: "published" },
+        data: {
+          content: doc("page", draft),
+          status: "published",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await jobPass();
@@ -1249,6 +1436,7 @@ describe.each(getConfiguredTestDialects())(
             heading("a", styledAtMobile),
             heading("b", styledAtMobile),
           ]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1272,7 +1460,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "features",
         id: fid,
-        data: { hero: { body: doc("page", [heading("a")]) } },
+        data: { hero: { body: doc("page", [heading("a")]) }, _overwrite: true },
         overrideAccess: true,
       });
       await jobPass();
@@ -1302,7 +1490,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { content: doc("page", [heading("a", styledAtMobile)]) },
+        data: {
+          content: doc("page", [heading("a", styledAtMobile)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       const unconfirmed = await post(cookie, ["site", "breakpoints"], {
@@ -1332,6 +1523,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1386,7 +1578,10 @@ describe.each(getConfiguredTestDialects())(
       // The save stores its set and walks: the page is stripped.
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });
@@ -1453,6 +1648,7 @@ describe.each(getConfiguredTestDialects())(
             ],
             container: [],
           },
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -1490,7 +1686,10 @@ describe.each(getConfiguredTestDialects())(
       expect(typeof read._rev).toBe("string");
       await t.nextly.updateSingle({
         slug: SITE_STYLE_SLUG,
-        data: { breakpoints: { viewport: [TABLET], container: [] } },
+        data: {
+          breakpoints: { viewport: [TABLET], container: [] },
+          _overwrite: true,
+        },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
       });

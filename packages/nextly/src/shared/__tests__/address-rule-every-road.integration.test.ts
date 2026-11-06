@@ -446,7 +446,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await t.adapter.tableExists("single_team_updates")).toBe(true);
         await t.nextly.updateSingle({
           slug: "team-updates",
-          data: { body: "hello" },
+          data: { body: "hello", _overwrite: true },
         });
         const read = await t.nextly.findSingle({ slug: "team-updates" });
         expect((read as { body?: string }).body).toBe("hello");
@@ -473,7 +473,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await t.adapter.tableExists("single_team_updates")).toBe(true);
         await t.nextly.updateSingle({
           slug: "team-updates",
-          data: { body: "hello" },
+          data: { body: "hello", _overwrite: true },
         });
         expect(
           (

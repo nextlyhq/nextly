@@ -94,6 +94,8 @@ interface ShortcutProps {
   breakpoint: BreakpointId;
   /** What reaches the edited address from elsewhere, as the cascade says. */
   reaching?: Reaching | undefined;
+  /** The prefix the site's tokens are written under, as the cascade's are. */
+  tokenPrefix?: string | undefined;
 }
 
 /**
@@ -126,6 +128,7 @@ export function MinHeightPresets({
   state,
   breakpoint,
   reaching,
+  tokenPrefix,
   over,
 }: ShortcutProps & { over: boolean }): React.JSX.Element | null {
   const row = React.useRef<HTMLDivElement>(null);
@@ -133,7 +136,11 @@ export function MinHeightPresets({
   React.useLayoutEffect(() => takeMovedFocus(row.current, nodeId));
   const node = findNode(editor.document.nodes, nodeId);
   if (node?.type !== SECTION_BLOCK) return null;
-  const at: ShortcutAt = { state, breakpoint };
+  const at: ShortcutAt = {
+    state,
+    breakpoint,
+    ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
+  };
   return (
     <div ref={row} className="nx-block-shortcuts" data-control="section-height">
       <ChoiceRow
@@ -176,10 +183,15 @@ export function BlockShortcutsControl({
   state,
   breakpoint,
   reaching,
+  tokenPrefix,
 }: ShortcutProps): React.JSX.Element | null {
   const node = findNode(editor.document.nodes, nodeId);
   if (node === undefined) return null;
-  const at: ShortcutAt = { state, breakpoint };
+  const at: ShortcutAt = {
+    state,
+    breakpoint,
+    ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
+  };
   const apply = (op: BuilderOp | null) => {
     if (op !== null) editor.apply(op);
   };

@@ -161,6 +161,9 @@ function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
     // The block type a look is bound to: the same styles on another type is
     // another look.
     a.blockType === b.blockType &&
+    // A block's own look edits its type's base; the same entry without the
+    // mark is a look blocks wear instead.
+    a.isDefault === b.isDefault &&
     sameJsonValue(a.styles, b.styles)
   );
 }
