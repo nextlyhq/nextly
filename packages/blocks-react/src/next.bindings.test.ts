@@ -1128,8 +1128,13 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(runtime.judged).toContain("shapes collection:Public");
   });
 
-  it("reads the site's zone for a list's item conditions only when one orders a value", async () => {
-    const listWith = (op: string, value?: unknown) =>
+  it("reads the site's zone for a list's item conditions only when one orders a date", async () => {
+    runtime.shapes.set("collection:posts", [
+      { name: "title", type: "text" },
+      { name: "rating", type: "number" },
+      { name: "publishedAt", type: "date" },
+    ]);
+    const listWith = (field: string, op: string, value?: unknown) =>
       instance(
         page({
           id: "loop",
@@ -1141,7 +1146,7 @@ describe("a page's blocks shown by their visibility conditions", () => {
               shownWhen("pill", "Featured", [
                 [
                   {
-                    field: "title",
+                    field,
                     op,
                     ...(value === undefined ? {} : { value }),
                   },
@@ -1161,13 +1166,25 @@ describe("a page's blocks shown by their visibility conditions", () => {
     const { html } = await renderedPage(
       createBlocksPage,
       { ...base, maxQueries: 2 },
-      listWith("equals", "Public")
+      listWith("title", "equals", "Public")
     );
     expect(siteRead()).toBe(false);
     expect(html).toContain("Featured");
-    // CONTROL: an ordered comparison reads it.
+    // Nor does ordering a number, which compares no day.
     runtime.tags = [];
-    await renderedPage(createBlocksPage, base, listWith("greater_than", "A"));
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("rating", "greater_than", 3)
+    );
+    expect(siteRead()).toBe(false);
+    // CONTROL: ordering a date reads it.
+    runtime.tags = [];
+    await renderedPage(
+      createBlocksPage,
+      base,
+      listWith("publishedAt", "greater_than", "2026-01-01")
+    );
     expect(siteRead()).toBe(true);
   });
 

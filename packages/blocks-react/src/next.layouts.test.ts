@@ -634,6 +634,41 @@ describe("a page drawn inside its Layout", () => {
     expect(meta.title).toBe("Entry title");
   });
 
+  it("reads the Layout for metadata when the page's conditions read the entry, as the render does", async () => {
+    // A block shown by a condition on the entry: no binding, but the entry
+    // read it needs spends the budget after the Layout, as in the render.
+    const metadataReadsLayout = async (content: unknown) => {
+      const r = siteReader({ page: { content } });
+      const layouts = provider("main");
+      const route = createBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        nextly: r.nextly,
+        blocks: createBlockResolver(coreBlocks),
+        layouts,
+      });
+      await route.generateMetadata({ params: { slug: ["about"] } });
+      return layouts.readDefault.mock.calls.length > 0;
+    };
+    const conditioned = doc([
+      {
+        id: "c",
+        type: "core/text",
+        version: 1,
+        props: { text: "Body" },
+        visibility: {
+          conditions: [[{ field: "title", op: "equals", value: "x" }]],
+        },
+      },
+    ]);
+    expect(await metadataReadsLayout(conditioned)).toBe(true);
+    // CONTROL: a page that reads nothing reads no Layout for its metadata.
+    const plain = doc([
+      { id: "t", type: "core/text", version: 1, props: { text: "Body" } },
+    ]);
+    expect(await metadataReadsLayout(plain)).toBe(false);
+  });
+
   it("renders exactly as before when the option is off", async () => {
     const off = await render(
       { page: { content: PAGE_BODY, layout: "landing" } },

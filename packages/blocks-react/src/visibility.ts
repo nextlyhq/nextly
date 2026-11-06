@@ -12,7 +12,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { conditionDayStart } from "./blocks/list-read";
-import type { PageContext } from "./context";
+import type { PageBindings, PageContext } from "./context";
 import type { BlockResolver } from "./resolver";
 
 /**
@@ -309,4 +309,34 @@ export function entryConditionedIn(document: BlockDocument): Set<string> {
   };
   visit(document.nodes, { source: "entry", collection: undefined });
   return held;
+}
+
+/**
+ * The page's entry as a condition reads it, when the public may read it.
+ * Nothing for a Single's page, which has no entry for conditions to read.
+ */
+export function entrySubjectOf(bindings: PageBindings | undefined): {
+  entry?: ConditionSubject;
+} {
+  const values = bindings?.entry;
+  const ref = bindings?.entryRef;
+  // A Single's page has no entry for its conditions to read, as the save
+  // judges it: its fields are the Single's, read for its bindings, and a
+  // condition on the page is one no entry can answer, so it fails closed.
+  if (ref === undefined || "single" in ref) return {};
+  const readable = bindings?.fieldShapes?.fieldsOf(ref);
+  if (values === undefined || values === null || readable === undefined) {
+    return {};
+  }
+  return {
+    entry: {
+      // The public's fields are all a page is handed, so a field outside them
+      // reads as one the entry lacks; either way it fails closed.
+      fields: {
+        declared: new Set(readable.map(field => field.name)),
+        readable,
+      },
+      values,
+    },
+  };
 }

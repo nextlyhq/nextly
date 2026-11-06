@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
-import { itemDecidedRules, resolvePageStyles } from "./styles";
+import { drawlessTestFor, itemDecidedRules, resolvePageStyles } from "./styles";
 
 const resolver = createBlockResolver([...coreBlocks]);
 const context = {
@@ -130,5 +130,26 @@ describe("the sheet of a page decided by its entry", () => {
     // CONTROL: its drawn sibling's rules travel with the block around them.
     expect(rules.get("outer")).toContain("#c06666");
     expect(rules.get("outer")).not.toContain("#c05555");
+  });
+
+  it("keeps the rules of a block that draws once its list item fills it", () => {
+    // Empty as stored, and bound to each item's title: it draws per item,
+    // so its rules must reach the list, judged as the renderer judges it.
+    const badge = {
+      ...coloured("badge", "#c07777", vip),
+      props: { text: "", level: 3 },
+      bindings: { text: { $bind: "title", source: "item" } },
+    };
+    const list = {
+      id: "l",
+      type: "core/collection-loop",
+      version: 1,
+      props: { collection: "posts" },
+      slots: { children: [badge] },
+    };
+    const document = doc(list);
+    const styles = resolvePageStyles(document, undefined, context, resolver);
+    const rules = itemDecidedRules(styles, document, drawlessTestFor(resolver));
+    expect(rules.get("badge")).toContain("#c07777");
   });
 });
