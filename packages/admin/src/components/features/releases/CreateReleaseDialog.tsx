@@ -27,6 +27,7 @@ import {
 import { useCreateRelease } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
 import { ReleaseNameFields } from "./ReleaseNameFields";
 
@@ -42,6 +43,8 @@ export function CreateReleaseDialog({
   onOpenChange,
   onCreated,
 }: CreateReleaseDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const create = useCreateRelease();
@@ -96,7 +99,7 @@ export function CreateReleaseDialog({
         else onOpenChange(true);
       }}
     >
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={returnFocus}>
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>New release</DialogTitle>

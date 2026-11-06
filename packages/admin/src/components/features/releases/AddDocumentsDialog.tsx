@@ -60,6 +60,7 @@ import {
   type LinkedOffer,
   type PickerDocument,
 } from "./add-documents";
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { isDefiniteRefusal, releaseErrorMessage } from "./release-error";
 import { ReleaseActionChoice } from "./ReleaseActionChoice";
 import { useAddDocumentsSources } from "./useAddDocumentsSources";
@@ -86,6 +87,8 @@ export function AddDocumentsDialog({
   release,
   inRelease,
 }: AddDocumentsDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   // The offer replaces the picker once an add has landed, so the dialog keeps
   // which one it shows; reopening it starts at the picker again.
   const [offer, setOffer] = useState<LinkedOffer | null>(null);
@@ -95,7 +98,10 @@ export function AddDocumentsDialog({
   };
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent
+        onCloseAutoFocus={returnFocus}
+        className="w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+      >
         {offer === null ? (
           <DocumentPicker
             release={release}

@@ -12,6 +12,8 @@
  *
  * @module components/features/releases/dialog-opener
  */
+import { useRef } from "react";
+
 export function dialogOpenerOf(active: Element | null): HTMLElement | null {
   if (!(active instanceof HTMLElement)) return null;
   const menu = active.closest('[role="menu"]');
@@ -30,6 +32,25 @@ export function returnFocusTo(opener: HTMLElement | null, event: Event): void {
   if (opener === null || !opener.isConnected) return;
   event.preventDefault();
   opener.focus();
+}
+
+/**
+ * A dialog's focus handed back to what opened it, for a dialog opened from
+ * state rather than from a trigger of its own: answers the dialog content's
+ * `onCloseAutoFocus`.
+ *
+ * The opener is read as the dialog opens, during that render: the dialog's
+ * own effects move focus inside it before any effect of this component runs,
+ * so by then the opener is no longer the focused element.
+ */
+export function useReturnFocusOnClose(open: boolean): (event: Event) => void {
+  const opener = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current && typeof document !== "undefined") {
+    opener.current = dialogOpenerOf(document.activeElement);
+  }
+  wasOpen.current = open;
+  return event => returnFocusTo(opener.current, event);
 }
 
 /**
