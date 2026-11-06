@@ -109,7 +109,8 @@ function isPlainData(value: object): boolean {
  * or an object other than plain data (a client, a repository, a closure) is
  * a handle that can read data, so it refuses inside a named query's frame as
  * the service does, whether it is used at once or kept and used later. A
- * promise is guarded once it settles. Plain data passes as it is.
+ * promise is guarded once it settles. Plain data is read as it is, and a
+ * handle held inside it, at any depth, comes back guarded when it is read.
  */
 function guardedResult(value: unknown, path: string): unknown {
   if (typeof value === "function") return refusingInsideNamedQuery(value, path);
@@ -117,7 +118,37 @@ function guardedResult(value: unknown, path: string): unknown {
   if (value instanceof Promise) {
     return value.then(settled => guardedResult(settled, path));
   }
-  return isPlainData(value) ? value : refusingInsideNamedQuery(value, path);
+  return isPlainData(value)
+    ? plainDataGuarded(value, path)
+    : refusingInsideNamedQuery(value, path);
+}
+
+/** Each plain record or array already traversed, so one read twice is one proxy. */
+const traversedPlain = new WeakMap<object, object>();
+
+/**
+ * Plain data, read as it is, each of its own properties that is a handle
+ * coming back guarded (`guardedResult`), lazily, when it is read: a record
+ * holding `{ repository: new Repository() }` hands out the repository
+ * guarded. Inherited members, such as an array's `map`, are read as they
+ * are, so plain data stays usable inside the frame.
+ */
+function plainDataGuarded(value: object, path: string): object {
+  const known = traversedPlain.get(value);
+  if (known !== undefined) return known;
+  const proxy = new Proxy(value, {
+    get(target, prop, receiver) {
+      if (!Object.hasOwn(target, prop)) {
+        return Reflect.get(target, prop, receiver) as unknown;
+      }
+      return guardedResult(
+        Reflect.get(target, prop, target),
+        `${path}.${String(prop)}`
+      );
+    },
+  });
+  traversedPlain.set(value, proxy);
+  return proxy;
 }
 
 /** Each object already guarded, so one reached twice is one proxy. */
