@@ -2125,7 +2125,22 @@ describe.each(getConfiguredTestDialects())(
         const page = { collection: "pages", id };
         const hash = await systemHash(page, "body");
 
+        // Refused as the caller's own update is: forbidden to one who may
+        // read the entry, and not found to one who may not, so a refused
+        // caller cannot tell whether it exists. Never a conflict or a write.
         for (const caller of [reader, stranger]) {
+          const ordinary = await rejectionOf(
+            t.nextly.update({
+              collection: "pages",
+              id,
+              data: { body: { v: "refused" } },
+              user: caller.user,
+              overrideAccess: false,
+            } as never)
+          );
+          if (!(ordinary instanceof NextlyError)) {
+            throw new Error("expected the ordinary update to be refused");
+          }
           const refusal = await rejectionOf(
             updateIfUnchanged(checked(caller), {
               ...page,
@@ -2133,7 +2148,10 @@ describe.each(getConfiguredTestDialects())(
               expect: { field: "body", form: "published", hash },
             })
           );
-          expect(NextlyError.isForbidden(refusal)).toBe(true);
+          expect(
+            NextlyError.isForbidden(refusal) || NextlyError.isNotFound(refusal)
+          ).toBe(true);
+          expect(NextlyError.isCode(refusal, ordinary.code)).toBe(true);
         }
         expect(await systemValue(page, "body")).toEqual({
           kind: "value",
