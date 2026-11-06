@@ -19,7 +19,11 @@
  *
  * @module list-entries-route
  */
-import { readListQuery } from "@nextlyhq/blocks-engine";
+import {
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
+  readListQuery,
+} from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
@@ -39,14 +43,40 @@ const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 const SCALAR = z.union([z.string(), z.number().finite(), z.boolean()]);
 
 /**
+ * Whether a sort as sent is within the bounds the engine holds a stored sort
+ * to: a string no longer than a stored sort, or a list of no more keys than
+ * one sorts by. Asked of the value as it arrives, before any of it is read.
+ */
+function withinSortBounds(sort: unknown): boolean {
+  if (typeof sort === "string") return sort.length <= LIST_MAX_SORT_LENGTH;
+  return !Array.isArray(sort) || sort.length <= LIST_MAX_SORT_KEYS;
+}
+
+/**
  * A sort as a list stores it, judged by the engine's own reading of a stored
- * sort (`readListQuery`), with no bound of its own: a stored sort has no
- * length bound, so one here would refuse on the canvas a list the save took
- * and the published page reads. The one-key-per-entry list form is read as
- * the same keys joined.
+ * sort (`readListQuery`), in the string form or the one-key-per-entry list
+ * form, read as the same keys joined. The bounds that reading holds a stored
+ * sort to are checked first and stop the check there, so a sort past them is
+ * refused before its keys are parsed, joined or read: the length of the
+ * string, the number of keys in a list, and the length of each key.
  */
 const SORT = z
-  .union([z.string(), z.array(z.string())])
+  .unknown()
+  .refine(withinSortBounds, {
+    message: "The sort is longer than any a list stores.",
+    abort: true,
+  })
+  .pipe(
+    z.union([
+      z.string(),
+      z.array(
+        z.string().max(LIST_MAX_SORT_LENGTH, {
+          message: "A sort key is longer than any a list stores.",
+          abort: true,
+        })
+      ),
+    ])
+  )
   .refine(
     sort =>
       readListQuery({ sort: typeof sort === "string" ? sort : sort.join(",") })

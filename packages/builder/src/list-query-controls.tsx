@@ -32,6 +32,7 @@
 import {
   findNode,
   LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
   listKindSortable,
   listQueryIssues,
   outerListOf,
@@ -2112,7 +2113,8 @@ function SortGroup({
         fields={sortable.filter(
           field => !keys.some(key => key.field === field.name)
         )}
-        disabled={disabled}
+        // No key past the most a list sorts by, which the save refuses.
+        disabled={disabled || keys.length >= LIST_MAX_SORT_KEYS}
         onPick={field =>
           onSort([
             ...keys,

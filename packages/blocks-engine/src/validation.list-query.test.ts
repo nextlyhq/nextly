@@ -14,6 +14,8 @@ import {
   LIST_FIELD_KINDS,
   LIST_ISSUE_CODES,
   LIST_KIND_OPS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
   listFieldKind,
   listKindSortable,
   listQueryIssues,
@@ -755,6 +757,38 @@ describe("readListQuery", () => {
       { field: "title", op: "equals", value: "a" },
     ]);
     expect(problems.map(problem => problem.prop)).toEqual(["limit", "filters"]);
+  });
+
+  it("holds a sort to the most keys and characters a list stores", () => {
+    const keys = (count: number, name = "title") =>
+      Array.from({ length: count }, (_, index) => `${name}${String(index)}`);
+    // The most a list holds: every key naming a 63-character column.
+    const widest = keys(LIST_MAX_SORT_KEYS, "f".repeat(61)).join(",");
+    expect(readListQuery({ sort: widest }).problems).toEqual([]);
+    expect(readListQuery({ sort: widest }).query.sort).toHaveLength(
+      LIST_MAX_SORT_KEYS
+    );
+    // One key more, and the same keys padded past the length, read as no
+    // sort, told apart from none by the problem.
+    const tooMany = readListQuery({
+      sort: keys(LIST_MAX_SORT_KEYS + 1).join(","),
+    });
+    expect(tooMany.query.sort).toEqual([]);
+    expect(tooMany.problems).toEqual([
+      {
+        prop: "sort",
+        code: "list-sort-invalid",
+        message: `A list sorts by at most ${String(LIST_MAX_SORT_KEYS)} fields; this one sorts by ${String(LIST_MAX_SORT_KEYS + 1)}.`,
+      },
+    ]);
+    const padded = `title${" ".repeat(LIST_MAX_SORT_LENGTH)},`;
+    expect(readListQuery({ sort: padded }).problems).toEqual([
+      {
+        prop: "sort",
+        code: "list-sort-invalid",
+        message: `A list's sort holds at most ${String(LIST_MAX_SORT_LENGTH)} characters; this one holds ${String(padded.length)}.`,
+      },
+    ]);
   });
 });
 

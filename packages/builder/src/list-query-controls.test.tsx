@@ -31,6 +31,7 @@ import * as React from "react";
 import {
   clearBlocks,
   COLLECTION_LIST_TYPE,
+  LIST_MAX_SORT_KEYS,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
@@ -485,6 +486,42 @@ describe("a list's sort", () => {
     expect(writes(editor)).toEqual([
       { collection: "posts", sort: "-publishedAt" },
     ]);
+  });
+
+  it("offers no key past the most a list sorts by, as the save refuses one", async () => {
+    // More fields than a list may sort by, so one is always left to add.
+    const wide: LoopCollection = {
+      slug: "wide",
+      label: "Wide",
+      singular: "Wide",
+      fields: Array.from({ length: LIST_MAX_SORT_KEYS + 1 }, (_, index) => ({
+        name: `f${String(index)}`,
+        label: `Field ${String(index)}`,
+        kind: "text" as const,
+      })),
+    };
+    const sortBy = (count: number) =>
+      Array.from({ length: count }, (_, index) => `f${String(index)}`).join(
+        ","
+      );
+    const services = { listLoopCollections: vi.fn(async () => [wide]) };
+    // Each read once the collection's fields are in, which name the rows.
+    const addSortWith = async (count: number) => {
+      mount({ collection: "wide", sort: sortBy(count) }, services);
+      await screen.findByRole("button", {
+        name: `Sort ${String(count)} of ${String(count)}, by Field ${String(count - 1)}`,
+      });
+      return screen.getByRole("button", { name: "Add sort" });
+    };
+    expect(
+      ((await addSortWith(LIST_MAX_SORT_KEYS - 1)) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+    cleanup();
+    clearBlocks();
+    expect(
+      ((await addSortWith(LIST_MAX_SORT_KEYS)) as HTMLButtonElement).disabled
+    ).toBe(true);
   });
 
   it("marks a stored key the collection no longer has, with the engine's reason", async () => {

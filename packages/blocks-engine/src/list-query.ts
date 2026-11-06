@@ -127,6 +127,16 @@ export const LIST_LIMIT_MAX = 100;
 export const LIST_MAX_FILTERS = 20;
 export const LIST_MAX_VALUES = 100;
 
+/**
+ * How many keys one list sorts by, and how many characters its stored sort
+ * holds: room for every key naming a field as long as a database column may
+ * be (63 characters), with the separators, and more. Every reader of a sort
+ * holds it to these, the save and a request for a list's entries alike, so
+ * none takes a sort another refuses, and none is handed one without bound.
+ */
+export const LIST_MAX_SORT_KEYS = 20;
+export const LIST_MAX_SORT_LENGTH = 2000;
+
 /** A list's query as stored, each part present only when it was stored well. */
 export interface ListQuery {
   /** The collection read, trimmed; absent when none is named. */
@@ -350,36 +360,43 @@ function readFilter(
 
 /**
  * The stored sort read as keys: split on commas, each trimmed, empty ones
- * skipped, as the reader that orders the rows splits and skips them.
+ * skipped, as the reader that orders the rows splits and skips them, and
+ * held to {@link LIST_MAX_SORT_LENGTH} and {@link LIST_MAX_SORT_KEYS}.
  */
 function readSort(
   value: unknown
 ): { keys: ListSortKey[] } | { problem: ListQueryProblem } {
   if (value === undefined || value === null) return { keys: [] };
-  const problem = (message: string) => ({
-    problem: {
-      prop: "sort" as const,
-      code: "list-sort-invalid" as const,
-      message,
-    },
-  });
-  if (typeof value !== "string") {
-    return problem("The sort is not text naming fields, such as -date,title.");
+  const read =
+    typeof value === "string"
+      ? sortKeysIn(value)
+      : "The sort is not text naming fields, such as -date,title.";
+  return typeof read === "string"
+    ? { problem: { prop: "sort", code: "list-sort-invalid", message: read } }
+    : { keys: read };
+}
+
+/** A stored sort string's keys, or why it is not a sort a list stores. */
+function sortKeysIn(stored: string): ListSortKey[] | string {
+  // Bounded before it is split, so no reader splits a sort without bound.
+  if (stored.length > LIST_MAX_SORT_LENGTH) {
+    return `A list's sort holds at most ${String(LIST_MAX_SORT_LENGTH)} characters; this one holds ${String(stored.length)}.`;
   }
   const keys: ListSortKey[] = [];
-  for (const part of value.split(",")) {
+  for (const part of stored.split(",")) {
     const text = part.trim();
     if (text === "") continue;
     const descending = text.startsWith("-");
     const field = (descending ? text.slice(1) : text).trim();
     if (!isFieldName(field)) {
-      return problem(
-        `The sort names "${describeValue(text)}", which is not a field name, such as -date.`
-      );
+      return `The sort names "${describeValue(text)}", which is not a field name, such as -date.`;
     }
     keys.push({ field, descending });
   }
-  return { keys };
+  if (keys.length > LIST_MAX_SORT_KEYS) {
+    return `A list sorts by at most ${String(LIST_MAX_SORT_KEYS)} fields; this one sorts by ${String(keys.length)}.`;
+  }
+  return keys;
 }
 
 /**
