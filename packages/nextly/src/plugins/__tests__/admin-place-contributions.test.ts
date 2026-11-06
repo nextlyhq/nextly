@@ -548,6 +548,42 @@ describe("contributedAdminContributions", () => {
     });
   });
 
+  it.each<[string, { method: "GET" | "POST"; path: string }]>([
+    // Declared, so the refusal is for the method and not a missing route.
+    [
+      "a route that reads rather than writes",
+      { method: "GET", path: "/escalate" },
+    ],
+    // Its `:id` has nothing to fill it from: the rows travel in the body.
+    [
+      "a route whose path takes parameters",
+      { method: "POST", path: "/tickets/:id/archive" },
+    ],
+  ])(
+    "refuses an action that runs %s, though the plugin declares it",
+    (_case, run) => {
+      const action = {
+        id: "acme-support.a",
+        kind: "rowAction",
+        place: "collection.list",
+        label: "A",
+        action: { run },
+      };
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([
+            plugin("@acme/support", [action], {
+              contributes: {
+                admin: { contributions: [action] as AdminContribution[] },
+                routes: [{ ...run, handler: () => new Response() } as never],
+              },
+            }),
+          ])
+        )
+      ).toMatchObject({ reason: "admin-contribution-invalid" });
+    }
+  );
+
   it("refuses an action that runs a public route, which has no caller to judge", () => {
     const action = {
       id: "acme-support.a",
