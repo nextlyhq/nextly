@@ -33,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -306,6 +306,7 @@ type BreakpointRemovalsColumns = {
   readonly phase: ColumnBuilder<string, false, true>;
   readonly cursor: ColumnBuilder<string, true, false>;
   readonly openKey: ColumnBuilder<string, true, false>;
+  readonly undoes: ColumnBuilder<string, true, false>;
 };
 
 /**
@@ -327,6 +328,9 @@ type BreakpointRemovalsColumns = {
  * - `openKey` is `site` while the run is open and `null` once it is done. Its
  *   unique index lets one removal be open at a time: a second insert meets it
  *   and is refused, and every finished run (all `null`) stays as a record.
+ * - `undoes` is set on a run that puts a removal back rather than making
+ *   one: the id of the removal it undoes. It takes the same one open slot,
+ *   so no removal runs while an undo does.
  */
 export const breakpointRemovals: TableDefinition<
   "breakpoint_removals",
@@ -341,6 +345,7 @@ export const breakpointRemovals: TableDefinition<
     phase: col.varchar(16, { default: "converting" }),
     cursor: col.varchar(1024, { nullable: true }),
     openKey: col.varchar(16, { nullable: true }),
+    undoes: col.char(36, { nullable: true }),
   },
   { indexes: [{ columns: ["openKey"], unique: true }] }
 );
@@ -395,8 +400,15 @@ export const breakpointRemovalFragments: TableDefinition<
     fragment: col.json(),
     ...col.timestamps(),
   },
-  // Read and purged by run; the purge also reads by age.
-  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+  // Read and purged by run; the purge also reads by age; an undo reads a
+  // run's rows a document at a time, in document order.
+  {
+    indexes: [
+      { columns: ["runId"] },
+      { columns: ["createdAt"] },
+      { columns: ["runId", "documentKey"] },
+    ],
+  }
 );
 
 /** The columns every usage index row has: the document it describes. */

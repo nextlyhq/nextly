@@ -191,6 +191,11 @@ import {
   sharedStyleRoutes,
 } from "./shared-styles-routes";
 import {
+  BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+  BREAKPOINT_REMOVAL_UNDONE_METADATA,
+  siteBreakpointUndoRoute,
+} from "./site-breakpoint-undo";
+import {
   resolveFontOptions,
   type PageBuilderFontOptions,
 } from "./site-fonts/options";
@@ -1910,6 +1915,8 @@ export const pageBuilder = (
         site: rewriteInstall.site,
         defaults: configStyle,
         definedBreakpoints,
+        breakpointsNow: async () =>
+          siteBreakpoints(await siteStyleNow()) ?? null,
       };
       removalLogger = ctx.logger;
       // A write holding a removed breakpoint's values, committed after the
@@ -1956,12 +1963,16 @@ export const pageBuilder = (
       // screen, REST route or Direct API call reaches them.
       schema: pageBuilderSchema,
       // The audit rows this plugin writes: one per breakpoint removed, with
-      // what removing it dropped.
+      // what removing it dropped, and one per removal undone.
       audit: {
         kinds: [
           {
             kind: BREAKPOINT_REMOVED_AUDIT,
             metadataKeys: [...BREAKPOINT_REMOVED_METADATA],
+          },
+          {
+            kind: BREAKPOINT_REMOVAL_UNDONE_AUDIT,
+            metadataKeys: [...BREAKPOINT_REMOVAL_UNDONE_METADATA],
           },
         ],
       },
@@ -2320,6 +2331,9 @@ export const pageBuilder = (
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // The newest removal undone, within its 30 days; its walk is carried
+        // on through the removal route.
+        siteBreakpointUndoRoute(breakpointRemoval),
         // Where one removal stands, read by its id.
         siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
