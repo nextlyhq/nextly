@@ -70,6 +70,21 @@ const DOC_TYPE = {
   component: "@test/doc/admin#Doc",
 } as const;
 
+/**
+ * A site's `beforeChange` hook that puts the stored body back over the one a
+ * write sends, once a body is stored: the last hook before a save persists.
+ */
+function restoreStoredBody(hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+  const stored = hook.originalData?.body;
+  if (hook.data === undefined || !("body" in hook.data) || stored == null) {
+    return hook.data;
+  }
+  return { ...hook.data, body: stored };
+}
+
 /** What the read hooks below put in place of the stored values. */
 const HIDDEN = { hiddenBy: "afterRead" };
 
@@ -327,6 +342,14 @@ describe.each(getConfiguredTestDialects())(
               body: { ...(data.body as Record<string, unknown>), sealed: true },
             };
           });
+          ctx.hooks.on("beforeChange", "restored", hook =>
+            restoreStoredBody(
+              hook as {
+                data?: Record<string, unknown>;
+                originalData?: Record<string, unknown>;
+              }
+            )
+          );
           // A site's collection-level read hook that removes a field from
           // every ordinary read.
           for (const slug of ["hooked", "worded"]) {
@@ -451,6 +474,14 @@ describe.each(getConfiguredTestDialects())(
             ],
           } as unknown as CollectionConfig,
           {
+            // A body a `beforeChange` hook puts back as stored.
+            slug: "restored",
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as unknown as CollectionConfig,
+          {
             // A body whose update rule refuses a sealed value, which only the
             // collection's own update hook seals.
             slug: "hookgated",
@@ -497,6 +528,15 @@ describe.each(getConfiguredTestDialects())(
                 ],
               }) as never
           ),
+          // A Single whose own `beforeChange` hook puts its stored body back.
+          {
+            slug: "restoresite",
+            hooks: { beforeChange: [restoreStoredBody] },
+            fields: [
+              { name: "title", type: "text" },
+              { name: "body", type: "doc" },
+            ],
+          } as never,
           // Created by another writer while a conditional write is under way,
           // with the field it expects left unset.
           ...["adoptrace", "adoptcontrol", "firstpair"].map(
@@ -542,6 +582,7 @@ describe.each(getConfiguredTestDialects())(
         "guarded",
         "locked",
         "hookgated",
+        "restored",
         "staged",
         "stagedwords",
       ];
@@ -2372,6 +2413,102 @@ describe.each(getConfiguredTestDialects())(
         expect(await systemValue(entry, "body")).toEqual({
           kind: "value",
           value: { v: "system" },
+        });
+      });
+
+      it("refuses a write a collection's beforeChange hook puts the stored value back into, and writes nothing", async () => {
+        const id = await created("restored", { title: "t", body: { v: 0 } });
+        const entry = { collection: "restored", id };
+        const hash = await systemHash(entry, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findByID({
+              collection: "restored",
+              id,
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: an ordinary update lets the hook put the body back, and
+        // writes the title.
+        await t.nextly.update({
+          collection: "restored",
+          id,
+          data: { title: "ordinary", body: { v: "ordinary" } },
+          user: editor.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [editor, checked(editor)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...entry,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(entry, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+      });
+
+      it("refuses a write a Single's beforeChange hook puts the stored value back into, and writes nothing", async () => {
+        const site = { single: "restoresite" };
+        await t.nextly.updateSingle({
+          slug: "restoresite",
+          data: { title: "t", body: { v: 0 }, _overwrite: true },
+          overrideAccess: true,
+        } as never);
+        const hash = await systemHash(site, "body");
+        const titleOf = async () =>
+          (
+            (await t.nextly.findSingle({
+              slug: "restoresite",
+              overrideAccess: true,
+              depth: 0,
+            } as never)) as unknown as { title: string }
+          ).title;
+        // CONTROL: an ordinary update lets the hook put the body back, and
+        // writes the title.
+        await t.nextly.updateSingle({
+          slug: "restoresite",
+          data: {
+            title: "ordinary",
+            body: { v: "ordinary" },
+            _overwrite: true,
+          },
+          user: owner.user,
+          overrideAccess: false,
+        } as never);
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(site, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
+        });
+
+        for (const identity of [owner, checked(owner)]) {
+          const refusal = await rejectionOf(
+            updateIfUnchanged(identity, {
+              ...site,
+              data: { title: "conditional", body: { v: "conditional" } },
+              expect: { field: "body", form: "published", hash },
+            })
+          );
+          expect(NextlyError.isForbidden(refusal)).toBe(true);
+        }
+        expect(await titleOf()).toBe("ordinary");
+        expect(await systemValue(site, "body")).toEqual({
+          kind: "value",
+          value: { v: 0 },
         });
       });
     });

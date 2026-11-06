@@ -44,6 +44,7 @@ import {
   showsUnpublished,
   STORED_FORMS,
   storesJson,
+  wholeWriteOf,
   type StoredFieldsRead,
   type FieldScope,
 } from "../domains/collections/services/stored-field-read";
@@ -426,10 +427,11 @@ function publicStateOf(liveState: string | null | undefined): string | null {
  *
  * The update is the ordinary one, made as the person `identity` names under
  * access rules: refused where they may not update the document (or publish
- * it, where `data` publishes), and refused with `FORBIDDEN` where the
- * update's field-access pass, after its hooks, would leave out of it, or keep
- * as stored, any field it writes: an ordinary update drops such a field
- * silently and writes the rest. Made as the system, it is an
+ * it, where `data` publishes), and refused with `FORBIDDEN` where what it
+ * would persist, after every hook, does not hold each field it writes exactly
+ * as sent, or the field-access pass took one out: an ordinary update lets a
+ * rule drop such a field, or a hook change it, silently and writes the rest.
+ * Made as the system, it is an
  * `overrideAccess: true` update, judged by no access rule. The expectation is
  * judged inside the update's own transaction, once it holds the entry's row
  * lock, against the value as committed then; where it no longer hashes to
@@ -479,14 +481,16 @@ export async function updateIfUnchanged(
   // context object no other call is handed, which the write path receives
   // as its own and its hooks only as a copy.
   const context: Record<string, unknown> = {};
-  // A person's write is judged by field rules, which an ordinary update lets
-  // drop a field silently: theirs is made whole or refused, by the update's
-  // own field-access pass. The system's is judged by none.
+  // A person's write is judged by field rules and run through the site's
+  // hooks, either of which an ordinary update lets drop or change a field
+  // silently: theirs is made whole or refused, by its final payload against
+  // what it sent, recorded here before the write path touches it. The
+  // system's is judged by no field rule.
   const pin = {
     document,
     expect: expected,
     checked: false,
-    ...(person === undefined ? {} : { whole: true }),
+    ...(person === undefined ? {} : { whole: await wholeWriteOf(named.data) }),
   };
   expectStoredValue(context, pin);
   // As the person under access rules, or as the system, which the Direct

@@ -420,6 +420,7 @@ import {
   entryWriteContext,
   fieldAccessPass,
   holdStoredExpectation,
+  refuseUnlessWhole,
 } from "./stored-field-read";
 import {
   prepareWriteMatch,
@@ -13400,8 +13401,8 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      // A conditional write that must be made whole is refused by this same
-      // pass instead, where it would take out or keep any field it writes.
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
       const storedForAccess = await this.storedForCarryForward({
         row: existingEntry as Record<string, unknown>,
         fields,
@@ -13490,6 +13491,18 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is shaped and written.
+      await refuseUnlessWhole(
+        params.context,
+        {
+          kind: "collection",
+          slug: params.collectionName,
+          id: params.entryId,
+        },
+        finalData,
+        fields
+      );
 
       // A password the update leaves out of a container keeps its stored hash.
       const reach = await this.passwordReach(fields);

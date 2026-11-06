@@ -2475,8 +2475,8 @@ export class SingleMutationService extends BaseService {
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
       const storedForAccess = await storedFieldGroupsIn(options.locale);
-      // A conditional write that must be made whole is refused by this same
-      // pass instead, where it would take out or keep any field it writes.
+      // For a conditional write made whole, what this pass takes out or keeps
+      // is recorded, and refuses it once every hook has run.
       await storedFieldRead.fieldAccessPass(
         options.context,
         { kind: "single", slug },
@@ -2641,6 +2641,14 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
       });
+      // Every hook has run: a conditional write made whole is judged here, on
+      // what is about to be persisted, before it is normalized and written.
+      await storedFieldRead.refuseUnlessWhole(
+        options.context,
+        { kind: "single", slug },
+        currentData,
+        fieldConfigs
+      );
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing
