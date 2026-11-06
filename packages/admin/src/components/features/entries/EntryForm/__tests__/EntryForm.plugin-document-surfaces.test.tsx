@@ -109,6 +109,8 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   }),
 }));
 
+import { toast } from "@admin/components/ui";
+
 import { EntryForm } from "../EntryForm";
 import { useDocumentLocale } from "../EntryFormContext";
 import { useDocumentActions } from "../useDocumentActionHooks";
@@ -159,7 +161,10 @@ const collectionNamed = (name: string) =>
     name,
     label: name,
     status: true,
-    fields: [{ name: "title", type: "text", label: "Title" }],
+    fields: [
+      { name: "title", type: "text", label: "Title" },
+      { name: "summary", type: "text", label: "Summary" },
+    ],
   }) as never;
 
 const entry = {
@@ -353,6 +358,158 @@ describe("a plugin's document actions", () => {
 
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Remove layout" })).toBeNull();
+  });
+});
+
+describe("a plugin's replacement over time", () => {
+  /** The editor with the layouts plugin, drawn again on demand. */
+  function renderLive(rows: { updatedAt: string } = entry as never) {
+    const element = (current: object) => (
+      <EntryForm
+        collection={collectionNamed("layouts")}
+        entry={current as never}
+        mode="edit"
+        onViewApi={() => {}}
+      />
+    );
+    const view = render(element(rows), { wrapper: Providers });
+    return (next: object = rows) => view.rerender(element(next));
+  }
+
+  async function openRemove(): Promise<void> {
+    const del = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    await userEvent.setup().click(del!);
+    await screen.findByRole("dialog", { name: "Remove layout" });
+  }
+
+  it("keeps the replacement told what holds the document, and whether it may write now", async () => {
+    const drawAgain = renderLive();
+    await openRemove();
+    expect(replacement.current?.documentLock).toEqual({
+      readOnly: false,
+      actionsDisabled: false,
+    });
+    expect(replacement.current?.mayWrite()).toBe(true);
+    // The dialog is open when a colleague takes the document over.
+    const opened = replacement.current!;
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "held-by-other",
+        holder: { userId: "u2", name: "Ada", email: "ada@example.com" },
+      },
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    drawAgain();
+    await waitFor(() =>
+      expect(replacement.current?.documentLock.actionsDisabled).toBe(true)
+    );
+    // Asked at the moment of writing, even by the copy of the props the
+    // component held from before the change.
+    expect(opened.mayWrite()).toBe(false);
+  });
+
+  it("closes a replacement whose component is not registered, says so, and answers the run as cancelled", async () => {
+    const error = vi.spyOn(toast, "error");
+    plugins.current = [
+      {
+        ...LAYOUTS_PLUGIN,
+        documentActions: [
+          {
+            slug: "layouts",
+            action: "delete",
+            override: { component: "test/layouts#Missing" },
+          },
+        ],
+      },
+    ];
+    renderLive();
+    const del = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    await userEvent.setup().click(del!);
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        "This action couldn't open. Reload the page and try again."
+      )
+    );
+    // Not wedged: the action can be chosen again.
+    const again = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    expect(again).not.toHaveAttribute("aria-disabled", "true");
+    expect(deleteEntry).not.toHaveBeenCalled();
+  });
+
+  it("closes a replacement that throws while drawing, and says so", async () => {
+    const error = vi.spyOn(toast, "error");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    function Throws(): never {
+      throw new Error("plugin broke");
+    }
+    registerComponent("test/layouts#Throws", Throws as never);
+    plugins.current = [
+      {
+        ...LAYOUTS_PLUGIN,
+        documentActions: [
+          {
+            slug: "layouts",
+            action: "delete",
+            override: { component: "test/layouts#Throws" },
+          },
+        ],
+      },
+    ];
+    renderLive();
+    const del = (await openMenu()).find(
+      item => item.dataset.action === "delete"
+    );
+    await userEvent.setup().click(del!);
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        "This action couldn't open. Reload the page and try again."
+      )
+    );
+    unregisterComponent("test/layouts#Throws");
+  });
+
+  it("keeps the author's unsaved edits when a plugin's own change is read back", async () => {
+    const drawAgain = renderLive();
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+    await screen.findByText("Used by 2 pages");
+
+    act(() => section.current!.documentChanged("changed"));
+    // The read brings the plugin's change: a newer version of the entry.
+    drawAgain({ ...(entry as object), updatedAt: "2026-10-03T09:00:00Z" });
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Not saved yet"
+      )
+    );
+  });
+
+  it("still takes in someone else's newer version, once the plugin's change is read", async () => {
+    // The control: without a plugin's change on its way, a newer version is
+    // someone else's and replaces the form, as it always has.
+    const drawAgain = renderLive();
+    const summary = await screen.findByRole("textbox", { name: "Summary" });
+    await userEvent.setup().type(summary, "Not saved yet");
+
+    drawAgain({
+      ...(entry as object),
+      summary: "Theirs",
+      updatedAt: "2026-10-04T09:00:00Z",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Summary" })).toHaveValue(
+        "Theirs"
+      )
+    );
   });
 });
 

@@ -64,6 +64,8 @@ expectTypeOf<DocumentActionReplacementProps>().toEqualTypeOf<{
   action: OverridableDocumentAction;
   collectionSlug: string;
   entryId: string;
+  documentLock: DocumentLockGates;
+  mayWrite: () => boolean;
   close: (result?: DocumentChangeResult) => void;
 }>();
 
@@ -71,5 +73,6 @@ expectTypeOf<DocumentPanelSectionProps>().toEqualTypeOf<{
   collectionSlug: string;
   entryId: string;
   documentLock: DocumentLockGates;
+  mayWrite: () => boolean;
   documentChanged: (result: DocumentChangeResult) => void;
 }>();

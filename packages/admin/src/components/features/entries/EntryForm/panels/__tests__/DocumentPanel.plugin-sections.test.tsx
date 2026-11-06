@@ -58,6 +58,7 @@ const sectionProps: DocumentPanelSectionProps = {
   collectionSlug: "layouts",
   entryId: "l1",
   documentLock: { readOnly: true, actionsDisabled: true },
+  mayWrite: () => false,
   documentChanged: vi.fn(),
 };
 

@@ -395,6 +395,9 @@ export function EntryForm({
   // and the version on screen are known. Read by the form when a refused
   // publish's recovery runs, which writes like the handlers below do.
   const writesHeldNow = useRef(false);
+  // Read when a plugin asks whether it may write, which can be long after the
+  // render that drew it: a dialog stays open while the document changes hands.
+  const pluginWritesHeldNow = useRef(false);
   // The entry's Save that never publishes, handed up from inside its
   // document's actions, where the Save lives.
   const saveWithoutPublishing = useRef<
@@ -420,6 +423,7 @@ export function EntryForm({
     holdForVersionChange,
     releaseVersionHold,
     stopAwaitingCurrentVersion,
+    expectOwnChange,
   } = useEntryForm({
     collection,
     entry,
@@ -869,6 +873,9 @@ export function EntryForm({
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
+  // What a plugin's own write is held by at this instant: a colleague's claim,
+  // a past version on screen or a recovery, as the built-in Delete is.
+  pluginWritesHeldNow.current = writesHeld || recovering;
 
   /*
    * The one gate every write passes through.
@@ -1106,7 +1113,9 @@ export function EntryForm({
       readOnly: contentHeld,
       actionsDisabled: writesHeld || recovering,
     },
+    mayWrite: () => !pluginWritesHeldNow.current,
     onDeleted: onDelete,
+    onOwnChange: expectOwnChange,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {

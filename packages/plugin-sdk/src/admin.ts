@@ -74,12 +74,15 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *
  * - `DocumentActionReplacementProps`: the component a replaced action opens,
  *   mounted when the author chooses the action — so a dialog renders open —
- *   with `close(result?)` to end it: `"deleted"` leaves the document for its
+ *   with `documentLock` and `mayWrite()` (ask it immediately before the
+ *   write, after anything awaited), and `close(result?)` to end it:
+ *   `"deleted"` leaves the document for its
  *   collection's list as the built-in Delete does, `"changed"` reads it
  *   again, and nothing means the author backed out.
  * - `DocumentPanelSectionProps`: a panel section's body, with the document's
  *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
- *   `actionsDisabled`), and `documentChanged(result)`, the same two results.
+ *   `actionsDisabled`), `mayWrite()`, and `documentChanged(result)`, the same
+ *   two results.
  *
  * Both are drawn inside the document's editor, so `useDocumentLocale()` names
  * the language being edited — the one a replaced Unpublish acts on — and

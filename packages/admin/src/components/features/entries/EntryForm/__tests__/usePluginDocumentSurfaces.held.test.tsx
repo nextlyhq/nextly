@@ -53,6 +53,7 @@ function renderHost(onDelete: () => Promise<{ ok: true }>) {
       collectionSlug: "layouts",
       entryId: "l1",
       documentLock: { readOnly: false, actionsDisabled: false },
+      mayWrite: () => true,
       onDeleted: undefined,
     });
     return (

@@ -442,7 +442,7 @@ export function useUpdateEntry<
 
       // Its lists, its own read and the dashboard refetch, as after every
       // change to an entry.
-      refreshAfterEntryChange(queryClient, collectionSlug, entryId);
+      void refreshAfterEntryChange(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS saved even when a post-commit hook failed, so this stays a

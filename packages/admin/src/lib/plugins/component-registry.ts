@@ -170,6 +170,17 @@ export interface DocumentActionReplacementProps {
   /** The entry's id. */
   entryId: string;
   /**
+   * What holds the document right now, kept current while the component is
+   * open: a colleague's claim, a past version on screen, a reader's page.
+   */
+  documentLock: DocumentLockGates;
+  /**
+   * Whether the document may be written at this instant. Ask it immediately
+   * before the write, after anything awaited: the document can change hands
+   * while a dialog is open, and the editor's own Delete asks the same.
+   */
+  mayWrite: () => boolean;
+  /**
    * Close it, with what it came to: `"deleted"` or `"changed"` (see
    * `DocumentChangeResult`), or nothing when the author backed out.
    */
@@ -193,6 +204,11 @@ export interface DocumentPanelSectionProps {
    * while `actionsDisabled`.
    */
   documentLock: DocumentLockGates;
+  /**
+   * Whether the document may be written at this instant: ask it immediately
+   * before a write, after anything awaited.
+   */
+  mayWrite: () => boolean;
   /**
    * Tell the editor the section changed the document: `"deleted"` leaves for
    * the collection's list, `"changed"` reads the document again.

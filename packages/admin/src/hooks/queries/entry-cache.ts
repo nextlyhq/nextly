@@ -12,20 +12,26 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import { entryKeys } from "@admin/services/entryApi";
 
-/** An entry was changed: its lists, its own read and the dashboard refetch. */
-export function refreshAfterEntryChange(
+/**
+ * An entry was changed: its lists, its own read and the dashboard refetch.
+ * Resolves once they have, for a caller that must know when the entry's new
+ * copy has arrived; one that need not leaves it unawaited.
+ */
+export async function refreshAfterEntryChange(
   queryClient: QueryClient,
   collectionSlug: string,
   entryId: string
-): void {
-  void queryClient.invalidateQueries({
-    queryKey: entryKeys.listsByCollection(collectionSlug),
-  });
-  void queryClient.invalidateQueries({
-    queryKey: entryKeys.detail(collectionSlug, entryId),
-  });
-  // So recent-entries cards refresh at once.
-  void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: entryKeys.listsByCollection(collectionSlug),
+    }),
+    queryClient.invalidateQueries({
+      queryKey: entryKeys.detail(collectionSlug, entryId),
+    }),
+    // So recent-entries cards refresh at once.
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+  ]);
 }
 
 /**

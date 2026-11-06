@@ -18,9 +18,10 @@ import {
   OVERRIDABLE_DOCUMENT_ACTIONS,
   type OverridableDocumentAction,
 } from "nextly/config";
-import { useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { toast } from "@admin/components/ui";
 import {
   useBranding,
   useBrandingStatus,
@@ -133,6 +134,26 @@ function overridesFor(
   return overrides;
 }
 
+/** What the author is told when a plugin's replacement could not be drawn. */
+const REPLACEMENT_FAILED =
+  "This action couldn't open. Reload the page and try again.";
+
+/**
+ * Drawn where a replacement names a component nothing registered: closes it
+ * as it mounts, which is the one moment the editor learns it drew nothing.
+ */
+function ClosesAsFailed({ onMount }: { onMount: () => void }): null {
+  // Once, as it mounts: the replacement it stands for is then closed, and a
+  // new `onMount` from a later render must not close the next one.
+  const fired = useRef(false);
+  useEffect(() => {
+    if (fired.current) return;
+    fired.current = true;
+    onMount();
+  }, [onMount]);
+  return null;
+}
+
 export interface PluginDocumentSurfaces {
   /** The overrides the editor's actions run through. */
   actionOverrides: DocumentActionOverrides;
@@ -148,15 +169,29 @@ export function usePluginDocumentSurfaces({
   collectionSlug,
   entryId,
   documentLock,
+  mayWrite,
   onDeleted,
+  onOwnChange,
 }: {
   collectionSlug: string;
   /** The saved document's id, or "" before it is saved. */
   entryId: string;
   /** What holds the document right now, as a section is told. */
   documentLock: DocumentLockGates;
+  /**
+   * Whether the document may be written at this instant, read as the
+   * editor's own write gate reads it: for a plugin to ask immediately before
+   * its write, after anything it awaited.
+   */
+  mayWrite: () => boolean;
   /** Leaves the document once a plugin removed it, as the built-in Delete does. */
   onDeleted: (() => void) | undefined;
+  /**
+   * Tells the form the next copy of the document is this author's own change,
+   * made by a plugin: it keeps the unsaved edits over it and starts from it,
+   * as after its own save. Answers how to stop expecting it.
+   */
+  onOwnChange?: () => () => void;
 }): PluginDocumentSurfaces {
   const { plugins } = useBranding();
   // Until the list has arrived, an absent override says nothing: the plugin
@@ -184,7 +219,16 @@ export function usePluginDocumentSurfaces({
       onDeleted?.();
       return;
     }
-    refreshAfterEntryChange(queryClient, collectionSlug, entryId);
+    // The copy that arrives is the author's own change, so the form keeps
+    // what they have not saved over it, as it does over its own save's echo,
+    // rather than resetting to it as to someone else's. Expected until the
+    // read has landed and the form has taken it in, a task later.
+    const release = onOwnChange?.();
+    void refreshAfterEntryChange(queryClient, collectionSlug, entryId).finally(
+      () => {
+        setTimeout(() => release?.(), 0);
+      }
+    );
   };
 
   const openReplacement = (
@@ -224,19 +268,48 @@ export function usePluginDocumentSurfaces({
     closing?.answer(result === undefined ? BACKED_OUT : { ok: true });
   };
 
+  /*
+   * The plugin's component could not be drawn: it names nothing registered,
+   * or it threw. It can never call `close`, so the editor closes it, says so,
+   * and answers the run as cancelled, or every caller would wait forever and
+   * every other replaced action would answer busy.
+   */
+  const failed = (): void => {
+    if (openNow.current === null) return;
+    toast.error(REPLACEMENT_FAILED);
+    close();
+  };
+
   return {
     actionOverrides,
     replacement:
       open === null || entryId === "" ? null : (
         <PluginSlot<DocumentActionReplacementProps>
           path={open.component}
-          props={{ action: open.action, collectionSlug, entryId, close }}
+          props={{
+            action: open.action,
+            collectionSlug,
+            entryId,
+            documentLock,
+            mayWrite,
+            close,
+          }}
+          fallback={<ClosesAsFailed onMount={failed} />}
+          // Nothing drawn in its place: the editor closes it at once.
+          errorFallback={null}
+          onError={failed}
         />
       ),
     sections: surfaces.sections,
     sectionProps:
       entryId === ""
         ? undefined
-        : { collectionSlug, entryId, documentLock, documentChanged },
+        : {
+            collectionSlug,
+            entryId,
+            documentLock,
+            mayWrite,
+            documentChanged,
+          },
   };
 }
