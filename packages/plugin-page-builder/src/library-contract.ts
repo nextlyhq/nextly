@@ -30,6 +30,8 @@ import type {
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
 
+import type { RemovalDryRun } from "./breakpoint-removal/dry-run";
+
 /**
  * The name this plugin registers under, which is also how its routes are
  * addressed.
@@ -594,6 +596,158 @@ export interface SiteBreakpointsRequest {
    * @experimental
    */
   readonly dryRun?: boolean;
+  /**
+   * Strip every style and hide stored under each breakpoint this set removes,
+   * across the site, as the person confirmed after seeing the dry run. Without
+   * it a set removing breakpoints is stored and what they held stays, unused
+   * by the stylesheet, as it would if the breakpoint were added again.
+   *
+   * @experimental
+   */
+  readonly confirmRemoval?: boolean;
+  /**
+   * With `confirmRemoval`: the `version` the dry run answered with. A
+   * confirmed removal is refused when the site style has changed since, so
+   * it removes exactly what the person was shown.
+   *
+   * @experimental
+   */
+  readonly version?: string;
+}
+
+/**
+ * What a dry run of {@link SiteBreakpointsRequest} answers inside its mutation
+ * envelope's `item`: every style and hide stored under each breakpoint the set
+ * removes, with nothing saved.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointsDryRun extends RemovalDryRun {
+  readonly dryRun: true;
+  readonly breakpoints: SiteBreakpointsRequest["breakpoints"];
+  /**
+   * The version of the site style this was counted from, which a confirmed
+   * removal sends back; absent where the site issues no versions.
+   */
+  readonly version?: string;
+}
+
+/**
+ * Where a breakpoint removal that did not finish within its save is carried
+ * on: `POST` with the run's id ({@link SiteBreakpointRemovalRequest}), under
+ * the same permission as the save.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_REMOVAL_ROUTE_PATH = "/site/breakpoints/removal";
+
+/** The query parameter naming the run a removal's status is read for. */
+export const SITE_BREAKPOINT_REMOVAL_RUN_PARAM = "runId";
+
+/**
+ * Where removal `runId` stands is read: `GET` on the removal route.
+ *
+ * @experimental
+ */
+export function siteBreakpointRemovalStatusPath(runId: string): string {
+  const params = new URLSearchParams({
+    [SITE_BREAKPOINT_REMOVAL_RUN_PARAM]: runId,
+  });
+  return `${SITE_BREAKPOINT_REMOVAL_ROUTE_PATH}?${params.toString()}`;
+}
+
+/**
+ * What reading one removal answers: its status while it holds what it
+ * removed, or `null` once it holds nothing (done, leaving no document), or
+ * where there is no such run.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRead {
+  readonly removal: SiteBreakpointRemovalStatus | null;
+}
+
+/**
+ * What continuing a removal sends: the run the save answered with.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalRequest {
+  readonly runId: string;
+}
+
+/**
+ * Where a removal stands after a save or a call to carry it on: every value
+ * under the removed breakpoints is stripped once `finished`; until then the
+ * removal route is called again with `runId`. `left` counts the documents
+ * this call had to leave as they are (a published page with a pending draft,
+ * say), which keep their values until they can be stripped.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemoval {
+  readonly runId: string;
+  readonly finished: boolean;
+  readonly left: number;
+  /** For a run undoing a removal: what it undoes, and what stayed out. */
+  readonly undo?: SiteBreakpointUndo;
+}
+
+/**
+ * Where an undo of a breakpoint removal is asked for: `POST` with the
+ * removal's id ({@link SiteBreakpointRemovalRequest}), under the same
+ * permission as the save. Only the newest removal can be undone, once, within
+ * 30 days. The breakpoints it removed are defined again, and every value it
+ * took out goes back where nothing has been set since; its walk is carried on
+ * through {@link SITE_BREAKPOINT_REMOVAL_ROUTE_PATH} like a removal's.
+ *
+ * @experimental
+ */
+export const SITE_BREAKPOINT_UNDO_ROUTE_PATH = "/site/breakpoints/removal/undo";
+
+/**
+ * Values an undo could not put back into one document, for one reason (a
+ * document may be listed once per reason):
+ * - `changed`: something else was set there after the removal;
+ * - `block-deleted`: their block (or shared style) was deleted after it;
+ * - `gone`: the document was deleted after it;
+ * - `draft-gone`: the draft they were taken from was published or discarded;
+ * - `unreadable`: the document cannot be read, so nothing is known of them.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndoSkipped {
+  readonly kind: "collection" | "single";
+  readonly slug: string;
+  readonly id?: string;
+  readonly values: number;
+  readonly reason:
+    | "changed"
+    | "block-deleted"
+    | "gone"
+    | "draft-gone"
+    | "unreadable";
+}
+
+/**
+ * What an undo did: the removal it undoes and, once its walk is finished,
+ * each document it could not put every value back into.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointUndo {
+  readonly undoes: string;
+  readonly skipped?: readonly SiteBreakpointUndoSkipped[];
+}
+
+/**
+ * What saving the site's breakpoints answers: the set stored, and, when it
+ * removed breakpoints, where the removal of their values stands.
+ */
+export interface SiteBreakpointsSaved {
+  readonly breakpoints: BreakpointSet | null;
+  /** @experimental */
+  readonly removal?: SiteBreakpointRemoval;
 }
 
 /**
@@ -679,6 +833,38 @@ export interface SiteSettingsRead {
    * current default, to name it, for a caller who may not choose.
    */
   readonly layouts: readonly SiteLayoutOption[];
+  /**
+   * The breakpoint removals still holding what they removed: the open one
+   * first, then the newest done ones that left documents keeping their
+   * values. Absent where the site carries no removals out, or the runs could
+   * not be read.
+   *
+   * @experimental
+   */
+  readonly removals?: readonly SiteBreakpointRemovalStatus[];
+}
+
+/**
+ * One breakpoint removal as the Site tab shows it.
+ *
+ * @experimental
+ */
+export interface SiteBreakpointRemovalStatus {
+  readonly runId: string;
+  /** The breakpoints it removed, by the names the author knew them by. */
+  readonly labels: readonly string[];
+  /** Whether it is still walking the site. */
+  readonly open: boolean;
+  /**
+   * The documents it left, which keep their values under the removed
+   * breakpoints until they can be stripped; 0 while it is open.
+   */
+  readonly left: number;
+  /**
+   * Whether every document it left waits on a pending draft, which
+   * publishing or discarding resolves.
+   */
+  readonly waitingOnDrafts: boolean;
 }
 
 /**

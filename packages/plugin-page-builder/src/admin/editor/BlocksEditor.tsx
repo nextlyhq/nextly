@@ -66,6 +66,7 @@ import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
+import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -75,6 +76,7 @@ import {
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
+import { listEntryCollectionOf } from "./canvas-page-context";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -88,6 +90,7 @@ import {
 } from "./media-summary-reader";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton } from "./preview-button";
+import { recentIconsStore } from "./recent-icons-store";
 import { useReveal, type Reveal } from "./reveal-hidden";
 import {
   settingsAddressOf,
@@ -145,6 +148,11 @@ type EditorView = EditorMount &
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
     preview: ComponentView["preview"];
+    /**
+     * The collection the document is an entry of, so a list on it can show
+     * the entry's related entries; `null` on a Single, which has none.
+     */
+    entryCollection: string | null | undefined;
   };
 
 /**
@@ -366,9 +374,10 @@ function borrowedServices(): ContentServices {
 }
 
 /**
- * The borrowed services with this editor's open-passage registry and its
- * language, one object per registry and language so the panel sees the same
- * one on every render. A relation search and a link's search read titles in
+ * The borrowed services with this editor's open-passage registry, its
+ * language, the collection its document is an entry of and the author's
+ * recent icons, one object per registry, language, collection and author so
+ * the panel sees the same one on every render. A relation search and a link's search read titles in
  * the language being edited.
  */
 const servicesByPassages = new WeakMap<
@@ -379,14 +388,19 @@ const servicesByPassages = new WeakMap<
 function servicesFor(
   passages: OpenPassages,
   locale: string | undefined,
-  readMedia: ReadMediaSummary
+  readMedia: ReadMediaSummary,
+  entryCollection: string | null | undefined,
+  userId: string | null
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
     byLocale = new Map();
     servicesByPassages.set(passages, byLocale);
   }
-  const key = locale ?? "";
+  // All three in the key, as JSON so no language, collection and author can
+  // collide.
+  const key = JSON.stringify([locale ?? "", entryCollection ?? null, userId]);
+  const recentIcons = recentIconsStore(userId);
   let services = byLocale.get(key);
   if (services === undefined) {
     services = {
@@ -398,6 +412,14 @@ function servicesFor(
       // The same language for a link's search, so a page is found and named
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
+      // The fields a list may name, as a save in this language judges them.
+      listLoopCollections: () => listLoopCollections(locale),
+      // The selected list's "N entries match, so M show", taken from the
+      // canvas's own read of the list in this language.
+      countListEntries: canvasListReadsIn(locale).count,
+      ...(entryCollection === undefined ? {} : { entryCollection }),
+      // The icons this author chose last, for the Icon control's Recent row.
+      ...(recentIcons === undefined ? {} : { recentIcons }),
     };
     byLocale.set(key, services);
   }
@@ -470,13 +492,31 @@ function editorInspector(
       // handed out of it because the inspector is drawn beside the canvas
       // rather than under it.
       verbs={verbs}
-      contentServices={servicesFor(view.passages, view.locale, view.readMedia)}
+      contentServices={servicesFor(
+        view.passages,
+        view.locale,
+        view.readMedia,
+        view.entryCollection,
+        view.userId
+      )}
+      // A placement's exposed passage the canvas is editing in place: its
+      // field in the placement panel is held meanwhile, as one editor serves
+      // both.
+      canvasPassage={view.inline.editingRich?.exposure ?? null}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
       // The author's right, the style write and the reach reads, so a
       // shared style the block wears can become the Style tab's target.
       sharedStyles={sharedStyles}
+      {...(view.lookEditing.look === null
+        ? {}
+        : {
+            lookEditing: {
+              look: view.lookEditing.look,
+              onExit: view.lookEditing.exit,
+            },
+          })}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
@@ -738,6 +778,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
               onSelect={editor.select}
+              // A list note's "Choose a field": the list selected and the
+              // author taken to its first sort row.
+              onListSortField={editor.askSortField}
               // The style context and the host policy, derived above so both
               // are one object with one identity rather than rebuilt per
               // render.
@@ -846,6 +889,7 @@ function editorSettings(
     pageLayout,
     canvasRender,
     saveBreakpoints,
+    refreshSiteStyle,
     siteStylePending,
     siteStyleError,
   } = view;
@@ -880,6 +924,7 @@ function editorSettings(
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
           status: siteStyleStatus(siteStylePending, siteStyleError),
+          refresh: refreshSiteStyle,
         }}
       />
     </RemountOnStyleReplay>
@@ -997,7 +1042,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done, publishOffer } = useHostCommit({
+  const { done, publishOffer, removalHold } = useHostCommit({
     name,
     control,
     editor,
@@ -1005,6 +1050,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     onCommit,
     onClose,
     savePoint,
+    // The count the removal dialog says now; the hold keeps it as it stood
+    // when each field was removed.
+    removalReach: () => mount.componentFacts?.reach,
   });
 
   const page = usePageFacts(control);
@@ -1045,6 +1093,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   // A stored image's name and picture in the inspector, read as the canvas
   // reads it.
   const readMedia = useMediaSummaryReader();
+  const identity = useDocumentIdentity();
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1057,6 +1106,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     reveal,
     readMedia,
     preview: componentView.preview,
+    entryCollection: listEntryCollectionOf(identity),
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -1152,6 +1202,8 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
+          // Esc with no block selected leaves a look edited on its own.
+          onEscapeWithoutSelection={panels.lookEditing.exit}
           onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
@@ -1229,6 +1281,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             returnFocusTo={makeComponent.returnFocusTo}
           />
           {publishOffer}
+          {removalHold}
           {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>

@@ -493,17 +493,18 @@ statement and let the transaction go on, except that MySQL undoes the whole
 transaction on a deadlock. A statement that may fail, and that
 the rest of the work should not depend on, belongs outside the transaction.
 
-Another service or `ctx.settings` called inside a transaction runs on its own
-connection on PostgreSQL and MySQL, outside the transaction, and commits on its
-own.
+Another service called inside a transaction runs on its own connection on
+PostgreSQL and MySQL, outside the transaction, and commits on its own.
+
+`ctx.settings.set` is refused inside a transaction, on every dialect, with an
+error that says so: write the setting after the transaction has finished.
 
 On SQLite the transaction holds the database's only connection until it ends. A
-service or `ctx.settings` called inside joins it as a savepoint, and its rows
-roll back with it. What a service does after its own write waits until your
-transaction commits: collection hooks (`afterCreate`, `afterUpdate`,
-`afterDelete`), field `afterChange` hooks, events such as `user.created`,
-`media.uploaded` or `plugin.settings.changed`, cache revalidation and webhook
-delivery run once, before `ctx.db.transaction` resolves, and never run if it
+service called inside joins it as a savepoint, and its rows roll back with it.
+What a service does after its own write waits until your transaction commits:
+collection hooks (`afterCreate`, `afterUpdate`, `afterDelete`), field
+`afterChange` hooks, events such as `user.created` or `media.uploaded`, cache
+revalidation and webhook delivery run once, before `ctx.db.transaction` resolves, and never run if it
 rolls back. Inside such a transaction an after-hook's error is logged rather
 than failing the call, and a value a field `afterChange` hook or a Single's
 `afterUpdate` hook returns does not reshape the service's response. A media

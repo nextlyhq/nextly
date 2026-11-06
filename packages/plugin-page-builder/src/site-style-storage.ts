@@ -22,6 +22,13 @@ import { isPlainRecord, type SpacingMode } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
 
+import {
+  openRemovalFor,
+  type OpenRemovalReader,
+  type OpenWork,
+} from "./breakpoint-removal/lock-acceptance";
+import { restoreClasses } from "./breakpoint-removal/restore";
+import { stripClass } from "./breakpoint-removal/strip";
 import { documentVersionOf } from "./document-version";
 import type { StoredSiteStyle } from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
@@ -38,7 +45,7 @@ import {
   spacingModeReaderOf,
   type SpacingModeReader,
 } from "./spacing-mode-reader";
-import { readStoredJson } from "./stored-json";
+import { readStoredJson, sameStoredValue } from "./stored-json";
 
 /** The single the stored tier lives in. One document per site, by design. */
 export const SITE_STYLE_SLUG = "site-style";
@@ -75,31 +82,6 @@ export const BREAKPOINTS_OUTSIDE_SETTINGS =
   "The site's breakpoints are changed in the page builder's Settings.";
 
 /**
- * A JSON value with every object's keys in one order, so two values holding
- * the same thing compare equal however they were stored: Postgres `jsonb`
- * reorders keys, and an unchanged set sent back by a form must not read as a
- * change.
- */
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map(key => [key, canonical((value as Record<string, unknown>)[key])])
-    );
-  }
-  return value;
-}
-
-function sameValue(a: unknown, b: unknown): boolean {
-  return (
-    JSON.stringify(canonical(a ?? null)) ===
-    JSON.stringify(canonical(b ?? null))
-  );
-}
-
-/**
  * Refuse a write to this Single that changes its breakpoints, unless the
  * Settings route made it.
  *
@@ -122,7 +104,7 @@ export function refuseBreakpointsOutsideSettings(hook: {
   if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "breakpoints")) return;
-  if (sameValue(data.breakpoints, hook.originalData?.breakpoints)) return;
+  if (sameStoredValue(data.breakpoints, hook.originalData?.breakpoints)) return;
   if (hook.user === undefined && hook.principal === undefined) return;
   throw new NextlyError({
     code: "FORBIDDEN",
@@ -184,6 +166,33 @@ function lockOutsideItsRoute(): NextlyError {
 }
 
 /**
+ * Whether a write changes a locked entry. Still locked after the write, the
+ * entry must come back as it was; an unlock through the lock route is the one
+ * change a locked entry takes. While a breakpoint removal is open, the
+ * settings write may bring it back with exactly the removed breakpoints'
+ * values stripped (`removed`), and no other way. While its undo is open, the
+ * settings write may bring it back exactly as the undo leaves it
+ * (`restored`, the stored tier after the undo by id), or take it out where
+ * the undo does.
+ */
+function lockedEntryChanged(
+  id: string,
+  was: Record<string, unknown>,
+  now: Record<string, unknown> | undefined,
+  removed: ReadonlySet<string> | undefined,
+  restored: ReadonlyMap<string, unknown> | undefined
+): boolean {
+  // Taken out: only the strip's override of a code class, which an undo
+  // takes out again (absent from what the undo leaves).
+  if (now === undefined) return restored === undefined || restored.has(id);
+  if (now.locked !== true || sameStoredValue(was, now)) return false;
+  if (restored !== undefined) return !sameStoredValue(restored.get(id), now);
+  return (
+    removed === undefined || !sameStoredValue(stripClass(was, removed), now)
+  );
+}
+
+/**
  * Refuse what a write does to one stored entry: a locked one changed or
  * removed by anyone, or a lock moved outside the lock route. `now` is the
  * entry as written, absent if removed.
@@ -198,14 +207,12 @@ function refuseStoredEntryChange(
   id: string,
   was: Record<string, unknown>,
   now: Record<string, unknown> | undefined,
-  lockRoute: boolean
+  lockRoute: boolean,
+  removed: ReadonlySet<string> | undefined,
+  restored: ReadonlyMap<string, unknown> | undefined
 ): void {
   const wasLocked = was.locked === true;
-  // Still locked after the write, so the entry must come back as it was; an
-  // unlock through the lock route is the one change a locked entry takes.
-  const lockedEntryChanged =
-    now === undefined || (now.locked === true && !sameValue(was, now));
-  if (wasLocked && lockedEntryChanged) {
+  if (wasLocked && lockedEntryChanged(id, was, now, removed, restored)) {
     throw NextlyError.conflict({
       reason: "state",
       message: `${sharedStyleName(was)} is locked, so it can't be changed, renamed or removed. Unlock it first.`,
@@ -240,13 +247,31 @@ function refuseStoredEntryChange(
  * Server code acting as nobody (the Direct API, an import) is trusted, as for
  * the breakpoints.
  */
-export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
-  data?: Record<string, unknown>;
-  originalData?: Record<string, unknown>;
-  user?: { id: string };
-  principal?: unknown;
-  context?: Record<string, unknown>;
-}): void {
+export function refuseSharedStyleChangesOutsideTheirRoutes(
+  hook: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    user?: { id: string };
+    principal?: unknown;
+    context?: Record<string, unknown>;
+  },
+  /**
+   * The breakpoints an open removal is stripping, for the settings write that
+   * strips them; absent for every other write, and where none is open.
+   */
+  removed?: ReadonlySet<string>,
+  /**
+   * The code's classes, which that write may store a stripped override of: a
+   * locked one comes in as a new stored entry already locked.
+   */
+  supplied?: ReadonlyMap<string, unknown>,
+  /**
+   * For the settings write of an open undo: the stored tier as the undo
+   * leaves it, by id. A locked style may come back exactly so, and the
+   * removal's override of a locked code class may be taken out.
+   */
+  restored?: ReadonlyMap<string, unknown>
+): void {
   const data = hook.data;
   if (data === undefined || !Object.hasOwn(data, "classes")) return;
   if (hook.user === undefined && hook.principal === undefined) return;
@@ -254,14 +279,88 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
   const before = classEntriesById(hook.originalData?.classes);
   const after = classEntriesById(data.classes);
   for (const [id, was] of before) {
-    refuseStoredEntryChange(id, was, after.get(id), lockRoute);
+    refuseStoredEntryChange(
+      id,
+      was,
+      after.get(id),
+      lockRoute,
+      removed,
+      restored
+    );
   }
   for (const [id, now] of after) {
-    // A style written already locked is a lock moved outside its route.
+    // A style written already locked is a lock moved outside its route,
+    // except the removal's override of a locked code class: exactly that
+    // class with the removed breakpoints' values stripped.
     if (!before.has(id) && now.locked === true && !lockRoute) {
-      throw lockOutsideItsRoute();
+      const code = supplied?.get(id);
+      const stripped =
+        removed !== undefined &&
+        code !== undefined &&
+        sameStoredValue(stripClass(code, removed), now);
+      if (!stripped) throw lockOutsideItsRoute();
     }
   }
+}
+
+/**
+ * The shared-style guard as the Single runs it. The settings write, and only
+ * it, is judged with the open breakpoint removal's ids, read from the
+ * plugin's own table: a locked style may come back stripped of exactly those,
+ * or, while an undo is open, exactly as the undo puts it back. Where the open
+ * work cannot be read, nothing extra is accepted.
+ */
+function sharedStyleGuard(
+  openRemoval: OpenRemovalReader | undefined,
+  supplied: SiteStyleData["classes"]
+): (
+  hook: Parameters<typeof refuseSharedStyleChangesOutsideTheirRoutes>[0]
+) => Promise<void> {
+  return async hook => {
+    const settingsWrite = hook.context?.[SITE_SETTINGS_WRITE] === true;
+    const touchesClasses =
+      hook.data !== undefined && Object.hasOwn(hook.data, "classes");
+    // The settings route writes the Single on its own, never inside a
+    // transaction, so its write may read the removal on the pool.
+    const work =
+      settingsWrite && touchesClasses
+        ? await openRemovalFor(openRemoval, { inTransaction: false })
+        : null;
+    refuseSharedStyleChangesOutsideTheirRoutes(
+      hook,
+      work?.kind === "strip" ? work.removal.ids : undefined,
+      new Map((supplied ?? []).map(entry => [entry.id, entry])),
+      work?.kind === "restore" && work.classes !== undefined
+        ? restoredTier(hook.originalData?.classes, supplied, work.classes)
+        : undefined
+    );
+  };
+}
+
+/** What an open undo kept of the shared styles, with every id it took out. */
+type RestoredClasses = NonNullable<
+  Extract<OpenWork, { readonly kind: "restore" }>["classes"]
+>;
+
+/**
+ * The stored class tier as an undo's settings write leaves it, by id: the
+ * same restore the undo writes (`restoreClasses`), so the lock accepts that
+ * write and nothing else.
+ */
+function restoredTier(
+  stored: unknown,
+  supplied: SiteStyleData["classes"],
+  classes: RestoredClasses
+): ReadonlyMap<string, unknown> {
+  const tier = readStoredJson(stored);
+  return classEntriesById(
+    restoreClasses(
+      Array.isArray(tier) ? tier : [],
+      supplied ?? [],
+      classes.fragment,
+      classes.ids
+    ).value
+  );
 }
 
 /**
@@ -280,7 +379,11 @@ export function refuseSharedStyleChangesOutsideTheirRoutes(hook: {
  *   whole sections at a time; a field-per-property schema here would be a
  *   third statement of shapes two packages already agree on.
  */
-export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
+export function siteStyleSingle(
+  policy: SectionPolicy = {},
+  /** The open breakpoint removal, which a locked shared style may be stripped by. */
+  openRemoval?: OpenRemovalReader
+): SingleConfig {
   return defineSingle({
     slug: SITE_STYLE_SLUG,
     label: { singular: "Site Style" },
@@ -290,7 +393,7 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
     hooks: {
       beforeValidate: [
         refuseBreakpointsOutsideSettings,
-        refuseSharedStyleChangesOutsideTheirRoutes,
+        sharedStyleGuard(openRemoval, policy.defaults?.classes),
       ],
     },
     // No `access` block, deliberately: read and update both fall through to
@@ -433,7 +536,7 @@ export async function readStoredSiteStyle(args: {
  * The stored site style, and the Single's version as the same read gave it,
  * for a write made from that read to send back.
  */
-async function readStoredSiteStyleVersioned(
+export async function readStoredSiteStyleVersioned(
   args: Parameters<typeof readStoredSiteStyle>[0]
 ): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
   // Read beside the Single, so every reader of the stored style, the

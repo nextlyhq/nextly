@@ -434,7 +434,10 @@ describe.each(LOCK_DIALECTS)(
         adapter.getDrizzle(),
         dialect
       ).listFileApplies();
-      expect(attempts.filter(row => row.filename.includes("rcx"))).toEqual([]);
+      // A ledger row may carry no file name; only a named one can be this file.
+      expect(
+        attempts.filter(row => row.filename?.includes("rcx") === true)
+      ).toEqual([]);
     }, 120_000);
 
     // PostgreSQL keeps a quoted name's case, while a statement is read lower-cased: the guard

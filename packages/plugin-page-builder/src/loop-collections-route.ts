@@ -1,7 +1,8 @@
 /**
- * The read behind a collection loop's inspector: the collections it can
- * repeat over, each with the fields its entries can be ordered by, as
- * `{ slug, label, sortFields }`.
+ * The read behind a collection list's inspector: the collections it can
+ * read, each with the fields its filters and sort may name and the to-many
+ * relations a related list may show, as `{ slug, label, singular, fields,
+ * relations }`.
  *
  * ## Which collections it lists
  *
@@ -21,162 +22,175 @@
  * collections exist, and what their fields are called, is configuration, but
  * it is configuration about content the caller may have no business with, so
  * nothing of a collection they cannot read travels. This shapes a menu and
- * decides no read: the page's own read of the loop's entries is core's, as
+ * decides no read: the page's own read of the list's entries is core's, as
  * whoever views the page.
  *
- * ## Which fields it offers to sort by
+ * ## Which fields it offers
  *
- * Two questions, each asked of the one place that answers it:
+ * The fields a list may name, as a save judges them: `listFieldsFrom`, the
+ * collection's fields as the PUBLIC may read them (`bindingFieldShapes`).
+ * Which entries a list shows, and in what order, would otherwise reveal a
+ * field no visitor may see, so a field only the author may read is not
+ * offered, and the save refuses it. Of those, a field is offered when the
+ * engine names a kind for it (`listFieldKind`): one scalar value, never a
+ * field holding several, rich text, media or a container. The id is not
+ * offered, since it orders and filters by nothing an author reads.
  *
- * - Which fields hold something an author could mean to order by: top-level
- *   fields holding one scalar value, judged by the engine's binding
- *   vocabulary (`bindingKindOf`), the one place a field type's kind of value
- *   is named: text, a URL, a number, a yes-or-no, a date or a choice. Never
- *   a container, a list, a relation, rich text or a password. Then the
- *   timestamps every collection keeps, unless it turned them off.
- * - Which of those this caller may sort by: core's, asked by sorting a read
- *   by all of them as the caller, with unknown keys refused rather than
- *   dropped. Core refuses before it reads, naming every key it will not order
- *   by (a field with a read rule this caller fails, a withheld column, a
- *   password), and those are left out. The registry's records cannot answer
- *   this: a code-first collection's read rules are functions, which the
- *   records do not carry.
- *
- * That read is the smallest core judges: one row, its id alone, so it costs
- * one ordered lookup per collection, more only while core still refuses
- * keys. A large collection sorted by an unindexed field pays for that order
- * here as the page's own read would.
- *
- * A field offered here is not a promise: the loop's read on a published page
- * asks core again as whoever views it, and a sort core refuses there lists
- * in id order (see `core/collection-loop`).
+ * A related list may show a to-many relation visitors can see
+ * (`listRelationTarget`), when its entries are in a collection listed here,
+ * so the menu offers a source whose fields it also lists.
  *
  * @module loop-collections-route
  */
 import {
-  bindingKindOf,
-  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
-  type BindingValueKind,
-  type FieldStoragePrimitive,
+  listFieldKind,
+  listRelationTarget,
+  type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  addressableFields,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 import { respondList, type PaginationMeta } from "nextly";
 import { humanizeFieldName } from "nextly/field-label";
+import { z } from "nextly/zod";
 
+import { labelOf, pluralLabelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
-import { findAsCaller } from "./entry-reads";
+import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import { listFieldsFrom } from "./fields/list-query-judgement";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 import {
+  LOOP_COLLECTIONS_PARAMS,
   LOOP_COLLECTIONS_ROUTE_PATH,
   type LoopCollectionItem,
   type LoopCollectionsResponse,
-  type LoopSortFieldItem,
+  type LoopFieldOption,
+  type LoopListFieldItem,
+  type LoopRelationItem,
 } from "./loop-collections-contract";
 import {
-  labelOf,
-  pluralLabelOf,
   registryRecords,
   schemaIsLive,
   slugOf,
   type PageCollectionsContext,
 } from "./pages-search-route";
-
-/** The kinds of value a list can be ordered by. */
-const SORTABLE_KINDS: ReadonlySet<BindingValueKind> = new Set<BindingValueKind>(
-  ["text", "url", "number", "boolean", "date", "option"]
-);
+import { optionalText, parseRouteQuery } from "./route-query";
 
 /**
  * The timestamps a collection keeps unless it turns them off, named as the
  * admin's entry list heads their columns.
  */
-const TIMESTAMPS: readonly LoopSortFieldItem[] = [
-  { name: "createdAt", label: "Created", date: true },
-  { name: "updatedAt", label: "Updated", date: true },
-];
+const TIMESTAMP_LABELS: Readonly<Record<string, string>> = {
+  createdAt: "Created",
+  updatedAt: "Updated",
+};
 
-/** A top-level field as a registry record declares it, as far as sorting cares. */
+/** A field as a registry record declares it, as far as its words go. */
 interface DeclaredField {
   readonly name?: unknown;
-  readonly type?: unknown;
   readonly label?: unknown;
-  readonly hasMany?: unknown;
-  readonly storage?: unknown;
-}
-
-/** Whether a declared storage primitive is one the engine knows. */
-function isStoragePrimitive(value: unknown): value is FieldStoragePrimitive {
-  return (
-    typeof value === "string" &&
-    Object.prototype.hasOwnProperty.call(STORAGE_PRIMITIVE_AS_FIELD_TYPE, value)
-  );
-}
-
-/** A declared field with a name and a type, holding one value. */
-type NamedSingleField = DeclaredField & { name: string; type: string };
-
-/** Whether a declared field has a name and a type and holds one value. */
-function isNamedSingleField(value: unknown): value is NamedSingleField {
-  if (typeof value !== "object" || value === null) return false;
-  const { name, type, hasMany } = value as DeclaredField;
-  // A field holding many values orders by nothing one row shows.
-  return (
-    typeof name === "string" &&
-    name !== "" &&
-    typeof type === "string" &&
-    hasMany !== true
-  );
-}
-
-/**
- * The kind of value a field holds, when it is one a list can be ordered by.
- * A plugin's own field type is judged by the storage primitive it declares,
- * read against the engine's table of them rather than a list kept here.
- */
-function sortKindOf(
-  type: string,
-  storage: unknown
-): BindingValueKind | undefined {
-  const kind = bindingKindOf({
-    type,
-    ...(isStoragePrimitive(storage) ? { storage } : {}),
-  });
-  return kind !== null && SORTABLE_KINDS.has(kind) ? kind : undefined;
+  readonly options?: unknown;
 }
 
 /** What an author calls a field: its label, or its name in words. */
-function fieldWordsOf(name: string, label: unknown): string {
-  return typeof label === "string" && label.trim() !== ""
-    ? label
-    : humanizeFieldName(name);
+function fieldWordsOf(
+  name: string,
+  declared: DeclaredField | undefined
+): string {
+  const label = declared?.label;
+  if (typeof label === "string" && label.trim() !== "") return label;
+  return TIMESTAMP_LABELS[name] ?? humanizeFieldName(name);
 }
 
-/** A field a loop can sort by, or `undefined` for one it cannot. */
-function sortFieldOf(value: unknown): LoopSortFieldItem | undefined {
-  if (!isNamedSingleField(value)) return undefined;
-  const kind = sortKindOf(value.type, value.storage);
-  if (kind === undefined) return undefined;
+/** One declared choice, as stored and as named, or `undefined` for none. */
+function optionOf(value: unknown): LoopFieldOption | undefined {
+  if (typeof value === "string") return { value, label: value };
+  if (typeof value !== "object" || value === null) return undefined;
+  const { value: stored, label } = value as {
+    value?: unknown;
+    label?: unknown;
+  };
+  if (typeof stored !== "string") return undefined;
   return {
-    name: value.name,
-    label: fieldWordsOf(value.name, value.label),
-    date: kind === "date",
+    value: stored,
+    label: typeof label === "string" && label.trim() !== "" ? label : stored,
   };
 }
 
-/** A record's sortable fields, its own first, then the timestamps it keeps. */
-function sortFieldsOf(record: Record<string, unknown>): LoopSortFieldItem[] {
-  const declared = (Array.isArray(record.fields) ? record.fields : []).flatMap(
-    value => {
-      const field = sortFieldOf(value);
-      return field === undefined ? [] : [field];
-    }
-  );
-  const names = new Set(declared.map(field => field.name));
-  const stamps =
-    record.timestamps === false
-      ? []
-      : TIMESTAMPS.filter(stamp => !names.has(stamp.name));
-  return [...declared, ...stamps];
+/**
+ * A choice field's choices: the values the public's shape holds, each named
+ * as the record declares it.
+ */
+function optionsOf(
+  shape: BindingFieldShape,
+  declared: DeclaredField | undefined
+): LoopFieldOption[] {
+  const named = new Map<string, string>();
+  for (const value of Array.isArray(declared?.options)
+    ? declared.options
+    : []) {
+    const option = optionOf(value);
+    if (option !== undefined) named.set(option.value, option.label);
+  }
+  return (shape.options ?? []).map(value => ({
+    value,
+    label: named.get(value) ?? value,
+  }));
+}
+
+/** A readable field as the menu offers it, or `undefined` for one it leaves out. */
+function listFieldOf(
+  shape: BindingFieldShape,
+  declared: DeclaredField | undefined
+): LoopListFieldItem | undefined {
+  if (shape.name === "id") return undefined;
+  const kind = listFieldKind(shape);
+  if (kind === undefined) return undefined;
+  return {
+    name: shape.name,
+    label: fieldWordsOf(shape.name, declared),
+    kind,
+    ...(kind === "choice" ? { options: optionsOf(shape, declared) } : {}),
+    ...(kind === "entry" && typeof shape.relationTo === "string"
+      ? { relationTo: shape.relationTo }
+      : {}),
+    ...(kind === "date" && shape.dateOnly === true ? { dateOnly: true } : {}),
+  };
+}
+
+/** A record's declared fields by name, for the words each is offered with. */
+function declaredByName(
+  record: Record<string, unknown>
+): ReadonlyMap<string, DeclaredField> {
+  const byName = new Map<string, DeclaredField>();
+  for (const field of addressableFields(record.fields)) {
+    if (typeof field.name === "string") byName.set(field.name, field);
+  }
+  return byName;
+}
+
+/**
+ * The public's fields first in the collection's order, then the timestamps,
+ * as the admin lists a collection's columns.
+ */
+function timestampsLast(
+  shapes: readonly BindingFieldShape[]
+): BindingFieldShape[] {
+  // Each name once: a collection that declares a timestamp itself is read
+  // with it as `listFieldsFrom` adds it.
+  const seen = new Set<string>();
+  const once = shapes.filter(shape => {
+    if (seen.has(shape.name)) return false;
+    seen.add(shape.name);
+    return true;
+  });
+  const stamp = (shape: BindingFieldShape) =>
+    Object.hasOwn(TIMESTAMP_LABELS, shape.name);
+  return [
+    ...once.filter(shape => !stamp(shape)),
+    ...once.filter(shape => stamp(shape)),
+  ];
 }
 
 /** Whether a record is hidden from the admin's navigation. */
@@ -187,6 +201,18 @@ function hiddenInAdmin(record: Record<string, unknown>): boolean {
     admin !== null &&
     (admin as { hidden?: unknown }).hidden === true
   );
+}
+
+/** A record's singular name: its label, or its slug. */
+function singularOf(record: Record<string, unknown>, slug: string): string {
+  const labels = record.labels;
+  const singular =
+    typeof labels === "object" && labels !== null
+      ? (labels as { singular?: unknown }).singular
+      : undefined;
+  return typeof singular === "string" && singular !== ""
+    ? singular
+    : labelOf(record, slug);
 }
 
 /**
@@ -201,75 +227,13 @@ export interface LoopCollectionsReads {
   /** Whether the caller may read this collection. */
   mayRead(slug: string): Promise<boolean>;
   /**
-   * One read of the collection AS THE CALLER, sorted by `keys`, refusing
-   * every key core will not sort by; resolves when core accepts them all.
+   * The fields of a collection the public may read, as a published page's
+   * bindings are judged; `undefined` when the public may read none of it.
    */
-  sortedRead(slug: string, keys: readonly string[]): Promise<void>;
-}
-
-/** The key one problem of a refusal names, when it is a sort key refused. */
-function refusedSortKey(problem: unknown): string | undefined {
-  const { code, path } = (problem ?? {}) as { code?: unknown; path?: unknown };
-  return code === "FIELD_NOT_SORTABLE" &&
-    typeof path === "string" &&
-    path.startsWith("sort.")
-    ? path.slice("sort.".length)
-    : undefined;
-}
-
-/**
- * The problems a validation refusal names, when `error` is one that names
- * at least one; `undefined` for any other failure.
- */
-function validationProblemsOf(error: unknown): readonly unknown[] | undefined {
-  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return undefined;
-  const problems = (error.publicData as { errors?: unknown } | undefined)
-    ?.errors;
-  return Array.isArray(problems) && problems.length > 0 ? problems : undefined;
-}
-
-/**
- * The fields core refused to sort by, when `error` is that refusal and
- * nothing else: every problem it names is a sort key. `undefined` for any
- * other failure.
- */
-function refusedSortKeys(error: unknown): ReadonlySet<string> | undefined {
-  const problems = validationProblemsOf(error);
-  if (problems === undefined) return undefined;
-  const keys = problems.map(refusedSortKey);
-  return keys.every(key => key !== undefined) ? new Set(keys) : undefined;
-}
-
-/**
- * The keys of `candidates` core lets this caller sort `slug` by.
- *
- * Asked with all of them, then again without each key core named, until it
- * accepts the rest: core refuses in stages (passwords, then fields it does
- * not know or withholds, then fields the caller may not read), naming every
- * key of a stage at once, so this ends within a few reads. Any other failure
- * offers no field rather than one core might refuse.
- */
-export async function sortableKeys(
-  slug: string,
-  candidates: readonly string[],
-  reads: Pick<LoopCollectionsReads, "sortedRead">
-): Promise<ReadonlySet<string>> {
-  let keys = [...candidates];
-  while (keys.length > 0) {
-    try {
-      await reads.sortedRead(slug, keys);
-      return new Set(keys);
-    } catch (error) {
-      const refused = refusedSortKeys(error);
-      const left =
-        refused === undefined ? [] : keys.filter(key => !refused.has(key));
-      // A refusal that names none of the keys asked would ask the same
-      // question forever: it is a failure like any other.
-      if (left.length === keys.length) return new Set();
-      keys = left;
-    }
-  }
-  return new Set();
+  publicFields(
+    slug: string,
+    locale?: string
+  ): Promise<readonly BindingFieldShape[] | undefined>;
 }
 
 /** The meta of an answer that is the whole list on one page. */
@@ -284,12 +248,65 @@ function onePage(total: number): PaginationMeta {
   };
 }
 
+/** One listed collection, its fields and relations read as the public's. */
+async function collectionItem(
+  slug: string,
+  record: Record<string, unknown>,
+  listedSlugs: ReadonlySet<string>,
+  reads: LoopCollectionsReads,
+  locale: string | undefined
+): Promise<LoopCollectionItem> {
+  // The fields a list may name, as a save judges them: the record's
+  // declared fields, and those the public may read, in the save's language.
+  const fields = await listFieldsFrom({
+    record: () => Promise.resolve(record),
+    readable: (collection, language) =>
+      language === undefined
+        ? reads.publicFields(collection)
+        : reads.publicFields(collection, language),
+  })(slug, locale);
+  const declared = declaredByName(record);
+  const shapes = timestampsLast(fields?.readable ?? []);
+  return {
+    slug,
+    label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
+    singular: singularOf(record, slug),
+    fields: shapes.flatMap(shape => {
+      const field = listFieldOf(shape, declared.get(shape.name));
+      return field === undefined ? [] : [field];
+    }),
+    relations: shapes.flatMap((shape): LoopRelationItem[] => {
+      const collection = listRelationTarget(shape);
+      return collection !== undefined && listedSlugs.has(collection)
+        ? [
+            {
+              field: shape.name,
+              label: fieldWordsOf(shape.name, declared.get(shape.name)),
+              collection,
+            },
+          ]
+        : [];
+    }),
+    declared: [...(fields?.declared ?? [])],
+    readable: (fields?.readable ?? []).map(shape => ({
+      name: shape.name,
+      type: shape.type,
+      ...(shape.hasMany === true ? { hasMany: true as const } : {}),
+      ...(shape.relationTo === undefined
+        ? {}
+        : { relationTo: shape.relationTo }),
+    })),
+  };
+}
+
 /**
  * Answer one read: the listed collections the caller may read, each once, in
  * registry order. The menu orders them by name; this decides only which.
  */
 export async function readLoopCollections(
-  reads: LoopCollectionsReads
+  reads: LoopCollectionsReads,
+  /** The language being edited, which a save judges its lists in. */
+  locale?: string
 ): Promise<LoopCollectionsResponse> {
   const internal = reads.internal();
   const seen = new Set<string>();
@@ -309,25 +326,20 @@ export async function readLoopCollections(
   const readable = await Promise.all(
     candidates.map(candidate => reads.mayRead(candidate.slug))
   );
-  const items: LoopCollectionItem[] = await Promise.all(
-    candidates
-      .filter((_, index) => readable[index] === true)
-      .map(async ({ slug, record }) => {
-        const offered = sortFieldsOf(record);
-        const sortable = await sortableKeys(
-          slug,
-          offered.map(field => field.name),
-          reads
-        );
-        return {
-          slug,
-          label: pluralLabelOf(record).pluralLabel ?? labelOf(record, slug),
-          sortFields: offered.filter(field => sortable.has(field.name)),
-        };
-      })
+  const listed = candidates.filter((_, index) => readable[index] === true);
+  const listedSlugs = new Set(listed.map(candidate => candidate.slug));
+  const items = await Promise.all(
+    listed.map(({ slug, record }) =>
+      collectionItem(slug, record, listedSlugs, reads, locale)
+    )
   );
   return { items, meta: onePage(items.length) };
 }
+
+/** The route's query: the language the fields are judged in, if any. */
+const LOOP_COLLECTIONS_QUERY = z.object({
+  [LOOP_COLLECTIONS_PARAMS.locale]: optionalText(ENTRIES_LOCALE_MAX),
+});
 
 /** The route context this reads: the registry, the plugin's slugs, and who asks. */
 interface LoopCollectionsRouteContext extends PageCollectionsContext {
@@ -365,22 +377,15 @@ function directLoopCollectionsReads(
       ctx.caller === null
         ? Promise.resolve(false)
         : ctx.caller.can("read", slug),
-    // The shared as-caller read, so core judges the sort for exactly the
-    // caller every other editor read is judged for.
-    sortedRead: async (slug, keys) => {
-      await findAsCaller(ctx, {
-        collection: slug,
-        // Core judges every sort key before it reads, whatever the filter, so
-        // a filter no row can match still gets the caller's exact answer. A
-        // primary key is never null: the database answers this from the
-        // key's index, with no rows to sort or count, however large the
-        // collection or unindexed the field.
-        where: { id: { exists: false } },
-        select: { id: true },
-        sort: keys,
-        limit: 1,
-        unknownSort: "refuse",
-      });
+    // The anonymous visitor's fields, judged as the published page's
+    // bindings are: imported at call time, as the save's reader is, so
+    // loading this module costs none of the runtime.
+    publicFields: async (slug, locale) => {
+      const { bindingFieldShapes } = await import("nextly/runtime");
+      return bindingFieldShapes(
+        { collection: slug },
+        locale === undefined ? {} : { locale }
+      );
     },
   };
 }
@@ -400,9 +405,16 @@ export function loopCollectionsRoute(
   return {
     method: "GET",
     path: LOOP_COLLECTIONS_ROUTE_PATH,
-    handler: async (_req, ctx) => {
+    handler: async (req, ctx) => {
+      const query = parseRouteQuery(
+        req.url,
+        Object.values(LOOP_COLLECTIONS_PARAMS),
+        LOOP_COLLECTIONS_QUERY,
+        "loop collections route"
+      );
       const answer = await readLoopCollections(
-        directLoopCollectionsReads(ctx, store)
+        directLoopCollectionsReads(ctx, store),
+        query[LOOP_COLLECTIONS_PARAMS.locale]
       );
       return respondList([...answer.items], answer.meta);
     },

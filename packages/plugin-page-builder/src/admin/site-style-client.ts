@@ -65,6 +65,7 @@ import {
   type Context,
 } from "react";
 
+import { asOverwrite } from "../document-version";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
@@ -614,7 +615,10 @@ export function useSaveSiteStyle(): SiteStyleWrite {
           });
           await refetch();
         } else {
-          await mutation.mutateAsync({ [section]: value });
+          // Saved over whatever the style holds now, on purpose: the last
+          // writer wins, as it always has here. Each studio keeps its own
+          // copy, so no one version could stand for what this editor saw.
+          await mutation.mutateAsync(asOverwrite({ [section]: value }));
           // The editor reads the style through the plugin's route, which the
           // Single's own write does not invalidate, so it is asked again.
           // Not awaited, as the Single's own invalidation is not: the save has

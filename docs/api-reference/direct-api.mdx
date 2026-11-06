@@ -470,6 +470,23 @@ const saved = await nextly.findSingle({
 const siteName = saved === null ? "My site" : saved.siteName;
 ```
 
+**Experimental:** add `whenAbsent: "default"` beside `createIfMissing: false`
+to read, for a single that has no stored document yet, the default document a
+first read would create, without creating it. It goes through the same read:
+access rules, the draft and published filter, field rules and read hooks apply
+as they would to the stored document. Passing `whenAbsent` without
+`createIfMissing: false` is refused. A `defaultValue` written as a function is
+computed again for each such read, so one that is not deterministic may answer
+differently from what is later stored.
+
+```typescript
+const settings = await nextly.findSingle({
+  slug: "site-settings",
+  createIfMissing: false,
+  whenAbsent: "default",
+});
+```
+
 ### updateSingle
 
 Update a single's content by slug. Returns the same `{ message, item }` envelope
@@ -650,11 +667,13 @@ profile.user; // current user record (or null)
 
 const updated = await nextly.updateMe({
   user: { id: "user-123" },
-  data: { name: "New Display Name" },
+  data: { name: "New Display Name", interfaceLanguage: "fr" },
 });
 ```
 
 **Returns:** `AuthResult` — `{ user, permissions? }`. Throws `NextlyError` (`NOT_FOUND`) if the user does not exist.
+
+`interfaceLanguage` is the language this person wants the admin in, kept apart from any content language: a language tag spelled as browsers report it (`fr`, `pt-BR`), or `null` to follow the browser, then English. It is the person's own to set, through `updateMe` or `PATCH /admin/api/me`. `users.update` and `PATCH /admin/api/users/:id` refuse it with a `VALIDATION_ERROR` naming the field, and a malformed or non-canonical tag (`pt-br`) is refused the same way. `interfaceLanguage` is also a reserved name for a custom user field.
 
 ### changePassword
 
@@ -805,6 +824,41 @@ const posts = await nextly.find({
   },
 });
 ```
+
+## Languages
+
+On a localized collection or Single (see [Localization](/docs/localization)), a read or a
+write names its language with `locale`, and a read chooses its fallback with `fallbackLocale`.
+An `update` by `where` is the exception: it does not pass `locale` on, so it writes the
+default language whatever `locale` says. To write another language, update by `id`.
+
+```ts
+// Spanish, falling back as the site configures it.
+const { items } = await nextly.find({ collection: "posts", locale: "es" });
+
+// Spanish only: an untranslated field reads empty.
+const post = await nextly.findByID({
+  collection: "posts",
+  id,
+  locale: "es",
+  fallbackLocale: false,
+});
+
+// Every language's value for each translated field, in one answer: each such field
+// holds an object keyed by language code, e.g. all.title.es.
+const all = await nextly.findByID({ collection: "posts", id, locale: "all" });
+
+// A write stores into the language it names.
+await nextly.update({ collection: "posts", id, locale: "es", data: { title: "Hola" } });
+```
+
+| Option           | Type              | What it does                                                                                                                                                              |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field, as an object keyed by language code. Generated types do not model that yet and still declare the field's own type, so treat such a result as untyped.               |
+| `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.               |
+
+Language filters and the per-language status overview are REST parameters; see
+[Languages](/docs/api-reference/rest-api#languages) in the REST reference.
 
 ## Sorting
 

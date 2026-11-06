@@ -38,6 +38,10 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
@@ -194,12 +198,14 @@ function allLocalesLifecycle(
   successMessage: string
 ): MethodHandler<CollectionsHandlerType> {
   return {
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       // `requireParam` rather than an inline throw: a missing route parameter is
       // caller-fixable, and a bare `Error` here would surface it as a 500.
       const collectionName = requireParam(p, "collectionName");
       const entryId = requireParam(p, "entryId");
       const result = await svc[method]({
+        // The request this transition's hooks are told about.
+        request,
         collectionName,
         entryId,
         actor: readAuthenticatedActor(),
@@ -856,6 +862,12 @@ const COLLECTIONS_METHODS: Record<
           // collection into a DISABLE transition, restoring the companion's
           // columns onto the main table and archiving it.
           const isLocalized = readRequestLocalized(body) ?? wasLocalized;
+          // Where its translatable values are stored once this apply runs, which the runtime
+          // tables registered below describe: per language when it is translated, or always under
+          // per-language storage. `isLocalized` stays the product's answer.
+          const isStoredPerLanguage = storesPerLanguage({
+            localized: isLocalized,
+          });
           // i18n: enabling Internationalization needs the app-level
           // `localization` config — without it the companion reconcile below
           // would move translatable columns into a table the runtime cannot
@@ -989,7 +1001,10 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               fields as FieldDefinition[],
               dialect,
-              { localized: isLocalized, status: collection.status === true }
+              {
+                localized: isStoredPerLanguage,
+                status: collection.status === true,
+              }
             );
             getCollectionsHandlerFromDI()?.refreshCollectionSchema(
               tableName,
@@ -999,14 +1014,19 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               freshTable
             );
-            if (isLocalized) {
+            if (isStoredPerLanguage) {
               const companion = buildCompanionRuntimeTable({
                 slug: p.collectionName,
                 tableName,
                 fields: fields as FieldDefinition[],
                 dialect,
                 localized: true,
-                status: collection.status === true,
+                // As saved, not as the record read before the save: a save that turns
+                // translation on gives a Draft/Published collection its per-language `_status`.
+                status: publishesPerLanguage({
+                  localized: isLocalized,
+                  status: (collection as { status?: unknown }).status,
+                }),
               });
               if (companion) {
                 getCollectionsHandlerFromDI()?.refreshCollectionSchema(

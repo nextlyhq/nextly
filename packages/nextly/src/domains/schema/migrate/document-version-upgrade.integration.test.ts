@@ -228,24 +228,26 @@ async function seed(t: TestNextly): Promise<void> {
         overrideAccess: true,
         locale: "es",
       },
-      slug === "cf_posts" ? { title: "Hola" } : { heading: "Hola" }
+      slug === "cf_posts"
+        ? { title: "Hola", _overwrite: true }
+        : { heading: "Hola", _overwrite: true }
     );
   }
 
   const singles = t.getService("singleEntryService") as SingleEntryService;
   await singles.update(
     "cf_site",
-    { siteName: "Site" },
+    { siteName: "Site", _overwrite: true },
     { locale: "en", overrideAccess: true }
   );
   await singles.update(
     "cf_site",
-    { siteName: "Sitio" },
+    { siteName: "Sitio", _overwrite: true },
     { locale: "es", overrideAccess: true }
   );
   await singles.update(
     "ui_banner",
-    { message: "Welcome" },
+    { message: "Welcome", _overwrite: true },
     { overrideAccess: true }
   );
 }

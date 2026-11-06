@@ -147,6 +147,20 @@ export interface RewriteReport {
 /** The character joining a key's parts; no slug, id, key or locale holds it. */
 const KEY_SEPARATOR = "\u001F";
 
+/** The document a key names, as {@link documentKeyOf} spells it; `undefined` otherwise. */
+export function documentAddressOf(
+  key: string
+): Pick<HostAddress, "kind" | "slug" | "id"> | undefined {
+  const parts = key.split(KEY_SEPARATOR);
+  if (parts[0] === "single" && parts.length === 2 && parts[1] !== "") {
+    return { kind: "single", slug: parts[1] };
+  }
+  if (parts[0] === "collection" && parts.length === 3 && parts[2] !== "") {
+    return { kind: "collection", slug: parts[1], id: parts[2] };
+  }
+  return undefined;
+}
+
 /** The document a host belongs to: `collection␟slug␟id` or `single␟slug`. */
 export function documentKeyOf(
   host: Pick<HostAddress, "kind" | "slug" | "id">
@@ -154,4 +168,20 @@ export function documentKeyOf(
   return host.kind === "single"
     ? ["single", host.slug].join(KEY_SEPARATOR)
     : ["collection", host.slug, host.id ?? ""].join(KEY_SEPARATOR);
+}
+
+/**
+ * A host and form as one key, so what a step saw is what its writer writes:
+ * a breakpoint removal keeps what it strips by it, and its undo reads that
+ * back by it.
+ */
+export function formKey(host: HostAddress, form: HostForm): string {
+  return JSON.stringify([
+    host.kind,
+    host.slug,
+    host.id ?? "",
+    host.path,
+    host.locale ?? "",
+    form,
+  ]);
 }

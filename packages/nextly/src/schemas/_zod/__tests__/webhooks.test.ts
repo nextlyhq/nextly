@@ -7,8 +7,9 @@
  * and an unknown event type would be accepted into a subscription the fan-out
  * never matches — a subscription that silently never fires.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 
+import { publishWebhookEventTypes } from "../../../domains/webhooks/event-type-registry";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
@@ -146,6 +147,58 @@ describe("CreateWebhookSchema", () => {
       url: `https://example.com/${"a".repeat(2048)}`,
     });
     expect(parsed.success).toBe(false);
+  });
+});
+
+describe("the webhook schemas nextly/schemas publishes", () => {
+  it("still publishes core's event-type schemas, naming core's types alone", async () => {
+    // Read from the published entry, so removing either export from the
+    // barrel fails here rather than in a consumer's build.
+    const published = await import("../../index");
+
+    expect(
+      published.WebhookEventTypeSchema.safeParse("entry.created").success
+    ).toBe(true);
+    expect(
+      published.WebhookEventTypeSchema.safeParse("acme-shop.order.paid").success
+    ).toBe(false);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse("*").success
+    ).toBe(true);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse(
+        "form.submission.created"
+      ).success
+    ).toBe(true);
+    expect(
+      published.WebhookEventSubscriptionSchema.safeParse("acme-shop.order.paid")
+        .success
+    ).toBe(false);
+  });
+});
+
+describe("the published request schemas, with a plugin's type declared", () => {
+  afterEach(() => {
+    publishWebhookEventTypes([]);
+  });
+
+  it("still refuse it: they name core's types alone, as they always have", () => {
+    // Declared and subscribable through the route; the published schemas are
+    // an export of `nextly/schemas` and keep their meaning.
+    publishWebhookEventTypes([
+      { type: "acme-shop.order.paid", owner: "@acme/shop" },
+    ]);
+
+    expect(
+      CreateWebhookSchema.safeParse({
+        ...valid,
+        eventTypes: ["acme-shop.order.paid"],
+      }).success
+    ).toBe(false);
+    expect(
+      UpdateWebhookSchema.safeParse({ eventTypes: ["acme-shop.order.paid"] })
+        .success
+    ).toBe(false);
   });
 });
 

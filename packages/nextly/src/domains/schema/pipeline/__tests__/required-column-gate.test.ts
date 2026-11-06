@@ -27,7 +27,11 @@ import {
   noopRenameDetector,
 } from "../pushschema-pipeline-stubs";
 import { refuseRequiredColumnsOverNulls } from "../required-column-gate";
-import type { ClassifierEvent, Resolution } from "../resolution/types";
+import type {
+  AddNotNullWithNullsEvent,
+  ClassifierEvent,
+  Resolution,
+} from "../resolution/types";
 import type { DesiredSchema } from "../types";
 
 let sqlite: Database.Database;
@@ -105,7 +109,8 @@ const promo: DesiredSchema = {
   },
 };
 
-function madeRequired(table: string, column: string): ClassifierEvent {
+// Typed as its own kind, so a test spreading it may set that kind's fields.
+function madeRequired(table: string, column: string): AddNotNullWithNullsEvent {
   return {
     id: `add_not_null_with_nulls:${table}.${column}`,
     kind: "add_not_null_with_nulls",

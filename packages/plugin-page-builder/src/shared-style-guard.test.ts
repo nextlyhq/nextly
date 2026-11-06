@@ -2,12 +2,17 @@
  * The site-style Single's guard over its shared styles: a locked one holds
  * for everyone, a lock moves only through the lock route, and an entry leaves
  * only through the remove route, which checks first that nothing uses it.
+ * While a breakpoint removal is open, the settings write may bring a locked
+ * style back stripped of exactly the removed breakpoints' values.
  */
 import { describe, expect, it } from "vitest";
 
+import type { OpenRemovalReader } from "./breakpoint-removal/lock-acceptance";
+import type { Removal } from "./breakpoint-removal/strip";
 import {
   refuseSharedStyleChangesOutsideTheirRoutes,
   SHARED_STYLE_LOCK_WRITE_CONTEXT,
+  SITE_SETTINGS_WRITE_CONTEXT,
   siteStyleSingle,
 } from "./site-style-storage";
 
@@ -237,9 +242,234 @@ describe("writes the guard lets through", () => {
   });
 });
 
+/** Every hook the Single runs before validation, in order, on one write. */
+async function wiredRefusal(
+  hook: Hook,
+  openRemoval?: OpenRemovalReader,
+  /** The code's classes the Single is configured with. */
+  classes?: readonly (typeof lockedCard)[]
+): Promise<unknown> {
+  const policy = classes === undefined ? {} : { defaults: { classes } };
+  const hooks =
+    siteStyleSingle(policy, openRemoval).hooks?.beforeValidate ?? [];
+  try {
+    for (const run of hooks) await run(hook as never);
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
 describe("the Single's wiring", () => {
-  it("runs the guard before validation, beside the breakpoints' door", () => {
-    const hooks = siteStyleSingle().hooks?.beforeValidate ?? [];
-    expect(hooks).toContain(refuseSharedStyleChangesOutsideTheirRoutes);
+  it("runs the guard before validation, beside the breakpoints' door", async () => {
+    const error = await wiredRefusal({
+      data: {
+        classes: [
+          { ...lockedCard, styles: { base: { base: { color: "#ff0000" } } } },
+        ],
+      },
+      originalData: { classes: [lockedCard] },
+      user: author,
+      context: {},
+    });
+    expect(error).toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("a locked shared style while a breakpoint removal is open", () => {
+  /** A locked style holding a value at Mobile beside its base one. */
+  const lockedAtMobile = {
+    ...lockedCard,
+    styles: {
+      base: { base: { color: "#111111" }, mobile: { color: "#222222" } },
+      hover: { mobile: { color: "#333333" } },
+    },
+  };
+  /** The same style as removing Mobile strips it. */
+  const stripped = {
+    ...lockedCard,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+  const removingMobile: Removal = {
+    ids: new Set(["mobile"]),
+    before: {
+      viewport: [{ id: "mobile", label: "Mobile", maxWidth: 600 }],
+      container: [],
+    },
+  };
+  const open: OpenRemovalReader = async () => ({
+    kind: "strip",
+    removal: removingMobile,
+  });
+  const settingsWrite = (
+    now: unknown,
+    context = SITE_SETTINGS_WRITE_CONTEXT
+  ) => ({
+    data: { classes: [now] },
+    originalData: { classes: [lockedAtMobile] },
+    user: author,
+    context: { ...context },
+  });
+
+  it("accepts the settings write bringing it back exactly stripped", async () => {
+    expect(await wiredRefusal(settingsWrite(stripped), open)).toBeUndefined();
+  });
+
+  it("refuses the strip with anything else changed", async () => {
+    const more = {
+      ...stripped,
+      styles: { base: { base: { color: "#ff0000" } } },
+    };
+    expect(await wiredRefusal(settingsWrite(more), open)).toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("refuses the strip with no removal open", async () => {
+    expect(
+      await wiredRefusal(settingsWrite(stripped), async () => null)
+    ).toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses the strip when the open removal cannot be read", async () => {
+    const unreadable: OpenRemovalReader = async () => {
+      throw new Error("the table cannot be read");
+    };
+    expect(
+      await wiredRefusal(settingsWrite(stripped), unreadable)
+    ).toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses the strip from any write but the settings one", async () => {
+    expect(await wiredRefusal(settingsWrite(stripped, {}), open)).toMatchObject(
+      { code: "CONFLICT" }
+    );
+  });
+  describe("supplied by the code, not stored", () => {
+    // A refusal here is the guard's for a style written already locked: a
+    // lock moved outside its route.
+    /** The settings write storing the code's class as its stripped override. */
+    const overriding = (now: unknown) => ({
+      data: { classes: [now] },
+      originalData: { classes: [] },
+      user: author,
+      context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+    });
+
+    it("accepts the override that is exactly the code's style stripped", async () => {
+      expect(
+        await wiredRefusal(overriding(stripped), open, [lockedAtMobile])
+      ).toBeUndefined();
+    });
+
+    it("refuses an override with anything else changed", async () => {
+      const more = {
+        ...stripped,
+        styles: { base: { base: { color: "#ff0000" } } },
+      };
+      expect(
+        await wiredRefusal(overriding(more), open, [lockedAtMobile])
+      ).toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("refuses the override with no removal open, or for a style the code does not supply", async () => {
+      expect(
+        await wiredRefusal(overriding(stripped), async () => null, [
+          lockedAtMobile,
+        ])
+      ).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await wiredRefusal(overriding(stripped), open, [])).toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+    });
+  });
+  describe("while the removal's undo is open", () => {
+    /** What removing Mobile kept of the style: its Mobile values. */
+    const kept = (
+      overridden: readonly string[] = [],
+      overrides?: Record<string, unknown>
+    ) => ({
+      fragment: {
+        classes: {
+          [lockedCard.id]: {
+            base: { mobile: { color: "#222222" } },
+            hover: { mobile: { color: "#333333" } },
+          },
+        },
+        overridden,
+        ...(overrides === undefined ? {} : { overrides }),
+      },
+      ids: new Set(["mobile"]),
+    });
+    const undoing =
+      (
+        overridden?: readonly string[],
+        overrides?: Record<string, unknown>
+      ): OpenRemovalReader =>
+      async () => ({
+        kind: "restore",
+        restoreFor: () => Promise.resolve(undefined),
+        classes: kept(overridden, overrides),
+      });
+    /** The settings write of the undo, from the stripped style stored. */
+    const undoWrite = (now: readonly unknown[]) => ({
+      data: { classes: now },
+      originalData: { classes: [stripped] },
+      user: author,
+      context: { ...SITE_SETTINGS_WRITE_CONTEXT },
+    });
+
+    it("accepts the settings write bringing it back exactly as it was", async () => {
+      expect(
+        await wiredRefusal(undoWrite([lockedAtMobile]), undoing())
+      ).toBeUndefined();
+    });
+
+    it("refuses the restore with anything else changed, or with no undo open", async () => {
+      const more = {
+        ...lockedAtMobile,
+        styles: { base: { base: { color: "#ff0000" } } },
+      };
+      expect(await wiredRefusal(undoWrite([more]), undoing())).toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(
+        await wiredRefusal(undoWrite([lockedAtMobile]), async () => null)
+      ).toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("accepts taking out the removal's override of a locked code style, and only that", async () => {
+      expect(
+        await wiredRefusal(undoWrite([]), undoing([lockedCard.id]), [
+          lockedAtMobile,
+        ])
+      ).toBeUndefined();
+      // Not an override the removal stored: a locked style is not removed.
+      expect(
+        await wiredRefusal(undoWrite([]), undoing(), [lockedAtMobile])
+      ).toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("takes out the override the removal recorded, though the code's style changed since", async () => {
+      // The code now supplies the style differently: the override the
+      // removal stored is still the one it recorded, so it goes.
+      const changedInCode = {
+        ...lockedAtMobile,
+        styles: { base: { base: { color: "#0000ff" } } },
+      };
+      expect(
+        await wiredRefusal(
+          undoWrite([]),
+          undoing([lockedCard.id], { [lockedCard.id]: stripped }),
+          [changedInCode]
+        )
+      ).toBeUndefined();
+      // CONTROL: without the record, the changed code's strip is not it.
+      expect(
+        await wiredRefusal(undoWrite([]), undoing([lockedCard.id]), [
+          changedInCode,
+        ])
+      ).toMatchObject({ code: "CONFLICT" });
+    });
   });
 });

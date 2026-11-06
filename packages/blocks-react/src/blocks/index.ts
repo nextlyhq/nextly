@@ -37,6 +37,7 @@ import { embed } from "./embed";
 import { form } from "./form";
 import { gallery } from "./gallery";
 import { heading } from "./heading";
+import { icon } from "./icon";
 import { image } from "./image";
 import { list } from "./list";
 import { paragraph } from "./paragraph";
@@ -66,6 +67,7 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
@@ -106,6 +108,12 @@ export {
   type ContainerTag,
 } from "./container";
 export type { CollectionLoopProps } from "./collection-loop";
+// The editor's count of a list's matching entries, taken from the list's own
+// read, so the count and the list cannot disagree.
+export { listEntryCount, type ListEntryCount } from "./list-read";
+// The engine types a list's props name, so a consumer of the props type can
+// spell its filters and relation source without importing the engine.
+export type { ListFilter, ListRelation } from "@nextlyhq/blocks-engine";
 
 /**
  * Every block in the core library.
@@ -157,6 +165,7 @@ type CoreBlockList = [
   typeof divider,
   typeof quote,
   typeof embed,
+  typeof icon,
   typeof collectionLoop,
 ];
 
@@ -191,5 +200,6 @@ export const coreBlocks: CoreBlockList[number][] = [
   divider,
   quote,
   embed,
+  icon,
   collectionLoop,
 ] satisfies CoreBlockList;
