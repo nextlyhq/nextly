@@ -58,7 +58,7 @@ import {
   nextlySingleTags,
   nextlySiteSettingsTags,
   readPublicSiteSettings,
-  runInsideNamedQuery,
+  openNamedQueryFrame,
   slugToStaticParam,
 } from "nextly/runtime";
 import type {
@@ -78,6 +78,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment, Suspense } from "react";
 
 import { collectionLoop } from "./blocks/collection-loop";
+import { namedQueryFailureLine } from "./blocks/named-read";
 import { url } from "./blocks/props";
 import {
   COMPONENT_DOCUMENT_FIELD,
@@ -675,7 +676,9 @@ function namedQueryHostFor(args: {
         { collection },
         { scope: config.cacheScope ?? "", locale, window }
       ),
-    runInFrame: (name, run) => runInsideNamedQuery(name, run),
+    // nextly's frame: inside it the Direct API refuses every call, and the
+    // query's reader reads through the frame's own door.
+    frame: name => openNamedQueryFrame(name),
     cache: async ({ declaration, key, read }) => {
       const route = await releaseBoundedRevalidate(window);
       const own = declaration.revalidate;
@@ -699,11 +702,14 @@ function namedQueryHostFor(args: {
       });
     },
     // The log names the page, the list and the query, under the reference
-    // an author is shown in place of the error.
+    // an author is shown in place of the error, and the error by its code or
+    // class only: its message may hold whatever the query's code put in it.
     report: failure => {
       console.warn(
-        `[blocks] The named query "${failure.query}" in list "${failure.nodeId}" on "${context.collection}" page "${context.slug}" failed (${failure.code}), so the list shows its empty state. Reference ${failure.ref}.`,
-        ...(failure.error === undefined ? [] : [failure.error])
+        namedQueryFailureLine(
+          failure,
+          `"${context.collection}" page "${context.slug}"`
+        )
       );
     },
   };

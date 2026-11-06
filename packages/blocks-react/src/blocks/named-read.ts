@@ -43,10 +43,12 @@ import {
 
 import type {
   ListBaseReader,
+  NamedQueryFailure,
   NamedQueryFailureCode,
   NamedQueryHost,
   NamedQueryRunData,
   PageContext,
+  QueryBudget,
 } from "../context";
 
 /**
@@ -67,18 +69,30 @@ class NamedQueryRunError extends Error {
   }
 }
 
+/** A query as plain data: what a getter or a method on it would do runs now. */
+function asData<Q>(query: Q): Q {
+  return JSON.parse(JSON.stringify(query)) as Q;
+}
+
+/** The door that runs a read as it is: for a host with no frame. */
+const OPEN_DOOR = <T>(operation: () => Promise<T>): Promise<T> => operation();
+
 /**
  * The reader handed to a named query's `run`: `base`, limited to what the
- * query declares, each read claimed through `claim` first.
+ * query declares, each read claimed through `claim` first, and each made
+ * through `door`, the host frame's way out for this reader alone.
  *
  * An undeclared read throws `undeclared-read` before anything is read; a
- * refused claim throws `budget`. The object is frozen, so `run` cannot swap
- * a method for one of its own.
+ * refused claim throws `budget`. Each query is copied to plain data before
+ * it goes through the door, so nothing `run` hands over (a getter, say) runs
+ * outside the frame. The object is frozen, so `run` cannot swap a method for
+ * one of its own.
  */
 export function scopedReader(
   declaration: NamedQueryDeclaration,
   base: ListBaseReader,
-  claim: () => boolean
+  claim: () => boolean,
+  door: <T>(operation: () => Promise<T>) => Promise<T> = OPEN_DOOR
 ): NamedQueryReader {
   const collections = new Set(declaration.reads.collections ?? []);
   const singles = new Set(declaration.reads.singles ?? []);
@@ -98,23 +112,26 @@ export function scopedReader(
     }
   };
   return Object.freeze({
-    find: async query => {
+    find: async asked => {
+      const query = asData(asked);
       if (!collections.has(query.collection)) refuse(query.collection);
       spend();
-      return await base.find(query);
+      return await door(() => base.find(query));
     },
-    count: async query => {
+    count: async asked => {
+      const query = asData(asked);
       if (!collections.has(query.collection)) refuse(query.collection);
       spend();
-      return await base.count(query);
+      return await door(() => base.count(query));
     },
-    findSingle: async query => {
+    findSingle: async asked => {
+      const query = asData(asked);
       if (!singles.has(query.slug)) refuse(query.slug);
       if (base.findSingle === undefined) {
         throw new Error("This page's reader cannot read a Single.");
       }
       spend();
-      return await base.findSingle(query);
+      return await door(async () => (await base.findSingle?.(query)) ?? null);
     },
     siteSettings: async () => {
       if (declaration.reads.site !== true) refuse("the site settings");
@@ -122,7 +139,7 @@ export function scopedReader(
         throw new Error("This page's reader cannot read the site settings.");
       }
       spend();
-      return await base.siteSettings();
+      return await door(async () => (await base.siteSettings?.()) ?? {});
     },
   } satisfies NamedQueryReader);
 }
@@ -249,11 +266,19 @@ async function execute(
 ): Promise<NamedQueryRunData> {
   const declaration = namedQueryDeclaration(definition);
   let reads = 0;
-  const reader = scopedReader(declaration, host.reader, () => {
-    if (!claim()) return false;
-    reads += 1;
-    return true;
-  });
+  // One frame per run: the query runs inside it, and only its reader reads,
+  // through the frame's own door.
+  const frame = host.frame?.(definition.name);
+  const reader = scopedReader(
+    declaration,
+    host.reader,
+    () => {
+      if (!claim()) return false;
+      reads += 1;
+      return true;
+    },
+    frame === undefined ? undefined : operation => frame.read(operation)
+  );
   const timeout = namedQueryTimeout(declaration);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -269,9 +294,7 @@ async function execute(
   let result: NamedQueryResult;
   try {
     result = await untilAborted(
-      host.runInFrame === undefined
-        ? call()
-        : host.runInFrame(definition.name, call),
+      (async () => await (frame === undefined ? call() : frame.run(call)))(),
       controller.signal,
       () =>
         new NamedQueryRunError(
@@ -293,6 +316,45 @@ async function execute(
       : {}),
     reads,
   };
+}
+
+/**
+ * Where a host's named queries are looked up: its own lookup, or the
+ * engine's registry. The one answer the run and the binding checks of its
+ * rows share, so a list's items are judged against the query that made them.
+ */
+export function namedQueryLookup(
+  host: Pick<NamedQueryHost, "definitionOf"> | undefined
+): (name: string) => NamedQueryDefinition | undefined {
+  return host?.definitionOf ?? getNamedQuery;
+}
+
+/** What an error is, for a log: its code or its class, never its words. */
+function errorKind(error: unknown): string {
+  if (typeof error !== "object" || error === null) return typeof error;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(code)) {
+    return code;
+  }
+  const name = (error as { name?: unknown }).name;
+  return typeof name === "string" && /^[A-Za-z0-9_]{1,64}$/.test(name)
+    ? name
+    : "error";
+}
+
+/**
+ * A failed run's log line: where it failed, the query, its code and the
+ * reference an author is shown, and what the error was by its code or its
+ * class. Never the error's message, values or stack, which hold whatever the
+ * query's code or a provider put in them, a credential among them.
+ */
+export function namedQueryFailureLine(
+  failure: NamedQueryFailure,
+  where: string
+): string {
+  const kind =
+    failure.error === undefined ? "" : ` (${errorKind(failure.error)})`;
+  return `[blocks] The named query "${failure.query}" in list "${failure.nodeId}" on ${where} failed: ${failure.code}${kind}, so the list shows its empty state. Reference ${failure.ref}.`;
 }
 
 /** A value as JSON with its keys in order, so one set of inputs is one key. */
@@ -332,11 +394,14 @@ function dependsOnToday(declaration: NamedQueryDeclaration): boolean {
 
 /**
  * Each render's runs, by key, so a query a page draws several times (inside
- * an outer list) runs once per render. Keyed by the host, which is made per
- * render.
+ * an outer list) runs once per render. Owned by the render's read allowance
+ * (`ctx.queries`), which a page makes for each render and never shares: a
+ * host may well be kept across renders, and a run kept with it would serve
+ * the first render's rows to every later one. A render with no allowance
+ * keeps nothing.
  */
 const runsThisRender = new WeakMap<
-  NamedQueryHost,
+  QueryBudget,
   Map<string, Promise<NamedQueryRunData>>
 >();
 
@@ -467,7 +532,7 @@ export async function readNamedList(
   const host = ctx.namedQueries;
   const claim = () => ctx.queries?.take() !== false;
   const at = { host, name: named.name, nodeId };
-  const definition = (host.definitionOf ?? getNamedQuery)(named.name);
+  const definition = namedQueryLookup(host)(named.name);
   if (definition === undefined) {
     return failed("unknown", NAMED_QUERY_TEXT.removed(named.name), at);
   }
@@ -482,6 +547,9 @@ export async function readNamedList(
   const key = [
     named.name,
     hashText(JSON.stringify(declaration)),
+    // The implementation too: a deployment that changes only `run` must not
+    // be served the rows the old one made.
+    hashText(definition.run.toString()),
     stableJson(judged.values),
     String(window.limit),
     String(window.offset),
@@ -503,15 +571,22 @@ export async function readNamedList(
       claim
     );
   };
-  const runs = runsThisRender.get(host) ?? new Map();
-  runsThisRender.set(host, runs);
+  const owner = ctx.queries;
+  const runs =
+    owner === undefined
+      ? undefined
+      : (runsThisRender.get(owner) ??
+        new Map<string, Promise<NamedQueryRunData>>());
+  if (owner !== undefined && runs !== undefined) {
+    runsThisRender.set(owner, runs);
+  }
   const memoKey = key.join("\u0000");
   const pending =
-    runs.get(memoKey) ??
+    runs?.get(memoKey) ??
     (host.cache === undefined
       ? read()
       : host.cache({ declaration, key, read }));
-  runs.set(memoKey, pending);
+  runs?.set(memoKey, pending);
   let data: NamedQueryRunData;
   try {
     data = await pending;

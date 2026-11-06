@@ -54,7 +54,7 @@ import { defineCollection, text } from "nextly/config";
 import {
   bindingFieldShapes,
   createPublicReader,
-  runInsideNamedQuery,
+  openNamedQueryFrame,
 } from "nextly/runtime";
 import { createElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -239,7 +239,7 @@ async function published(
           // The public's fields of a collection, as a published page's
           // route answers them: a collection's entries are kept to these.
           fieldsOf: collection => bindingFieldShapes({ collection }),
-          runInFrame: (name, run) => runInsideNamedQuery(name, run),
+          frame: name => openNamedQueryFrame(name),
           report: failure => failures.push(failure),
         },
       },

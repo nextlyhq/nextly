@@ -39,7 +39,7 @@ import { PageRenderer } from "../page-renderer";
 import { createBlockResolver } from "../resolver";
 
 import { coreBlocks } from "./index";
-import { scopedReader } from "./named-read";
+import { namedQueryFailureLine, scopedReader } from "./named-read";
 
 const node = (
   id: string,
@@ -462,10 +462,13 @@ describe("a list whose source is a named query", () => {
       ),
       {
         host: {
-          runInFrame: (name, run) => {
-            frames.push(name);
-            return run();
-          },
+          frame: name => ({
+            run: operation => {
+              frames.push(name);
+              return operation();
+            },
+            read: operation => operation(),
+          }),
         },
       }
     );
@@ -542,6 +545,7 @@ describe("a list whose source is a named query", () => {
       page(outer),
       context({
         namedQueries: made,
+        queries: createQueryBudget(),
         data: {
           find: () =>
             Promise.resolve({ items: [{ id: "p1" }, { id: "p2" }], total: 2 }),
@@ -552,11 +556,118 @@ describe("a list whose source is a named query", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("runs again in the next render, though the host is kept", async () => {
+    const run = vi.fn<NamedQueryDefinition["run"]>(async ({ reader }) => ({
+      rows: (await reader.find({ collection: "events" })).items,
+    }));
+    const kept = host(eventsQuery(run), base({ events: EVENTS }));
+    for (const queries of [
+      createQueryBudget(),
+      createQueryBudget(),
+      undefined,
+    ]) {
+      await drawn(
+        page(list(named())),
+        context({
+          namedQueries: kept,
+          ...(queries === undefined ? {} : { queries }),
+        })
+      );
+    }
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
+  it("keys a kept result by the query's implementation as well as its declaration", async () => {
+    const keys: string[] = [];
+    const kept = new Map<string, NamedQueryRunData>();
+    const cache: NamedQueryHost["cache"] = async ({ key, read }) => {
+      keys.push(key.join("|"));
+      const found = kept.get(key.join("|"));
+      if (found !== undefined) return found;
+      const data = await read();
+      kept.set(key.join("|"), data);
+      return data;
+    };
+    const before = await draw(
+      eventsQuery(() => Promise.resolve({ rows: [{ id: "a", title: "Old" }] })),
+      { host: { cache } }
+    );
+    expect(headings(before.element)).toEqual(["Old"]);
+    // The same declaration, deployed with another run function.
+    const after = await draw(
+      eventsQuery(() => Promise.resolve({ rows: [{ id: "a", title: "New" }] })),
+      { host: { cache } }
+    );
+    expect(headings(after.element)).toEqual(["New"]);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("reads only through the frame's door, with the query as plain data", async () => {
+    let inFrame = false;
+    const seen: string[] = [];
+    const reader = base({ events: EVENTS });
+    const frame: NamedQueryHost["frame"] = () => ({
+      run: async operation => {
+        inFrame = true;
+        try {
+          return await operation();
+        } finally {
+          inFrame = false;
+        }
+      },
+      read: async operation => {
+        const was = inFrame;
+        inFrame = false;
+        try {
+          seen.push("door");
+          return await operation();
+        } finally {
+          inFrame = was;
+        }
+      },
+    });
+    const watched: ListBaseReader = {
+      ...reader,
+      find: query => {
+        seen.push(inFrame ? "base in frame" : "base outside");
+        return reader.find(query);
+      },
+    };
+    const { element } = await draw(
+      eventsQuery(async ({ reader: scoped }) => {
+        // A getter on the query runs when it is copied, inside the frame,
+        // never past the door.
+        const query = {
+          get collection() {
+            seen.push(inFrame ? "getter in frame" : "getter outside");
+            return "events";
+          },
+        };
+        return { rows: (await scoped.find(query)).items };
+      }),
+      { host: { frame, reader: watched } }
+    );
+    expect(headings(element)).toEqual(["One", "Two"]);
+    expect(seen).toEqual(["getter in frame", "door", "base outside"]);
+  });
+
   it("checks an item binding against the query's declared rows", async () => {
     const definition = eventsQuery(async ({ reader }) => ({
       rows: (await reader.find({ collection: "events" })).items,
     }));
-    registerNamedQueries([definition]);
+    // Registered under the same name with other rows, which the page must
+    // not judge by: its rows come from the host's query.
+    registerNamedQueries([
+      eventsQuery(definition.run, {
+        rows: {
+          key: "id",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "internalNote", type: "text" },
+          ],
+        },
+      }),
+    ]);
     const issues: BindingIssue[] = [];
     await drawn(
       page(list(named(), [itemHeading("t", "internalNote")])),
@@ -566,6 +677,36 @@ describe("a list whose source is a named query", () => {
     expect(issues).toContainEqual(
       expect.objectContaining({ nodeId: "t", code: "binding-field-missing" })
     );
+  });
+
+  it("logs a failure by its code and reference, never the error's words", () => {
+    const line = namedQueryFailureLine(
+      {
+        code: "threw",
+        query: "events.upcoming",
+        nodeId: "list",
+        ref: "NQ-ABC123",
+        error: Object.assign(new Error("ECONNREFUSED token=abc"), {
+          code: "ECONNREFUSED",
+        }),
+      },
+      '"pages" page "home"'
+    );
+    expect(line).toContain("NQ-ABC123");
+    expect(line).toContain("threw (ECONNREFUSED)");
+    expect(line).not.toContain("token=abc");
+    expect(
+      namedQueryFailureLine(
+        {
+          code: "threw",
+          query: "q",
+          nodeId: "l",
+          ref: "NQ-000000",
+          error: new TypeError("secret=1"),
+        },
+        "p"
+      )
+    ).not.toContain("secret");
   });
 
   it("tells an author a related list inside it has no entries to read", async () => {

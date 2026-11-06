@@ -190,15 +190,27 @@ export interface NamedQueryHost {
   readonly fieldsOf?: (
     collection: string
   ) => Promise<readonly BindingFieldShape[] | undefined>;
-  /** Run a query's `run` inside the host's frame, which refuses trusted reads. */
-  readonly runInFrame?: <T>(name: string, run: () => Promise<T>) => Promise<T>;
+  /**
+   * The host's frame for one run of the query `name`: `run` executes the
+   * query inside it, where the host refuses every read but the reader's, and
+   * `read` is the door the reader handed to the query reads through.
+   */
+  readonly frame?: (name: string) => {
+    run<T>(operation: () => Promise<T>): Promise<T>;
+    read<T>(operation: () => Promise<T>): Promise<T>;
+  };
   /** Keep a run's result across renders, tagged by everything it declares. */
   readonly cache?: (request: {
     readonly declaration: NamedQueryDeclaration;
     readonly key: readonly string[];
     readonly read: () => Promise<NamedQueryRunData>;
   }) => Promise<NamedQueryRunData>;
-  /** Told about each failed run, for the server log. */
+  /**
+   * Told about each failed run, for the server log. The failure carries the
+   * error as thrown, which may hold whatever the query's code put in it:
+   * log it through `namedQueryFailureLine`, which leaves the error's
+   * message and values out.
+   */
   readonly report?: (failure: NamedQueryFailure) => void;
 }
 

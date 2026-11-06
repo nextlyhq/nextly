@@ -73,9 +73,9 @@ function refusingPrincipal(
   operation: string
 ): (...args: unknown[]) => unknown {
   return (...args: unknown[]) => {
-    // Inside a page builder named query, no call outside the collection and
-    // Single operations is made: none of them reads as an anonymous visitor.
-    const insideQuery = refusedInsideNamedQuery(undefined, operation);
+    // Inside a page builder named query's run, no call is made: the query
+    // reads only through the reader it is handed.
+    const insideQuery = refusedInsideNamedQuery(operation);
     if (insideQuery !== undefined) return Promise.reject(insideQuery);
     return namesPrincipal(args)
       ? Promise.reject(refusal(operation))

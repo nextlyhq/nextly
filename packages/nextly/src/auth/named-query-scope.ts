@@ -1,21 +1,23 @@
 /**
  * Whether the code running now is a page builder named query's `run`.
  *
- * A named query is developer code a published page runs to read its rows. It
- * is handed a reader that reads as an anonymous visitor, and the rest of the
- * page builder's guarantees (only declared reads, rows as visitors see them)
- * rest on that reader being the only way it reads. But `run` is ordinary
- * server code: a closure that imports the trusted Direct API could read with
- * the server's access, and its rows would reach a published page.
+ * A named query is developer code a published page runs to read its rows.
+ * It is handed one reader, which reads as an anonymous visitor, only what
+ * the query declares, each read counted against the page's allowance and
+ * tagging the page's cache. Every guarantee the page builder makes about a
+ * named query rests on that reader being the ONLY way it reads. But `run` is
+ * ordinary server code: a closure that imports the Direct API could read a
+ * collection it never declared, uncounted and untagged, or read with the
+ * server's access, and its rows would reach a published page.
  *
- * So the renderer runs `run` inside this frame, and the Direct API refuses
- * every call made inside it that would not read as an anonymous visitor
- * (`assertVisitorCallInsideNamedQuery`). It fails closed: a call that names
- * no access at all defaults to the server's, and is refused.
+ * So the renderer runs `run` inside a frame ({@link openNamedQueryFrame}),
+ * and the Direct API refuses EVERY call made inside it. The reader's own
+ * reads go through the frame's `read` door, which leaves the frame for the
+ * length of that read: the door belongs to the frame that opened it, so code
+ * inside `run` cannot open one of its own and walk through it.
  *
- * A call that passes runs with the frame cleared, so the collection hooks it
- * reaches are judged as they are for any published list's read, and nothing
- * a hook does is refused for having been reached from a named query.
+ * Fails closed: a call made inside the frame by any other route than the
+ * door is refused, whatever access it names.
  *
  * `AsyncLocalStorage`, for the reason every caller scope here uses it: pages
  * render concurrently. The cost is one store lookup per Direct API call.
@@ -26,59 +28,71 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { NextlyError } from "../errors/nextly-error";
 
-const namedQueryFrame = new AsyncLocalStorage<string>();
+/** One open frame: the query it runs, as the log names it. */
+interface FrameToken {
+  readonly name: string;
+}
+
+const namedQueryFrame = new AsyncLocalStorage<FrameToken>();
 
 /**
- * Run `operation` as the named query `name`: every Direct API call it makes
- * must read as an anonymous visitor.
+ * One named query's frame: `run` executes the query inside it, and `read` is
+ * the one door through which the query's own reader reads.
  *
  * @experimental
  */
-export function runInsideNamedQuery<T>(name: string, operation: () => T): T {
-  return namedQueryFrame.run(name, operation);
+export interface NamedQueryFrame {
+  /** Run `operation` inside the frame. Refused inside another frame. */
+  run<T>(operation: () => T): T;
+  /**
+   * Run `operation` outside the frame, for the reader handed to the query.
+   * Refused unless called from inside THIS frame, so a frame code opens
+   * for itself is no way out of the one it runs in.
+   */
+  read<T>(operation: () => T): T;
 }
 
-/** The named query running now, or `undefined` outside one. */
-export function currentNamedQuery(): string | undefined {
-  return namedQueryFrame.getStore();
-}
-
-/** Run `operation` outside any named query's frame. */
-export function outsideNamedQuery<T>(operation: () => T): T {
-  return namedQueryFrame.exit(operation);
-}
-
-/** A call's access, as it reaches the Direct API, with the instance's defaults applied. */
-export interface NamedQueryCallAccess {
-  readonly overrideAccess?: boolean;
-  readonly user?: unknown;
-  readonly principal?: unknown;
-  readonly fieldAccessUser?: unknown;
-  readonly actor?: unknown;
-}
-
-/**
- * Refuse a Direct API call made inside a named query unless it reads as an
- * anonymous visitor: access rules applied, and no user, person, field-rule
- * user or key named. `operation` names the call in the log.
- */
-export function refusedInsideNamedQuery(
-  access: NamedQueryCallAccess | undefined,
-  operation: string
-): NextlyError | undefined {
-  const query = currentNamedQuery();
-  if (query === undefined) return undefined;
-  const asVisitor =
-    access !== undefined &&
-    access.overrideAccess === false &&
-    access.user === undefined &&
-    access.principal === undefined &&
-    access.fieldAccessUser === undefined &&
-    access.actor === undefined;
-  if (asVisitor) return undefined;
+/** The refusal for a call made where a named query may not make one. */
+function refusal(query: string, operation: string): NextlyError {
   // The log names the query and the call; a named query reads only through
   // the reader it is given.
   return NextlyError.forbidden({
     logContext: { reason: "named-query-trusted-read", query, operation },
   });
+}
+
+/**
+ * Open the frame a named query `name` runs in.
+ *
+ * @experimental
+ */
+export function openNamedQueryFrame(name: string): NamedQueryFrame {
+  const token: FrameToken = { name };
+  return Object.freeze({
+    run<T>(operation: () => T): T {
+      const outer = namedQueryFrame.getStore();
+      if (outer !== undefined) {
+        throw refusal(outer.name, "a named query frame of its own");
+      }
+      return namedQueryFrame.run(token, operation);
+    },
+    read<T>(operation: () => T): T {
+      const current = namedQueryFrame.getStore();
+      if (current !== token) {
+        throw refusal(current?.name ?? name, "a frame's reader door");
+      }
+      return namedQueryFrame.exit(operation);
+    },
+  });
+}
+
+/**
+ * The refusal for a Direct API call made inside a named query's frame, or
+ * nothing outside one. `operation` names the call in the log.
+ */
+export function refusedInsideNamedQuery(
+  operation: string
+): NextlyError | undefined {
+  const frame = namedQueryFrame.getStore();
+  return frame === undefined ? undefined : refusal(frame.name, operation);
 }
