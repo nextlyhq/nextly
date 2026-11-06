@@ -76,8 +76,11 @@ test("the Releases page's strip names each stopped and overdue release, linked, 
         "href",
         new RegExp(`/admin/releases/${id}$`)
       );
+      // `has` is asked inside each item, so it names the link from the page.
       await expect(
-        strip.getByRole("listitem").filter({ has: named })
+        strip
+          .getByRole("listitem")
+          .filter({ has: page.getByRole("link", { name: title }) })
       ).toContainText(outcome === "stopped" ? "Stopped" : "Overdue");
     }
 
