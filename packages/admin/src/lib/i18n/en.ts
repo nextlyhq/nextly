@@ -22,4 +22,11 @@ export const en = {
   "nextly.errors.page.retry": "Try again",
   "nextly.errors.page.home": "Go home",
   "nextly.errors.page.details": "View technical details",
+  "nextly.errors.section.title": "Error loading section",
+  "nextly.errors.section.description":
+    "An error occurred while loading this section. Please try again.",
+  "nextly.errors.section.details": "Error details",
+  "nextly.errors.section.retry": "Try Again",
+  "nextly.errors.inline.message": "Error loading content",
+  "nextly.errors.inline.development": "Error: {message}",
 } as const;
