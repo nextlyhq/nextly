@@ -200,6 +200,7 @@ import {
   BREAKPOINT_REMOVED_AUDIT,
   BREAKPOINT_REMOVED_METADATA,
   siteBreakpointRemovalRoute,
+  siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
   siteSettingsRoute,
   type BreakpointsRouteContext,
@@ -2251,11 +2252,15 @@ export const pageBuilder = (
         pageCollectionRoute(),
         // Settings' Site tab: what the caller may change there, and the one
         // way the site's breakpoints change.
-        siteSettingsRoute(configStyle),
+        // With the removals still holding what they removed, so the tab can
+        // follow one that is still going.
+        siteSettingsRoute(configStyle, breakpointRemoval),
         // A set that removes breakpoints strips what they held from the site;
         // one that does not finish in its save is carried on by the second.
         siteBreakpointsRoute(breakpointRemoval),
         siteBreakpointRemovalRoute(breakpointRemoval),
+        // Where one removal stands, read by its id.
+        siteBreakpointRemovalStatusRoute(breakpointRemoval),
         // A pattern, a component or a Layout as one file, with the components,
         // shared styles, variables, breakpoints and media it depends on,
         // read as the caller.

@@ -867,6 +867,7 @@ function editorSettings(
     pageLayout,
     canvasRender,
     saveBreakpoints,
+    refreshSiteStyle,
     siteStylePending,
     siteStyleError,
   } = view;
@@ -901,6 +902,7 @@ function editorSettings(
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
           status: siteStyleStatus(siteStylePending, siteStyleError),
+          refresh: refreshSiteStyle,
         }}
       />
     </RemountOnStyleReplay>
