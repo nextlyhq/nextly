@@ -154,6 +154,15 @@ export {
   type NamedQueryFrame,
 } from "./auth/named-query-scope";
 
+// The reader a page builder's canvas reads the same lists with: the same
+// queries, read as the person editing, drafts included. `@experimental` with
+// the public reader.
+export {
+  createEditorReader,
+  toEditorFind,
+} from "./runtime/routing/editor-reader";
+export type { EditorReaderPerson } from "./runtime/routing/editor-reader";
+
 // What a binding on a published page reads besides a list, `@experimental`
 // with the reader: the site settings through their public allowlist (a write
 // to them expires `nextlySiteSettingsTags()`), and the field shapes a binding

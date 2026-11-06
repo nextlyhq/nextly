@@ -9,6 +9,7 @@
  *
  * @module usage-backfill-wiring.test
  */
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +21,7 @@ import {
   backfillSurvey,
   forgetGoneScopes,
   goneScopes,
+  hostGeneration,
   type BackfillHost,
 } from "./usage-backfill-wiring";
 import type { UsageRowReader } from "./usage-count";
@@ -470,5 +472,39 @@ describe("forgetting the scopes that are gone", () => {
     // transaction, and the run records its sweep.
     expect(fenced).toHaveLength(2);
     expect(swept).toBe(1);
+  });
+});
+
+describe("every usage index the backfill fills", () => {
+  it("reads every index's table for gone scopes, the variables' included", async () => {
+    const read: string[] = [];
+    await forgetGoneScopes(
+      host({ collectionSlugs: async () => [] }),
+      [],
+      async () => undefined as never,
+      { completed: new Set(), markSwept: async () => undefined },
+      table => {
+        read.push(table.name);
+        return async () => ({ items: [], hasNext: false });
+      }
+    );
+
+    expect(read).toEqual([
+      "page_builder__class_usage",
+      "page_builder__component_usage",
+      "page_builder__token_usage",
+    ]);
+  });
+
+  it("names every index's table in the generation, so a new index is walked", () => {
+    expect(
+      hostGeneration(host({ limits: () => DEFAULT_LIMITS })).split("|")
+    ).toEqual(
+      expect.arrayContaining([
+        "page_builder__class_usage",
+        "page_builder__component_usage",
+        "page_builder__token_usage",
+      ])
+    );
   });
 });

@@ -885,11 +885,13 @@ export type {
 export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
   PluginStoredIdentity,
   PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
