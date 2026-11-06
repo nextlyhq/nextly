@@ -444,6 +444,7 @@ describe.each(getConfiguredTestDialects())(
           data: {
             title: "Author edit",
             content: placing("page", heroId, { title: "Old", body: "Author" }),
+            _overwrite: true,
           },
           overrideAccess: true,
         });

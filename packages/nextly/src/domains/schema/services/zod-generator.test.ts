@@ -780,12 +780,12 @@ describe("ZodGenerator — Schema Variants & Exports", () => {
 
     // Create Input Schema
     expect(code).toContain(
-      "export const ArticleCreateInputSchema = ArticleSchema.omit({\n  id: true,\n  createdAt: true,\n  updatedAt: true,\n});"
+      "export const ArticleCreateInputSchema = ArticleSchema.omit({\n  id: true,\n  _rev: true,\n  createdAt: true,\n  updatedAt: true,\n});"
     );
 
     // Update Input Schema
     expect(code).toContain(
-      "export const ArticleUpdateInputSchema = ArticleSchema.partial().required({\n  id: true,\n});"
+      "export const ArticleUpdateInputSchema = ArticleSchema.partial()\n  .required({ id: true })\n  .extend({ _overwrite: z.boolean().optional() });"
     );
 
     // Type Exports
@@ -811,7 +811,7 @@ describe("ZodGenerator — Schema Variants & Exports", () => {
       "export const CmsArticleCreateInputSchema = CmsArticleSchema.omit({"
     );
     expect(code).toContain(
-      "export const CmsArticleUpdateInputSchema = CmsArticleSchema.partial().required({"
+      "export const CmsArticleUpdateInputSchema = CmsArticleSchema.partial()"
     );
   });
 

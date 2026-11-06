@@ -415,8 +415,9 @@ describe.each(getConfiguredTestDialects())(
         "versions",
         "working-draft",
       ];
+      // The author discards whatever the draft holds now.
       const response = await createDynamicHandlers().DELETE(
-        new Request(`${ORIGIN}/api/${path.join("/")}`, {
+        new Request(`${ORIGIN}/api/${path.join("/")}?_overwrite=true`, {
           method: "DELETE",
           headers: {
             cookie: `${cookie}; nextly_csrf=${CSRF}`,
@@ -581,7 +582,7 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id,
-            data: { content: doc("page", [node]) },
+            data: { content: doc("page", [node]), _overwrite: true },
           },
         ],
         { overrideAccess: true }
@@ -765,6 +766,7 @@ describe.each(getConfiguredTestDialects())(
         id: withDraft,
         data: {
           content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -1872,7 +1874,10 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id: trimmed,
-          data: { content: doc("page", [heading("a", styledAfter)]) },
+          data: {
+            content: doc("page", [heading("a", styledAfter)]),
+            _overwrite: true,
+          },
           overrideAccess: true,
         });
         await t.nextly.delete({
@@ -1925,6 +1930,7 @@ describe.each(getConfiguredTestDialects())(
           id: withDraft,
           data: {
             content: doc("page", [heading("a", styledAtMobile), heading("b")]),
+            _overwrite: true,
           },
           overrideAccess: true,
         });
@@ -1967,6 +1973,7 @@ describe.each(getConfiguredTestDialects())(
           id: live,
           data: {
             content: doc("page", [heading("a", styledAfter), heading("b")]),
+            _overwrite: true,
           },
           overrideAccess: true,
         });
@@ -2028,7 +2035,10 @@ describe.each(getConfiguredTestDialects())(
         await svc.retire(["mobile"]);
         await t.nextly.updateSingle({
           slug: SITE_STYLE_SLUG,
-          data: { breakpoints: { viewport: [TABLET, MOBILE], container: [] } },
+          data: {
+            breakpoints: { viewport: [TABLET, MOBILE], container: [] },
+            _overwrite: true,
+          },
           overrideAccess: true,
           context: { ...SITE_SETTINGS_WRITE_CONTEXT },
         });
@@ -2147,7 +2157,10 @@ describe.each(getConfiguredTestDialects())(
         await svc.retire(["mobile"]);
         await t.nextly.updateSingle({
           slug: SITE_STYLE_SLUG,
-          data: { breakpoints: { viewport: [TABLET, MOBILE], container: [] } },
+          data: {
+            breakpoints: { viewport: [TABLET, MOBILE], container: [] },
+            _overwrite: true,
+          },
           overrideAccess: true,
           context: { ...SITE_SETTINGS_WRITE_CONTEXT },
         });

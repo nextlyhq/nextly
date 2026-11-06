@@ -71,6 +71,18 @@ import {
 // ============================================================
 
 /**
+ * The version a read gives a document, which an update sends back so a save
+ * made since refuses it. Optional: a server that issues none leaves it off.
+ */
+const DOCUMENT_VERSION_MEMBER = "  _rev?: string;";
+
+/**
+ * An update's choice to replace whatever is stored rather than send the
+ * version it read: one of the two an update must say.
+ */
+const OVERWRITE_MEMBER = "_overwrite?: boolean";
+
+/**
  * Result of generating TypeScript types for a single collection.
  */
 export interface GeneratedTypeInterface {
@@ -549,6 +561,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of collection.fields) {
@@ -637,6 +650,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of single.fields) {
@@ -1329,7 +1343,8 @@ ${properties}
       lines.push(" */");
     }
 
-    const omitFields = ["id"];
+    // A create is never judged by version, so it carries none.
+    const omitFields = ["id", "_rev"];
     if (collection.timestamps) {
       omitFields.push("createdAt", "updatedAt");
     }
@@ -1362,7 +1377,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string };`
+      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string; ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");
@@ -1387,7 +1402,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">>;`
+      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">> & { ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");

@@ -294,22 +294,27 @@ export interface CreateArgs<TSlug extends CollectionSlug = CollectionSlug>
  *
  * Supports updating by ID or by where clause (bulk update).
  *
+ * An update says which version it changes, the `_rev` from the read it was
+ * made from, or that it replaces whatever is stored (`_overwrite: true`).
+ * One that says neither is refused with `VERSION_REQUIRED`.
+ *
  * @typeParam TSlug - The collection slug literal type (auto-inferred from `collection`)
  *
  * @example
  * ```typescript
- * // Update by ID
+ * // Update by ID, from a read of it
+ * const post = await nextly.findByID({ collection: 'posts', id: 'post-123' });
  * await nextly.update({
  *   collection: 'posts',
  *   id: 'post-123',
- *   data: { status: 'published' },
+ *   data: { status: 'published', _rev: post?._rev },
  * });
  *
- * // Bulk update by where clause
+ * // Bulk update by where clause: a query names no one document's version
  * await nextly.update({
  *   collection: 'posts',
  *   where: { status: { equals: 'draft' } },
- *   data: { status: 'archived' },
+ *   data: { status: 'archived', _overwrite: true },
  * });
  * ```
  */

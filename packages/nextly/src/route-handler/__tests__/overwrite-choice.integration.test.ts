@@ -314,9 +314,13 @@ describe.each(getConfiguredTestDialects())(
       }
 
       // A Single, through REST and the Direct API (plugins update no Single).
+      // Ben saves from the version he read, so his save is no overwrite.
+      const benRead = (await t.nextly.findSingle({
+        slug: SETTINGS as never,
+      } as never)) as Doc;
       await t.nextly.updateSingle({
         slug: SETTINGS as never,
-        data: { notice: "Ben's" },
+        data: { notice: "Ben's", _rev: benRead._rev },
         user: { id: BEN.id },
       } as never);
       await grantPublic(t, [`read-${SETTINGS}`, `update-${SETTINGS}`]);
