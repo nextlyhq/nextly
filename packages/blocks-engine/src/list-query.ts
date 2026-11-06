@@ -235,7 +235,8 @@ export type ListPageCode =
   | "list-paginate-twice"
   | "list-paginate-nested"
   | "list-paginate-related"
-  | "list-paginate-shared";
+  | "list-paginate-shared"
+  | "list-paginate-named";
 
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
@@ -290,6 +291,8 @@ export const LIST_ISSUE_CODES: {
     "A list split into pages shows related entries, which have no count of pages.",
   "list-paginate-shared":
     "A list split into pages sits in a component or a Layout region, which shows on many pages.",
+  "list-paginate-named":
+    "A list split into pages takes its entries from a custom source, which can't be split into pages yet.",
 };
 
 /**
@@ -1663,6 +1666,12 @@ function pageFindings(
       "list-paginate-nested",
       "This list is split into pages, but it sits inside another list, which repeats it for each entry with no address of its own. Turn off Split into pages, or move this list out of that list."
     );
+  }
+  // A custom source's rows have no page count a route can serve yet, so a
+  // list of them pages nothing: refused rather than left on one page with
+  // no word why.
+  if (query.namedQuery !== undefined) {
+    return refused("list-paginate-named", NAMED_QUERY_TEXT.paginated);
   }
   if (query.relation !== undefined) {
     return refused(

@@ -394,6 +394,14 @@ describe.each(getConfiguredTestDialects())(
         "Enter a whole number from 1 to 9.",
       ],
       [
+        "a custom source's list split into pages",
+        {
+          namedQuery: { name: "events.upcoming", params: { city: "lahore" } },
+          paginate: true,
+        },
+        "A custom source's list can't be split into pages yet.",
+      ],
+      [
         "a custom source beside a collection",
         {
           namedQuery: { name: "events.upcoming", params: { city: "lahore" } },

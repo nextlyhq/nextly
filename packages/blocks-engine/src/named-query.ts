@@ -527,6 +527,7 @@ export const NAMED_QUERY_TEXT: {
   readonly counted: (matching: number, shown: number) => string;
   readonly uncounted: (query: string) => string;
   readonly nestedRelated: string;
+  readonly paginated: string;
   readonly needsInput: string;
   readonly inputsNote: (
     query: string,
@@ -591,6 +592,8 @@ export const NAMED_QUERY_TEXT: {
     `${query} doesn't count its entries, so this list can't be split into pages. Turn this off, or ask a developer to make it return a total.`,
   nestedRelated:
     "The list around this one shows a custom source's rows, which have no related entries. Choose a collection.",
+  paginated:
+    "A custom source's list can't be split into pages yet. Turn off Split into pages, or choose a collection.",
   // The Source menu's tag on a query an author must give a value to.
   needsInput: "Needs input",
   inputsNote: (query, required, { others, waiting }) => {

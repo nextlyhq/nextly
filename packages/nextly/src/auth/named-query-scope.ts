@@ -97,6 +97,29 @@ export function refusedInsideNamedQuery(
   return frame === undefined ? undefined : refusal(frame.name, operation);
 }
 
+/** Whether a value is plain data: a plain record or an array. */
+function isPlainData(value: object): boolean {
+  if (Array.isArray(value)) return true;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * What a guarded service method returned, guarded in its turn: a function
+ * or an object other than plain data (a client, a repository, a closure) is
+ * a handle that can read data, so it refuses inside a named query's frame as
+ * the service does, whether it is used at once or kept and used later. A
+ * promise is guarded once it settles. Plain data passes as it is.
+ */
+function guardedResult(value: unknown, path: string): unknown {
+  if (typeof value === "function") return refusingInsideNamedQuery(value, path);
+  if (typeof value !== "object" || value === null) return value;
+  if (value instanceof Promise) {
+    return value.then(settled => guardedResult(settled, path));
+  }
+  return isPlainData(value) ? value : refusingInsideNamedQuery(value, path);
+}
+
 /** Each object already guarded, so one reached twice is one proxy. */
 const guardedObjects = new WeakMap<object, object>();
 
@@ -114,7 +137,7 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
     return ((...args: unknown[]) => {
       const refused = refusedInsideNamedQuery(path);
       if (refused !== undefined) throw refused;
-      return method(...args);
+      return guardedResult(method(...args), `${path}()`);
     }) as T;
   }
   if (typeof value !== "object" || value === null) return value;
@@ -135,7 +158,7 @@ export function refusingInsideNamedQuery<T>(value: T, path: string): T {
         return (...args: unknown[]) => {
           const refused = refusedInsideNamedQuery(at);
           if (refused !== undefined) throw refused;
-          return Reflect.apply(method, target, args);
+          return guardedResult(Reflect.apply(method, target, args), `${at}()`);
         };
       }
       return refusingInsideNamedQuery(member, at);

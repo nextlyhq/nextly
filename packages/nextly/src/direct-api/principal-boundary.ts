@@ -136,6 +136,22 @@ function guardNamespace(
 }
 
 /**
+ * Whether `prop` is read through a getter on `target` or its prototypes,
+ * found without running it.
+ */
+function isAccessor(target: object, prop: PropertyKey): boolean {
+  for (
+    let at: object | null = target;
+    at !== null;
+    at = Object.getPrototypeOf(at) as object | null
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(at, prop);
+    if (descriptor !== undefined) return descriptor.get !== undefined;
+  }
+  return false;
+}
+
+/**
  * The instance as its callers reach it: the collection and Single methods
  * as they are, and every other method and namespace refusing `principal`.
  *
@@ -150,8 +166,17 @@ export function guardPrincipalOperations<T extends object>(instance: T): T {
   const namespaces = new WeakMap<object, Record<string, unknown>>();
   const guarded: T = new Proxy(instance, {
     get(target, prop, receiver) {
-      const value = Reflect.get(target, prop, receiver) as unknown;
       const name = String(prop);
+      // Inside a page builder named query's run, the instance's own services
+      // (`collectionsHandler` and the rest, each a getter) are refused
+      // before the getter runs, as its methods are: a call on one, such as a
+      // trusted list read made by mistake, would read past the query's
+      // reader.
+      if (isAccessor(target, prop)) {
+        const refused = refusedInsideNamedQuery(name);
+        if (refused !== undefined) throw refused;
+      }
+      const value = Reflect.get(target, prop, receiver) as unknown;
       if (UNGUARDED.has(name)) return value;
       if (typeof value === "function") {
         return PERSON_OPERATIONS.has(name)
