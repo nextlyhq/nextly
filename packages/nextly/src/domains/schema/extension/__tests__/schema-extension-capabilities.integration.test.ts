@@ -67,11 +67,9 @@ import {
   resolveEntryId,
 } from "../../../collections/services/collection-id";
 import { runEntityTransforms } from "../../../../plugins/entity-transforms";
+import type { PluginContributions } from "../../../../plugins/contributions";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
-import {
-  applyPluginSchemaContributions,
-  type PluginContributions,
-} from "../../../../plugins/schema/apply-contributions";
+import { applyPluginSchemaContributions } from "../../../../plugins/schema/apply-contributions";
 import { resolvePostgresSchema } from "../../services/postgres-schema";
 import { fieldProducesColumn } from "../../services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../utils/resolve-table-name";
@@ -103,7 +101,8 @@ interface TestAdapter {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   executeQuery(sql: string): Promise<unknown>;
-  getDrizzle<T = unknown>(): T;
+  /** The relations argument builds the RQB view; absent, plain query building. */
+  getDrizzle<T = unknown>(relations?: unknown): T;
   setTableResolver(resolver: unknown): void;
 }
 
@@ -406,7 +405,7 @@ const CAPABILITIES: Capability[] = [
       // diff reads them as its own and proposes nothing.
       const live = (await ctx.live([spec.name]))[0]!;
       const liveNames = (live.indexes ?? []).map(i => i.name).sort();
-      for (const index of spec.indexes) {
+      for (const index of spec.indexes ?? []) {
         expect(liveNames).toContain(index.name);
       }
 
@@ -1479,7 +1478,10 @@ const CAPABILITIES: Capability[] = [
         {
           entityKind: "collection",
           tableName: `dc_${PREFIX}_posts`,
-          fields: posts?.fields ?? [],
+          fields: (posts?.fields ?? []) as readonly {
+            name: string;
+            type: string;
+          }[],
         },
         ctx.dialect
       );
