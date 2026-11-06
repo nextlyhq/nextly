@@ -407,6 +407,19 @@ export function BrandingProvider({
       brandingData === undefined && workspaceData === undefined
         ? undefined
         : { ...brandingData, ...workspaceData };
+    // Each half carries its own places' contributions: the public half the
+    // login page's, the signed-in half the rest. Merged place by place, so
+    // signing in does not take the login page's away.
+    if (
+      merged !== undefined &&
+      (brandingData?.contributions !== undefined ||
+        workspaceData?.contributions !== undefined)
+    ) {
+      merged.contributions = {
+        ...brandingData?.contributions,
+        ...workspaceData?.contributions,
+      };
+    }
     return {
       branding: merged,
       // The WORKSPACE query, matching `isUnavailable`. Both answer one
