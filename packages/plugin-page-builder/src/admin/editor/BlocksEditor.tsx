@@ -76,6 +76,7 @@ import {
 } from "../site-style-client";
 import { valueAtPath } from "../snapshot-merge";
 
+import { listEntryCollectionOf } from "./canvas-page-context";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -148,9 +149,9 @@ type EditorView = EditorMount &
     preview: ComponentView["preview"];
     /**
      * The collection the document is an entry of, so a list on it can show
-     * the entry's related entries; absent on a Single.
+     * the entry's related entries; `null` on a Single, which has none.
      */
-    entryCollection: string | undefined;
+    entryCollection: string | null | undefined;
   };
 
 /**
@@ -387,7 +388,7 @@ function servicesFor(
   passages: OpenPassages,
   locale: string | undefined,
   readMedia: ReadMediaSummary,
-  entryCollection: string | undefined
+  entryCollection: string | null | undefined
 ): ContentServices {
   let byLocale = servicesByPassages.get(passages);
   if (byLocale === undefined) {
@@ -395,7 +396,7 @@ function servicesFor(
     servicesByPassages.set(passages, byLocale);
   }
   // Both in the key, as JSON so no language and collection can collide.
-  const key = JSON.stringify([locale ?? "", entryCollection ?? ""]);
+  const key = JSON.stringify([locale ?? "", entryCollection ?? null]);
   let services = byLocale.get(key);
   if (services === undefined) {
     services = {
@@ -407,6 +408,8 @@ function servicesFor(
       // The same language for a link's search, so a page is found and named
       // as the author reads it.
       findLinkTargets: findLinkTargetsIn(locale),
+      // The fields a list may name, as a save in this language judges them.
+      listLoopCollections: () => listLoopCollections(locale),
       // The selected list's "N entries match, so M show", taken from the
       // canvas's own read of the list in this language.
       countListEntries: canvasListReadsIn(locale).count,
@@ -489,6 +492,10 @@ function editorInspector(
         view.readMedia,
         view.entryCollection
       )}
+      // A placement's exposed passage the canvas is editing in place: its
+      // field in the placement panel is held meanwhile, as one editor serves
+      // both.
+      canvasPassage={view.inline.editingRich?.exposure ?? null}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -1020,7 +1027,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
-  const { done, publishOffer } = useHostCommit({
+  const { done, publishOffer, removalHold } = useHostCommit({
     name,
     control,
     editor,
@@ -1028,6 +1035,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     onCommit,
     onClose,
     savePoint,
+    // The count the removal dialog says now; the hold keeps it as it stood
+    // when each field was removed.
+    removalReach: () => mount.componentFacts?.reach,
   });
 
   const page = usePageFacts(control);
@@ -1081,8 +1091,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     reveal,
     readMedia,
     preview: componentView.preview,
-    entryCollection:
-      identity?.kind === "collection" ? identity.slug : undefined,
+    entryCollection: listEntryCollectionOf(identity),
   };
   useOpenAtSection({
     sectionId: openAt,
@@ -1255,6 +1264,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             returnFocusTo={makeComponent.returnFocusTo}
           />
           {publishOffer}
+          {removalHold}
           {sharedStyle.dialog}
         </BlockKeyboardActions>
       </BuilderShell>

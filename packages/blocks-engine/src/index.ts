@@ -709,6 +709,7 @@ export type {
   ColorLeaf,
   CssValueLeaf,
   DimensionLeaf,
+  KeywordExpansion,
   KeywordLeaf,
   LogicalCornersShape,
   LogicalSidesShape,
@@ -941,6 +942,10 @@ export {
   // gap's rules on it, a block repeating its slot puts it on each wrapper, and
   // an editor takes it off to ask whether a margin is the gap.
   CHILD_GAP_CLASS,
+  // What an Accordion section marks as its icon and its title, for the
+  // Accordion's icon choices to reach.
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
@@ -965,6 +970,12 @@ export type { CompiledDeclarations, Declaration } from "./style/declarations";
  * @experimental
  */
 export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
+export {
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_ICONS,
+  DISCLOSURE_POSITION_PROPERTY,
+  DISCLOSURE_POSITIONS,
+} from "./style/disclosure";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {
@@ -1302,6 +1313,7 @@ export {
   COLLECTION_LIST_TYPE,
   isListDay,
   isListFilterOp,
+  LIST_ENTRY_SLOT,
   LIST_FIELD_CODES,
   LIST_FILTER_OPS,
   LIST_ISSUE_CODES,
@@ -1310,6 +1322,8 @@ export {
   LIST_FIELD_KINDS,
   LIST_KIND_OPS,
   LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
   LIST_MAX_VALUES,
   isListFieldKind,
   listFieldKind,
@@ -1317,6 +1331,7 @@ export {
   listQueryIssues,
   listRelationTarget,
   listSortText,
+  outerListOf,
   readListQuery,
 } from "./list-query";
 export type {

@@ -1,6 +1,7 @@
 import type {
   OverridableDocumentAction,
   PluginDocumentActionOverride,
+  PluginListFilterDeclaration,
   PublishedContentSource,
 } from "nextly/config";
 import type {
@@ -239,6 +240,12 @@ export interface PluginMetadata {
    * Present only for enabled plugins.
    */
   panelSections?: Array<{ slug: string; title: string; component: string }>;
+  /**
+   * @experimental The filters this plugin offers in the entry list's toolbar,
+   * via `contributes.admin.filters`, as they passed the boot check. Present
+   * only for enabled plugins.
+   */
+  listFilters?: PluginListFilterDeclaration[];
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body

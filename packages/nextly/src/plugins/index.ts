@@ -124,6 +124,8 @@ export type {
   PluginFieldTypeDocumentView,
   PluginPanelSection,
   PluginAdminPlaceDeclaration,
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";

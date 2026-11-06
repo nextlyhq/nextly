@@ -249,7 +249,7 @@ function readerFilters(
 function idOf(value: unknown): string | number | undefined {
   if (typeof value === "string" || typeof value === "number") return value;
   if (typeof value === "object" && value !== null && "id" in value) {
-    const id = (value as { id: unknown }).id;
+    const id = value.id;
     if (typeof id === "string" || typeof id === "number") return id;
   }
   return undefined;
@@ -316,7 +316,7 @@ async function entryRelatedIds(
   if (ctx.entry === null) {
     return {
       problem:
-        "This page shows no entry, so it has no related entries to list.",
+        "This page isn't an entry in a collection, so it has no related entries to show.",
     };
   }
   const id = ctx.entry.id;

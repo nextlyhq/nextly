@@ -166,13 +166,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: PIPELINE,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/users/services/plaintext-password-cleanup.ts#PlainTextPasswordCleanup.clear (opened the transaction) \u00b7 insert users",
     witness:
       "packages/nextly/src/domains/users/__tests__/plaintext-password-cleanup.integration.test.ts",
@@ -257,13 +250,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
     witness: null,
     reason: TIMING,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts#<anonymous> (opened the transaction) \u00b7 select nextly_schema_owners",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: PIPELINE,
   },
   {
     dialect: "postgresql",
