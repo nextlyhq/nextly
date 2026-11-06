@@ -72,7 +72,7 @@ export {
   type InboundWebhookDelivery,
   type InboundWebhookReading,
   type InboundWebhookScheme,
-  type PluginWebhooks,
+  type PluginReceivedWebhooks,
   type VerifyWebhookOptions,
   type WebhookRefusal,
   type WebhookVerification,

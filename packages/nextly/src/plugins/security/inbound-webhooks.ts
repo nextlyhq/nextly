@@ -98,7 +98,7 @@ export type WebhookVerification =
   | { readonly verified: false; readonly reason: WebhookRefusal };
 
 /** @experimental Verifying the webhooks a plugin receives (`ctx.security.webhooks`). */
-export interface PluginWebhooks {
+export interface PluginReceivedWebhooks {
   /**
    * Verify `request`, reading a copy of its body: the request stays readable,
    * though the verified `body` in the answer is the one to process.
@@ -297,9 +297,9 @@ async function readBounded(
 }
 
 /** `ctx.security.webhooks`, telling time by `now`. */
-export function createPluginWebhooks(
+export function createPluginReceivedWebhooks(
   clock: { now: () => Date } = { now: () => new Date() }
-): PluginWebhooks {
+): PluginReceivedWebhooks {
   return {
     async verify(request, options) {
       const maxBytes = finiteAtLeast(

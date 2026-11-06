@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSignatureHeaders } from "../../../domains/webhooks/signing";
 import {
-  createPluginWebhooks,
+  createPluginReceivedWebhooks,
   standardWebhooks,
   verifyWebhookDelivery,
   type InboundWebhookScheme,
@@ -532,7 +532,7 @@ describe("verifying an inbound webhook", () => {
 });
 
 describe("ctx.security.webhooks.verify", () => {
-  const webhooks = createPluginWebhooks({ now: () => AT });
+  const webhooks = createPluginReceivedWebhooks({ now: () => AT });
 
   function request(delivery: { headers: Headers; bytes: Uint8Array }) {
     return new Request("https://site.example/api/plugins/shop/webhooks", {

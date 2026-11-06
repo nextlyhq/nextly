@@ -353,7 +353,7 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginWebhooks`
+ *   with them (see STABILITY.md). `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
  *   experimental too, until a first-party plugin receives webhooks with it.
@@ -369,7 +369,7 @@ export type {
   OneTimeSecrets,
   SecretData,
   TxOption,
-  PluginWebhooks,
+  PluginReceivedWebhooks,
   InboundWebhookScheme,
   InboundWebhookDelivery,
   InboundWebhookReading,
