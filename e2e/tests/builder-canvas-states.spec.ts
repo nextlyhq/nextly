@@ -295,9 +295,16 @@ async function groundBehind(
   return { own, page: beneath };
 }
 
-/** The ratio between a mark's rendered ring and the rendered ground beneath it. */
+/**
+ * The ratio between a mark's rendered ring and the rendered ground beneath it,
+ * with both colours attached to the run so a failure names what it measured.
+ */
 async function ringContrast(page: Page, selector: string): Promise<number> {
   const { ring, ground } = await ringAndGround(page, selector);
+  test.info().annotations.push({
+    type: "ring-and-ground",
+    description: `${selector}: ring ${ring} on ${ground}`,
+  });
   return contrast(page, ring, ground);
 }
 
@@ -326,9 +333,15 @@ async function pixelAt(page: Page, x: number, y: number): Promise<string> {
  * mark the author can see (a layer can hold others that are not drawn), read
  * as the browser resolved it: a one- or two-pixel line beside a halo, so a
  * single sampled pixel is the halo or a blend rather than the ring. The ground
- * is rendered, one pixel inside the mark's edge with the editor's layer hidden
+ * is rendered, just inside the mark's edge with the editor's layer hidden
  * and the page's text made transparent: a colour, an image or a gradient the
  * block paints, and never a glyph that happens to sit at that point.
+ *
+ * The point is held inside the page as the frame shows it. A mark around a
+ * block as wide as the page is drawn a few pixels past the page's edge, so
+ * its side runs over the editor's own surround; a pixel taken there is the
+ * editor, not the page the mark outlines, and the ring is read against the
+ * page along its whole inner edge.
  */
 async function ringAndGround(
   page: Page,
@@ -341,7 +354,9 @@ async function ringAndGround(
   await expect(mark).toBeVisible();
   const box = await mark.boundingBox();
   if (box === null) throw new Error("the mark is not laid out");
-  const x = box.x + 1;
+  const shown = await page.locator(CANVAS_FRAME).boundingBox();
+  if (shown === null) throw new Error("the canvas frame is not laid out");
+  const x = Math.max(box.x, shown.x) + 3;
   const y = box.y + box.height / 2;
   const ring = await mark.evaluate(
     element => getComputedStyle(element).outlineColor
