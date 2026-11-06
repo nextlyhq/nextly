@@ -69,7 +69,7 @@ function page(...nodes: BlockNode[]): BlockDocument {
 /** `count` posts, titled `Post 1` onward, behind a reader with totals. */
 function posts(
   count: number,
-  options: { readonly fails?: boolean } = {}
+  options: { readonly fails?: boolean; readonly total?: number } = {}
 ): { provider: BlocksDataProvider; queries: BlocksQuery[] } {
   const rows = Array.from({ length: count }, (_, index) => ({
     id: `p${String(index + 1)}`,
@@ -88,7 +88,7 @@ function posts(
         const start = query.offset ?? 0;
         return Promise.resolve({
           items: rows.slice(start, start + (query.limit ?? 10)),
-          total: rows.length,
+          total: options.total ?? rows.length,
         });
       },
     },
@@ -223,6 +223,19 @@ describe("a list split into pages, rendered", () => {
     expect(host.textContent).toContain("Nothing yet");
     expect(host.querySelector("nav")).toBeNull();
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 2.5])(
+    "draws no links for a provider total of %s",
+    async total => {
+      const { provider } = posts(30, { total });
+      const host = await drawn(page(list("news", NEWS)), {
+        data: provider,
+        listPage: listPage("news", 1),
+      });
+      expect(titles(host)).toHaveLength(10);
+      expect(host.querySelector("nav")).toBeNull();
+    }
+  );
 
   it("shows its first page, unlinked, where no route pages it", async () => {
     const { provider, queries } = posts(30);

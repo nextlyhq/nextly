@@ -2608,16 +2608,30 @@ function blocksRouteConfig(
       const document = readDocument(entry, field, context);
       const list = pagedListOf(config, resolver, document);
       if (list === undefined) return null;
-      // Counted under the page's read allowance, as the list reads: a page
-      // whose allowance cannot reach the list (`maxQueries: 0`, or spent on
-      // the day terms first) has no later pages, since its list draws none.
+      // Counted under the page's read allowance, spent in the render's own
+      // order up to the list: the page's inputs (its components, its Layout's
+      // regions, what its bindings read), then the terms its lists compare
+      // days by, then the list's own read. A page whose allowance runs out
+      // before the list (`maxQueries: 0`, or spent on those reads) has no
+      // later pages, since its list draws none.
       const budget = createQueryBudget(
         config.maxQueries ?? DEFAULT_MAX_QUERIES
       );
+      const { bindings, presented } = await readPageInputs({
+        config,
+        resolver,
+        document,
+        entry,
+        context,
+        entrySource,
+        layoutsProvider,
+        window: listWindow,
+        budget,
+      });
       const days = await listDayInputs({
         config,
-        documents: [document],
-        bindings: undefined,
+        documents: presented,
+        bindings,
         budget,
         window: listWindow,
         context,

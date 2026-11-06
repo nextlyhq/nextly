@@ -209,7 +209,14 @@ export async function renderCollectionLoop({
     {
       find: async query => {
         const result = await data.find(query);
-        matching = typeof result.total === "number" ? result.total : undefined;
+        // A provider's own answer, held to what a count can be: a whole
+        // number from 0. Anything else draws no links, rather than links to
+        // `/page/NaN` the route would never serve.
+        const total = result.total;
+        matching =
+          typeof total === "number" && Number.isSafeInteger(total) && total >= 0
+            ? total
+            : undefined;
         return Array.isArray(result.items) ? [...result.items] : [];
       },
       claim: () => ctx.queries?.take() !== false,
