@@ -51,6 +51,8 @@ let writeBehaviour: () => Promise<unknown> = async () => ({ id: "1" });
  */
 let issuesAnswer: readonly ValidationIssue[] = [];
 const writes: Record<string, unknown>[] = [];
+/** Whether each write, in order, said to overwrite; kept apart from `writes`. */
+const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
@@ -101,7 +103,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     writeOptions = options;
     return {
       mutateAsync: async (data: Record<string, unknown>) => {
-        writes.push(data);
+        const { _overwrite, ...sections } = data;
+        overwrites.push(_overwrite);
+        writes.push(sections);
         return writeBehaviour();
       },
       isPending: false,
@@ -136,6 +140,7 @@ beforeEach(() => {
   writeBehaviour = async () => ({ id: "1" });
   issuesAnswer = [];
   writes.length = 0;
+  overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
   readFails = false;
@@ -242,6 +247,61 @@ describe("saving the space between blocks", () => {
     });
     expect(verdict).toMatchObject({ saved: false });
     expect(refetches).toBe(0);
+  });
+});
+
+describe("a save across two studios", () => {
+  it("stores both sections, refusing neither", async () => {
+    // A page save releases each studio's held edit at once. The server is
+    // modelled as the Single's update judges a write: one that names neither
+    // the current version nor an overwrite is refused. Both writes are this
+    // editor's, so both must be stored.
+    let current = 3;
+    readAnswer = {
+      data: {
+        tokens: null,
+        fonts: null,
+        classes: null,
+        breakpoints: null,
+        _rev: "3",
+      },
+      isPending: false,
+      error: null,
+    };
+    writeBehaviour = async () => {
+      const sent = writes[writes.length - 1] ?? {};
+      const overwrite = overwrites[overwrites.length - 1];
+      if (overwrite !== true && sent._rev !== String(current)) {
+        throw Object.assign(
+          new Error("This document changed since the version you gave."),
+          {
+            status: 409,
+            code: "STALE_VERSION",
+            data: { currentVersion: String(current) },
+          }
+        );
+      }
+      current += 1;
+      return { id: "1", _rev: String(current) };
+    };
+    const tokens = renderHook(() => useSaveSiteStyle());
+    const fonts = renderHook(() => useSaveSiteStyle());
+
+    let results: unknown[] = [];
+    await act(async () => {
+      results = await Promise.all([
+        tokens.result.current.save("tokens", { tokens: [] }),
+        fonts.result.current.save("fonts", []),
+      ]);
+    });
+
+    expect(results).toEqual([
+      { saved: true, issues: {} },
+      { saved: true, issues: {} },
+    ]);
+    // Last writer wins, on purpose: each write says so, and names no version.
+    expect(writes).toEqual([{ tokens: { tokens: [] } }, { fonts: [] }]);
+    expect(overwrites).toEqual([true, true]);
   });
 });
 

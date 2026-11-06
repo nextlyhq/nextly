@@ -101,21 +101,6 @@ import { getRolesScreen } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
-  listWebhooks,
-  getWebhookById,
-  createWebhook,
-  updateWebhook,
-  deleteWebhook,
-  revealWebhookSecret,
-  rotateWebhookSecret,
-  expireWebhookOldSecrets,
-  listWebhookDeliveries,
-  getWebhookDelivery,
-  testWebhookEndpoint,
-  redeliverWebhookDelivery,
-  drainWebhooks,
-} from "./api/webhooks";
-import {
   deleteWidgetLayout,
   getWidgetLayout,
   putWidgetLayout,
@@ -218,6 +203,7 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
@@ -400,53 +386,6 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "contentEvents",
   "rolesScreen",
 ]);
-
-/**
- * Route a parsed webhook operation to its handler.
- *
- * Mirrors the API-key dispatch: the handlers own their own auth and body
- * parsing, so this only maps the method name.
- */
-async function handleWebhookRequest(
-  req: Request,
-  method: string,
-  routeParams: Record<string, string> | undefined
-): Promise<Response> {
-  const id = routeParams?.webhookId ?? "";
-  switch (method) {
-    case "listWebhooks":
-      return listWebhooks(req);
-    case "getWebhookById":
-      return getWebhookById(req, id);
-    case "createWebhook":
-      return createWebhook(req);
-    case "updateWebhook":
-      return updateWebhook(req, id);
-    case "deleteWebhook":
-      return deleteWebhook(req, id);
-    case "revealWebhookSecret":
-      return revealWebhookSecret(req, id);
-    case "rotateWebhookSecret":
-      return rotateWebhookSecret(req, id);
-    case "expireWebhookOldSecrets":
-      return expireWebhookOldSecrets(req, id);
-    case "listWebhookDeliveries":
-      return listWebhookDeliveries(req, id);
-    case "getWebhookDelivery":
-      return getWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
-    case "testWebhookEndpoint":
-      return testWebhookEndpoint(req, id);
-    case "redeliverWebhookDelivery":
-      return redeliverWebhookDelivery(req, id, routeParams?.deliveryId ?? "");
-    case "drainWebhooks":
-      return drainWebhooks(req);
-    default:
-      return new Response(
-        JSON.stringify({ error: "Unknown webhook operation" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-  }
-}
 
 /** Delegate a languages request to its handler, which manages its own auth and body. */
 async function handleLanguagesRequest(
@@ -2432,11 +2371,18 @@ async function handleAdminMetaWorkspaceRequest(
  * The catch-all Email routes whose grant is not their verb's action, each the
  * system policy's entry for what it does, as the standalone routes ask it:
  * choosing a provider type is a read or a create, making a provider the
- * default updates it, and a test send through a provider or a template
- * preview creates nothing stored and asks create.
+ * default updates it, a test send through a provider or a template preview
+ * creates nothing stored and asks create, and checking a saved provider takes
+ * the edit grant, because it is an edit's first step and tries the provider's
+ * stored secrets.
  */
 const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
   listProviderTypes: SYSTEM_READ_POLICY.emailProviders.readTypes,
+  // A saved provider's check travels over POST, but it is an edit's first
+  // step and tries the provider's stored secrets, so it takes the grant an
+  // edit takes: read from the verb, a person who may only add providers
+  // could point another provider's stored sign-in at a server of their own.
+  checkSavedProvider: SYSTEM_WRITE_POLICY.emailProviders.update,
   setDefault: SYSTEM_WRITE_POLICY.emailProviders.makeDefault,
   testProvider: SYSTEM_WRITE_POLICY.emailProviders.sendTest,
   previewTemplate: SYSTEM_WRITE_POLICY.emailTemplates.preview,

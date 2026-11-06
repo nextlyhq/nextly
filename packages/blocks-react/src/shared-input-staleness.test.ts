@@ -344,6 +344,33 @@ describe("a block that changes one of its own parts", () => {
     expect(stampWith(context())).not.toBe(stampWith(withPart("#010101")));
   });
 
+  it("moves the identity when a part's route from its root changes", () => {
+    // What a part takes from a wrapping root decides which element its
+    // declarations land on, so a changed route must not reuse the sheet
+    // compiled for the old one, whichever half of it changed.
+    const routed = (
+      properties: string[],
+      whenRootIs: string[]
+    ): StyleCompileContext => ({
+      ...context(),
+      blockParts: {
+        "test/text": {
+          frame: {},
+          picture: { takesFromRoot: { properties, whenRootIs } },
+        },
+      },
+    });
+    const radius = stampWith(routed(["borderRadius"], ["frame"]));
+    expect(
+      stampWith(routed(["borderRadius", "aspectRatio"], ["frame"]))
+    ).not.toBe(radius);
+    expect(stampWith(routed(["borderRadius"], ["frame", "link"]))).not.toBe(
+      radius
+    );
+    // And the same route stamps the same: the control.
+    expect(stampWith(routed(["borderRadius"], ["frame"]))).toBe(radius);
+  });
+
   it("leaves the identity alone when no block declares a part", () => {
     // The control the two above need. Without it, an identity that changed on
     // EVERY compile would satisfy both while seeing nothing — and it also pins

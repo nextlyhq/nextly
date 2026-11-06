@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator,
 } from "@nextlyhq/ui";
 import {
+  Fragment,
   useState,
   useMemo,
   useEffect,
@@ -46,8 +47,14 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import type { OfferedListFilter } from "./plugin-filters";
 import { useEntryBulkActions } from "./useEntryBulkActions";
-import { rowId, useEntrySelection, type EntryRow } from "./useEntrySelection";
+import {
+  rowId,
+  useEntrySelection,
+  type EntryRow,
+  type EntryVersions,
+} from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -99,15 +106,19 @@ export interface EntryTableProps {
   /** Callback for bulk delete operation */
   onBulkDelete: (entryIds: string[]) => void;
   /** Callback for bulk update operation */
-  onBulkUpdate?: (entryIds: string[], data: Record<string, unknown>) => void;
+  onBulkUpdate?: (
+    entryIds: string[],
+    data: Record<string, unknown>,
+    versions: EntryVersions
+  ) => void;
   /**
    * Callback for bulk publish (sets `status: "published"` on every selected
    * entry). The bar gates the button on `collection.status === true`, so
    * passing this for non-status collections is harmless but unused.
    */
-  onBulkPublish?: (entryIds: string[]) => void;
+  onBulkPublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Callback for bulk unpublish (sets `status: "draft"`). Same gating. */
-  onBulkUnpublish?: (entryIds: string[]) => void;
+  onBulkUnpublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Whether a bulk publish/unpublish request is in flight. */
   isBulkPublishing?: boolean;
   /**
@@ -129,6 +140,12 @@ export interface EntryTableProps {
   translationFilter?: TranslationListFilter | null;
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
+  /** The filters plugins offer this list (`contributes.admin.filters`). */
+  pluginFilters?: readonly OfferedListFilter[];
+  /** The option each plugin filter has chosen, by filter name. */
+  chosenPluginFilters?: ReadonlyMap<string, string>;
+  /** Choose a plugin filter's option, or `null` to clear it. */
+  onPluginFilterChange?: (name: string, value: string | null) => void;
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -167,6 +184,46 @@ export interface EntryTableRef {
 /**
  * Entry data table with server-side pagination, sorting, and bulk operations.
  */
+/**
+ * The Filter menu's sections for plugins' filters: one per filter, its label
+ * then its options, the chosen one checked. Choosing the checked option again
+ * clears it, as the language filter does.
+ */
+function PluginFilterMenuSections({
+  filters,
+  chosen,
+  onChange,
+  separateFirst,
+}: {
+  filters: readonly OfferedListFilter[];
+  chosen: ReadonlyMap<string, string> | undefined;
+  onChange: ((name: string, value: string | null) => void) | undefined;
+  /** Whether a section of the list's own comes before the first. */
+  separateFirst: boolean;
+}) {
+  return filters.map((filter, index) => (
+    <Fragment key={filter.name}>
+      {(index > 0 || separateFirst) && <DropdownMenuSeparator />}
+      <DropdownMenuLabel>{filter.label}</DropdownMenuLabel>
+      <DropdownMenuSeparator />
+      {filter.options.map(option => {
+        const active = chosen?.get(filter.name) === option.value;
+        return (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={active}
+            onCheckedChange={() =>
+              onChange?.(filter.name, active ? null : option.value)
+            }
+          >
+            {option.label}
+          </DropdownMenuCheckboxItem>
+        );
+      })}
+    </Fragment>
+  ));
+}
+
 export const EntryTable: ForwardRefExoticComponent<
   EntryTableProps & RefAttributes<EntryTableRef>
 > = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
@@ -193,6 +250,9 @@ export const EntryTable: ForwardRefExoticComponent<
     onStatusChange,
     translationFilter = null,
     onTranslationFilterChange,
+    pluginFilters = [],
+    chosenPluginFilters,
+    onPluginFilterChange,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -212,7 +272,7 @@ export const EntryTable: ForwardRefExoticComponent<
   // Rows are selectable only when some bulk action is offered on them, and a
   // row's Delete only with the delete permission.
   const offered = useEntryBulkActions(collection);
-  const { selection, selected, selectAll, clear } = useEntrySelection(
+  const { selection, selected, versions, selectAll, clear } = useEntrySelection(
     offered.any
   );
 
@@ -343,10 +403,14 @@ export const EntryTable: ForwardRefExoticComponent<
     !!createdTo ||
     !!updatedFrom ||
     !!updatedTo ||
-    !!translationFilter;
+    !!translationFilter ||
+    (chosenPluginFilters?.size ?? 0) > 0;
+
+  // Offered only where a choice can be acted on.
+  const hasPluginFilters = pluginFilters.length > 0 && !!onPluginFilterChange;
 
   const showFilterDropdown =
-    hasStatusField || hasDateFilters || hasLanguageFilter;
+    hasStatusField || hasDateFilters || hasLanguageFilter || hasPluginFilters;
 
   const clearDateFilters = () => {
     onCreatedFromChange?.("");
@@ -434,6 +498,17 @@ export const EntryTable: ForwardRefExoticComponent<
               </>
             )}
 
+            {hasPluginFilters && (
+              <PluginFilterMenuSections
+                filters={pluginFilters}
+                chosen={chosenPluginFilters}
+                onChange={onPluginFilterChange}
+                separateFirst={
+                  !!(hasStatusField && onStatusChange) || hasLanguageFilter
+                }
+              />
+            )}
+
             {hasDateFilters && (
               <>
                 <DropdownMenuSeparator />
@@ -484,13 +559,19 @@ export const EntryTable: ForwardRefExoticComponent<
             collection={collection}
             onDelete={() => onBulkDelete(selected)}
             onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selected, data) : undefined
+              onBulkUpdate
+                ? data => onBulkUpdate(selected, data, versions)
+                : undefined
             }
             onPublish={
-              onBulkPublish ? () => onBulkPublish(selected) : undefined
+              onBulkPublish
+                ? () => onBulkPublish(selected, versions)
+                : undefined
             }
             onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selected) : undefined
+              onBulkUnpublish
+                ? () => onBulkUnpublish(selected, versions)
+                : undefined
             }
             isPublishing={isBulkPublishing}
             onClear={clear}

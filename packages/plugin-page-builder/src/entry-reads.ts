@@ -36,6 +36,12 @@ export interface AsCallerFindArgs {
   readonly offset?: number;
   /** The language to read in, when the request named one. */
   readonly locale?: string;
+  /**
+   * Refuse a sort key naming no field this caller may sort by, naming each,
+   * rather than sorting by the others: for a read that asks which keys core
+   * accepts.
+   */
+  readonly unknownSort?: "refuse";
 }
 
 /** What one list read answers: the rows and the read's pagination. */
@@ -68,6 +74,9 @@ export async function findAsCaller(
     ...(args.page === undefined ? {} : { page: args.page }),
     ...(args.offset === undefined ? {} : { offset: args.offset }),
     ...(args.locale === undefined ? {} : { locale: args.locale }),
+    ...(args.unknownSort === undefined
+      ? {}
+      : { unknownSort: args.unknownSort }),
   });
   return { items: result.items, meta: result.meta };
 }

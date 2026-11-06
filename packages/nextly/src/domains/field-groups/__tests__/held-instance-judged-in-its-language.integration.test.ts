@@ -142,6 +142,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           status: "published",
           badge: { id: badge, heading: "Hola", box: { kept: "ES" } },
+          _overwrite: true,
         },
       } as never);
       return { id, badge };
@@ -157,6 +158,7 @@ describe.each(getConfiguredTestDialects())(
         ...(locale === undefined ? {} : { locale }),
         data: {
           badge: { id: badge, heading: "Held", box: { kept: "changed" } },
+          _overwrite: true,
         },
       } as never);
       return [...new Set(judged)];

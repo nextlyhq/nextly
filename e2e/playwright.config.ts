@@ -258,6 +258,11 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // Turns off Next.js's development indicator, whose button a development
+      // server injects into the canvas's frame too: a tab stop inside the
+      // canvas that a production build never draws, which the keyboard specs
+      // walking in and out of the frame would otherwise meet.
+      NEXTLY_E2E_DEV_INDICATORS: "0",
       // Registers the style fixture, which plugin-admin-styling.spec.ts and
       // plugin-page-routing.spec.ts both depend on. Off by default so a test
       // double does not appear in a contributor's plugins list or inject a

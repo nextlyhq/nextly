@@ -73,6 +73,31 @@ export function retiredStore(args: {
 }
 
 /**
+ * Every component's retired ids, the whole table paged to the end: what the
+ * cleanup of retired values walks the site for. Small however large the site,
+ * for the reason {@link readRetired} reads it uncapped.
+ */
+export async function allRetired(args: {
+  nextly: () => Promise<RetiredDirectApi>;
+  collection: string;
+}): Promise<RetiredByComponent> {
+  const nextly = await args.nextly();
+  const found = new Map<string, { properties: string[]; slots: string[] }>();
+  for (let page = 1; ; page += 1) {
+    const answer = await nextly.find({
+      collection: args.collection,
+      limit: ROWS_PER_PAGE,
+      page,
+      sort: "id",
+      depth: 0,
+      overrideAccess: true,
+    });
+    for (const row of answer.items) addRow(found, row);
+    if (!answer.meta.hasNext) return found;
+  }
+}
+
+/**
  * Every retired row of these components, a bounded number of ids per read,
  * each paged to the end.
  *

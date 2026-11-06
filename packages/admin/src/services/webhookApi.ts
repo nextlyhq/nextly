@@ -19,6 +19,7 @@ import type {
   RotateWebhookInput,
   UpdateWebhookInput,
   WebhookEndpointSummary,
+  WebhookEventTypeEntry,
   WebhookTestResult,
 } from "../types/webhooks";
 
@@ -26,6 +27,19 @@ import type {
 export async function listWebhooks(): Promise<WebhookEndpointSummary[]> {
   const result = await fetcher<ListResponse<WebhookEndpointSummary>>(
     "/webhooks",
+    {},
+    true
+  );
+  return result.items;
+}
+
+/**
+ * The event types an endpoint may subscribe to: core's and every enabled
+ * plugin's. Reached through {@link webhookApi}, as its callers use it.
+ */
+async function listWebhookEventTypes(): Promise<WebhookEventTypeEntry[]> {
+  const result = await fetcher<ListResponse<WebhookEventTypeEntry>>(
+    "/webhooks/event-types",
     {},
     true
   );
@@ -128,6 +142,7 @@ export async function testEndpoint(id: string): Promise<WebhookTestResult> {
 /** The type of {@link webhookApi}. */
 type WebhookApiType = {
   readonly listWebhooks: typeof listWebhooks;
+  readonly listWebhookEventTypes: typeof listWebhookEventTypes;
   readonly getWebhook: typeof getWebhook;
   readonly createWebhook: typeof createWebhook;
   readonly updateWebhook: typeof updateWebhook;
@@ -140,6 +155,7 @@ type WebhookApiType = {
 
 export const webhookApi: WebhookApiType = {
   listWebhooks,
+  listWebhookEventTypes,
   getWebhook,
   createWebhook,
   updateWebhook,

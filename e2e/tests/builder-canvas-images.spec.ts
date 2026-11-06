@@ -9,44 +9,14 @@
  *
  * @module tests/builder-canvas-images.spec
  */
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { canvasBlock, canvasFrame } from "./support/canvas-frame";
+import { uploadImage } from "./support/media-upload";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
-
-/**
- * A 64-pixel square PNG: large enough to be pressed on the canvas, where a
- * one-pixel image gives a pointer nowhere to land.
- */
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwFfGZMa3hCH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBmGYxWlLxJbIAAAAASUVORK5CYII=",
-  "base64"
-);
-
-/** Store an image in the media library; returns its id and address. */
-async function uploadImage(
-  request: APIRequestContext,
-  run: string
-): Promise<{ id: string; url: string }> {
-  const uploaded = await request.post("/admin/api/media", {
-    multipart: {
-      file: { name: `canvas-${run}.png`, mimeType: "image/png", buffer: PNG },
-    },
-  });
-  expect(uploaded.ok(), `uploading: ${uploaded.status()}`).toBe(true);
-  const body = (await uploaded.json()) as {
-    item?: { id: string; url: string };
-    id?: string;
-    url?: string;
-  };
-  return {
-    id: String(body.item?.id ?? body.id),
-    url: String(body.item?.url ?? body.url),
-  };
-}
 
 /** A page holding a library image, an image by address, and a button. */
 async function seed(page: Page): Promise<string> {
@@ -170,7 +140,8 @@ test.describe("the canvas's images and buttons", () => {
     await openBuilder(page, await seed(page));
     const frame = canvasFrame(page);
     await canvasBlock(page, "address").click();
-    const alt = page.getByRole("textbox", { name: "Alt text" });
+    // The image stores its own alt text, so the field is the Custom one.
+    const alt = page.getByRole("textbox", { name: "Custom alt text" });
     await alt.fill("An edited description");
     await alt.press("Enter");
     await expect(

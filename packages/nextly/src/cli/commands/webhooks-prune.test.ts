@@ -47,6 +47,12 @@ vi.mock("../utils/adapter", () => ({
     setTableResolver: () => {},
     disconnect: async () => {},
   })),
+  // The dry run's read-only open, which answers the same stand-in.
+  openCommandAdapter: vi.fn(async () => ({
+    getCapabilities: () => ({ dialect: "sqlite" }),
+    setTableResolver: () => {},
+    disconnect: async () => {},
+  })),
 }));
 
 vi.mock("../utils/config-loader", () => ({
@@ -59,7 +65,7 @@ vi.mock("../../domains/webhooks/prune", () => ({
   pruneWebhookData: prunePass,
 }));
 
-import { createCliAdapter } from "../utils/adapter";
+import { createCliAdapter, openCommandAdapter } from "../utils/adapter";
 
 class Exited extends Error {
   constructor(readonly code: number | undefined) {
@@ -260,6 +266,12 @@ describe("runWebhooksPruneCommand", () => {
       expect(confirm).not.toHaveBeenCalled();
       expect(deleted()).toBe(false);
       expect(output).not.toMatch(NEXT_RELEASE);
+      // It opens the database read-only, never with the writable connection.
+      expect(openCommandAdapter).toHaveBeenCalledWith(
+        expect.objectContaining({ dryRun: true }),
+        expect.anything()
+      );
+      expect(createCliAdapter).not.toHaveBeenCalled();
     });
   });
 });

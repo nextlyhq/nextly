@@ -2,9 +2,12 @@ import {
   compileSiteSheet,
   compileSiteTokenSheet,
   DOCUMENT_FORMAT_VERSION,
+  isDefaultLook,
+  ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
@@ -31,6 +34,7 @@ import {
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
+  blockPartsFor,
   drawlessTestFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
@@ -458,7 +462,10 @@ export function sharedStyleInputs(
   const stored: Partial<SiteSheetInput> = site ?? {};
   return defined({
     breakpoints: firstStated(stored.breakpoints, route.breakpoints),
-    namedClasses: firstStated(route.namedClasses, stored.classes),
+    namedClasses: withSiteOwnLooks(
+      firstStated(route.namedClasses, stored.classes),
+      stored.classes
+    ),
     blockBases: firstStated(stored.blockBases, route.blockBases),
     tokenPrefix: firstStated(
       stored.tokenPrefix,
@@ -485,6 +492,29 @@ export function sharedStyleInputs(
     // wins, as it does for the block defaults the model decides.
     spacingMode: firstStated(stored.spacingMode, route.spacingMode),
   });
+}
+
+/**
+ * The page context's classes with the site's own looks in place of any the
+ * context states: a block type's own look edits its base for every page on
+ * the site, so it is a fact about the site, as the stored bases are, and a
+ * route stating its own classes for attribution must not lose it. An own look
+ * is never written as a class, so this changes no class rule, only the bases.
+ */
+function withSiteOwnLooks(
+  classes: StyleCompileContext["namedClasses"],
+  site: SiteSheetInput["classes"]
+): StyleCompileContext["namedClasses"] {
+  if (classes === site || !Array.isArray(classes) || !Array.isArray(site)) {
+    return classes;
+  }
+  const siteOwn = ownLooksRead(site);
+  // Unchanged where neither tier holds one, so the stamp keeps its identity.
+  if (siteOwn.length === 0 && !classes.some(isDefaultLook)) return classes;
+  return [
+    ...classes.filter((entry: NamedClass) => !isDefaultLook(entry)),
+    ...siteOwn,
+  ];
 }
 
 /**
@@ -982,10 +1012,13 @@ export function PageRenderer({
         ? css === ""
           ? undefined
           : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet({
-            ...siteSheetInput,
-            breakpoints: siteBreakpoints,
-          });
+        : compileSiteSheet(
+            { ...siteSheetInput, breakpoints: siteBreakpoints },
+            // The parts of the types this page draws, over the composed tree
+            // the page sheet reads, so the classes in the shared sheet route a
+            // wrapped image's corners to its picture as the page sheet does.
+            blockPartsFor(doc, resolver, pageStyleContext?.blockParts)
+          );
 
   return (
     <div className={rootClassName}>

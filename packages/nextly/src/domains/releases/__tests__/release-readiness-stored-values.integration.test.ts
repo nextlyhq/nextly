@@ -183,7 +183,7 @@ async function writeAsAuthor(
   return t.nextly.update({
     collection: collection as never,
     id,
-    data: { status } as never,
+    data: { status, _overwrite: true } as never,
     locale: "*",
     overrideAccess: false,
     user: { id: author, email: user.email, roles: [] },
@@ -217,14 +217,14 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "stories" as never,
           id,
-          data: { title: "Edited" } as never,
+          data: { title: "Edited", _overwrite: true } as never,
         });
       }
       // The target leaves the published set, and its junction rows stay.
       await t.nextly.update({
         collection: "topics" as never,
         id: topic,
-        data: { status: "draft" } as never,
+        data: { status: "draft", _overwrite: true } as never,
       });
       const releaseId = await releaseOf(t, author, [
         { collection: "stories", id: going, action: "publish" },
@@ -261,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "guides" as never,
           id,
-          data: { title: "Edited" } as never,
+          data: { title: "Edited", _overwrite: true } as never,
         });
       }
       const releaseId = await releaseOf(t, author, [

@@ -174,8 +174,10 @@ export function fieldToColumnDef(
   const mappedType = storageType ?? field.type;
 
   switch (mappedType) {
+    // An icon id is a short string, stored like an email.
     case "text":
     case "email":
+    case "icon":
     case "code":
     case "textarea":
       // A field that declared its own width gets the bounded column the descriptor binds and a

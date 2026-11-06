@@ -40,6 +40,10 @@ import {
   VersionCaptureService,
   type CaptureInput,
 } from "../version-capture-service";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 let services: PluginContext["services"] | undefined;
@@ -59,7 +63,15 @@ interface VersionItem {
   author: { kind?: string; id: string | null; name: string | null } | null;
 }
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+/** The memos collection's slug, one per dialect and storage layout. */
+function memosSlug(dialect: TestDialect, storage: StorageMode): string {
+  return `memos-${dialect}${storage.perLanguageStorage ? "-per-language" : ""}`;
+}
+
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   const probe = definePlugin({
     name: "@test/version-actors",
     version: "1.0.0",
@@ -70,6 +82,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   });
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     collections: [
       defineCollection({
         slug: "notes",
@@ -91,10 +104,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
-      // Its slug per dialect: an overflow is reported once per process for
-      // each collection, and the dialects share one process.
+      // Its slug per dialect and storage layout: an overflow is reported once
+      // per process for each collection, and they all share one process.
       defineCollection({
-        slug: `memos-${dialect}`,
+        slug: memosSlug(dialect, storage),
         versions: true,
         fields: [text({ name: "title" }), text({ name: "status" })],
       }),
@@ -237,11 +250,20 @@ async function versionNumbersOf(t: TestNextly, id: string): Promise<number[]> {
     .sort((x, y) => x - y);
 }
 
-describe.each(getConfiguredTestDialects())(
-  "version actors, statuses and number clashes (integration, %s)",
-  dialect => {
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
+  "version actors, statuses and number clashes (integration, $dialect, $mode)",
+  ({ dialect, storage }) => {
     it("names each version's actor: a person, an API key by its own name, and the system for a seed and a plugin", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const person = await seedLiveAuthor(t);
       const reader = await keyNamed(t, "History reader", ["read-notes"]);
       const writer = await keyNamed(t, "Import robot", [
@@ -305,7 +327,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("records a status the lifecycle does not know as it is, never as published", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const reader = await keyNamed(t, "Reader", ["read-tickets"]);
       const id = idOf(
         await t.nextly.create({
@@ -319,8 +341,8 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("marks a status too long for the column as shortened, keeps it whole in the snapshot, and reports it once", async () => {
-      const t = await boot(dialect);
-      const collection = `memos-${dialect}`;
+      const t = await boot(dialect, storage);
+      const collection = memosSlug(dialect, storage);
       const reader = await keyNamed(t, "Reader", [`read-${collection}`]);
       const error = vi.spyOn(
         t.getService("logger") as { error: (...args: unknown[]) => void },
@@ -338,7 +360,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection,
         id,
-        data: { title: "two", status: long },
+        data: { title: "two", status: long, _overwrite: true },
       });
 
       const versions = await historyOf(reader, collection, id);
@@ -365,7 +387,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("retries a version insert under the next number when a concurrent write took it", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const id = idOf(
         await t.nextly.create({ collection: "notes", data: { title: "x" } })
       );
@@ -382,19 +404,29 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("counts the version that won the race when the retried write trims history to its cap", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const id = idOf(
         await t.nextly.create({ collection: "notes", data: { title: "x" } })
       );
       // Two captures over the first version, kept to two: the write that lost
       // the race inserts third and must see the winner's version to remove
-      // the first.
+      // the first. They record the language the create's version did: one
+      // whose values are kept per language is labelled with it, and retention
+      // keeps each language's latest, so an unlabelled capture beside it would
+      // leave the first standing as its own language's latest.
+      const [first] = (
+        await t.adapter.select<{ entryId: string; locale: string | null }>(
+          "nextly_versions",
+          {}
+        )
+      ).filter(row => row.entryId === id);
       await captureConcurrently(t, {
         ref: notesRef(id),
         status: "published",
         snapshot: { title: "x" },
         lifecycle: true,
         maxPerDoc: 2,
+        locale: first?.locale ?? null,
       });
       expect(await versionNumbersOf(t, id)).toEqual([2, 3]);
     }, 120_000);

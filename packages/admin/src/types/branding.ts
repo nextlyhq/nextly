@@ -1,4 +1,7 @@
-import type { PublishedContentSource } from "nextly/config";
+import type {
+  PluginListFilterDeclaration,
+  PublishedContentSource,
+} from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -97,6 +100,11 @@ export interface PluginMetadata {
    * `usePluginClientConfig` rather than searching this array by hand.
    */
   clientConfig?: Record<string, unknown>;
+  /**
+   * The plugin's admin strings, by interface language and key, declared in
+   * `contributes.translations`. On the signed-in metadata only.
+   */
+  translations?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   version?: string;
   description?: string;
   /** Author shown in the plugins list; mirrors package.json by convention. */
@@ -213,6 +221,12 @@ export interface PluginMetadata {
       | { fieldType: string }
     )
   >;
+  /**
+   * @experimental The filters this plugin offers in the entry list's toolbar,
+   * via `contributes.admin.filters`, as they passed the boot check. Present
+   * only for enabled plugins.
+   */
+  listFilters?: PluginListFilterDeclaration[];
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body

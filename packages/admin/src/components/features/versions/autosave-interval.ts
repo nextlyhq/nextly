@@ -34,3 +34,16 @@ export function autosaveIntervalFrom(schema: unknown): number | undefined {
     ? intervalMs
     : undefined;
 }
+
+/**
+ * Whether the entity's versions configuration keeps recovery points at all
+ * (`versions.drafts.autosave.enabled`): where it does not, the server refuses
+ * to store one, so edits cannot be kept in one.
+ */
+export function autosaveEnabledFor(schema: unknown): boolean {
+  if (typeof schema !== "object" || schema === null) return false;
+  const { versions } = schema as {
+    versions?: { drafts?: { autosave?: { enabled?: unknown } } } | null;
+  };
+  return versions?.drafts?.autosave?.enabled === true;
+}

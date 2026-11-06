@@ -55,6 +55,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
+import type { UserFieldConfig } from "../../../users/config/types";
 import { auditReason } from "../../audit/audit-reasons";
 
 import type { UserAccountService } from "./user-account-service";
@@ -128,9 +129,12 @@ export interface ListUsersQueryOptions {
     page?: number;
   };
   search?: string;
+  /** Custom fields the search does not match; see `ListUsersOptions`. */
+  unsearchedFields?: ReadonlySet<string>;
   emailVerified?: boolean;
   hasPassword?: boolean;
-  sortBy?: "createdAt" | "name" | "email";
+  /** A built-in column, or a custom user field by its name. */
+  sortBy?: "createdAt" | "name" | "email" | (string & {});
   sortOrder?: "asc" | "desc";
 }
 
@@ -304,6 +308,16 @@ export class UserService {
   }
 
   /**
+   * @internal The custom user fields in effect, code-defined and
+   * admin-defined merged, as the reads and writes use them. A read that
+   * leaves hidden user fields out (`showHiddenFields: false`) derives their
+   * paths from these.
+   */
+  customFieldConfigs(): readonly UserFieldConfig[] {
+    return this.queryService.getEffectiveFields();
+  }
+
+  /**
    * Display names for a set of user ids, for surfaces that attribute an action
    * to a person.
    *
@@ -364,6 +378,7 @@ export class UserService {
       page,
       limit,
       search: options.search,
+      unsearchedFields: options.unsearchedFields,
       emailVerified: options.emailVerified,
       hasPassword: options.hasPassword,
       sortBy: options.sortBy,
@@ -653,7 +668,11 @@ export class UserService {
    */
   async updateProfile(
     userId: string,
-    changes: { name?: string; image?: string },
+    changes: {
+      name?: string;
+      image?: string;
+      interfaceLanguage?: string | null;
+    },
     _context: RequestContext
   ): Promise<User> {
     this.logger.debug("Updating user profile", { userId, changes });

@@ -1,3 +1,5 @@
+import type { WhereFilter } from "../domains/collections/query/query-operators";
+
 import type { PermissionSlug } from "./contributions";
 
 /**
@@ -234,6 +236,46 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
 }
 
 /**
+ * @experimental One choice of a plugin's entry-list filter: what the admin
+ * shows, the value the page's URL keeps, and the `where` it narrows the list
+ * by when chosen.
+ */
+export interface PluginListFilterOption {
+  /** Kept in the URL: lower-case letters, digits and single dashes. */
+  value: string;
+  label: string;
+  /**
+   * Added to the list's own `where`, so it can only narrow the rows the
+   * caller may already list.
+   */
+  where: WhereFilter;
+}
+
+/**
+ * @experimental A filter a plugin adds to the entry list's toolbar: see
+ * `PluginAdminContributions.filters`.
+ */
+export interface PluginListFilterDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-support.state"`. */
+  name: string;
+  label: string;
+  /** The collections whose lists offer it, by slug; every collection's when absent. */
+  collections?: string[];
+  options: PluginListFilterOption[];
+}
+
+/**
+ * @experimental One place a plugin declares on its own admin pages, under its
+ * namespace: see `PluginAdminContributions.places`.
+ */
+export interface PluginAdminPlaceDeclaration {
+  /** `<plugin-slug>.<name>`, e.g. `"acme-billing.invoice"`. */
+  name: string;
+  /** What the place is for, for the authors of plugins that add to it. */
+  description?: string;
+}
+
+/**
  * @public Declarative admin-UI contributions. Introspectable
  * by the host without running the plugin.
  *
@@ -246,6 +288,22 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
   menu?: PluginMenuItem[];
+  /**
+   * @experimental Places of this plugin's own, on its pages, that plugins may
+   * add to. Each name starts with this plugin's slug and a dot,
+   * `"acme-billing.invoice"` for `@acme/billing`; the app refuses to start on
+   * one outside it, under a segment core reserves, or declared by two
+   * plugins. Type each by augmenting `AdminPlaces`.
+   */
+  places?: PluginAdminPlaceDeclaration[];
+  /**
+   * @experimental Filters for the entry list's toolbar. Choosing an option
+   * adds its `where` to the list's request, so a filter narrows the list and
+   * never widens it; the choice is kept in the page's URL. The app refuses to
+   * start on one outside this plugin's namespace, declared twice, or with an
+   * malformed option.
+   */
+  filters?: PluginListFilterDeclaration[];
   /** Custom admin pages, namespaced + RBAC-gated. */
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */

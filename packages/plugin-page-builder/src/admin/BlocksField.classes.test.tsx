@@ -24,6 +24,7 @@
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
+import { registerBlocks } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
@@ -45,6 +46,11 @@ let clientConfig: Record<string, unknown> | undefined;
 let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
+/**
+ * The bodies the Single was handed. Each is saved over whatever the style
+ * holds, which the body says with `_overwrite: true`; the expectations state
+ * that key, so a save that stops saying it fails here.
+ */
 const saved: Array<Record<string, unknown>> = [];
 /** How many times the top bar's breakpoint manager has been mounted. */
 let managerMounts = 0;
@@ -335,6 +341,14 @@ const setting = (property: string, value: unknown): Change =>
   );
 
 /** What the inspector was handed for the class surface. */
+/**
+ * The site's own classes in the library the inspector is handed: without the
+ * looks the code tier always holds, which these cases are not about.
+ */
+function siteClasses() {
+  return classProps().classLibrary?.filter(entry => !("blockType" in entry));
+}
+
 function classProps(): {
   classLibrary?: readonly { id: string; slug: string }[];
   classLibraryAbsence?: "pending" | "failed";
@@ -396,7 +410,7 @@ describe("the library reaching the inspector", () => {
     };
     openEditor();
 
-    expect(classProps().classLibrary?.map(c => c.slug)).toEqual(["hero"]);
+    expect(siteClasses()?.map(c => c.slug)).toEqual(["hero"]);
   });
 
   it("hands it an EMPTY library, not undefined, when the site has none", () => {
@@ -407,7 +421,7 @@ describe("the library reaching the inspector", () => {
      */
     openEditor();
 
-    expect(classProps().classLibrary).toEqual([]);
+    expect(siteClasses()).toEqual([]);
   });
 
   it("hands it undefined while the stored read is still pending", () => {
@@ -454,7 +468,7 @@ describe("why the library is absent", () => {
     // absence would hide the surface that creates the first one.
     openEditor();
 
-    expect(classProps().classLibrary).toEqual([]);
+    expect(siteClasses()).toEqual([]);
   });
 });
 
@@ -472,11 +486,13 @@ describe("adding a shared style made from a block", () => {
     expect(await addStyle()).toBeUndefined();
     expect(saved).toHaveLength(1);
     // The block is the builder's write, after this one lands.
-    expect(Object.keys(saved[0] ?? {})).toEqual(["classes"]);
-    expect(saved[0]?.classes).toEqual([
-      { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
-      MADE,
-    ]);
+    expect(saved[0]).toEqual({
+      _overwrite: true,
+      classes: [
+        { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+        MADE,
+      ],
+    });
   });
 
   it("refuses a name the queue's library already has, though the dialog's read did not", async () => {
@@ -536,7 +552,11 @@ describe("adding a shared style made from a block", () => {
 
   it("offers the save verb with the library and the author's right", () => {
     openEditor();
-    expect(seen.verbs).toMatchObject({ library: [], mayChange: true });
+    expect(seen.verbs).toMatchObject({ mayChange: true });
+    // The site's own styles: none here; the code tier's looks are beside them.
+    const library = (seen.verbs as { library?: { blockType?: string }[] })
+      .library;
+    expect(library?.filter(entry => entry.blockType === undefined)).toEqual([]);
   });
 });
 
@@ -565,7 +585,10 @@ describe("writing a shared style's styles while it is the target", () => {
     });
 
     expect(refused).toBeUndefined();
-    expect(saved.at(-1)).toEqual({ classes: [{ ...stored, styles }] });
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [{ ...stored, styles }],
+    });
   });
 
   it("applies each change to what the one before it stored, so two quick edits both survive", async () => {
@@ -583,6 +606,7 @@ describe("writing a shared style's styles while it is the target", () => {
     });
 
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...stored,
@@ -614,6 +638,7 @@ describe("writing a shared style's styles while it is the target", () => {
     });
     expect(recorded).toHaveLength(2);
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...stored,
@@ -651,7 +676,7 @@ describe("writing a shared style's styles while it is the target", () => {
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [stored] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [stored] });
   });
 });
 
@@ -732,12 +757,12 @@ describe("undoing an edit to a shared style the site's code supplies", () => {
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
 
     await act(async () => {
       await recorded[0]?.redo();
     });
-    expect(saved.at(-1)).toEqual({ classes: edited });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: edited });
   });
 });
 
@@ -768,7 +793,7 @@ describe("replaying an edit to a code-supplied style after the code changed", ()
     await act(async () => {
       await recorded[0]?.undo();
     });
-    expect(saved.at(-1)).toEqual({ classes: [] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
 
     clientConfig = { siteStyle: { classes: [after] } };
     rerender(<Host />);
@@ -776,10 +801,176 @@ describe("replaying an edit to a code-supplied style after the code changed", ()
       await recorded[0]?.redo();
     });
     expect(saved.at(-1)).toEqual({
+      _overwrite: true,
       classes: [
         {
           ...after,
           styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+});
+
+describe("undoing an edit to a code-supplied style after the code changed", () => {
+  it("undoes onto the code as it now is, and redoes the edit over it", async () => {
+    const before = {
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111" } } },
+    };
+    const after = {
+      ...before,
+      styles: { base: { base: { color: "#111111", opacity: 0.5 } } },
+    };
+    clientConfig = { siteStyle: { classes: [before] } };
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    // The override is stored; then the code gains an opacity.
+    const edited = saved.at(-1)?.classes;
+    storedRead = { data: { classes: edited }, isPending: false, error: null };
+    clientConfig = { siteStyle: { classes: [after] } };
+    rerender(<Host />);
+
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    // Nothing of the author's is left: the code's own style shows.
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [] });
+
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    rerender(<Host />);
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [
+        {
+          ...after,
+          styles: { base: { base: { color: "#222222", opacity: 0.5 } } },
+        },
+      ],
+    });
+  });
+});
+
+describe("redoing an edit the code has since made itself", () => {
+  it("still stores the rebase, so the code's value isn't masked", async () => {
+    const code = {
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111" } } },
+    };
+    // The site renamed the style, so an override is stored whatever else.
+    const renamed = { ...code, label: "Mine" };
+    clientConfig = { siteStyle: { classes: [code] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    // The rename keeps the override, at the colour the code had.
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [renamed] });
+
+    // The code now sets the very colour the redo would.
+    const later = {
+      ...code,
+      styles: { base: { base: { color: "#222222" } } },
+    };
+    clientConfig = { siteStyle: { classes: [later] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    rerender(<Host />);
+    const writes = saved.length;
+    let redone: boolean | undefined;
+    await act(async () => {
+      redone = await recorded[0]?.redo();
+    });
+    expect(redone).toBe(true);
+    expect(saved).toHaveLength(writes + 1);
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [{ ...later, label: "Mine" }],
+    });
+  });
+});
+
+describe("replaying across two changes to the code", () => {
+  it("rebases each replay from the code the last one rebased onto", async () => {
+    const at = (opacity: number) => ({
+      id: "c-code",
+      slug: "code",
+      label: "Code",
+      orderIndex: 0,
+      styles: { base: { base: { color: "#111111", opacity } } },
+    });
+    // Renamed, so the override outlives the undo.
+    const renamed = { ...at(0.5), label: "Mine" };
+    clientConfig = { siteStyle: { classes: [at(0.5)] } };
+    storedRead = {
+      data: { classes: [renamed] },
+      isPending: false,
+      error: null,
+    };
+    const { rerender } = render(<Host />);
+    await act(async () => {
+      await classProps().sharedStyles?.writeStyles(
+        "c-code",
+        setting("color", "#222222")
+      );
+    });
+    const follow = (opacity: number) => {
+      clientConfig = { siteStyle: { classes: [at(opacity)] } };
+      storedRead = {
+        data: { classes: saved.at(-1)?.classes },
+        isPending: false,
+        error: null,
+      };
+      rerender(<Host />);
+    };
+    follow(0.6);
+    await act(async () => {
+      await recorded[0]?.undo();
+    });
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [{ ...at(0.6), label: "Mine" }],
+    });
+    follow(0.7);
+    await act(async () => {
+      await recorded[0]?.redo();
+    });
+    expect(saved.at(-1)).toEqual({
+      _overwrite: true,
+      classes: [
+        {
+          ...at(0.7),
+          label: "Mine",
+          styles: { base: { base: { color: "#222222", opacity: 0.7 } } },
         },
       ],
     });
@@ -826,7 +1017,7 @@ describe("undoing a shared style's edit after the library changed elsewhere", ()
       await recorded[0]?.undo();
     });
 
-    expect(saved.at(-1)).toEqual({ classes: [card] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [card] });
   });
 
   it("does nothing, and says so, once the style itself is gone", async () => {
@@ -873,7 +1064,7 @@ describe("undoing a shared style added from the editor", () => {
       undone = await recorded[0]?.undo();
     });
     expect(undone).toBe(true);
-    expect(saved.at(-1)).toEqual({ classes: [hero] });
+    expect(saved.at(-1)).toEqual({ _overwrite: true, classes: [hero] });
 
     await act(async () => {
       await recorded[0]?.redo();
@@ -946,5 +1137,39 @@ describe("undoing a shared style added from the editor", () => {
       slug: "another",
     });
     expect(created).toBeUndefined();
+  });
+});
+
+describe("the looks the editor's library holds", () => {
+  it("include a look of a block another plugin registered, which the published config could not carry", () => {
+    registerBlocks(
+      [
+        {
+          name: "acme/hero",
+          version: 1,
+          description: "A hero.",
+          example: { props: {} },
+          editor: {
+            label: "Hero",
+            variations: [
+              {
+                name: "dark",
+                label: "Dark",
+                styles: { base: { base: { color: "white" } } },
+              },
+            ],
+          },
+          props: {},
+          render: () => null,
+        },
+      ] as never,
+      { source: "looks-test" }
+    );
+    clientConfig = {};
+    storedRead = { data: { classes: [] }, isPending: false, error: null };
+    openEditor();
+    const ids = (classProps().classLibrary ?? []).map(each => each.id);
+    expect(ids).toContain("look:acme/hero:dark");
+    expect(ids).toContain("look:core/button:outline");
   });
 });

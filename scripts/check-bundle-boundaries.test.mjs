@@ -199,6 +199,16 @@ describe("a boundary", () => {
       })
     );
   });
+
+  it("keeps the icon set out of the admin's eager chunks and out of the admin's and the plugin SDK's types", () => {
+    expect(BOUNDARIES).toContainEqual(
+      expect.objectContaining({
+        packageDir: "packages/admin",
+        specifier: "@nextlyhq/blocks-react",
+        declarationDirs: ["packages/admin/dist", "packages/plugin-sdk/dist"],
+      })
+    );
+  });
 });
 
 describe("a package's test entries", () => {

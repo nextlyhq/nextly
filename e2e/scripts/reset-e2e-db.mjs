@@ -36,6 +36,21 @@ const FILES = [
   "e2e-setup.db-wal",
 ];
 
+/**
+ * The production suite's own database, emptied only when it is the one the
+ * server about to start opens. The seed adds only what is missing, so a file
+ * an earlier run left would keep that run's seeded content and a change to the
+ * seed would never reach the suite; and named by the server's own
+ * `DATABASE_URL` rather than always, so the other suite's reset never empties
+ * it under a production run beside it.
+ */
+const PRODUCTION_DB = "e2e-prod.db";
+const PRODUCTION_FILES = [
+  PRODUCTION_DB,
+  `${PRODUCTION_DB}-shm`,
+  `${PRODUCTION_DB}-wal`,
+];
+
 const DEV_DB = "nextly.db";
 
 async function main() {
@@ -44,7 +59,11 @@ async function main() {
 
   await fs.mkdir(DATA_DIR, { recursive: true });
 
-  for (const name of FILES) {
+  const opensProduction =
+    process.env.DATABASE_URL === `file:./data/${PRODUCTION_DB}`;
+  for (const name of opensProduction
+    ? [...FILES, ...PRODUCTION_FILES]
+    : FILES) {
     if (name.includes(DEV_DB)) {
       throw new Error(`Refusing to delete the development database: ${name}`);
     }
