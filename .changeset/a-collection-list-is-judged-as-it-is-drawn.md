@@ -36,7 +36,8 @@ A collection list's query is now judged at save exactly as the page draws it and
 - A list's fields are judged in the language being saved, and the editor offers the fields visitors can see in the language being edited.
 - A filter or sort on a field the editor never offers is refused: a time of day, rich text or media, or a sort on a related entry.
 - A filter on a number field compares with a number, on every operator.
-- A list inside a placed component is judged as the page composes it, so a placement's value or variant cannot sort or filter it by a field visitors can't see.
-- The canvas reads any sort a list may store, however long.
+- A list inside a placed component is judged as the page composes it, so a placement's value or variant cannot give it a sort or filter no list takes, or one on a field visitors can't see.
+- A component save is refused when it would break a list on a page placing it, such as by aiming a page's value at the list's sort. The server log names each page.
+- A list sorts by at most 20 fields, in at most 2,000 characters (`LIST_MAX_SORT_KEYS` and `LIST_MAX_SORT_LENGTH` in `@nextlyhq/blocks-engine`). The save, the canvas's read of a list's entries and the editor's Add sort all hold it to that.
 
 Pages already stored keep saving: a problem a stored page already had stays a warning.
