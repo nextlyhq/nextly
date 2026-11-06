@@ -364,6 +364,13 @@ async function walkRestore(
   run: { readonly runId: string; readonly undoes: string },
   budget: WalkBudget
 ): Promise<RewriteReport> {
+  // Its removal, and only it, gives up its claims on what the undo defined
+  // again, should its request have stopped before it did: a newer removal of
+  // the same breakpoint keeps its own. Repeating it changes nothing.
+  const undone = await store.runById(run.undoes);
+  if (undone !== null) {
+    await store.retire([...removedEver(undone)], undone.id);
+  }
   const kept = keptRowsOf(installed.db, run.undoes);
   return rewriteHosts(
     {
@@ -650,9 +657,15 @@ export function breakpointRemovalService(
         // An undo is published only once its set is stored: its walk puts
         // values back whatever the site defines, so one whose set never
         // landed is dropped, and can be made again.
-        if (open.undoes !== null && !(await undoLanded(install(), open))) {
-          await store.abandon(open.id);
-          return;
+        if (open.undoes !== null) {
+          if (!(await undoLanded(install(), open))) {
+            await store.abandon(open.id);
+            return;
+          }
+          // Its set is stored: its removal gives up its claims, as the
+          // undo's own request would have once its write landed.
+          const undone = await store.runById(open.undoes);
+          if (undone !== null) await store.retire([...removedEver(undone)]);
         }
         await store.publish(open.id);
       }

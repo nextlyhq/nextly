@@ -43,6 +43,7 @@ import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { componentUsageIndex } from "./component-usage";
 import { walkPages } from "./paged-walk";
+import { tokenUsageIndex } from "./token-usage";
 import { isSupersededRun } from "./usage-bookkeeping";
 import type { UsageScope } from "./usage-index";
 
@@ -650,6 +651,12 @@ export interface PageBuilderRebuildArgs {
   /** Where the COMPONENT index's rows live. */
   componentIndex: ClassUsageIndexStore;
   /**
+   * Where the VARIABLE index's rows live. Required for the reason the other
+   * two are: a repair that skipped it would leave every variable reading as
+   * used by nothing.
+   */
+  tokenIndex: ClassUsageIndexStore;
+  /**
    * Whether `collection` names a collection or a Single; a collection when
    * absent. A Single's rows are filed with an empty `entityKey`, and its
    * document store answers with its one document.
@@ -675,13 +682,14 @@ export async function walkPageBuilderUsageIndexes(
   args: PageBuilderRebuildArgs,
   resume?: UsageWalkResume
 ): Promise<{ report: ClassUsageRebuildReport; finished: boolean }> {
-  const { classIndex, componentIndex, ...rest } = args;
+  const { classIndex, componentIndex, tokenIndex, ...rest } = args;
   return walkUsageIndexes(
     {
       ...rest,
       targets: [
         usageTarget(classUsageIndex, classIndex),
         usageTarget(componentUsageIndex, componentIndex),
+        usageTarget(tokenUsageIndex, tokenIndex),
       ],
     },
     resume

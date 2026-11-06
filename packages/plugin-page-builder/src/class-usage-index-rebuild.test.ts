@@ -782,6 +782,7 @@ describe("repairing every index a site maintains", () => {
       documents: docs.store,
       classIndex: classes.store,
       componentIndex: components.store,
+      tokenIndex: recordingStore().store,
       collection: "pages",
       field: "content",
       locale: "",
@@ -815,6 +816,7 @@ describe("repairing every index a site maintains", () => {
       documents: docs.store,
       classIndex: unavailableStore("class index unavailable"),
       componentIndex: healthy.store,
+      tokenIndex: recordingStore().store,
       collection: "pages",
       field: "content",
       locale: "",
@@ -851,6 +853,7 @@ describe("repairing every index a site maintains", () => {
       documents: docs.store,
       classIndex: unavailableStore("class index unavailable"),
       componentIndex: healthy.store,
+      tokenIndex: recordingStore().store,
       collection: "pages",
       field: "content",
       locale: "",
@@ -875,6 +878,7 @@ describe("repairing every index a site maintains", () => {
       documents: docs.store,
       classIndex: classes.store,
       componentIndex: components.store,
+      tokenIndex: recordingStore().store,
       collection: "pages",
       field: "content",
       locale: "",
@@ -887,7 +891,7 @@ describe("repairing every index a site maintains", () => {
     }).toEqual({ failure: undefined, unrepaired: 0 });
   });
 
-  it("fills BOTH indexes from one walk, through the entry point a host can reach", async () => {
+  it("fills EVERY index from one walk, through the entry point a host can reach", async () => {
     // The upgrade case, and the reason this entry point exists. An installation
     // that already held pages gets an empty component index and it fills only
     // for pages saved AFTER the upgrade, so every stored reference stays
@@ -912,6 +916,7 @@ describe("repairing every index a site maintains", () => {
               version: 1,
               props: {},
               classes: ["hero"],
+              styles: { base: { base: { color: { $token: "color.brand" } } } },
             },
             {
               id: "i1",
@@ -925,12 +930,14 @@ describe("repairing every index a site maintains", () => {
     ]);
     const classes = recordingStore();
     const components = recordingStore();
+    const tokens = recordingStore();
 
     await rebuildPageBuilderUsageIndexes({
       limits: DEFAULT_LIMITS,
       documents: docs.store,
       classIndex: classes.store,
       componentIndex: components.store,
+      tokenIndex: tokens.store,
       collection: "pages",
       field: "content",
       locale: "",
@@ -944,7 +951,12 @@ describe("repairing every index a site maintains", () => {
     expect({
       classes: classes.written.map(r => r.classId),
       components: components.written.map(r => r.componentId),
-    }).toEqual({ classes: ["hero"], components: ["header"] });
+      tokens: tokens.written.map(r => r.tokenId),
+    }).toEqual({
+      classes: ["hero"],
+      components: ["header"],
+      tokens: ["color.brand"],
+    });
   });
 });
 

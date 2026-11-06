@@ -8,11 +8,13 @@
  * number of items (2), each through its control. Then:
  *
  * 1. The field menu offers only fields visitors can see, and says so.
- * 2. The canvas draws the entries a visitor would see, in that order.
+ * 2. The canvas draws the entries the author may read, in that order, their
+ *    draft included: the canvas reads as the person editing.
  * 3. "Canvas shows: When empty" draws the list's empty state, tagged.
  * 4. The saved list stores the shape the engine reads.
- * 5. Published, the page lists exactly those entries to a visitor who is
- *    not signed in: a draft entry never, and the sort and the limit hold.
+ * 5. Published, the page lists the published entries to a visitor who is
+ *    not signed in: the draft the canvas showed never, and the sort and the
+ *    limit hold.
  *
  * Under Number of items the selected list says how many entries match and
  * how many show, taken from the canvas's own read of the list: the editor
@@ -199,13 +201,14 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await items.fill("2");
   await items.press("Enter");
 
-  // The canvas draws what a visitor would see: this run's two dearest.
+  // The canvas draws what the author may read, their draft included: this
+  // run's two dearest are the draft and Birch.
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
-    .toEqual([`${mark} Birch`, `${mark} Cedar`]);
-  // Three published entries carry the mark; two show.
+    .toEqual([`${mark} Draft`, `${mark} Birch`]);
+  // Four entries carry the mark, the draft among them; two show.
   await expect(
-    inspector.getByText("3 entries match, so 2 show.", { exact: true })
+    inspector.getByText("4 entries match, so 2 show.", { exact: true })
   ).toBeVisible();
   // The count is the total of the canvas's own read of the list, so the
   // editor reads nothing to count: every read is the list's.
@@ -225,7 +228,7 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await inspector.getByRole("radio", { name: "Entries" }).click();
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
-    .toEqual([`${mark} Birch`, `${mark} Cedar`]);
+    .toEqual([`${mark} Draft`, `${mark} Birch`]);
 
   // 4. Saved as the engine reads it.
   await pressSave(page);
@@ -255,7 +258,9 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
     )
     .toBe("published");
 
-  // 5. A visitor with no session sees the same two, in the same order.
+  // 5. A visitor with no session sees the two dearest PUBLISHED entries, in
+  // the same order: the draft the canvas showed the author never reaches
+  // the published page.
   const baseURL = testInfo.project.use.baseURL;
   const visitor = await browser.newContext({ storageState: undefined });
   try {
@@ -266,6 +271,7 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
       `${mark} Birch`,
       `${mark} Cedar`,
     ]);
+    expect(await response?.text()).not.toContain(`${mark} Draft`);
     // An author's note, and the editor's count, never reach a visitor.
     await expect(shown.locator("[data-nx-list-diagnostic]")).toHaveCount(0);
     await expect(shown.getByText(/match(es)?, so \d+ shows?/)).toHaveCount(0);
