@@ -258,6 +258,37 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_ACTION_ROW_NOT_FOUND: {
+    cause:
+      "A plugin's declared action named a row its caller may not read, or one that does not exist, so its route's handler did not run.",
+    from: [
+      {
+        // A route bound to a declared action reads each row it names as the
+        // caller, and answers a row it may not read as it answers a missing one.
+        code: "NOT_FOUND",
+        reason: "action-row-not-readable",
+        describe: () => ({
+          what: "A plugin's action named an entry that could not be found for this caller.",
+          why: "An action acts only on entries its caller may read; one they may not read is answered as one that does not exist. Nothing was run.",
+          next: "Run the action on an entry the caller can open in the admin.",
+        }),
+      },
+    ],
+  },
+  ACTION_NOT_AVAILABLE: {
+    cause:
+      "A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run.",
+    from: [
+      {
+        code: "ACTION_NOT_AVAILABLE",
+        describe: error => ({
+          what: error.publicMessage,
+          why: "An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.",
+          next: "Run the action on an entry the admin offers it on.",
+        }),
+      },
+    ],
+  },
   PLUGIN_NOT_FOUND: {
     cause:
       "The plugin named on the command line is not among the plugins the configuration lists.",

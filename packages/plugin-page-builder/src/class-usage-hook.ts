@@ -69,6 +69,7 @@ import {
 import { reconcileWrittenDocument, usageTarget } from "./class-usage-write";
 import { componentUsageIndex } from "./component-usage";
 import type { SingleToWalk } from "./host-rewrite/site";
+import { tokenUsageIndex } from "./token-usage";
 import type { UsageIndexStores } from "./usage-index-tables";
 import {
   hookTargetOf,
@@ -324,7 +325,11 @@ async function forget(
   // references until somebody ran a rebuild nobody knew was needed.
   const failures: unknown[] = [];
   const stores = args.stores();
-  for (const store of [stores.classIndex, stores.componentIndex]) {
+  for (const store of [
+    stores.classIndex,
+    stores.componentIndex,
+    stores.tokenIndex,
+  ]) {
     try {
       await forgetDeletedDocument({
         store,
@@ -427,6 +432,7 @@ function indexWork(
     targets: [
       usageTarget(classUsageIndex, stores.classIndex),
       usageTarget(componentUsageIndex, stores.componentIndex),
+      usageTarget(tokenUsageIndex, stores.tokenIndex),
     ],
     read: classUsageDocumentReader(nextly),
     locales: args.locales(),
