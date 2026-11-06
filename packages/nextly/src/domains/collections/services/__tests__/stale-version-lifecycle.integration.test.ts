@@ -448,20 +448,16 @@ describe.each(getConfiguredTestDialects())(
           expect(await lifecycleOf(t, page.id)).toEqual(before);
         });
 
-        it("publishes with no version, until a version is required", async () => {
+        it("refuses a publish with no version, publishing nothing", async () => {
           const t = await boot(dialect);
           const page = await translatedDraft(t);
-          await update(
-            t,
-            PAGES,
-            page.id,
-            { title: "hola otra vez", _overwrite: true },
-            {
-              locale: "es",
-            }
+          const before = await lifecycleOf(t, page.id);
+          const refused = await publishEvery(t, page.id, {});
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "VERSION_REQUIRED"
           );
-          const published = await publishEvery(t, page.id, {});
-          expect(published.success, JSON.stringify(published)).toBe(true);
+          expect(refused.statusCode).toBe(428);
+          expect(await lifecycleOf(t, page.id)).toEqual(before);
         });
 
         it("publishes over a change with the overwrite choice, and records it", async () => {

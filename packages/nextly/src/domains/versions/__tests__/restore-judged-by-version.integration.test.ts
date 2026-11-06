@@ -284,21 +284,20 @@ describe.each(getConfiguredTestDialects())(
       expect(single.json._rev).toBe((await banner(t))._rev);
     });
 
-    it("applies a restore with no version, until a version is required", async () => {
+    it("refuses a restore with no version, restoring nothing", async () => {
       const t = await boot(dialect);
       const key = await adminKey(t);
       const id = await postWithHistory(t);
-      await handlerOf(t).updateEntry(
-        { collectionName: POSTS, entryId: id, overrideAccess: true },
-        { title: "third", _overwrite: true }
-      );
-      const restored = await rest(
+      const before = await postTitle(t, id);
+      const refused = await rest(
         "POST",
         ["collections", POSTS, "entries", id, "versions", "1", "restore"],
         key
       );
-      expect(restored.status, JSON.stringify(restored.json)).toBe(200);
-      expect(await postTitle(t, id)).toBe("first");
+      expect(refused.status, JSON.stringify(refused.json)).toBe(428);
+      expect((refused.json.error as Doc).code).toBe("VERSION_REQUIRED");
+      expect(await postTitle(t, id)).toBe(before);
+      expect(before).not.toBe("first");
     });
 
     it("applies a restore over a change with the overwrite choice, and records the overwrite", async () => {

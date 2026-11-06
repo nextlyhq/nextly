@@ -138,8 +138,8 @@ describe("the editor's count of a list", () => {
   });
 
   it("reads in the language being edited, as the canvas does", async () => {
-    const reads = canvasListReadsIn("fr");
-    expect(canvasListReadsIn("fr")).toBe(reads);
+    const reads = canvasListReadsIn("fr", "u1");
+    expect(canvasListReadsIn("fr", "u1")).toBe(reads);
     const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
     vi.mocked(writePluginRoute).mockReset();
     vi.mocked(writePluginRoute).mockResolvedValue(counted(4));
@@ -149,6 +149,23 @@ describe("the editor's count of a list", () => {
     expect(vi.mocked(writePluginRoute).mock.calls[0]?.[0]).toMatchObject({
       body: { query: { collection: "posts", locale: "fr" } },
     });
+  });
+
+  it("never hands one person's kept rows to another", async () => {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockResolvedValue(counted(3));
+    const first = canvasListReadsIn("en", "author-a");
+    await first.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(1);
+    // Another person signs in in the same tab: their reads are their own,
+    // and asking again reads again rather than answering from A's.
+    const second = canvasListReadsIn("en", "author-b");
+    expect(second).not.toBe(first);
+    await second.count({ collection: "posts", limit: 2 });
+    expect(vi.mocked(writePluginRoute)).toHaveBeenCalledTimes(2);
+    // And A's are gone: coming back reads afresh too.
+    expect(canvasListReadsIn("en", "author-a")).not.toBe(first);
   });
 
   it("reads nothing for a list one read cannot count", async () => {

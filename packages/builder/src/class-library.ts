@@ -212,7 +212,7 @@ const SUMMARY_PATH = "class";
  * to catch. Iterating `STYLE_STATES` rather than the record's own keys keeps
  * the walk to states the engine defines.
  */
-function storedContexts(
+export function storedContexts(
   styles: NodeStyles
 ): { state: string; breakpoint: string; values: Record<string, unknown> }[] {
   const pairs: {

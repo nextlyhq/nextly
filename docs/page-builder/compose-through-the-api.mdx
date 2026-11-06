@@ -114,7 +114,7 @@ drafts saves an edit straight onto the published entry, so there the caller need
 | `set-placement-values` | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                               |
 | `choose-variant`       | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                            |
 | `set-layout`           | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
-| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`. See below.                   |
+| `set-list-query`       | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`. See below.       |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
@@ -132,10 +132,13 @@ outer list's item; `filters` is a list of `{ "field", "op", "value" }` rows an e
 all meet, `op` one of `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
 `less_than`, `less_than_equal`, `contains`, `in`, `not_in` and `exists`, and a day written
 `"2026-09-01"`; `sort` is comma-separated keys, `-` for descending (`"-publishedAt,title"`);
-`limit` is 1 to 100 and `offset` 0 or more. The write is judged as the editor's save is: a
-field the collection lacks or visitors can't see, a filter on a field holding several values
-and a related list nested more than one level deep are refused, in the words the editor
-shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
+`limit` is 1 to 100 and `offset` 0 or more; `paginate: true` splits the list into pages,
+each at its own address (`/news/page/2`), and `null` turns that off. The write is judged as
+the editor's save is: a field the collection lacks or visitors can't see, a filter on a
+field holding several values, a related list nested more than one level deep, and a split
+into pages the page cannot serve (a second list split into pages, one inside another list,
+one of related entries, one in a component or a Layout region) are refused, in the words the
+editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
 
 ## Change a component's definition
 
@@ -173,6 +176,33 @@ variant made or changed), `warnings`, and, when a removed field emptied variants
 `prunedVariants`. A refused edit answers `422` with the planner's reason as the error
 code, such as `label-taken`.
 
+## Give a collection its template
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/actions
+Content-Type: application/json
+
+{ "action": { "kind": "create-template", "collection": "posts" }, "dryRun": true }
+```
+
+A template is a builder document of kind `template`, stored in the page builder's
+`templates` collection, that draws each entry of the collection it names. A collection
+has one template, whatever its state: a second is refused when it is created, naming the
+first by its title, or by its id to someone who may not read it.
+
+| `kind`             | Fields                                  | Rights on templates         |
+| ------------------ | --------------------------------------- | --------------------------- |
+| `create-template`  | `collection`, and `title` and `publish` | **create**, and **publish** |
+| `publish-template` | `id`                                    | **read** and **publish**    |
+
+A template is created as a draft unless `publish` is set, and named after its collection
+unless `title` is given. A collection may have a template when it is content the admin
+shows and has a `slug` text field, its entries' part of their address. The page
+builder's own collections may not. A template's collection cannot be changed while that
+collection exists. A refused action answers `409` for a collection that already has a
+template and `422` for one that cannot have one; a dry run answers either as `refusals`.
+The answer holds the `template` as the write stored it.
+
 ## Other routes with a dry run
 
 - `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
@@ -206,7 +236,8 @@ const plan = planDefinitionAction(definition, action, {
 });
 ```
 
-`pageActionJsonSchema()` and `definitionActionJsonSchema()` give the same schemas as
+`pageActionJsonSchema()`, `definitionActionJsonSchema()` and `templateActionJsonSchema()`
+give the same schemas as
 JSON Schema, for a tool that registers them as inputs. The editor's planners are
 published there too: `planInsertPattern`, `planSaveAsPattern`, `planSaveAsComponent`,
 `planExposeProperty`, `planAddVariant` and the rest.
@@ -230,6 +261,9 @@ const composition = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[
 ] as CompositionService;
 
 const manifest = await composition.manifest(ctx);
+await composition.templateAction(ctx, {
+  action: { kind: "create-template", collection: "posts" },
+});
 const { message, item } = await composition.pageAction(ctx, {
   page: { collection: "pages", id: pageId },
   action: { kind: "choose-variant", instanceId, variant: "v-dark" },

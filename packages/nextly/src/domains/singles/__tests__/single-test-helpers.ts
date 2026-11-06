@@ -158,6 +158,9 @@ export function createMockHookRegistry(): MockRecord {
     hasHooks: vi.fn().mockReturnValue(false),
     execute: vi.fn().mockResolvedValue(undefined),
     executeBeforeOperation: vi.fn().mockResolvedValue(undefined),
+    // No in-transaction handler, so a save never loads that phase.
+    hasInTransaction: vi.fn().mockReturnValue(false),
+    inTransactionRunners: vi.fn().mockReturnValue([]),
   };
 }
 

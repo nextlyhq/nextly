@@ -16,6 +16,7 @@ import {
   SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
+  SHARED_STYLE_WHERE_USED_PAGES_MAX,
   sharedStyleUsagePath,
   sharedStyleWhereUsedPath,
 } from "../library-contract";
@@ -133,6 +134,28 @@ describe("reading where a shared style is used", () => {
       hasNext: false,
       complete: false,
     });
+  });
+});
+
+describe("the last where-used page", () => {
+  it("offers no page past the last the shared-style route may be asked for", async () => {
+    // The route refuses a page past its cap, so the list stops there; the
+    // documents beyond stay counted in the total.
+    readAnswer = { items: [], meta: { total: 6000, hasNext: true } };
+    const { result } = renderHook(() => useSharedStylesClient());
+    const before = await result.current.uses(
+      "c-card",
+      SHARED_STYLE_WHERE_USED_PAGES_MAX - 1,
+      signal
+    );
+    expect(before.hasNext).toBe(true);
+    const last = await result.current.uses(
+      "c-card",
+      SHARED_STYLE_WHERE_USED_PAGES_MAX,
+      signal
+    );
+    expect(last.hasNext).toBe(false);
+    expect(last.total).toBe(6000);
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * Pieces the Design panel's tabs share: the Keep / Remove pair a removal is
- * confirmed with, "Show N more" under a long list, and a write that answers
- * with a refusal or nothing.
+ * confirmed with, "Show N more" under a long list, the open row drawn past
+ * a page, and a write that answers with a refusal or nothing.
  *
  * One copy each, so the Variables, Fonts and Shared styles tabs confirm,
  * page and report a refusal the same way.
@@ -77,6 +77,25 @@ export function ShowMore({
       {`Show ${String(Math.min(hidden, pageSize))} more`}
     </button>
   );
+}
+
+/**
+ * The rows a page shows, and the open row as well when it lies past them.
+ *
+ * A row whose editor is open can lie past the page: a variable added at the
+ * end of a long group, or a shared style opened from another tab. Its row is
+ * drawn on its own after the page rather than by raising the page, which
+ * would mount every row before it.
+ */
+export function withOpenRow<T>(
+  rows: readonly T[],
+  limit: number,
+  isOpen: (row: T) => boolean
+): readonly T[] {
+  const page = rows.slice(0, limit);
+  const at = rows.findIndex(isOpen);
+  const open = at >= limit ? rows[at] : undefined;
+  return open === undefined ? page : [...page, open];
 }
 
 /**

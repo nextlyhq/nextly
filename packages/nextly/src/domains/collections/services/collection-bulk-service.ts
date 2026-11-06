@@ -40,7 +40,10 @@ import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { DOCUMENT_VERSION_KEY } from "../../versions/document-revision";
-import { sameValuesVersionRequirement } from "../../versions/stale-version";
+import {
+  sameValuesVersionRequirement,
+  versionRequiredFor,
+} from "../../versions/stale-version";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -992,6 +995,7 @@ export class CollectionBulkService extends BaseService {
       ids: params.ids,
       revs: params.revs,
     });
+    if (requirement.kind === "required") throw versionRequiredFor("ids");
     const revs = requirement.kind === "per-document" ? requirement.revs : {};
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
@@ -1151,9 +1155,6 @@ export class CollectionBulkService extends BaseService {
     // read, and the gate this asks and the rows written must read the same
     // body.
     const data = { ...params.data };
-    // One set of values for every match names no one document's version, and
-    // a query names no ids to give each one's: decided before any row is found.
-    sameValuesVersionRequirement(data, { ids: undefined, revs: params.revs });
     const gate = await writeGateFor(data, "collection", () =>
       this.mutationService.hasLifecycle(params.collectionName)
     );
@@ -1185,6 +1186,15 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
+    // One set of values for every match names no one document's version, and
+    // a query names no ids to give each one's. Decided after the access gate,
+    // so a caller who may not write here is refused for that whatever the body
+    // says, and before any row is found.
+    const requirement = sameValuesVersionRequirement(data, {
+      ids: undefined,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("query");
     await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level

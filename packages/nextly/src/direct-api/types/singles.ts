@@ -95,20 +95,42 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
    * @default true
    */
   createIfMissing?: boolean;
+
+  /**
+   * With `createIfMissing: false`, what a Single with no stored document
+   * answers. `"default"` answers the default document a creating read would
+   * store, through the same read (access rules, lifecycle filter, field rules
+   * and read hooks), without storing anything: so a caller can see what the
+   * Single will hold once it is first read. Refused unless `createIfMissing`
+   * is `false`, since a creating read answers the created document anyway.
+   *
+   * A default computed by a function is computed again for each such read, so
+   * a function that is not deterministic may answer differently from what is
+   * later stored.
+   *
+   * @experimental
+   */
+  whenAbsent?: "default";
 }
 
 /**
  * Arguments for updating a single document.
  *
+ * An update says which version it changes, the `_rev` from the read it was
+ * made from, or that it replaces whatever is stored (`_overwrite: true`).
+ * One that says neither is refused with `VERSION_REQUIRED`.
+ *
  * @typeParam TSlug - The single slug literal type (auto-inferred from `slug`)
  *
  * @example
  * ```typescript
+ * const settings = await nextly.findSingle({ slug: 'site-settings' });
  * await nextly.updateSingle({
  *   slug: 'site-settings',
  *   data: {
  *     siteName: 'My Site',
  *     maintenanceMode: false,
+ *     _rev: settings?._rev,
  *   },
  * });
  * ```

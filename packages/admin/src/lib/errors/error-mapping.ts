@@ -28,7 +28,12 @@
 
 import type { UseFormSetError, FieldPath, FieldValues } from "react-hook-form";
 
-import { normalizeValidationIssues } from "../api/parseApiError";
+import {
+  isApiError,
+  normalizeValidationIssues,
+  validationIssues,
+  type ValidationIssue,
+} from "../api/parseApiError";
 
 // ============================================================================
 // Types
@@ -78,65 +83,68 @@ export interface MapServerErrorsOptions {
 // ============================================================================
 
 /**
- * Extract field-level errors from a canonical wire-shape error response.
+ * Every issue a rejection or an error body carries, read once.
  *
- * Reads `error.data.errors[]` only. Returns `null` when the input is not a
- * canonical error response or has no field-level errors.
+ * Three shapes reach a form: the `ApiError` the fetcher THROWS, which carries
+ * the body's `data` on the error itself; a raw `{ error: { data } }` body; and
+ * a fetch/axios-style wrapper holding that body under `.response.data`. The
+ * thrown one is the shape every entry save meets, and reading only the other
+ * two is how a refused save's field reason never reached its field.
  *
- * Also accepts a fetch/axios-style wrapper where the body is nested under
- * `.response.data` so `parseServerErrors(thrownError)` works without the
- * caller having to unwrap the response object.
+ * `null` where the value is none of them, or carries no `errors` list.
+ */
+function issuesOf(response: unknown): readonly ValidationIssue[] | null {
+  // The thrown error first: it is also an object with a `message`, and only
+  // its `data` says what the server refused.
+  if (isApiError(response)) {
+    return Array.isArray(response.data?.errors)
+      ? validationIssues(response)
+      : null;
+  }
+  if (!isRecord(response)) return null;
+  // A fetch/axios-style wrapper: the body under `.response.data`.
+  if (isRecord(response.response) && "data" in response.response) {
+    return issuesOf(response.response.data);
+  }
+  const errors =
+    isRecord(response.error) && isRecord(response.error.data)
+      ? response.error.data.errors
+      : undefined;
+  // Normalized once, in `parseApiError`'s module, then NARROWED by each
+  // caller. Traversing `data.errors` a second time would be a second answer
+  // to what the wire carries, and the two drifted the moment they existed.
+  return Array.isArray(errors) ? normalizeValidationIssues(errors) : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** An issue that can name a form control: a path, a code and a message. */
+function namesAField(issue: ValidationIssue): issue is ServerFieldError {
+  return (
+    issue.path !== undefined &&
+    issue.code !== undefined &&
+    issue.message !== undefined
+  );
+}
+
+/**
+ * Extract field-level errors from a server rejection: the `ApiError` the
+ * fetcher throws, a canonical wire-shape body, or a fetch/axios-style wrapper
+ * around one (`.response.data`), so `parseServerErrors(thrownError)` works
+ * without the caller unwrapping anything.
+ *
+ * Reads `data.errors[]` only, and keeps an issue only when it carries all
+ * three of path, code and message: this view names a form control with them,
+ * a stricter requirement than a consumer showing a sentence has. Returns
+ * `null` when the input carries no `errors` list at all.
  */
 export function parseServerErrors(
   response: unknown
 ): ServerFieldError[] | null {
-  if (!response || typeof response !== "object") {
-    return null;
-  }
-
-  const resp = response as Record<string, unknown>;
-
-  if (
-    "response" in resp &&
-    typeof resp.response === "object" &&
-    resp.response !== null
-  ) {
-    const axiosResp = resp.response as Record<string, unknown>;
-    if ("data" in axiosResp) {
-      return parseServerErrors(axiosResp.data);
-    }
-  }
-
-  if (
-    "error" in resp &&
-    typeof resp.error === "object" &&
-    resp.error !== null
-  ) {
-    const errorObj = resp.error as Record<string, unknown>;
-    if (
-      "data" in errorObj &&
-      typeof errorObj.data === "object" &&
-      errorObj.data !== null
-    ) {
-      const data = errorObj.data as Record<string, unknown>;
-      if (Array.isArray(data.errors)) {
-        // Normalized once, in `parseApiError`, then NARROWED here. Traversing
-        // `data.errors` a second time would be a second answer to what the
-        // wire carries, and the two drifted the moment they existed: this
-        // form needs all three fields to name a form control, which is a
-        // stricter requirement than a consumer showing a sentence has. The
-        // requirement belongs here; the reading does not.
-        return normalizeValidationIssues(data.errors).filter(
-          (issue): issue is ServerFieldError =>
-            issue.path !== undefined &&
-            issue.code !== undefined &&
-            issue.message !== undefined
-        );
-      }
-    }
-  }
-
-  return null;
+  const issues = issuesOf(response);
+  return issues === null ? null : issues.filter(namesAField);
 }
 
 /**
@@ -257,43 +265,85 @@ export function mapServerErrorsToForm<T extends FieldValues>(
   }
 }
 
+/** Options for {@link applyServerFieldErrors}. */
+export interface ApplyServerFieldErrorsOptions extends MapServerErrorsOptions {
+  /**
+   * Whether the form draws a field at this path. An error set on a path the
+   * form does not draw is kept by the form and shown nowhere, so its reason is
+   * handed back instead, for the caller to say some other way. Every path, if
+   * absent.
+   */
+  isFormField?: ((path: string) => boolean) | undefined;
+}
+
+/** What {@link applyServerFieldErrors} did with a rejection's reasons. */
+export interface AppliedServerFieldErrors {
+  /** How many reasons were put on a field. */
+  mapped: number;
+  /**
+   * The reasons no field on the form can show: an issue with no path, or one
+   * whose path the form does not draw. In the order the server gave them.
+   */
+  unplaced: string[];
+}
+
 /**
- * Create an error handler for mutation hooks
+ * Put a rejection's field reasons on the form's fields, and hand back the
+ * ones no field can show.
  *
- * Returns a function that parses server errors and maps them to form fields.
- * Returns `true` if errors were handled (mapped to form), `false` otherwise.
- *
- * @param setError - React Hook Form setError function
- * @param options - Mapping options
- * @returns Error handler function
- *
- * @example
- * ```typescript
- * const handleServerError = createServerErrorHandler(form.setError);
- *
- * useMutation({
- *   onError: (error) => {
- *     const handled = handleServerError(error);
- *     if (!handled) {
- *       toast.error("An unexpected error occurred");
- *     }
- *   },
- * });
- * ```
+ * The form keeps the author's values: this only sets errors. A reason whose
+ * field the form does not draw (a `status` refused on unpublish, a rule
+ * about the whole document) is returned rather than set, because an error on
+ * an undrawn path is stored and never seen.
  */
-export function createServerErrorHandler<T extends FieldValues>(
+export function applyServerFieldErrors<T extends FieldValues>(
+  error: unknown,
   setError: UseFormSetError<T>,
-  options?: MapServerErrorsOptions
-) {
-  return (error: unknown): boolean => {
-    const serverErrors = parseServerErrors(error);
+  options: ApplyServerFieldErrorsOptions = {}
+): AppliedServerFieldErrors {
+  const { isFormField = () => true, ...mapOptions } = options;
+  const placed: ServerFieldError[] = [];
+  const unplaced: string[] = [];
+  for (const issue of issuesOf(error) ?? []) {
+    if (namesAField(issue) && isFormField(issue.path)) placed.push(issue);
+    else if (issue.message !== undefined) unplaced.push(issue.message);
+  }
+  if (placed.length > 0) mapServerErrorsToForm(placed, setError, mapOptions);
+  return { mapped: placed.length, unplaced };
+}
 
-    if (serverErrors && serverErrors.length > 0) {
-      mapServerErrorsToForm(serverErrors, setError, options);
-      return true; // Errors were handled
-    }
+/**
+ * Whether a server path names a field among `fieldNames`: the path's first
+ * step (`title` in `title.en` or `items[2].url`) is one of them.
+ */
+export function pathOnForm(
+  fieldNames: ReadonlySet<string>
+): (path: string) => boolean {
+  return path => fieldNames.has(path.split(/[.[]/, 1)[0] ?? "");
+}
 
-    return false; // No field-level errors found
+/**
+ * What an entry save's failure handler does with a refusal: its field reasons
+ * on the form, and what the toast says.
+ *
+ * `handled` is true when every reason is on a field the form draws, so the
+ * form says all of it and no toast repeats it. Otherwise `toastMessage` holds
+ * the reasons no field can show, for the toast to say in place of the
+ * envelope's bare "Validation failed."; it is undefined when the refusal
+ * carried none, and the caller's own message stands.
+ */
+export function placeServerRefusal<T extends FieldValues>(
+  error: unknown,
+  setError: UseFormSetError<T> | undefined,
+  options?: ApplyServerFieldErrorsOptions
+): { handled: boolean; toastMessage: string | undefined } {
+  if (setError === undefined) {
+    return { handled: false, toastMessage: undefined };
+  }
+  const { mapped, unplaced } = applyServerFieldErrors(error, setError, options);
+  return {
+    handled: mapped > 0 && unplaced.length === 0,
+    toastMessage: unplaced.length > 0 ? unplaced.join(" ") : undefined,
   };
 }
 

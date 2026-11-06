@@ -63,13 +63,22 @@ describe("versionCheckFor", () => {
     ).toThrow();
   });
 
-  it("leaves a write that gives no version unjudged", () => {
-    expect(versionCheckFor({ title: "a" }, { exempt: false })).toEqual({
-      kind: "unjudged",
-    });
-    expect(versionCheckFor({ _rev: undefined }, { exempt: false })).toEqual({
-      kind: "unjudged",
-    });
+  // A write that gives neither would replace whatever was saved since its
+  // caller read, unasked: refused, naming both keys that say either.
+  it("refuses a write that gives neither a version nor the overwrite choice", () => {
+    for (const body of [{ title: "a" }, { _rev: undefined }]) {
+      let refused: unknown;
+      try {
+        versionCheckFor(body, { exempt: false });
+      } catch (error) {
+        refused = error;
+      }
+      expect(NextlyError.is(refused) && refused.code).toBe("VERSION_REQUIRED");
+      expect(NextlyError.is(refused) && refused.publicData).toEqual({
+        versionKey: "_rev",
+        overwriteKey: "_overwrite",
+      });
+    }
   });
 
   it("refuses as a validation error anything that is not a version, exempt or not", () => {
@@ -138,9 +147,10 @@ describe("versionCheckFor and _overwrite", () => {
     expect(
       versionCheckFor({ _overwrite: false, _rev: "4" }, { exempt: false })
     ).toMatchObject({ kind: "judge" });
-    expect(versionCheckFor({ _overwrite: false }, { exempt: false })).toEqual({
-      kind: "unjudged",
-    });
+    // `false` chooses nothing: with no version beside it, nothing is said.
+    expect(() =>
+      versionCheckFor({ _overwrite: false }, { exempt: false })
+    ).toThrow(expect.objectContaining({ code: "VERSION_REQUIRED" }));
   });
 
   it("refuses any other _overwrite, naming it", () => {
@@ -178,6 +188,19 @@ describe("the release run's mark", () => {
       ).toBe(false);
     });
     expect(releaseRunExemptFor(entry)).toBe(false);
+  });
+
+  it("exempts one write: a later one to the same document in the run is judged", () => {
+    runAsReleaseRun(entry, () => {
+      // A write to another document first leaves the mark for the run's own.
+      expect(releaseRunExemptFor({ ...entry, entryId: "b" })).toBe(false);
+      expect(releaseRunExemptFor(entry)).toBe(true);
+      expect(releaseRunExemptFor(entry)).toBe(false);
+    });
+    // Each run has a mark of its own.
+    runAsReleaseRun(entry, () => {
+      expect(releaseRunExemptFor(entry)).toBe(true);
+    });
   });
 
   it("matches a Single on its slug alone", () => {

@@ -169,6 +169,19 @@ export interface GetSingleOptions {
    */
   createIfMissing?: boolean;
 
+  /**
+   * With `createIfMissing: false`, what a read of a Single with no stored
+   * document answers. `"default"` answers the document the read would have
+   * created, built by the same function the creating read uses and passed
+   * through the rest of the read (access, lifecycle, field rules and read
+   * hooks) exactly as the created one would be, while still writing nothing.
+   * Ignored unless `createIfMissing` is `false`: a read that may create the
+   * document answers the created one.
+   *
+   * @experimental
+   */
+  whenAbsent?: "default";
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */

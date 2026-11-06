@@ -35,6 +35,12 @@ import {
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { HookRegistry } from "../../../hooks/hook-registry";
+import {
+  inTransactionHandlersFor,
+  runInTransactionPhaseFor,
+} from "../../../hooks/in-transaction-call";
+import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -148,7 +154,7 @@ import {
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
-import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { versionConflictRetries } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import {
@@ -178,6 +184,7 @@ import {
 } from "./promote-gate";
 import {
   checkSingleAccess,
+  getSingleHookCollection,
   singleGrantRefusal,
   type SingleQueryService,
 } from "./single-query-service";
@@ -230,8 +237,8 @@ export interface PublishAllSinglePreview {
 /**
  * Everything the publish acts on, resolved once before the transaction opens.
  *
- * Gathered up front because the transaction body may RE-RUN: `withVersionConflictRetry`
- * replays it on a version_no race, and anything resolved inside would be
+ * Gathered up front because the transaction body may RE-RUN: the version-conflict retry
+ * (`versionConflictRetries`) replays it on a version_no race, and anything resolved inside would be
  * resolved again — including the permission reads, which would then take a
  * second connection while this write holds its own.
  */
@@ -248,6 +255,11 @@ interface PublishPlan {
   companionReady: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
+  /**
+   * The in-transaction handlers this publish runs, asked once before the
+   * transaction, so every attempt runs the same set and reads what it needs.
+   */
+  inTransactionHandlers: InTransactionHandlerSet;
   /**
    * Whether the Single may have working drafts, as its schema read reports.
    * A stored draft is promoted only while it does: one left from before the
@@ -312,7 +324,12 @@ export class SinglePublishAllService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService,
     private readonly localizationSource?: LocalizationSource,
     /** Reads the promote gate needs: the logical shape, and the live document. */
-    private readonly queryService?: SingleQueryService
+    private readonly queryService?: SingleQueryService,
+    /**
+     * Where the Single's in-transaction handlers are registered. Without one a
+     * publish runs no in-transaction phase.
+     */
+    private readonly hookRegistry?: HookRegistry
   ) {
     super(adapter, logger);
   }
@@ -430,8 +447,8 @@ export class SinglePublishAllService extends BaseService {
         locale: undefined,
       });
 
-      const outcome = await withVersionConflictRetry(() =>
-        this.adapter.transaction(tx =>
+      const outcome = await this.adapter.transaction(
+        tx =>
           this.commitPublish(
             tx,
             plan,
@@ -441,8 +458,8 @@ export class SinglePublishAllService extends BaseService {
             promoteGrants,
             promoteReads,
             { stale, languages: judged, personName: options.user?.name ?? null }
-          )
-        )
+          ),
+        versionConflictRetries()
       );
 
       // The document was deleted out from under the publish: nothing was
@@ -811,6 +828,10 @@ export class SinglePublishAllService extends BaseService {
         companionReady,
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
+        inTransactionHandlers: inTransactionHandlersFor(
+          this.hookRegistry,
+          getSingleHookCollection(slug)
+        ),
         actor: actorForWrite(options.actor ?? null, options.user),
         // Resolved before the transaction: it reads the component registry.
         draftsEligible: (
@@ -1079,7 +1100,7 @@ export class SinglePublishAllService extends BaseService {
   /**
    * The publish itself: lock, re-check, write every status, capture, record.
    *
-   * Runs inside `withVersionConflictRetry`, so the whole body may re-run — it
+   * Retried on a version conflict (`versionConflictRetries`), so the whole body may re-run — it
    * therefore derives everything it reports from values read under THIS
    * attempt's lock rather than carrying state across attempts.
    */
@@ -1297,6 +1318,20 @@ export class SinglePublishAllService extends BaseService {
           promotedLocales: new Set(pending.map(draft => draft.locale)),
         })
       : false;
+
+    // Last in the transaction, and so again on each retried attempt: a
+    // publish of every language is an update of the Single.
+    await this.runInTransactionPhase(
+      tx,
+      {
+        plan,
+        lockedRow,
+        publishedRow: written.publishedRow,
+        priorComponents,
+        priorCompanionValues,
+      },
+      options.user
+    );
 
     return {
       documentVanished: false,
@@ -1724,7 +1759,8 @@ export class SinglePublishAllService extends BaseService {
    *   Every other language's companion row is left as it is, so the values
    *   read after the publish are the same.
    *
-   * Both empty when no event is recorded.
+   * Both empty when no event is recorded and no in-transaction handler
+   * runs: either is handed the before-state.
    */
   private async stateBeforePromotion(
     tx: TransactionContext,
@@ -1736,7 +1772,10 @@ export class SinglePublishAllService extends BaseService {
     values: Map<string, Record<string, unknown>>;
   }> {
     const components = new Map<string, Record<string, unknown>>();
-    if (!plan.recordingEnabled || pending.length === 0) {
+    if (
+      (!plan.recordingEnabled && plan.inTransactionHandlers.length === 0) ||
+      pending.length === 0
+    ) {
       return { components, values: new Map() };
     }
     const promoted = [
@@ -2365,26 +2404,24 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The document-wide pair: `single.updated` for the write, and
-   * `single.published` when the main row itself went live.
-   *
-   * Both payloads are assembled at the DEFAULT locale, which is the language an
-   * untagged event describes.
+   * The publish's document after and before, in the default language, in the
+   * read shape the outbox event carries: the one answer the event and the
+   * in-transaction phase are both given.
    */
-  private async recordDocumentEvents(
+  private async publishDocuments(
     tx: TransactionContext,
     args: {
       plan: PublishPlan;
       lockedRow: Record<string, unknown>;
       publishedRow: Record<string, unknown>;
-      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
-      resource: WebhookResource;
-      emitPublished: boolean;
       priorComponents: Map<string, Record<string, unknown>>;
       priorCompanionValues: Map<string, Record<string, unknown>>;
     }
-  ): Promise<boolean> {
-    const { plan, lockedRow, publishedRow, webhookFields, resource } = args;
+  ): Promise<{
+    data: Record<string, unknown>;
+    previous: Record<string, unknown>;
+  }> {
+    const { plan, lockedRow, publishedRow } = args;
     const defaultLocale = this.localization?.defaultLocale;
     const defaultCompanionValues =
       plan.companion && plan.companionPublishable && defaultLocale !== undefined
@@ -2417,6 +2454,59 @@ export class SinglePublishAllService extends BaseService {
       undefined,
       args.priorComponents.get(defaultLocale ?? "")
     );
+    return { data, previous };
+  }
+
+  /**
+   * The in-transaction phase for this publish, as operation `update` under
+   * the Single's hook namespace, with the handlers the plan took before the
+   * transaction. The documents are read only when that set is not empty, so
+   * a publish nobody handles reads nothing more, and the set that decided
+   * what was read (the before-state included) is the one that runs. No hook
+   * context is shared on this path, so the handler's is empty.
+   */
+  private async runInTransactionPhase(
+    tx: TransactionContext,
+    args: Parameters<SinglePublishAllService["publishDocuments"]>[1],
+    user: PublishAllSingleLocalesOptions["user"]
+  ): Promise<void> {
+    const handlers = args.plan.inTransactionHandlers;
+    if (handlers.length === 0) return;
+    const collection = getSingleHookCollection(args.plan.slug);
+    const { data, previous } = await this.publishDocuments(tx, args);
+    await runInTransactionPhaseFor(handlers, tx, {
+      collection,
+      operation: "update",
+      id: String(args.plan.existingDoc.id),
+      data,
+      originalData: previous,
+      user,
+      context: {},
+    });
+  }
+
+  /**
+   * The document-wide pair: `single.updated` for the write, and
+   * `single.published` when the main row itself went live.
+   *
+   * Both payloads are assembled at the DEFAULT locale, which is the language an
+   * untagged event describes.
+   */
+  private async recordDocumentEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
+      resource: WebhookResource;
+      emitPublished: boolean;
+      priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+    }
+  ): Promise<boolean> {
+    const { plan, webhookFields, resource } = args;
+    const { data, previous } = await this.publishDocuments(tx, args);
 
     let recorded = await recordMutationEvent(tx, {
       type: "single.updated",

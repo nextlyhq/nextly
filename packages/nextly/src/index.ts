@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
@@ -590,6 +591,9 @@ export {
   type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type HookPointContext,
@@ -630,9 +634,24 @@ export {
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginCollectionView,
+  type OverridableDocumentAction,
+  type PluginDocumentActionOverride,
+  type PluginDocumentActionOverrides,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginPanelSection,
   type PluginAdminPlaceDeclaration,
+  type AdminBlockContribution,
+  type AdminBulkActionContribution,
+  type AdminColumnContribution,
+  type AdminContribution,
+  type AdminContributionAction,
+  type AdminRowActionContribution,
+  type AdminSidebarSectionContribution,
+  type AdminTabContribution,
+  type AdminContributionKind,
+  type RowPredicate,
+  type RowPredicateValue,
   type PluginListFilterDeclaration,
   type PluginListFilterOption,
   type PluginMenuItem,
@@ -875,9 +894,14 @@ export type {
 export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";

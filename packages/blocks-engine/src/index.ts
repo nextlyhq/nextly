@@ -6,6 +6,10 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// A document's own metadata, its bound segments filled by the page's binding
+// pass: what a collection template gives each entry's page.
+export { resolveDocumentSeo } from "./document-seo";
+export type { ResolvedDocumentSeo } from "./document-seo";
 // Which Layout a page is drawn inside: the one rule the render, the editor
 // and the tests share.
 export { resolvePageLayout } from "./resolve-layout";
@@ -29,6 +33,8 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
@@ -92,7 +98,10 @@ export type {
   DocumentFormatVersion,
   DocumentKind,
   BlockOrigin,
+  DocumentSeo,
   DocumentSettings,
+  SeoBinding,
+  SeoTextSegment,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -614,7 +623,11 @@ export { overlaidStyles } from "./style/overlaid-styles";
  * split, so the decision is published rather than restated.
  */
 export { authoredText, isAuthoredText } from "./authored-text";
-export { declaresNoMarkup, isConditionGated } from "./visibility";
+export {
+  declaresNoMarkup,
+  isConditionGated,
+  storedVisibilityOf,
+} from "./visibility";
 // Per-device visibility as an author works with it: each device's resolved
 // state, a hide that stays on one device, and the stored values carried across
 // a change of the site's breakpoints. Public because the editor writes the eye
@@ -1314,6 +1327,7 @@ export {
   isListDay,
   isListFilterOp,
   LIST_ENTRY_SLOT,
+  listDayAfter,
   LIST_FIELD_CODES,
   LIST_FILTER_OPS,
   LIST_ISSUE_CODES,
@@ -1328,12 +1342,49 @@ export {
   isListFieldKind,
   listFieldKind,
   listKindSortable,
+  listPageCount,
   listQueryIssues,
   listRelationTarget,
   listSortText,
   outerListOf,
+  paginatedList,
   readListQuery,
 } from "./list-query";
+
+// A block's visibility conditions: the operator vocabulary and its render
+// classes, the evaluator the renderer asks, and their save-time judgement.
+export {
+  canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
+  CONDITION_FIELD_CODES,
+  CONDITION_ISSUE_CODES,
+  CONDITION_KIND_OPS,
+  CONDITION_MAX,
+  CONDITION_OP_ALIASES,
+  CONDITION_OPS,
+  CONDITION_REGISTRY,
+  conditionFieldKind,
+  conditionIssues,
+  conditionOp,
+  evaluateConditions,
+} from "./visibility-conditions";
+export type {
+  ConditionDayStart,
+  ConditionDemand,
+  ConditionEvaluation,
+  ConditionFieldKind,
+  ConditionInput,
+  ConditionIssue,
+  ConditionIssueCode,
+  ConditionJudgement,
+  ConditionOp,
+  ConditionRegistry,
+  ConditionRenderClass,
+  ConditionScope,
+  ConditionSource,
+  ConditionSubject,
+} from "./visibility-conditions";
 export type {
   ListFieldCode,
   ListFieldKind,
@@ -1342,6 +1393,7 @@ export type {
   ListFilter,
   ListFilterOp,
   ListFilterScalar,
+  ListPageCode,
   ListQuery,
   ListQueryJudgement,
   ListQueryProblem,
@@ -1349,4 +1401,5 @@ export type {
   ListRelation,
   ListShapeCode,
   ListSortKey,
+  PaginatedList,
 } from "./list-query";

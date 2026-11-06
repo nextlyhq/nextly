@@ -233,14 +233,17 @@ the Layout comes back from a copy taken just before, under a new id, and the def
 points at it. Unpublishing in that race leaves the default to the background repair,
 which points it back at the Layout the plugin created.
 
-Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
-unpublishing every language at once (`POST
-/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`). None of
-the checks above reach them, so unpublishing every language of a Layout takes it down
-without Remove Layout's checks. This is a known limit until core runs collection hooks
-there. Two things are repaired afterwards: the background repair points the site's default
-back at a published Layout if the default was taken down this way, and a Layout published
-again this way can be made the default once the next background check has run.
+Publishing or unpublishing every language at once (`POST
+/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`) runs the
+collection's hooks as a status change of one language does, so the checks above refuse
+it too (see [Publishing or unpublishing every
+language](/docs/configuration/collections#publishing-or-unpublishing-every-language)).
+
+A batch write with hooks turned off skips them. None of the checks above reach it, so
+such a write can take a Layout down without Remove Layout's checks. Two things are
+repaired afterwards: the background repair points the site's default back at a
+published Layout if the default was taken down this way, and a Layout published again
+this way can be made the default once the next background check has run.
 
 ## Existing sites: run a migration
 

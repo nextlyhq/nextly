@@ -43,6 +43,10 @@ export {
   MAX_BLOCK_TYPE_LENGTH,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  // The bounds of a document's own metadata, for a schema publisher to state
+  // as `maxItems` and `maxLength`: the numbers a save refuses beyond.
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   type DocumentFormatVersion,
   type DocumentKind,
   STYLE_STATES,
