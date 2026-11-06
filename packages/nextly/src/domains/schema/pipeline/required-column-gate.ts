@@ -172,10 +172,13 @@ function unansweredTightenings(
       event.kind === "add_not_null_with_nulls" ||
       event.kind === "add_required_field_no_default"
     ) {
+      // A column the answered plan renames into is not added: its rows carry the old column's
+      // values, which are counted where they are now.
       tighten(
         event.tableName,
         event.columnName,
-        event.kind === "add_required_field_no_default"
+        event.kind === "add_required_field_no_default" &&
+          !renamedFrom.has(tighteningKey(event.tableName, event.columnName))
       );
     }
   }

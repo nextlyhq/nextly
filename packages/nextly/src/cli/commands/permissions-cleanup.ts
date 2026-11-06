@@ -5,10 +5,13 @@ import {
   PermissionSeedService,
   type SeedResult,
 } from "../../domains/auth/services/permission-seed-service";
-import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import {
+  assertNoMigrationInFlight,
+  withMigrationExcluded,
+} from "../../domains/field-groups/migration/sync-guard";
 import type { Logger } from "../../shared/types";
 import { reportDryRun } from "../dry-run";
-import { exitWithError } from "../errors";
+import { exitWithError, toCliError } from "../errors";
 import { createContext } from "../program";
 import { openCommandAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
 import { databaseEnvOrThrow } from "../utils/command-prerequisites";
@@ -44,6 +47,9 @@ import type { Logger as CliLogger } from "../utils/logger";
  *   seed its permissions while the remaining deletes still act on the judgement made before. A
  *   killed process's claim lapses within one lease instead.
  */
+/** The command as the lock and its refusals name it. */
+const CLEANUP_LABEL = "nextly permissions:cleanup";
+
 export async function cleanupOrphanedPermissionsUnderLock(args: {
   adapter: DrizzleAdapter;
   logger: Logger;
@@ -55,7 +61,7 @@ export async function cleanupOrphanedPermissionsUnderLock(args: {
     {
       adapter,
       logger,
-      label: "nextly permissions:cleanup",
+      label: CLEANUP_LABEL,
       whenHeld: "wait",
       mayCreateLock: false,
       releaseOnInterrupt: false,
@@ -158,6 +164,20 @@ export async function runPermissionsCleanup(
   { dryRun }: { dryRun: boolean }
 ): Promise<void> {
   if (dryRun) {
+    // The precondition the real run asks once it holds the lock, asked here without taking it: it
+    // only reads the migration marker. A storage migration in flight is the real run's refusal.
+    try {
+      await assertNoMigrationInFlight({
+        adapter,
+        logger,
+        action: CLEANUP_LABEL,
+      });
+    } catch (error) {
+      const refused = toCliError(error);
+      if (refused.code !== "FIELD_GROUP_MIGRATION_IN_FLIGHT") throw error;
+      reportDryRun(logger, { changes: [], refusals: [refused.what] });
+      return;
+    }
     const orphaned = await new PermissionSeedService(
       adapter,
       logger

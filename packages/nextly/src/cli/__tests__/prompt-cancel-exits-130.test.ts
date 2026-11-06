@@ -57,6 +57,8 @@ const seen = vi.hoisted(() => ({
   openRegistry: vi.fn(),
   registry: {
     getCollectionBySlug: vi.fn(),
+    // The deletion's own refusal, asked before a promote appends anything: none here.
+    assertDeletable: vi.fn(),
     deleteCollection: vi.fn(),
     updateCollection: vi.fn(),
     registerCollection: vi.fn(),

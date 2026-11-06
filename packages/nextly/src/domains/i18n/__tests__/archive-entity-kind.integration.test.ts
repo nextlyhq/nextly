@@ -12,6 +12,8 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { restoreDryRunChanges } from "../../../cli/commands/i18n-restore";
+import { dryRunLines } from "../../../cli/dry-run";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -477,6 +479,70 @@ describeEachDialect("the archive's entity kind", dialect => {
       expect(restored.rowsRead).toBe(1);
     }
   );
+
+  /** The lines `i18n:restore --dry-run` prints for `hero`, from the restore's own dry run. */
+  async function dryRunLinesForHero(): Promise<string[]> {
+    const restoreArgs = {
+      collection: "hero",
+      kind: "collection" as const,
+      companionTableName: "dc_hero_locales",
+    };
+    const plan = await restoreI18nArchive({
+      adapter: restoreAdapter(),
+      ...restoreArgs,
+      dryRun: true,
+    });
+    return dryRunLines({ changes: restoreDryRunChanges(plan, restoreArgs) });
+  }
+
+  it("a dry run names the archive table a restore would create, and creates nothing", async () => {
+    await seedCollection();
+    await query(`DROP TABLE ${q("nextly_i18n_archive")}`);
+    const tablesBefore = (await current.adapter.listTables()).sort();
+
+    const lines = await dryRunLinesForHero();
+
+    expect(lines).toContain(
+      "Would create the archive table nextly_i18n_archive"
+    );
+    expect((await current.adapter.listTables()).sort()).toEqual(tablesBefore);
+
+    // The real restore creates it.
+    await restoreHero();
+    expect(await current.adapter.listTables()).toContain("nextly_i18n_archive");
+  });
+
+  it("a dry run over an archive older than the kind names the column it adds and the rows it labels", async () => {
+    const collectionId = await seedCollection();
+    // `hero` created between the two rows' archiving: one row is its, one predates it.
+    await createdLongAgo("dynamic_collections", "hero", BETWEEN);
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+    await legacyRow("hero", "older-entry", "Antiguo", LONG_AGO);
+    const rowsBefore = await query(
+      `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+    );
+
+    const lines = await dryRunLinesForHero();
+
+    expect(lines).toContain(
+      "Would add the entity_kind column to nextly_i18n_archive"
+    );
+    expect(lines).toContain("Would label 1 legacy rows as collection");
+    expect(lines).toContain("Would label 1 legacy rows as unresolved");
+    expect(
+      await query(
+        `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+      )
+    ).toEqual(rowsBefore);
+
+    // The real restore labels exactly those; the collection's row is then restored and kept.
+    await restoreHero();
+    expect(await archivedBySlug()).toEqual([
+      { slug: "hero", kind: "collection", value: "Antes" },
+      { slug: "hero", kind: "unresolved", value: "Antiguo" },
+    ]);
+  });
 
   it("keeps a row archived before its slug's entity existed unresolved, and reports it", async () => {
     // A slug can be reused: a row archived before today's `hero` was created belongs to whatever

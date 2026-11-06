@@ -34,7 +34,8 @@ collection in the admin, and nothing about either changes because the other exis
 
 A collection built in the admin can be moved into code with `nextly db:sync --promote <slug>`,
 without recreating the table or losing content; only its slug and fields are carried over
-([Collections](/docs/configuration/collections)). The other direction is not supported: a
+([Collections](/docs/configuration/collections)). Add `--dry-run` to see the snippet it would
+append and the registry row it would remove, changing nothing. The other direction is not supported: a
 code-first collection that has been synced shows read-only in the Schema Builder.
 
 ## What differs from a code-first collection
