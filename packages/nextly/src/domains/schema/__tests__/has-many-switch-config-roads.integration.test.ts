@@ -95,6 +95,22 @@ const config = (hasMany: boolean) =>
     singles: [site(hasMany)],
   });
 
+/** `articles` translated per language, whose translated `author` holds one entry or many. */
+const translatedArticles = (hasMany: boolean) =>
+  defineCollection({
+    slug: "articles",
+    localized: true,
+    fields: [
+      relationship({
+        name: "author",
+        relationTo: "authors",
+        hasMany,
+        localized: true,
+      } as never),
+    ],
+  });
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
+
 const q = (dialect: TestDialect, name: string) =>
   dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -226,6 +242,47 @@ for (const dialect of getConfiguredTestDialects()) {
       await rm(projectRoot, { recursive: true, force: true });
       vi.unstubAllEnvs();
       _resetEnvCache();
+    });
+
+    it("converts a translated relation's value on the translations table", async () => {
+      clearServices();
+      await createTestNextly({
+        adapter: database.adapter as never,
+        collections: [authors, translatedArticles(false)],
+        localization: LOCALIZATION,
+      } as never);
+      expect(
+        await reload(
+          defineConfig({
+            localization: LOCALIZATION,
+            collections: [authors, translatedArticles(false)],
+          })
+        )
+      ).toEqual([]);
+      const c = (name: string) => q(dialect, name);
+      await database.adapter.executeQuery(
+        `INSERT INTO ${c("dc_articles")} (${c("id")}, ${c("slug")}, ${c("title")}) VALUES ('p1', 'p1', 'P1')`
+      );
+      await database.adapter.executeQuery(
+        `INSERT INTO ${c("dc_articles_locales")} (${c("_parent")}, ${c("_locale")}, ${c("author")}) VALUES ('p1', 'es', '${A}')`
+      );
+
+      expect(
+        await reload(
+          defineConfig({
+            localization: LOCALIZATION,
+            collections: [authors, translatedArticles(true)],
+          })
+        )
+      ).toEqual([]);
+
+      const [row] = await database.adapter.executeQuery<{ author: unknown }>(
+        `SELECT ${c("author")} AS ${c("author")} FROM ${c("dc_articles_locales")}`
+      );
+      const value = row?.author;
+      expect(typeof value === "string" ? JSON.parse(value) : value).toEqual([
+        A,
+      ]);
     });
 
     it("keeps the id each row held as a one-item list, on a collection and a Single", async () => {

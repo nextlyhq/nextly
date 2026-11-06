@@ -17,7 +17,6 @@ import { toSnakeCase } from "../services/field-column-descriptor";
 import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import { liveTableName, renamesOf, type ApplyRenames } from "./live-uniques";
-import { targetSwitches } from "./reference-storage-switch";
 import type { DesiredSchema } from "./types";
 
 /** Each dialect's condition on a column, given its quoted identifier. */
@@ -45,6 +44,16 @@ const SEVERAL_REFERENCES: RowCondition = {
     sql`CASE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) > 1 ELSE FALSE END`,
   sqlite: c =>
     sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) > 1 ELSE 0 END`,
+};
+
+/** An empty JSON list: a relation holding no entry. Guarded by CASE as the condition above is. */
+const NO_REFERENCES: RowCondition = {
+  postgresql: c =>
+    sql`CASE WHEN jsonb_typeof(${c}::jsonb) = 'array' THEN jsonb_array_length(${c}::jsonb) = 0 ELSE FALSE END`,
+  mysql: c =>
+    sql`CASE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
+  sqlite: c =>
+    sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) = 0 ELSE 0 END`,
 };
 
 /** A value: not NULL, an empty string, an empty list or JSON null. */
@@ -86,9 +95,11 @@ function subjectOf(
     ["Single", desired.singles],
     ["Field group", desired.components],
   ] as const;
+  // A translated field's column is on its entity's companion, named for the main table.
+  const mainTable = table.toLowerCase().replace(/_locales$/, "");
   for (const [kind, entities] of kinds) {
     for (const entity of Object.values(entities)) {
-      if (entity.tableName.toLowerCase() !== table.toLowerCase()) continue;
+      if (entity.tableName.toLowerCase() !== mainTable) continue;
       const field = entity.fields.find(
         f => typeof f.name === "string" && toSnakeCase(f.name) === column
       );
@@ -101,20 +112,89 @@ function subjectOf(
   return { label: `Table '${table}'`, field: column };
 }
 
+/** A refusal's entry: the field it names, its code and its message. */
+interface RefusalError {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/** `rows` counted, as a refusal words it: "1 row holds", "3 rows hold". */
+function rowsHold(rows: number): string {
+  return rows === 1 ? "1 row holds" : `${String(rows)} rows hold`;
+}
+
+/**
+ * What a switch of `op`'s column to one reference finds in the rows it would convert: a row holding
+ * several, whose extra values one reference cannot keep, and, where the live column is NOT NULL, a
+ * row holding none, which would become NULL in a column that refuses it (PostgreSQL fails its single
+ * statement, MySQL's restated column would let the NULL in, SQLite fails the rewrite).
+ */
+async function oneReferenceRefusals(
+  args: { db: unknown; dialect: SupportedDialect; desired: DesiredSchema },
+  op: Extract<Operation, { type: "change_column_type" }>,
+  live: { table: string; column: string; notNull: boolean }
+): Promise<RefusalError[]> {
+  const count = async (condition: RowCondition): Promise<number> => {
+    const [row] = await querySqlRows<{ n: number | string }>(
+      args.db,
+      args.dialect,
+      rowsWhere(args.dialect, live.table, live.column, condition)
+    );
+    return Number(row?.n ?? 0);
+  };
+  const { label, field } = subjectOf(args.desired, op.tableName, op.columnName);
+  const errors: RefusalError[] = [];
+  const several = await count(SEVERAL_REFERENCES);
+  if (several > 0) {
+    const those = several === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_HOLDS_SEVERAL",
+      // Worded for the column rather than the field it was: a list a non-relation field held (such
+      // as chips changed into a relationship) reaches this refusal too.
+      message: `${label}: field '${field}' cannot change to a single related entry while ${rowsHold(several)} more than one value. Remove the extra values from ${those} first, or keep the field holding many.`,
+    });
+  }
+  const none = live.notNull ? await count(NO_REFERENCES) : 0;
+  if (none > 0) {
+    const those = none === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_REQUIRED_HOLDS_NONE",
+      message: `${label}: field '${field}' is required and cannot change to a single related entry while ${rowsHold(none)} none. Give ${those} an entry first, or make the field optional.`,
+    });
+  }
+  return errors;
+}
+
 /**
  * Refuses the apply when a relationship it switches from many related entries to one has a row
- * holding more than one, before any statement runs.
+ * holding more than one, or, in a column that refuses NULL, a row holding none, before any
+ * statement runs.
  *
- * @throws NextlyError (validation, `RELATIONSHIP_HOLDS_SEVERAL`) naming each such field and its rows
+ * @throws NextlyError (validation, `RELATIONSHIP_HOLDS_SEVERAL` or `RELATIONSHIP_REQUIRED_HOLDS_NONE`)
+ *   naming each such field and its rows
  */
 export async function refuseSeveralReferencesForOne(args: {
   db: unknown;
   dialect: SupportedDialect;
   desired: DesiredSchema;
+  /** The tables as they stand, for each column's nullability before the apply. */
+  live: NextlySchemaSnapshot;
   operations: readonly Operation[];
 }): Promise<void> {
-  const errors: Array<{ path: string; code: string; message: string }> = [];
+  const errors: RefusalError[] = [];
   const renames = renamesOf(args.operations);
+  const notNull = new Set(
+    args.live.tables.flatMap(table =>
+      table.columns
+        .filter(column => column.nullable === false)
+        .map(
+          column => `${table.name.toLowerCase()}.${column.name.toLowerCase()}`
+        )
+    )
+  );
   for (const op of args.operations) {
     if (
       op.type !== "change_column_type" ||
@@ -123,26 +203,14 @@ export async function refuseSeveralReferencesForOne(args: {
       continue;
     }
     const live = liveNames(renames, op.tableName, op.columnName);
-    const [row] = await querySqlRows<{ n: number | string }>(
-      args.db,
-      args.dialect,
-      rowsWhere(args.dialect, live.table, live.column, SEVERAL_REFERENCES)
+    errors.push(
+      ...(await oneReferenceRefusals(args, op, {
+        ...live,
+        notNull: notNull.has(
+          `${live.table.toLowerCase()}.${live.column.toLowerCase()}`
+        ),
+      }))
     );
-    const rows = Number(row?.n ?? 0);
-    if (rows === 0) continue;
-    const { label, field } = subjectOf(
-      args.desired,
-      op.tableName,
-      op.columnName
-    );
-    const those = rows === 1 ? "that row" : "those rows";
-    errors.push({
-      path: `fields.${field}`,
-      code: "RELATIONSHIP_HOLDS_SEVERAL",
-      // Worded for the column rather than the field it was: a list a non-relation field held (such
-      // as chips changed into a relationship) reaches this refusal too.
-      message: `${label}: field '${field}' cannot change to a single related entry while ${rows === 1 ? "1 row holds" : `${String(rows)} rows hold`} more than one value. Remove the extra values from ${those} first, or keep the field holding many.`,
-    });
   }
   if (errors.length === 0) return;
   throw NextlyError.validation({
@@ -157,9 +225,10 @@ export async function refuseSeveralReferencesForOne(args: {
  *
  * Such a relation stores `{ relationTo, value }` references, and the other side stores bare ids:
  * no conversion makes one from the other without guessing a target or dropping one, and a column
- * left holding the old shape is read wrongly. A column with no values switches as any other does.
- * Only a column the live table has is counted, under the name it has there before the apply's
- * renames: a relation backed by a junction table has none.
+ * left holding the old shape is read wrongly. The diff plans each such switch as a guard requiring
+ * the column empty (`requireEmpty`); this counts its rows under the names they have before the
+ * apply's renames, so the refusal names the field rather than the guard's statement failing. A
+ * column with no values switches as any other does.
  *
  * @throws NextlyError (validation, `RELATIONSHIP_TARGETS_HOLD_VALUES`) naming each such field and its rows
  */
@@ -167,23 +236,16 @@ export async function refuseTargetSwitchesOverValues(args: {
   db: unknown;
   dialect: SupportedDialect;
   desired: DesiredSchema;
-  live: NextlySchemaSnapshot;
-  /** The apply's operations, whose renames say where each column is found now. */
+  /** The apply's operations: its guards, and its renames, which say where each column is now. */
   operations: readonly Operation[];
 }): Promise<void> {
   const renames = renamesOf(args.operations);
-  const liveColumns = new Set(
-    args.live.tables.flatMap(table =>
-      table.columns.map(
-        column => `${table.name.toLowerCase()}.${column.name.toLowerCase()}`
-      )
-    )
-  );
-  const errors: Array<{ path: string; code: string; message: string }> = [];
-  for (const each of targetSwitches(args.desired)) {
-    const live = liveNames(renames, each.tableName, each.columnName);
-    const key = `${live.table.toLowerCase()}.${live.column.toLowerCase()}`;
-    if (!liveColumns.has(key)) continue;
+  const errors: RefusalError[] = [];
+  for (const op of args.operations) {
+    if (op.type !== "change_column_type" || op.conversion !== "requireEmpty") {
+      continue;
+    }
+    const live = liveNames(renames, op.tableName, op.columnName);
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,
@@ -191,11 +253,16 @@ export async function refuseTargetSwitchesOverValues(args: {
     );
     const rows = Number(row?.n ?? 0);
     if (rows === 0) continue;
+    const { label, field } = subjectOf(
+      args.desired,
+      op.tableName,
+      op.columnName
+    );
     const those = rows === 1 ? "that row" : "those rows";
     errors.push({
-      path: `fields.${each.field}`,
+      path: `fields.${field}`,
       code: "RELATIONSHIP_TARGETS_HOLD_VALUES",
-      message: `${each.label}: field '${each.field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rows === 1 ? "1 row holds" : `${String(rows)} rows hold`} a value. Clear the field on ${those} first, or keep its targets as they are.`,
+      message: `${label}: field '${field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rowsHold(rows)} a value. Clear the field on ${those} first, or keep its targets as they are.`,
     });
   }
   if (errors.length === 0) return;

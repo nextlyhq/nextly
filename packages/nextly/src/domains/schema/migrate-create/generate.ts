@@ -77,6 +77,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -581,6 +582,19 @@ export async function generateMigration(
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
+
+  // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
+  //     which the diff above does not reach: its guards lead the file, before any DDL, and its
+  //     conversions follow (`migrationCompanionSwitches`).
+  const companionSwitches = migrationCompanionSwitches({
+    entities,
+    previous: previous === null ? null : previous.data.entities,
+    dialect: args.dialect,
+  });
+  sqlStatements.unshift(...companionSwitches.up.guards);
+  sqlStatements.push(...companionSwitches.up.rest);
+  downSqlStatements.unshift(...companionSwitches.down.guards);
+  downSqlStatements.push(...companionSwitches.down.rest);
 
   /*
    * 8. Compose file content + write both files.

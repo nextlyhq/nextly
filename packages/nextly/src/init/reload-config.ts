@@ -83,6 +83,7 @@ import {
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
+  holdRecordedAtStart,
   recordFieldsOnto,
   registryRowsOrNone,
   takeRecordedAtStart,
@@ -2719,6 +2720,17 @@ async function applyReloadHolding(
       ))
   );
   recordFieldsOnto(
+    desiredComponents,
+    atStart?.components ??
+      (await registryRowsOrNone(async () =>
+        (
+          (await resolve(
+            "fieldGroupRegistryService"
+          )) as ComponentRegistrySurface
+        )?.getAllComponents?.()
+      ))
+  );
+  recordFieldsOnto(
     desiredSingles,
     atStart?.singles ??
       (await registryRowsOrNone(async () =>
@@ -2831,6 +2843,11 @@ async function applyReloadHolding(
     "code",
     { promptChannel: "terminal" }
   );
+  // A refused apply leaves the tables as they were, so the rows a start held still say what the
+  // fields were: held again, for the reload that retries it once the cause is fixed.
+  if (!applyResult.success && atStart !== undefined) {
+    holdRecordedAtStart(atStart);
+  }
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply

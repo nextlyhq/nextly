@@ -138,18 +138,34 @@ async function storedPosts(
  */
 async function switchAuthor(
   adapter: DrizzleAdapter,
-  to: boolean | { relationTo: string | string[]; hasMany?: boolean }
+  to:
+    | boolean
+    | {
+        relationTo: string | string[];
+        hasMany?: boolean;
+        required?: boolean;
+      }
 ): Promise<{ accepted: true } | { refused: string }> {
   const stored = await storedPosts(adapter);
-  const { relationTo, hasMany } =
+  const { relationTo, hasMany, required } =
     typeof to === "boolean"
-      ? { relationTo: "authors", hasMany: to }
-      : { relationTo: to.relationTo, hasMany: to.hasMany === true };
+      ? { relationTo: "authors", hasMany: to, required: false }
+      : {
+          relationTo: to.relationTo,
+          hasMany: to.hasMany === true,
+          required: to.required === true,
+        };
   // The relationship as the Builder sends it to apply: its target and cardinality, with no
   // `options` (which an apply reads as a select field's choices).
   const fields = stored.fields.map(f =>
     f.name === "author"
-      ? { name: "author", type: "relationship", relationTo, hasMany }
+      ? {
+          name: "author",
+          type: "relationship",
+          relationTo,
+          hasMany,
+          ...(required ? { required } : {}),
+        }
       : f
   );
   try {
@@ -258,7 +274,8 @@ for (const dialect of getConfiguredTestDialects()) {
     async function postsWithAuthors(
       t: TestNextly,
       hasMany: boolean,
-      relationTo: string | string[] = "authors"
+      relationTo: string | string[] = "authors",
+      required = false
     ) {
       await createCollection("authors", [{ name: "name", type: "text" }]);
       await createCollection("tags", [{ name: "label", type: "text" }]);
@@ -268,6 +285,7 @@ for (const dialect of getConfiguredTestDialects()) {
           type: "relationship",
           relationTo,
           hasMany,
+          ...(required ? { required } : {}),
           options: { target: "authors", relationType: "manyToOne" },
         },
       ]);
@@ -338,6 +356,36 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       expect(await authorOf(t, one)).toBe(a);
       expect(await authorOf(t, none)).toBeNull();
+    });
+
+    it("refuses switching a required relationship to one while a row holds none, before anything changes", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, true, "authors", true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [a] },
+      });
+      const empty = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P2", author: [a] },
+        })
+      ).item.id as string;
+      // A row holding no entry, as the backfill leaves the rows a Required list field is added
+      // over: the write path refuses an empty list for a Required field, so it is written here.
+      await database.adapter.executeQuery(
+        `UPDATE dc_posts SET author = '[]' WHERE id = '${empty}'`
+      );
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: "authors",
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("'author'") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain("1 row");
+      expect(await authorOf(t, empty)).toEqual([]);
     });
 
     it("refuses switching to one while a row holds several, before anything changes", async () => {

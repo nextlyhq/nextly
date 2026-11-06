@@ -66,7 +66,7 @@ export interface DesiredCollection {
    * The roads that apply configuration in code (a reload under `next dev`, `nextly db:sync`) state
    * it too, from the registry row before their own sync replaces it: on SQLite a relationship
    * switched between one related entry and many is told by nothing else
-   * (`withReferenceStorageSwitches`).
+   * (`withRecordedShapes`).
    */
   recordedFields?: readonly FieldConfig[];
 }
@@ -111,6 +111,12 @@ export interface DesiredFieldGroup {
   slug: string;
   tableName: string;
   fields: FieldConfig[];
+  /**
+   * The fields the registry records for this field group before the change, as it records them:
+   * what a relationship switched between one related entry and many was. Same source and use as
+   * `DesiredCollection.recordedFields`; absent, the diff reads the column's type alone.
+   */
+  recordedFields?: readonly FieldConfig[];
   indexes?: IndexConfig[];
   /** Same semantics as DesiredCollection.localized — translatable fields live in
    *  the companion `comp_<slug>_locales` table and are omitted from main. */

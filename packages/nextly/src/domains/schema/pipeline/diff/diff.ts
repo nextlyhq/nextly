@@ -65,6 +65,7 @@ import type {
   Operation,
   TableSpec,
 } from "./types";
+import { conversionBetweenShapes } from "./types";
 
 /** A table's columns without the ones a step of `nextly migrate` owns. */
 function withoutMigrateStepColumns(columns: ColumnSpec[]): ColumnSpec[] {
@@ -196,10 +197,11 @@ export function diffSnapshots(
       .filter(op => op.type === "drop_column")
       .map(op => `${op.tableName}\u0000${op.columnName}`)
   );
-  // A column a reference conversion retypes counts too: MySQL refuses to retype an indexed column
-  // to text or JSON, and a generated migration runs its operations in this order. (A live apply's
+  // A column a relation's switch retypes counts too: MySQL refuses to retype an indexed column to
+  // text or JSON, and a generated migration runs its operations in this order. (A live apply's
   // pre-resolution pass already drops indexes ahead of its conversions.)
-  for (const op of columnOps.filter(retypesForAReferenceConversion)) {
+  const retypedForSwitches = retypedForReferenceSwitches(columnOps);
+  for (const op of retypedForSwitches) {
     columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
   }
   const dropIndexBeforeColumns: Operation[] = [];
@@ -247,27 +249,46 @@ export function diffSnapshots(
     op => op.type === "drop_index"
   );
 
+  // A guard requiring a column empty (`requireEmpty`) leads everything: a migration file runs its
+  // operations in this order, and a guard refusing after any DDL has run would leave a dialect
+  // that commits each statement half-changed.
+  const guards = columnOps.filter(isEmptyColumnGuard);
   return [
+    ...guards,
     ...keysDroppedBeforeConversions(constraintDrops, columnOps, prevByName),
     ...tableOps,
     ...indexDropsBeforeColumns,
-    ...columnOps,
+    ...columnOps.filter(op => !isEmptyColumnGuard(op)),
     ...addIndexOps,
     ...dropIndexAfterAdds,
   ];
 }
 
+/** Whether `op` is a guard requiring a column empty before a relation's switch (`requireEmpty`). */
+function isEmptyColumnGuard(op: Operation): boolean {
+  return op.type === "change_column_type" && op.conversion === "requireEmpty";
+}
+
 /**
- * Whether `op` retypes a column to convert it between one reference and a list. A conversion that
- * keeps the type (SQLite's text) rewrites values only, and blocks on no key or index.
+ * The type changes among `columnOps` that a relation's switch makes: one converting the column
+ * between one reference and a list, and the plain retype a guarded switch (`requireEmpty`) needs.
+ * A conversion that keeps the type (SQLite's text) rewrites values only, and blocks on no key or
+ * index.
  */
-function retypesForAReferenceConversion(
-  op: Operation
-): op is ChangeColumnTypeOp {
-  return (
-    op.type === "change_column_type" &&
-    op.conversion !== undefined &&
-    op.fromType !== op.toType
+function retypedForReferenceSwitches(
+  columnOps: readonly Operation[]
+): ChangeColumnTypeOp[] {
+  const guarded = new Set(
+    columnOps
+      .filter(isEmptyColumnGuard)
+      .map(op => `${op.tableName}.${(op as ChangeColumnTypeOp).columnName}`)
+  );
+  return columnOps.filter(
+    (op): op is ChangeColumnTypeOp =>
+      op.type === "change_column_type" &&
+      op.fromType !== op.toType &&
+      (op.conversion !== undefined ||
+        guarded.has(`${op.tableName}.${op.columnName}`))
   );
 }
 
@@ -288,7 +309,7 @@ function keysDroppedBeforeConversions(
   columnOps: readonly Operation[],
   prevByName: ReadonlyMap<string, TableSpec>
 ): Operation[] {
-  const retyped = columnOps.filter(retypesForAReferenceConversion);
+  const retyped = retypedForReferenceSwitches(columnOps);
   const converted = new Set(
     retyped.map(op => `${op.tableName}.${op.columnName}`)
   );
@@ -307,9 +328,10 @@ function keysDroppedBeforeConversions(
         : []
     )
   );
+  // Every column a switch retypes into JSON: a list, or references naming their collections.
   const toList = new Set(
     retyped
-      .filter(op => op.conversion === "referenceList")
+      .filter(op => op.conversion !== "referenceScalar")
       .map(op => `${op.tableName}.${op.columnName}`)
   );
   const keysOverLists: Operation[] = [...prevByName.values()].flatMap(table =>
@@ -492,11 +514,92 @@ function diffChecks(
  * attributes travel with the types, and reading that beside the nullability and
  * default comparisons that follow it made one function responsible for both.
  */
-function columnTypeChange(
+function columnTypeChanges(
   tableName: string,
   columnName: string,
   prevC: ColumnSpec,
   curC: ColumnSpec
+): ChangeColumnTypeOp[] {
+  const shapes = shapeChange(prevC, curC);
+  // A switch to or from naming several collections: a guard of its own, which the diff moves ahead
+  // of every other operation, and then whatever retype the column needs, plain.
+  if (shapes === "requireEmpty") {
+    const retype = columnTypeChange(tableName, columnName, prevC, curC, {});
+    return [
+      inPlaceConversion(tableName, columnName, prevC, "requireEmpty"),
+      ...(retype === undefined ? [] : [retype]),
+    ];
+  }
+  const conversion =
+    shapes === undefined
+      ? referenceMarkerConversion(prevC, curC)
+      : { conversion: shapes };
+  const retype = columnTypeChange(
+    tableName,
+    columnName,
+    prevC,
+    curC,
+    conversion
+  );
+  if (retype !== undefined) return [retype];
+  // The type is the same either way (SQLite's text), so only the values change.
+  return shapes === undefined
+    ? []
+    : [inPlaceConversion(tableName, columnName, curC, shapes)];
+}
+
+/** The change between the shapes both sides state (`conversionBetweenShapes`). */
+function shapeChange(
+  prevC: ColumnSpec,
+  curC: ColumnSpec
+): NonNullable<ChangeColumnTypeOp["conversion"]> | undefined {
+  return conversionBetweenShapes(prevC.referenceShape, curC.referenceShape);
+}
+
+/**
+ * The conversion a type change makes when the shapes are not both known, as a snapshot written
+ * before they were recorded, or a live column no road annotated: read from the desired side's
+ * marker. A column becoming a relation's list of references holds a bare id, an array literal or a
+ * JSON list, and a plain cast reads none of them as a list; a previous snapshot can carry the same
+ * flag, and what matters is what the column is becoming.
+ */
+function referenceMarkerConversion(
+  prevC: ColumnSpec,
+  curC: ColumnSpec
+): Pick<ChangeColumnTypeOp, "conversion"> {
+  if (curC.holdsReferenceList === true) return { conversion: "referenceList" };
+  // A relation switched from many related entries to one: the list's one id is kept.
+  if (curC.holdsSingleReference === true && isJsonColumnType(prevC.type)) {
+    return { conversion: "referenceScalar" };
+  }
+  return {};
+}
+
+/** A conversion with the column's type unchanged: the values change, or are required absent. */
+function inPlaceConversion(
+  tableName: string,
+  columnName: string,
+  column: ColumnSpec,
+  conversion: NonNullable<ChangeColumnTypeOp["conversion"]>
+): ChangeColumnTypeOp {
+  return {
+    type: "change_column_type",
+    tableName,
+    columnName,
+    fromType: renderedType(column),
+    toType: renderedType(column),
+    nullable: column.nullable,
+    fromNullable: column.nullable,
+    conversion,
+  };
+}
+
+function columnTypeChange(
+  tableName: string,
+  columnName: string,
+  prevC: ColumnSpec,
+  curC: ColumnSpec,
+  conversion: Pick<ChangeColumnTypeOp, "conversion">
 ): ChangeColumnTypeOp | undefined {
   // Compared as normalised token PLUS declared size — the live side reads PG's
   // `udt_name` (`int4`, `bool`, `varchar` without length) while the desired
@@ -506,9 +609,7 @@ function columnTypeChange(
   // ALONE went the other way and let a narrowing through unseen, because
   // `numeric(10,2)` and `numeric(5,1)` reduce to one token. See
   // ./declared-size.ts.
-  if (!typesDiffer(prevC, curC)) {
-    return referenceSwitchInPlace(tableName, columnName, prevC, curC);
-  }
+  if (!typesDiffer(prevC, curC)) return undefined;
 
   return {
     type: "change_column_type",
@@ -530,43 +631,8 @@ function columnTypeChange(
     ...(prevC.default !== undefined
       ? { fromColumnDefault: prevC.default }
       : {}),
-    // A column becoming a relation's list of references holds a bare id, an array literal or a JSON
-    // list, and a plain cast reads none of them as a list. Read from the DESIRED side alone: a
-    // previous snapshot can carry the same flag, and what matters is what the column is becoming.
-    ...(curC.holdsReferenceList === true
-      ? { conversion: "referenceList" as const }
-      : curC.holdsSingleReference === true && isJsonColumnType(prevC.type)
-        ? // A relation switched from many related entries to one: the list's one id is kept.
-          { conversion: "referenceScalar" as const }
-        : {}),
-  };
-}
-
-/**
- * A relation switched between one related entry and many on a column whose type stays the same
- * (SQLite's text): no type changes, but the stored values must, from a bare id to a one-item list
- * or back. Planned as the type change's own conversion, so it is ordered, refused and run exactly as
- * the dialects that retype the column run theirs.
- */
-function referenceSwitchInPlace(
-  tableName: string,
-  columnName: string,
-  prevC: ColumnSpec,
-  curC: ColumnSpec
-): ChangeColumnTypeOp | undefined {
-  if (curC.switchesReferenceStorage === undefined) return undefined;
-  return {
-    type: "change_column_type",
-    tableName,
-    columnName,
-    fromType: renderedType(prevC),
-    toType: renderedType(curC),
-    nullable: curC.nullable,
-    fromNullable: prevC.nullable,
-    conversion:
-      curC.switchesReferenceStorage === "toList"
-        ? "referenceList"
-        : "referenceScalar",
+    // How a relation's values cross the change, where they must (`columnTypeChanges`).
+    ...conversion,
   };
 }
 
@@ -621,8 +687,7 @@ function diffColumns(
     }
     if (prevC && curC) {
       // Column present in both - check for changes.
-      const retyped = columnTypeChange(tableName, name, prevC, curC);
-      if (retyped) typeChanges.push(retyped);
+      typeChanges.push(...columnTypeChanges(tableName, name, prevC, curC));
 
       // A primary key's nullability is not an independent attribute: it
       // follows from being the primary key, and the dialects disagree only on

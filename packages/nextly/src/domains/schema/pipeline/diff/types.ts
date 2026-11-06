@@ -64,11 +64,14 @@ export interface ColumnSpec {
   // into this column FROM a JSON list (the field switched from many related entries to one) as a
   // `referenceScalar` conversion, since no cast reads a list's one id out of it.
   holdsSingleReference?: boolean;
-  // Set when the field behind this column switched between one related entry and many, as the
-  // registry's recorded fields tell, on a dialect where the column's type is the same either way
-  // (SQLite stores both as text). The type alone cannot show the switch there, so the diff reads
-  // this to plan the values' conversion in place. Recorded only on the desired side.
-  switchesReferenceStorage?: "toList" | "toScalar";
+  // How a relation's column stores its value (`relationStorageShape`): one id, a list of ids, or
+  // `{ relationTo, value }` references to several collections, one or a list. Recorded on the
+  // desired side for every relation column, so a migration snapshot carries it; on the live side
+  // only where a road knows what the field was (the registry's recorded fields), since the column's
+  // type does not always tell (SQLite keeps all four as text). When both sides state it and they
+  // differ, the diff plans the change from it (`ChangeColumnTypeOp.conversion`). Absent on either
+  // side, as in a snapshot written before it was recorded, the diff reads the type alone.
+  referenceShape?: "one" | "list" | "targets" | "targetList";
   // `true` when the live default is a `nextval()` over the sequence this
   // column OWNS — what PostgreSQL materialises for a `serial` declaration.
   // Recorded only when true, and only by PostgreSQL introspection: no other
@@ -308,11 +311,17 @@ export interface ChangeColumnTypeOp {
    * rather than drop references (an apply counts those rows and refuses before anything runs).
    *
    * On SQLite the column is text either way, so the same two conversions are planned with the
-   * type unchanged (`switchesReferenceStorage`) and rewrite the stored values in place.
+   * type unchanged (`referenceShape`) and rewrite the stored values in place.
+   *
+   * `requireEmpty`: the relation switches to or from naming several collections, whose
+   * `{ relationTo, value }` references no conversion makes or reads back. Planned as an op of its
+   * own with the type unchanged, ahead of every other, it refuses while a row holds a value: an
+   * apply counts first, and a migration file runs it as a guard statement before any DDL. Any type
+   * change the switch also needs follows as an ordinary one.
    *
    * Absent for every other type change.
    */
-  conversion?: "referenceList" | "referenceScalar";
+  conversion?: "referenceList" | "referenceScalar" | "requireEmpty";
   /**
    * The nullability and default the column must still have afterwards, when the caller knows them.
    *
@@ -498,15 +507,34 @@ export function isPreResolutionOp(op: Operation): boolean {
 }
 
 /**
- * Whether `op` converts a relation's column between one reference and a list of them, either way:
- * both are run by the pre-resolution executor as their statement list, before either apply route.
+ * Whether `op` converts a relation's column between one reference and a list of them, either way,
+ * or guards a switch no conversion makes (`requireEmpty`): each is run by the pre-resolution
+ * executor as its statement list, before either apply route.
  */
 export function isReferenceConversion(
   op: Operation
 ): op is ChangeColumnTypeOp & {
-  conversion: "referenceList" | "referenceScalar";
+  conversion: "referenceList" | "referenceScalar" | "requireEmpty";
 } {
   return op.type === "change_column_type" && op.conversion !== undefined;
+}
+
+/** A relation column's storage shape (`ColumnSpec.referenceShape`). */
+export type ReferenceShape = NonNullable<ColumnSpec["referenceShape"]>;
+
+/**
+ * The change a relation's column makes from the shape it had to the shape it has: one id and a
+ * list of them convert into each other; a switch to or from naming several collections converts
+ * nothing and requires the column empty. `undefined` where either is unknown or they agree.
+ */
+export function conversionBetweenShapes(
+  was: ReferenceShape | undefined,
+  now: ReferenceShape | undefined
+): NonNullable<ChangeColumnTypeOp["conversion"]> | undefined {
+  if (was === undefined || now === undefined || was === now) return undefined;
+  const bare = (shape: ReferenceShape) => shape === "one" || shape === "list";
+  if (!bare(was) || !bare(now)) return "requireEmpty";
+  return now === "list" ? "referenceList" : "referenceScalar";
 }
 
 /** Whether `op` converts a scalar column into the JSON list of references a relation keeps. */

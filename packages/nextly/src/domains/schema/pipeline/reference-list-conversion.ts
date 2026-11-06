@@ -126,6 +126,9 @@ export function referenceConversionStatements(
   op: ChangeColumnTypeOp,
   dialect: SupportedDialect
 ): string[] {
+  if (op.conversion === "requireEmpty") {
+    return requireEmptyStatements(op.tableName, op.columnName, dialect);
+  }
   if (op.conversion === "referenceScalar") {
     return referenceScalarStatements(op, dialect);
   }
@@ -203,6 +206,68 @@ function sqliteReferenceScalarRewrite(
     `THEN json_type(${c}) = 'text' OR (json_type(${c}) = 'array' AND json_array_length(${c}) <= 1) ` +
     `ELSE 0 END`
   );
+}
+
+/**
+ * The guard a relation's switch to or from naming several collections runs before any DDL: it
+ * fails, naming the column, while a row holds a value, and changes nothing either way. A value is
+ * anything but NULL, an empty string, an empty list or JSON null.
+ *
+ * Each dialect raises in the one way it has outside a stored routine: PostgreSQL from a `DO` block;
+ * MySQL by adding a CHECK no row holding a value satisfies, then dropping it; SQLite from a
+ * temporary trigger on a temporary table, fired by one insert. Each statement can run again.
+ */
+function requireEmptyStatements(
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): string[] {
+  const table = quoteIdent(tableName, dialect);
+  const c = quoteIdent(columnName, dialect);
+  const message =
+    `Column ${tableName}.${columnName} cannot change between one target collection and several ` +
+    `while a row holds a value. Clear it on every row first, or keep its targets as they are.`;
+  const literal = `'${message.replace(/'/g, "''")}'`;
+  if (dialect === "postgresql") {
+    return [
+      `DO $nextly$ BEGIN IF EXISTS (SELECT 1 FROM ${table} WHERE ${c} IS NOT NULL ` +
+        `AND btrim(${c}::text) NOT IN ('', '[]', 'null')) THEN RAISE EXCEPTION ${literal}; ` +
+        `END IF; END $nextly$`,
+    ];
+  }
+  if (dialect === "mysql") {
+    const guard = quoteIdent(
+      `chk_no_value_${tableName}_${columnName}`.slice(0, 64),
+      dialect
+    );
+    return [
+      `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR TRIM(CAST(${c} AS CHAR)) IN ('', '[]', 'null'))`,
+      `ALTER TABLE ${table} DROP CHECK ${guard}`,
+    ];
+  }
+  if (dialect === "sqlite") {
+    const probe = '"nextly_require_empty"';
+    const trigger = '"nextly_require_empty_guard"';
+    return [
+      `CREATE TEMP TABLE IF NOT EXISTS ${probe} ("x" integer)`,
+      `DROP TRIGGER IF EXISTS temp.${trigger}`,
+      `CREATE TEMP TRIGGER ${trigger} BEFORE INSERT ON ${probe} ` +
+        `WHEN EXISTS (SELECT 1 FROM main.${table} WHERE ${c} IS NOT NULL ` +
+        `AND trim(${c}) NOT IN ('', '[]', 'null')) ` +
+        `BEGIN SELECT RAISE(ABORT, ${literal}); END`,
+      `INSERT INTO ${probe} VALUES (1)`,
+      `DROP TRIGGER temp.${trigger}`,
+      `DROP TABLE temp.${probe}`,
+    ];
+  }
+  throw unsupportedDialect({
+    type: "change_column_type",
+    tableName,
+    columnName,
+    fromType: "",
+    toType: "",
+    conversion: "requireEmpty",
+  });
 }
 
 /** A conversion asked of a dialect this module has no statements for. */

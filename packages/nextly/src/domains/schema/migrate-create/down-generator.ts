@@ -85,16 +85,10 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         columnDefault: op.fromColumnDefault,
         fromNullable: op.nullable,
         fromColumnDefault: op.columnDefault,
-        // A list of references cannot be cast back to the scalar type it came from (PostgreSQL has
-        // no cast from jsonb to uuid at all), so the DOWN of that conversion reads each list back as
-        // the id it holds, and refuses a row holding more than one. The other way too: the DOWN of
-        // a relation switched from many related entries to one makes each id a one-item list
-        // again, which no cast from the scalar type does.
-        ...(op.conversion === "referenceList"
-          ? { conversion: "referenceScalar" as const }
-          : op.conversion === "referenceScalar"
-            ? { conversion: "referenceList" as const }
-            : {}),
+        // A reference conversion is undone by its own way back (`INVERSE_CONVERSION`).
+        ...(op.conversion === undefined
+          ? {}
+          : { conversion: INVERSE_CONVERSION[op.conversion] }),
       };
     case "change_column_nullable":
       return {
@@ -155,10 +149,28 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
   }
 }
 
+/**
+ * Each reference conversion's way back. A list of references cannot be cast back to the scalar
+ * type it came from (PostgreSQL has no cast from jsonb to uuid at all), so the DOWN reads each list
+ * back as the id it holds, and refuses a row holding more than one; the DOWN of a relation switched
+ * from many related entries to one makes each id a one-item list again, which no cast from the
+ * scalar type does; and switching back to or from several collections needs the column empty too.
+ */
+const INVERSE_CONVERSION = {
+  referenceList: "referenceScalar",
+  referenceScalar: "referenceList",
+  requireEmpty: "requireEmpty",
+} as const;
+
 export function buildInverseOperations(
   ops: Operation[],
   prev: NextlySchemaSnapshot
 ): Operation[] {
-  // Reverse order: the last forward op must be undone first.
-  return [...ops].reverse().map(op => invertOne(op, prev));
+  // Reverse order: the last forward op must be undone first. A guard requiring a column empty
+  // (`requireEmpty`) is the exception: it leads the DOWN as it leads the UP, since refusing after
+  // any DDL has run would leave a dialect that commits each statement half-changed.
+  const inverse = [...ops].reverse().map(op => invertOne(op, prev));
+  const isGuard = (op: Operation) =>
+    op.type === "change_column_type" && op.conversion === "requireEmpty";
+  return [...inverse.filter(isGuard), ...inverse.filter(op => !isGuard(op))];
 }

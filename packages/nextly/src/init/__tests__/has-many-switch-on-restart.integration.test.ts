@@ -40,9 +40,11 @@ import { takeRecordedAtStart } from "../../domains/schema/pipeline/recorded-fiel
 import { createTestNextly } from "../../plugins/test-nextly";
 import { _resetEnvCache } from "../../shared/lib/env";
 import { runBootTimeApplyIfDev } from "../boot-apply";
+import { reloadNextlyConfig } from "../reload-config";
 import { clearCachedSnapshot } from "../schema-snapshot-cache";
 
 const A = "3fb954e4-f04c-4de6-b970-d16bf548688a";
+const B = "16d6dfdf-bcd5-4408-a97b-df9e2547b30f";
 
 const authors = defineCollection({
   slug: "authors",
@@ -70,6 +72,14 @@ describe("a relationship switched to many while the server was stopped — sqlit
     clearCachedSnapshot();
     loaded.config = defineConfig({ collections });
     await createTestNextly({ adapter: adapter as never, collections });
+  }
+
+  /** What the post's `author` column holds. */
+  async function authorOf(): Promise<unknown> {
+    const [row] = await adapter.executeQuery<{ author: unknown }>(
+      `SELECT "author" FROM "dc_posts"`
+    );
+    return row?.author;
   }
 
   beforeEach(async () => {
@@ -111,6 +121,28 @@ describe("a relationship switched to many while the server was stopped — sqlit
       `SELECT "author" FROM "dc_posts"`
     );
     expect(row?.author).toBe(JSON.stringify([A]));
+  });
+
+  it("still converts on the retry after a start that was refused, once the row is fixed", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    await start([authors, posts(true)]);
+    await adapter.executeQuery(
+      `INSERT INTO "dc_posts" ("id", "slug", "title", "headline", "author") VALUES ('p1', 'p1', 'P1', 'P1', '${JSON.stringify([A, B])}')`
+    );
+
+    // Switched back to one while a row holds two: the start's apply is refused, and the table is
+    // left as it was.
+    await start([authors, posts(false)]);
+    await runBootTimeApplyIfDev({ caller: "test" });
+    expect(await authorOf()).toBe(JSON.stringify([A, B]));
+
+    // The extra entry is removed, and the configuration is saved again under `next dev`.
+    await adapter.executeQuery(
+      `UPDATE "dc_posts" SET "author" = '${JSON.stringify([A])}'`
+    );
+    await reloadNextlyConfig();
+
+    expect(await authorOf()).toBe(A);
   });
 
   it("reads no registry rows ahead of the sync on a production start", async () => {

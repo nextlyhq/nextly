@@ -2269,10 +2269,11 @@ async function syncCodeFirstEntities(
    */
   workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<{ databaseNotSetUp: boolean }> {
-  // In development only, what each code-first collection's and Single's registry row records
-  // before the syncs below replace it, held for the apply this start runs next: on SQLite a
-  // relationship switched between one related entry and many while the server was stopped is told
-  // by nothing else. A read alone, and a production start, which applies nothing, makes none.
+  // In development only, what each code-first collection's, Single's and field group's registry
+  // row records before the syncs below replace it, held for the apply this start runs next: on
+  // SQLite a relationship switched between one related entry and many while the server was stopped
+  // is told by nothing else. A read alone, and a production start, which applies nothing, makes
+  // none.
   if (bootApplyEnabled()) {
     holdRecordedAtStart({
       collections: await registryRowsOrNone(() =>
@@ -2284,6 +2285,11 @@ async function syncCodeFirstEntities(
         container
           .get<SingleRegistryService>("singleRegistryService")
           .getAllSingles()
+      ),
+      components: await registryRowsOrNone(() =>
+        container
+          .get<FieldGroupRegistryService>("fieldGroupRegistryService")
+          .getAllComponents()
       ),
     });
   }

@@ -6,7 +6,7 @@
  * configuration in code — a reload under `next dev`, `nextly db:sync` — read the new fields from
  * the configuration and update the registry row as well, so they read the row first. On SQLite a
  * relationship switched between one related entry and many is told by nothing else: its column is
- * text either way (`withReferenceStorageSwitches`).
+ * text either way (`withRecordedShapes`).
  *
  * @module domains/schema/pipeline/recorded-fields
  */
@@ -57,6 +57,7 @@ export async function registryRowsOrNone(
 export interface RecordedAtStart {
   collections: readonly RegistryFieldsRow[];
   singles: readonly RegistryFieldsRow[];
+  components: readonly RegistryFieldsRow[];
 }
 
 let heldAtStart: RecordedAtStart | undefined;

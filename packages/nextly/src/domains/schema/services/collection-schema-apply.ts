@@ -53,6 +53,7 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   companionHasStatusColumn,
+  convertCompanionRelationShapes,
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { runStatement } from "../pipeline/_internal/run-statement";
@@ -811,6 +812,17 @@ async function reconcileCompanion(args: {
       kind: "collection",
       slug,
       tableName,
+    });
+    // A translated relation switched between storage shapes, converted on the companion, which
+    // holds its values and which the main table's apply does not reach.
+    await convertCompanionRelationShapes(adapter, {
+      tableName,
+      oldFields,
+      newFields: fields,
+      wasLocalized,
+      isLocalized,
+      dialect: adapter.dialect,
+      builtBy: "collection",
     });
   } catch (err) {
     // A refused setting names the field, and nothing has been dropped by then, so it is passed
