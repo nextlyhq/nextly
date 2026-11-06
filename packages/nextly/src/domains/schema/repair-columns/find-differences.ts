@@ -10,9 +10,12 @@
 //
 // @module domains/schema/repair-columns/find-differences
 
+import { sql } from "drizzle-orm";
+
 import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../pipeline/diff/types";
 import {
@@ -24,6 +27,7 @@ import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
+import type { ColumnConversionPlan } from "./conversion/types";
 import { differenceCause } from "./difference-cause";
 import type {
   ColumnFinding,
@@ -358,15 +362,44 @@ async function appliedColumnFindings(
       ...liveNamesOf(live, finding.location),
     };
     const judgement = await classifyDifference(db, dialect, difference);
+    // What the conversion would run and what the new type cannot keep, read from the same live
+    // table, so the report can say both and block what cannot be carried.
+    const conversion = await planDifference(db, dialect, difference, judgement);
     findings.push({
       ...finding,
       judgement,
-      // What the conversion would run and what the new type cannot keep, read from the same live
-      // table, so the report can say both and block what cannot be carried.
-      conversion: await planDifference(db, dialect, difference, judgement),
+      conversion,
+      rowsRewritten: await rowsRewrittenBy(
+        db,
+        dialect,
+        difference.liveTable,
+        conversion
+      ),
     });
   }
   return findings;
+}
+
+/**
+ * The rows a conversion rewrites: the table's every row where the database rewrites or copies the
+ * table to run it, none where it changes the column in place, and null with no conversion. Counted
+ * here because the judgement does not always read the rows: a change every value keeps, into a
+ * nullable column, reads none.
+ */
+async function rowsRewrittenBy(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  conversion: ColumnConversionPlan | null
+): Promise<number | null> {
+  if (conversion === null) return null;
+  if (!conversion.rewritesTable) return 0;
+  const [row] = await querySqlRows<{ n: unknown }>(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}`
+  );
+  return Number(row?.n ?? 0);
 }
 
 /**
@@ -406,6 +439,7 @@ function judgeAppliedColumn(
     aspects,
     judgement: null,
     conversion: null,
+    rowsRewritten: null,
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,

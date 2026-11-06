@@ -25,6 +25,10 @@ const SHARED =
 /** The codes each command adds, as its help must print them. */
 const OWN: Record<string, string[]> = {
   migrate: ["2 an applied migration file was edited since it ran"],
+  "repair-columns": [
+    "2 differences remain (a column that could not be read counts as one)",
+    "3 a conversion failed or was interrupted",
+  ],
   "generate:types": [
     "with --check: 2 the component map is out of step with the config, 1 it could not be checked",
   ],

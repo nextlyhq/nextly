@@ -21,6 +21,12 @@ export function registerRepairColumnsCommand(
     .description(
       "Report every column whose type or nullability differs from its field (changes nothing)"
     )
+    // One versioned document on standard output, for CI; nothing else is written there.
+    .option(
+      "--json",
+      "Write one JSON document with every column and its outcome to standard output",
+      false
+    )
     .action(
       lazyAction(async () =>
         (await import("./repair-columns")).repairColumnsAction(createContext)

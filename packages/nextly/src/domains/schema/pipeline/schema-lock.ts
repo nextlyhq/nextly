@@ -1607,6 +1607,100 @@ function capitalise(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1);
 }
 
+/**
+ * Who holds the schema lock now, read without taking it, or null when nothing does.
+ *
+ * For a run that must write nothing, such as a report: taking the lock writes a claim, so this only
+ * reads each lock a schema change takes, in the order a contender meets them, and creates no table.
+ * A lock table that does not exist yet is free, since the first run that claims it creates it. The
+ * answer can be stale the moment it is read; a run that acts on it takes the lock instead.
+ */
+export async function readSchemaLockHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  const dialect = adapter.getCapabilities().dialect;
+  let state: RowState | undefined;
+  try {
+    const rows = await adapter.queryStatement<RawState>(stateQuery(dialect, 0));
+    state = toState(rows[0]);
+  } catch (error) {
+    if (!isMissingTable(error, dialect)) throw error;
+  }
+  if (state?.live === true) return holderOf(state);
+
+  const earlier = await readEarlierLockHolder(adapter, dialect);
+  if (earlier !== null) return earlier;
+
+  const fieldGroup = await observeMigrationLock(adapter, dialect);
+  return fieldGroup.kind === "held"
+    ? { kind: "earlier-field-group-lock", owner: fieldGroup.owner }
+    : null;
+}
+
+/**
+ * The earlier migrate lock's holder, read without taking it: PostgreSQL's row while its lease runs,
+ * and MySQL's named locks, this database's and the server-wide one earlier versions took.
+ */
+async function readEarlierLockHolder(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): Promise<SchemaLockHolder | null> {
+  if (dialect === "mysql") return readMysqlNamedLockHolder(adapter);
+  if (dialect === "postgresql") return readEarlierMigrateRowHolder(adapter);
+  return null;
+}
+
+/** MySQL's named locks: this database's, then the server-wide one earlier versions took. */
+async function readMysqlNamedLockHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  const [used] = toRows(
+    await adapter.queryStatement(
+      sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS ${id("current")},
+            IS_USED_LOCK(${MYSQL_LEGACY_LOCK_NAME}) AS ${id("legacy")}`
+    )
+  );
+  const named: Array<[string, string | null]> = [
+    // The connection holding each, or null where it is free.
+    ["nextly:migrate:<this database>", connectionIdOf(used?.current)],
+    [MYSQL_LEGACY_LOCK_NAME, connectionIdOf(used?.legacy)],
+  ];
+  const held = named.find(([, connection]) => connection !== null);
+  return held === undefined
+    ? null
+    : {
+        kind: "earlier-mysql-lock",
+        name: held[0],
+        connectionId: held[1],
+      };
+}
+
+/** PostgreSQL's earlier migrate row while its lease runs; a table never created holds nothing. */
+async function readEarlierMigrateRowHolder(
+  adapter: DrizzleAdapter
+): Promise<SchemaLockHolder | null> {
+  let rows: Array<{ owner: string | null; lapses_in: unknown }>;
+  try {
+    rows = await adapter.queryStatement(
+      sql`SELECT ${id("owner")},
+            ${remainingSecondsExpression("postgresql", "expires_at")} AS ${id("lapses_in")}
+          FROM ${id(EARLIER_MIGRATE_LOCK_TABLE)}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("expires_at")} > ${nowExpression("postgresql")}`
+    );
+  } catch (error) {
+    if (isMissingTable(error, "postgresql")) return null;
+    throw error;
+  }
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : {
+        kind: "earlier-migrate-lock",
+        owner: row.owner,
+        lapsesInSeconds: seconds(row.lapses_in),
+      };
+}
+
 /** An interrupt that arrived before the work began: nothing ran, and nothing is held. */
 function interruptedBeforeStart(command: string): NextlyError {
   return NextlyError.serviceUnavailable({
