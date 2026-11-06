@@ -23,11 +23,16 @@ import {
   clearNamedQueries,
   listFieldKind,
   NAMED_QUERY_TEXT_MAX,
+  namedQueryDeclaration,
+  namedQueryHiddenReads,
   namedQueryNeedsInput,
   namedQueryParamNeedsInput,
   registerNamedQueries,
   type BindingFieldShape,
+  type ListFields,
+  type ListFieldSource,
   type NamedQueryDeclaration,
+  type NamedQueryHiddenRead,
   type NamedQueryDefinition,
   type NamedQueryKnown,
   type NamedQueryParam,
@@ -41,8 +46,11 @@ import { collectDeclarations, respondList, type PaginationMeta } from "nextly";
 import { z } from "nextly/zod";
 
 import { PAGE_BUILDER_PLUGIN } from "./blocks/registration-service";
-import { pluralLabelOf } from "./collection-labels";
 import { ENTRIES_LOCALE_MAX } from "./entries-contract";
+import {
+  listFieldsFrom,
+  type ListFieldsReader,
+} from "./fields/list-query-judgement";
 import {
   NAMED_QUERIES_PARAMS,
   NAMED_QUERIES_ROUTE_PATH,
@@ -187,7 +195,7 @@ function rowField(shape: BindingFieldShape): {
  */
 export function namedQueryItem(
   declaration: NamedQueryDeclaration,
-  readsHidden: readonly string[] = []
+  readsHidden: readonly NamedQueryHiddenRead[] = []
 ): NamedQueryItem {
   const rows = declaration.rows;
   return {
@@ -210,7 +218,13 @@ export function namedQueryItem(
       singles: [...(declaration.reads.singles ?? [])],
       site: declaration.reads.site === true,
     },
-    readsHidden: [...readsHidden],
+    readsHidden: readsHidden.map(read => ({
+      ...read,
+      fields: [...read.fields],
+    })),
+    // The declaration itself, run-free: what an editor judges a list's
+    // inputs against, with the engine's own judgement.
+    declaration: namedQueryDeclaration(declaration),
   };
 }
 
@@ -283,13 +297,12 @@ export function namedQueryParamsSchema(
 export interface NamedQueriesReads {
   /** Every registered query. */
   readonly queries: () => readonly NamedQueryDeclaration[];
-  /** The fields of a collection the public may read; none or `undefined` when none. */
-  readonly publicFields: (
-    slug: string,
-    locale?: string
-  ) => Promise<readonly BindingFieldShape[] | undefined>;
-  /** What authors call a collection. */
-  readonly collectionLabel: (slug: string) => Promise<string>;
+  /**
+   * A collection's fields as a save judges a list by them: every name it
+   * declares, those the public may read, and its name as authors read it
+   * (`listFieldsFrom`). `undefined` for a collection with no record.
+   */
+  readonly listFields: ListFieldsReader;
 }
 
 /** The meta of an answer that is the whole list on one page. */
@@ -306,8 +319,9 @@ function onePage(total: number): PaginationMeta {
 
 /**
  * Every registered query's declaration, with the collections each reads
- * that visitors can read nothing of, judged in `locale`. Each collection is
- * judged once, however many queries read it.
+ * that visitors can read nothing of, judged in `locale` by the engine's
+ * `namedQueryHiddenReads`, the judgement the save warns with. Each
+ * collection is read once, however many queries read it.
  */
 export async function readNamedQueries(
   reads: NamedQueriesReads,
@@ -317,23 +331,18 @@ export async function readNamedQueries(
   const slugs = [
     ...new Set(queries.flatMap(query => query.reads.collections ?? [])),
   ];
-  const hidden = new Map<string, string>();
+  const known = new Map<string, ListFields>();
   await Promise.all(
     slugs.map(async slug => {
-      const fields = await reads.publicFields(slug, locale).catch(() => []);
-      if (fields === undefined || fields.length === 0) {
-        hidden.set(slug, await reads.collectionLabel(slug));
-      }
+      const fields = await reads
+        .listFields(slug, locale)
+        .catch(() => undefined);
+      if (fields !== undefined) known.set(slug, fields);
     })
   );
+  const source: ListFieldSource = { fieldsOf: slug => known.get(slug) };
   const items = queries.map(query =>
-    namedQueryItem(
-      query,
-      (query.reads.collections ?? []).flatMap(slug => {
-        const label = hidden.get(slug);
-        return label === undefined ? [] : [label];
-      })
-    )
+    namedQueryItem(query, namedQueryHiddenReads(query, source))
   );
   return { items, meta: onePage(items.length) };
 }
@@ -350,23 +359,21 @@ function directReads(
 ): NamedQueriesReads {
   return {
     queries,
-    publicFields: async (slug, locale) => {
-      // Imported at call time, as the loop collections route does, so
-      // loading this module costs none of the runtime.
-      const { bindingFieldShapes } = await import("nextly/runtime");
-      return bindingFieldShapes(
-        { collection: slug },
-        locale === undefined ? {} : { locale }
-      );
-    },
-    collectionLabel: async slug => {
-      const record: unknown = await ctx.services.collections
-        .getCollection(slug, {})
-        .catch(() => undefined);
-      return typeof record === "object" && record !== null
-        ? (pluralLabelOf(record as Record<string, unknown>).pluralLabel ?? slug)
-        : slug;
-    },
+    // The save's own reading of a collection's fields, so what the editor
+    // is told about a hidden read is what a save warns about.
+    listFields: listFieldsFrom({
+      record: async slug =>
+        await ctx.services.collections.getCollection(slug, {}),
+      readable: async (slug, locale) => {
+        // Imported at call time, as the loop collections route does, so
+        // loading this module costs none of the runtime.
+        const { bindingFieldShapes } = await import("nextly/runtime");
+        return bindingFieldShapes(
+          { collection: slug },
+          locale === undefined ? {} : { locale }
+        );
+      },
+    }),
   };
 }
 

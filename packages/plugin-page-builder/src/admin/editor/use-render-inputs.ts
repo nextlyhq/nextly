@@ -357,7 +357,8 @@ function useCanvasRender({
   const canvasContext = useCanvasPageContext(
     editor.listsShowingEmpty,
     locale,
-    initialDocument
+    initialDocument,
+    editor.listsStillShowing
   );
   const canvasRender = useMemo(
     () => ({

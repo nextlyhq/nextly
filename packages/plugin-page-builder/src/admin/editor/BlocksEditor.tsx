@@ -68,6 +68,7 @@ import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
 import { listLoopCollections } from "../loop-collections-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import {
@@ -414,9 +415,16 @@ function servicesFor(
       findLinkTargets: findLinkTargetsIn(locale),
       // The fields a list may name, as a save in this language judges them.
       listLoopCollections: () => listLoopCollections(locale),
+      // The site's named queries, a list's custom sources, as judged in
+      // this language: one read the canvas shares.
+      listCustomSources: canvasNamedQueriesIn(locale).sources,
       // The selected list's "N entries match, so M show", taken from the
-      // canvas's own read of the list in this language.
-      countListEntries: canvasListReadsIn(locale).count,
+      // canvas's own read of the list in this language, or its named
+      // query's run where that is its source.
+      countListEntries: props =>
+        props.namedQuery === undefined || props.namedQuery === null
+          ? canvasListReadsIn(locale).count(props)
+          : canvasNamedQueriesIn(locale).count(props),
       ...(entryCollection === undefined ? {} : { entryCollection }),
       // The icons this author chose last, for the Icon control's Recent row.
       ...(recentIcons === undefined ? {} : { recentIcons }),

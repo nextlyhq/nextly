@@ -2,6 +2,7 @@ import {
   allBlocks,
   allNamedQueries,
   breakpointContexts,
+  getNamedQuery,
   DEFAULT_LIMITS,
   namedQueryDeclaration,
   type DocumentLimits,
@@ -2363,7 +2364,9 @@ export const pageBuilder = (
         namedQueriesRoute(() => allNamedQueries().map(namedQueryDeclaration)),
         // A collection list's entries on the canvas, read as a visitor reads
         // them, for a collection the author may read.
-        listEntriesRoute(),
+        // A list whose source is a named query runs it here, on the server,
+        // where its run function lives.
+        listEntriesRoute(getNamedQuery),
         // Where one page is served as it is saved, for Settings' address
         // line, resolved as the search resolves each page's path.
         pageAddressRoute(componentStoreOf(opts), opts.pagePreviewPath),

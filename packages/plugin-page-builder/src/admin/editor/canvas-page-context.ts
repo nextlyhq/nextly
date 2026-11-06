@@ -28,6 +28,7 @@ import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import {
   createQueryBudget,
   createStandaloneContext,
+  type NamedQueryHost,
   type PageContext,
   type QueryBudget,
   type ResolvedIcon,
@@ -37,9 +38,10 @@ import {
   useDocumentIdentity,
   useMediaResolver,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { canvasListReadsIn } from "../list-entries-client";
+import { canvasNamedQueriesIn } from "../named-queries-client";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -122,7 +124,9 @@ export function useCanvasPageContext(
   listsShowingEmpty?: ReadonlySet<string>,
   locale?: string,
   /** The document being edited, whose kind decides whether it is an entry. */
-  document?: unknown
+  document?: unknown,
+  /** The lists whose new source waits for an input, with each one's tag. */
+  listsStillShowing?: ReadonlyMap<string, string>
 ): PageContext {
   const readMedia = useMediaResolver();
   const budget = useMemo(canvasQueryBudget, []);
@@ -141,6 +145,9 @@ export function useCanvasPageContext(
     identity?.kind === "collection" ? identity.documentId : undefined;
   // The language's one set of list reads, which the inspector's count shares.
   const lists = canvasListReadsIn(locale);
+  // The site's named queries, whose runs the server makes: until they are
+  // read, a list whose source is one draws its template, as with no host.
+  const namedQueries = useCanvasNamedHost(locale);
   const base = useMemo(
     () =>
       createStandaloneContext({
@@ -155,14 +162,56 @@ export function useCanvasPageContext(
         ...(entryCollection === undefined || entryId === undefined
           ? {}
           : { entry: { id: entryId }, entryCollection }),
+        ...(namedQueries === undefined ? {} : { namedQueries }),
       }),
-    [readMedia, entryCollection, entryId, lists, budget]
+    [readMedia, entryCollection, entryId, lists, budget, namedQueries]
   );
-  return useMemo(
-    () =>
+  return useMemo(() => {
+    const empty =
       listsShowingEmpty === undefined || listsShowingEmpty.size === 0
-        ? base
-        : { ...base, listsShowingEmpty },
-    [base, listsShowingEmpty]
-  );
+        ? undefined
+        : listsShowingEmpty;
+    const still =
+      listsStillShowing === undefined || listsStillShowing.size === 0
+        ? undefined
+        : listsStillShowing;
+    // The editor's one object again whenever nothing is chosen or waiting.
+    if (empty === undefined && still === undefined) return base;
+    return {
+      ...base,
+      ...(empty === undefined ? {} : { listsShowingEmpty: empty }),
+      ...(still === undefined ? {} : { listsStillShowing: still }),
+    };
+  }, [base, listsShowingEmpty, listsStillShowing]);
+}
+
+/**
+ * The canvas's host for named queries in `locale`, once the site's queries
+ * are read; `undefined` until then, or where they could not be read, so a
+ * list whose source is one draws its template rather than a failure.
+ */
+function useCanvasNamedHost(
+  locale: string | undefined
+): NamedQueryHost | undefined {
+  const [found, setFound] = useState<{
+    readonly locale: string | undefined;
+    readonly host: NamedQueryHost;
+  }>();
+  useEffect(() => {
+    let live = true;
+    canvasNamedQueriesIn(locale)
+      .host()
+      .then(
+        host => {
+          if (live) setFound({ locale, host });
+        },
+        () => undefined
+      );
+    return () => {
+      live = false;
+    };
+  }, [locale]);
+  return found !== undefined && found.locale === locale
+    ? found.host
+    : undefined;
 }
