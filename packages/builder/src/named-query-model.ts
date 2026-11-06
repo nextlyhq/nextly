@@ -205,7 +205,8 @@ export function judgedDraft(
  * The one write that makes a custom source the list's source: its name and
  * inputs, with the collection, the related source, the filters and the sort
  * removed in the same edit, so it is one undo step and never stored beside
- * another source. No inputs set stores none.
+ * another source. Pages go too: a custom source's list is not split into
+ * pages yet, which its save refuses. No inputs set stores none.
  */
 export function namedSourceChanges(
   name: string,
@@ -217,6 +218,7 @@ export function namedSourceChanges(
     relation: undefined,
     filters: undefined,
     sort: undefined,
+    paginate: undefined,
   };
 }
 

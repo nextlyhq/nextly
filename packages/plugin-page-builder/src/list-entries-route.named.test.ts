@@ -128,7 +128,8 @@ describe("a named run on the canvas", () => {
     expect(JSON.stringify(answer)).not.toContain(SENTINEL);
     expect(answer.meta).toMatchObject({
       total: 12,
-      named: { counted: true, reads: 2 },
+      // Its find and count, and the settings read today is resolved from.
+      named: { counted: true, reads: 3 },
     });
     // Through the one base reader it was given, with the list's window.
     expect(made.reader.asked).toContainEqual(
@@ -159,8 +160,20 @@ describe("a named run on the canvas", () => {
     expect(made.failures.map(each => each.ref)).toEqual([failure?.ref]);
   });
 
+  it("charges resolving today against the draw's allowance, before the query reads", async () => {
+    // Two left: today takes one, the query's find the other, its count none.
+    const answer = await readNamedListEntries(
+      { named: { ...asked().named, allowance: 2 } },
+      reads()
+    );
+    expect(answer.meta.named).toMatchObject({
+      reads: 2,
+      failure: { code: "budget" },
+    });
+  });
+
   it("spends no more reads than the canvas's draw has left", async () => {
-    // The query reads twice; the draw has one read left.
+    // The query reads twice and today once; the draw has one read left.
     const answer = await readNamedListEntries(
       { named: { ...asked().named, allowance: 1 } },
       reads()

@@ -91,6 +91,8 @@ function canvasQueryBudget(): CanvasQueryBudget {
   return {
     take: () => current.take(),
     remaining: () => current.remaining?.() ?? 0,
+    // Each draw's own, so a named query's run is kept for one draw only.
+    generation: () => current,
     renew: () => {
       current = createQueryBudget();
     },

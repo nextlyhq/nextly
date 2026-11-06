@@ -65,7 +65,7 @@ import {
   namedQueryFailureLine,
   readNamedList,
 } from "@nextlyhq/blocks-react/blocks";
-import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
 
@@ -280,17 +280,25 @@ export async function readNamedListEntries(
   const { name, params, limit, offset, locale, node, allowance } =
     request.named;
   const definition = reads.definitionOf(name);
+  // No more than the canvas's draw has left, so the page's lists share one
+  // allowance whichever of them runs where.
+  const budget = countingBudget(allowance);
   const host: NamedQueryHost = {
     definitionOf: asked => (asked === name ? definition : undefined),
     reader: await reads.baseReader(locale),
-    today: () => reads.today(),
+    // Today is read from the site settings: a read like the query's own,
+    // claimed from the same allowance and counted in what the answer says
+    // it cost, as a published page claims it.
+    today: async () => {
+      if (!budget.take()) {
+        throw new Error("The page's read allowance is spent.");
+      }
+      return await reads.today();
+    },
     fieldsOf: collection => reads.fieldsOf(collection, locale),
     ...(reads.frame === undefined ? {} : { frame: reads.frame }),
     report: failure => reads.report(failure),
   };
-  // No more than the canvas's draw has left, so the page's lists share one
-  // allowance whichever of them runs where.
-  const budget = countingBudget(allowance);
   const ctx = createStandaloneContext({
     namedQueries: host,
     queries: budget,
@@ -324,11 +332,36 @@ export async function readNamedListEntries(
   };
 }
 
+/** Whether a Single's read found nothing the caller may see: absent or refused. */
+function missedOrRefused(error: unknown): boolean {
+  return (
+    NextlyError.isNotFound(error) ||
+    NextlyError.isForbidden(error) ||
+    NextlyError.isAuthRequired(error)
+  );
+}
+
+/** A document kept to the fields a query selects, its id always. */
+function selectedOnly(
+  document: Record<string, unknown>,
+  select: readonly string[] | undefined
+): Record<string, unknown> {
+  if (select === undefined) return document;
+  const kept = new Set(["id", ...select]);
+  return Object.fromEntries(
+    Object.entries(document).filter(([field]) => kept.has(field))
+  );
+}
+
 /**
- * The canvas's base for a named run: the editor reader as the caller, the
- * reader the canvas's other list reads use. It reads collections; a Single
- * and the site settings it does not read yet, so those are the public's, as
- * a published page reads them, until it does.
+ * The canvas's base for a named run: what the person editing may read,
+ * drafts included, as the canvas's other list reads read. Collections
+ * through the editor reader; a Single through the Direct API as that person
+ * (`overrideAccess: false`, their user and key), with the public read's own
+ * refusals of the query first and its latest version, so a draft Single
+ * reads as the admin shows it. A Single absent or refused reads as nothing,
+ * as the public reader answers. Only the site settings stay the public's:
+ * they are the site's public settings either way.
  */
 async function canvasBaseReader(
   ctx: PluginRouteContext,
@@ -336,29 +369,40 @@ async function canvasBaseReader(
 ): Promise<ListBaseReader> {
   const {
     createEditorReader,
-    createPublicReader,
     readPublicSiteSettings,
     requireNextly,
+    toPublicFindSingle,
   } = await import("nextly/runtime");
   const nextly = requireNextly();
   const { user, actor } = await readingAsUser(ctx);
+  const person = { user, ...(actor === undefined ? {} : { actor }) };
   const binding = locale === undefined ? {} : { locale };
   const editor = createEditorReader(
     { find: async args => await nextly.find(args) },
-    { user, ...(actor === undefined ? {} : { actor }) },
-    binding
-  );
-  const visitor = createPublicReader(
-    {
-      find: async args => await nextly.find(args),
-      findSingle: async args => await nextly.findSingle(args),
-    },
+    person,
     binding
   );
   return {
     find: query => editor.find(query),
     count: query => editor.count(query),
-    findSingle: query => visitor.findSingle(query),
+    findSingle: async query => {
+      const args = {
+        ...toPublicFindSingle(query, binding),
+        status: "all" as const,
+        draft: true,
+        overrideAccess: false,
+        ...person,
+      };
+      try {
+        const found: unknown = await nextly.findSingle(args);
+        return typeof found === "object" && found !== null
+          ? selectedOnly(found as Record<string, unknown>, query.select)
+          : null;
+      } catch (error) {
+        if (missedOrRefused(error)) return null;
+        throw error;
+      }
+    },
     siteSettings: async () => ({ ...(await readPublicSiteSettings()) }),
   };
 }

@@ -216,8 +216,10 @@ async function runThrough(
  * The canvas's runs: each distinct run made once and its answer kept a
  * short while once it settles, a run in flight shared however long it
  * takes (a query may run longer than an answer is kept). A refusal is not
- * kept, so the next draw asks again; only the run that failed is dropped,
- * never one started after it.
+ * kept, nor an answer saying the run failed, so the next draw asks again;
+ * only the run that failed is dropped, never one started after it. Runs
+ * are told apart by what they ask, the list they are for aside, so two
+ * lists of one query share a run.
  */
 export function canvasNamedRuns(
   run: (
@@ -232,7 +234,7 @@ export function canvasNamedRuns(
   }
   const kept = new Map<string, Kept>();
   return async body => {
-    const key = JSON.stringify(body);
+    const key = JSON.stringify({ ...body.named, node: undefined });
     const held = kept.get(key);
     if (
       held !== undefined &&
@@ -242,14 +244,14 @@ export function canvasNamedRuns(
     }
     const entry: Kept = { answer: run(body) };
     kept.set(key, entry);
-    entry.answer.then(
-      () => {
-        entry.settledAt = now();
-      },
-      () => {
-        if (kept.get(key) === entry) kept.delete(key);
-      }
-    );
+    const drop = () => {
+      if (kept.get(key) === entry) kept.delete(key);
+    };
+    entry.answer.then(answer => {
+      // A run that failed answers as a run made, and is asked again next.
+      if (answer.meta.named.failure === undefined) entry.settledAt = now();
+      else drop();
+    }, drop);
     return entry.answer;
   };
 }
@@ -294,6 +296,13 @@ export function canvasNamedHost(
     // The run is the server's: asked for as the list stores it, judged and
     // made there, and its answer taken as this render's result.
     cache: async ({ declaration, asked }) => {
+      // The run is asked for as the list stores it; a caller that cannot
+      // say so has nothing the server could run.
+      if (asked === undefined) {
+        throw new Error(
+          "A named query on the canvas needs the run as its list stores it."
+        );
+      }
       // Nothing left of the draw's allowance: no run is started, as a read
       // the page could not claim is never made.
       if (asked.allowance === 0) throw spentAllowance(declaration.label);
@@ -307,6 +316,8 @@ export function canvasNamedHost(
           ...(asked.allowance === undefined
             ? {}
             : { allowance: asked.allowance }),
+          // The list it is for, so the server's log names it.
+          ...(asked.node === undefined ? {} : { node: asked.node }),
         },
       });
       const named = answer.meta.named;

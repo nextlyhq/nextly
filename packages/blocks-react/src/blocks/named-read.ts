@@ -444,7 +444,7 @@ function dependsOnToday(declaration: NamedQueryDeclaration): boolean {
  * keeps nothing.
  */
 const runsThisRender = new WeakMap<
-  QueryBudget,
+  object,
   Map<string, Promise<NamedQueryRunData>>
 >();
 
@@ -694,9 +694,12 @@ function renderRun(
   start: () => Promise<NamedQueryRunData>
 ): { readonly pending: Promise<NamedQueryRunData>; readonly joined: boolean } {
   if (owner === undefined) return { pending: start(), joined: false };
+  // The render's own generation, so a budget an editor keeps for its life
+  // keeps no run past the draw it was made in.
+  const holder = owner.generation?.() ?? owner;
   const runs =
-    runsThisRender.get(owner) ?? new Map<string, Promise<NamedQueryRunData>>();
-  runsThisRender.set(owner, runs);
+    runsThisRender.get(holder) ?? new Map<string, Promise<NamedQueryRunData>>();
+  runsThisRender.set(holder, runs);
   const started = runs.get(key);
   if (started !== undefined) return { pending: started, joined: true };
   const pending = start();
@@ -826,7 +829,12 @@ export async function readNamedList(
           declaration,
           key,
           read,
-          asked: { params: named.params, window, ...allowanceOf(ctx.queries) },
+          asked: {
+            params: named.params,
+            window,
+            node: nodeId,
+            ...allowanceOf(ctx.queries),
+          },
         })
   );
   let data: NamedQueryRunData;

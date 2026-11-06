@@ -3282,6 +3282,9 @@ function SourcePart({
   const { listed, issues } = reading;
   const unlisted = listed === undefined || listed.kind === "failed";
   const offersCustom = reading.customs.length > 0;
+  // Custom sources read before the collections are usable at once: the
+  // collections join the menu when they arrive.
+  const waiting = listed?.kind === "loading" && offersCustom;
   return (
     <>
       {unlisted ? (
@@ -3303,7 +3306,7 @@ function SourcePart({
         <SourceField
           id={id}
           reading={reading}
-          listed={unlisted ? NO_COLLECTIONS : listed}
+          listed={unlisted || waiting ? NO_COLLECTIONS : listed}
           named={editing.named}
           disabled={held}
           // A source just picked has nothing stored to refuse yet.

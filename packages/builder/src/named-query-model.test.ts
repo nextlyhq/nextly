@@ -129,6 +129,7 @@ describe("the write that makes a custom source the list's source", () => {
         collection: "posts",
         filters: [{ field: "title", op: "equals", value: "a" }],
         sort: "-title",
+        paginate: true,
         limit: 6,
         ...changes,
       }).filter(([, value]) => value !== undefined)
@@ -142,6 +143,8 @@ describe("the write that makes a custom source the list's source", () => {
       params: { city: "lahore" },
     });
     expect(read.query.collection).toBeUndefined();
+    // Pages go with the collection: a custom source's list is not split.
+    expect(stored).not.toHaveProperty("paginate");
     expect(read.query.limit).toBe(6);
   });
 

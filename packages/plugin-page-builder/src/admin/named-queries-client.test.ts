@@ -148,6 +148,7 @@ describe("the canvas's runs of a named query", () => {
         limit: 6,
         offset: 0,
         locale: "en",
+        node: "list",
       },
     });
     expect(outcome.items).toEqual([{ id: "e1" }]);
@@ -316,6 +317,32 @@ describe("canvasNamedRuns", () => {
     await runs(body);
     await runs(body);
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps no answer saying the run failed, so the next draw runs it again", async () => {
+    const failure = { code: "threw", detail: "Stopped.", ref: "NQ-ABCDEF" };
+    const run = vi
+      .fn<
+        (asked: ListEntriesNamedRequest) => Promise<ListEntriesNamedResponse>
+      >()
+      .mockResolvedValueOnce(answer({ counted: false, reads: 1, failure }, []))
+      .mockResolvedValue(answer({ counted: true, reads: 1 }));
+    const runs = canvasNamedRuns(run, () => 0);
+    await runs(body);
+    await runs(body);
+    await runs(body);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one run between two lists of one query, each telling the server its list", async () => {
+    const run = vi.fn(() =>
+      Promise.resolve(answer({ counted: true, reads: 1 }))
+    );
+    const runs = canvasNamedRuns(run, () => 0);
+    await runs({ named: { ...body.named, node: "a" } });
+    await runs({ named: { ...body.named, node: "b" } });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith({ named: { ...body.named, node: "a" } });
   });
 
   it("keeps no refusal, so the next draw asks again", async () => {

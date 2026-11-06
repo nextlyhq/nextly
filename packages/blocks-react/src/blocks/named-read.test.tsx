@@ -947,6 +947,52 @@ describe("a named query's run made somewhere else, as an editor's canvas makes i
     );
   });
 
+  it("keeps a run for one render's generation only, so a renewed allowance runs it again", async () => {
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    let calls = 0;
+    let current = createQueryBudget();
+    // One budget object for the editor's life, renewed per draw.
+    const budget = {
+      take: () => current.take(),
+      generation: () => current,
+    };
+    const made = host(definition, base({ events: EVENTS }), {
+      cache: () => {
+        calls += 1;
+        return Promise.resolve({
+          rows: [{ id: "e1", title: "One" }],
+          reads: 0,
+        });
+      },
+    });
+    const ctx = context({
+      namedQueries: made,
+      queries: budget,
+      diagnostics: true,
+    });
+    await drawn(page(list(named())), ctx);
+    await drawn(page(list(named())), ctx);
+    // The same generation: the second draw joined the first's run.
+    expect(calls).toBe(1);
+    current = createQueryBudget();
+    await drawn(page(list(named())), ctx);
+    expect(calls).toBe(2);
+  });
+
+  it("hands its cache the list the run is for", async () => {
+    const asked: unknown[] = [];
+    const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
+    await draw(definition, {
+      host: {
+        cache: request => {
+          asked.push(request.asked?.node);
+          return Promise.resolve({ rows: [], reads: 0 });
+        },
+      },
+    });
+    expect(asked).toEqual(["list"]);
+  });
+
   it("claims the reads a carried failure made from the page's allowance, as a success's are", async () => {
     const definition = eventsQuery(() => Promise.resolve({ rows: [] }));
     const budget = createQueryBudget(3);
@@ -996,7 +1042,10 @@ describe("a named query's run made somewhere else, as an editor's canvas makes i
       },
     });
     expect(asked).toEqual([
-      { params: { city: "lahore" }, window: { limit: 4, offset: 2 } },
+      expect.objectContaining({
+        params: { city: "lahore" },
+        window: { limit: 4, offset: 2 },
+      }),
     ]);
   });
 

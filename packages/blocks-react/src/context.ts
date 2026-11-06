@@ -231,9 +231,10 @@ export interface NamedQueryHost {
      * The run as the list stores it: its inputs before they are judged, and
      * its window. What a host that runs the query elsewhere (an editor's
      * canvas, on its server) asks for, so the run is judged there as on a
-     * published page.
+     * published page. Optional, so a host written before it was handed one
+     * is still a host; the renderer always hands it.
      */
-    readonly asked: {
+    readonly asked?: {
       readonly params: Readonly<Record<string, unknown>>;
       readonly window: { readonly limit: number; readonly offset: number };
       /**
@@ -241,6 +242,8 @@ export interface NamedQueryHost {
        * made elsewhere may spend no more, and none is started at 0.
        */
       readonly allowance?: number;
+      /** The list block the run is for, so a failure is logged under it. */
+      readonly node?: string;
     };
   }) => Promise<NamedQueryRunData>;
   /**
@@ -348,6 +351,13 @@ export interface QueryBudget {
    * Absent on a budget that cannot say.
    */
   remaining?(): number;
+  /**
+   * What this render's named query runs are kept with: a new object for
+   * each render. Absent, the budget itself, which a page makes per render;
+   * a budget kept across renders and renewed for each (an editor's canvas)
+   * answers the current render's, so no run outlives its render.
+   */
+  generation?(): object;
 }
 
 /**

@@ -403,6 +403,21 @@ describe("a list whose source is a custom one", () => {
 });
 
 describe("custom sources when a read fails", () => {
+  it("offers them at once while the collections are still being read", async () => {
+    const editor = mount(
+      { collection: "posts" },
+      // Never answers: the collections are still loading.
+      { listLoopCollections: vi.fn(() => new Promise<never>(() => undefined)) }
+    );
+    await openSource("posts");
+    fireEvent.click(
+      screen.getByRole("option", { name: /^Most read this month/ })
+    );
+    expect(writes(editor)).toEqual([
+      { namedQuery: { name: "posts.most-read" } },
+    ]);
+  });
+
   it("offers them alone when the collections cannot be listed", async () => {
     mount(
       { namedQuery: { name: "posts.most-read" } },
