@@ -1,0 +1,382 @@
+/**
+ * `POST /templates/actions`: the actions an author takes on a collection's
+ * template, offered to an API client one at a time, each with a dry run.
+ *
+ * - **create-template** gives a collection its template: an empty template
+ *   document, a draft unless `publish` is set. Refused when the collection
+ *   cannot have one, or already has one, naming it.
+ * - **publish-template** publishes a template, its working draft included,
+ *   as the editor's Publish does.
+ *
+ * Each is checked and written as the caller. Nothing here decides what the
+ * site accepts that its own write path decides already: the write is judged
+ * by core's rights and the templates collection's guard, exactly as an
+ * admin save is, and a dry run makes that write and rolls it back (see
+ * `judged-writes`). What this route adds before writing are the caller's
+ * rights, asked first, and the same eligibility and holder checks the guard
+ * makes, so an apply refuses up front, in the same words, what the write
+ * would refuse; and, when two creates race past those checks to the unique
+ * index, the name of the template that won.
+ *
+ * @experimental Settles when collection templates ship.
+ * @module templates/template-actions-route
+ */
+import { templateActionSchema } from "@nextlyhq/builder/ops";
+import {
+  getCachedNextly,
+  NextlyError,
+  respondMutation,
+  type PluginCollectionTransaction,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
+import { z } from "nextly/zod";
+
+import {
+  TEMPLATE_COLLECTION_FIELD,
+  TEMPLATE_CONTENT_FIELD,
+} from "../collections/templates";
+import {
+  actingCaller,
+  asCaller,
+  parsedWith,
+  readJsonBody,
+  readOrNull,
+  type ActionAnswer,
+  type CompositionRouteContext,
+} from "../composition-route-kit";
+import { documentVersionOf, withVersionFrom } from "../document-version";
+import { emptyBlockDocument } from "../fields/blocks-document";
+import { JUDGEMENT_CONTEXT, judgeInTransaction } from "../judged-writes";
+import { readingAsUser } from "../library-route";
+
+import {
+  TEMPLATE_ACTIONS_ROUTE_PATH,
+  type TemplateAction,
+  type TemplateActionRequest,
+  type TemplateActionResult,
+  type TemplateSummary,
+} from "./template-actions-contract";
+import {
+  baseSlotKey,
+  secondTemplateRefusal,
+  templateCollectionProblem,
+  type MayReadTemplate,
+  type TemplateGuardSetup,
+} from "./template-slot";
+
+/**
+ * The request around the action. The action itself is parsed by the
+ * builder's published schema, so the route and any client validating against
+ * `@nextlyhq/builder/ops` refuse the same actions.
+ */
+const TemplateActionEnvelope = z.strictObject({
+  action: z.unknown(),
+  dryRun: z.boolean().optional(),
+});
+
+/**
+ * A template action request read from outside input: a route body, or what a
+ * caller of the service passed. Refused with the path of each problem.
+ */
+export function templateActionRequestOf(raw: unknown): TemplateActionRequest {
+  const envelope = parsedWith(raw, TemplateActionEnvelope);
+  return {
+    action: parsedWith(envelope.action, templateActionSchema, "action"),
+    ...(envelope.dryRun === undefined ? {} : { dryRun: envelope.dryRun }),
+  };
+}
+
+/** The context the template actions run with. */
+export type TemplateActionsContext = CompositionRouteContext & {
+  services: {
+    collections: Pick<
+      PluginRouteContext["services"]["collections"],
+      "getCollection"
+    >;
+  };
+};
+
+/**
+ * What the template actions are built with: the guard's own lookups, so the
+ * route asks the questions the write's guard asks with the same functions.
+ * Resolved per call, since they need the installed plugin.
+ */
+export interface TemplateActionsSetup {
+  readonly guard: () => TemplateGuardSetup;
+}
+
+/** Run one template action, for the route and the service alike. */
+export async function runTemplateAction(
+  ctx: TemplateActionsContext,
+  request: TemplateActionRequest,
+  setup: TemplateActionsSetup
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const guard = setup.guard();
+  const action = request.action;
+  return action.kind === "create-template"
+    ? createTemplate(ctx, action, request.dryRun === true, guard)
+    : publishTemplate(ctx, action, request.dryRun === true, guard);
+}
+
+/** `create-template`, as the module docblock describes. */
+async function createTemplate(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "create-template" }>,
+  dryRun: boolean,
+  guard: TemplateGuardSetup
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const templates = guard.templatesCollection;
+  const publishes = action.publish === true;
+  // Preconditions first, before anything about the collection is read: a
+  // caller who may not create templates learns nothing from this route.
+  const by = await actingCaller(ctx, [
+    ["create", templates],
+    ...(publishes ? ([["publish", templates]] as const) : []),
+  ]);
+
+  const problem = await templateCollectionProblem(
+    action.collection,
+    guard.readCollection,
+    guard.ownCollections()
+  );
+  if (problem !== null) throw refusedAction([problem]);
+
+  const slot = baseSlotKey(action.collection);
+  const mayRead = mayReadAsCaller(ctx, templates);
+  const held = await guard.holderOf(slot);
+  if (held !== null) {
+    throw await secondTemplateRefusal(action.collection, held, mayRead);
+  }
+
+  const title = action.title ?? (await defaultTitle(ctx, action.collection));
+  const data = {
+    title,
+    [TEMPLATE_COLLECTION_FIELD]: action.collection,
+    [TEMPLATE_CONTENT_FIELD]: emptyBlockDocument(["template"]),
+    ...(publishes ? { status: "published" } : {}),
+  };
+  const summary = (id?: string): TemplateSummary => ({
+    ...(id === undefined ? {} : { id }),
+    title,
+    collection: action.collection,
+    status: publishes ? "published" : "draft",
+  });
+
+  if (dryRun) {
+    const collections = ctx.services.collections;
+    const judged = await judgeInTransaction(
+      run => collections.withTransaction(run),
+      (tx: PluginCollectionTransaction) =>
+        collections.createEntryInTransaction(tx, templates, data, {
+          ...asCaller(ctx),
+          context: { [JUDGEMENT_CONTEXT]: true },
+        })
+    );
+    return judgedAnswer("create-template", judged, summary(), by);
+  }
+
+  let created: { item: unknown };
+  try {
+    created = await ctx.services.collections.createEntry(
+      templates,
+      data,
+      asCaller(ctx)
+    );
+  } catch (error) {
+    // Two creates that both passed the holder check above meet at the unique
+    // index, and the one that loses is refused there with no name. The
+    // winner has committed by then, so it is read and named.
+    if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+    const winner = await guard.holderOf(slot);
+    if (winner === null) throw error;
+    throw await secondTemplateRefusal(action.collection, winner, mayRead);
+  }
+  return {
+    message: "The template was created.",
+    item: {
+      dryRun: false,
+      kind: "create-template",
+      template: summary(idOf(created.item)),
+      refusals: [],
+      by,
+    },
+  };
+}
+
+/** `publish-template`, as the module docblock describes. */
+async function publishTemplate(
+  ctx: TemplateActionsContext,
+  action: Extract<TemplateAction, { kind: "publish-template" }>,
+  dryRun: boolean,
+  guard: TemplateGuardSetup
+): Promise<ActionAnswer<TemplateActionResult>> {
+  const templates = guard.templatesCollection;
+  // Asked of any template: whether the caller may publish THIS one is the
+  // write's to decide, made as the caller against the row.
+  const by = await actingCaller(ctx, [["publish", templates]], {
+    anyEntry: true,
+  });
+  const stored = await readOrNull(async () =>
+    (await getCachedNextly()).findByID({
+      collection: templates,
+      id: action.id,
+      ...(await readingAsUser(ctx)),
+      status: "all",
+      depth: 0,
+    })
+  );
+  const row = recordOf(stored);
+  if (row === null) {
+    throw NextlyError.notFound({
+      logContext: { reason: "template-action-missing-template" },
+    });
+  }
+  const summary: TemplateSummary = {
+    id: action.id,
+    title: typeof row.title === "string" ? row.title : "",
+    collection:
+      typeof row[TEMPLATE_COLLECTION_FIELD] === "string"
+        ? row[TEMPLATE_COLLECTION_FIELD]
+        : "",
+    status: "published",
+  };
+  // Status alone, so the write is a publish and is judged by the publish
+  // right rather than as an edit, and promotes the working draft as the
+  // editor's Publish does. It carries the version it was read at, so a save
+  // someone made since is refused rather than published unseen.
+  const data = withVersionFrom({ status: "published" }, documentVersionOf(row));
+  const collections = ctx.services.collections;
+  if (dryRun) {
+    const judged = await judgeInTransaction(
+      run => collections.withTransaction(run),
+      (tx: PluginCollectionTransaction) =>
+        collections.updateEntryInTransaction(tx, templates, action.id, data, {
+          ...asCaller(ctx),
+          context: { [JUDGEMENT_CONTEXT]: true },
+        })
+    );
+    return judgedAnswer("publish-template", judged, summary, by);
+  }
+  await collections.updateEntry(templates, action.id, data, asCaller(ctx));
+  return {
+    message: "The template was published.",
+    item: {
+      dryRun: false,
+      kind: "publish-template",
+      template: summary,
+      refusals: [],
+      by,
+    },
+  };
+}
+
+/** A dry run's answer, from the judged write. */
+function judgedAnswer(
+  kind: TemplateAction["kind"],
+  judged: Awaited<ReturnType<typeof judgeInTransaction>>,
+  template: TemplateSummary,
+  by: TemplateActionResult["by"]
+): ActionAnswer<TemplateActionResult> {
+  const refusals = judged.refusal === null ? [] : judged.refusal.messages;
+  return {
+    message:
+      refusals.length === 0
+        ? "Nothing was written: this is what the action would do."
+        : "Nothing was written: the site would refuse this action.",
+    item: { dryRun: true, kind, template, refusals, by },
+  };
+}
+
+/**
+ * Whether the caller may read template `id`, through core's read access as
+ * the caller, so a refusal names a template by its title only to someone
+ * who may open it.
+ */
+function mayReadAsCaller(
+  ctx: TemplateActionsContext,
+  templates: string
+): MayReadTemplate {
+  return async id =>
+    (await readOrNull(async () =>
+      (await getCachedNextly()).findByID({
+        collection: templates,
+        id,
+        ...(await readingAsUser(ctx)),
+        status: "all",
+        depth: 0,
+      })
+    )) !== null;
+}
+
+/** A new template's name when the action gives none: after its collection. */
+async function defaultTitle(
+  ctx: TemplateActionsContext,
+  collection: string
+): Promise<string> {
+  const record = recordOf(
+    await readOrNull(() =>
+      ctx.services.collections.getCollection(collection, undefined as never)
+    )
+  );
+  const labels = recordOf(record?.labels);
+  const singular =
+    typeof labels?.singular === "string" && labels.singular.trim() !== ""
+      ? labels.singular.trim()
+      : collection;
+  return `${singular} template`;
+}
+
+/** A refusal of the action as a whole, with the reasons given. */
+function refusedAction(messages: readonly string[]): NextlyError {
+  return new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage:
+      "The action cannot be applied as it stands. Nothing was written.",
+    publicData: {
+      errors: messages.map(message => ({
+        path: "action",
+        code: "REFUSED",
+        message,
+      })),
+    },
+    logMessage: "Refused a template action",
+    logContext: { reason: "template-action-refused" },
+  });
+}
+
+function idOf(item: unknown): string | undefined {
+  const id = recordOf(item)?.id;
+  return typeof id === "string" || typeof id === "number"
+    ? String(id)
+    : undefined;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** The template actions route declaration. */
+export function templateActionsRoute(setup: TemplateActionsSetup): {
+  method: "POST";
+  path: string;
+  handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+} {
+  return {
+    method: "POST",
+    path: TEMPLATE_ACTIONS_ROUTE_PATH,
+    // Signed in is all reaching the route asks: each action asks its own
+    // rights on the templates collection before it reads anything.
+    handler: async (req, ctx) => {
+      const request = templateActionRequestOf(
+        await readJsonBody(req, "template action")
+      );
+      const answered = await runTemplateAction(ctx, request, setup);
+      return respondMutation<TemplateActionResult>(
+        answered.message,
+        answered.item
+      );
+    },
+  };
+}
