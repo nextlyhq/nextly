@@ -651,9 +651,7 @@ describe("the Source menu's note where no related source is offered", () => {
     const list = ruleFor(".nx-font-pick__list");
     const note = ruleFor(".nx-list-query__menu-note");
     expect(declared(note, "padding-inline")).toBe(declared(list, "padding"));
-    const words = ruleFor(
-      ".nx-list-query__menu-note > p:not(.nx-font-pick__heading)"
-    );
+    const words = ruleFor(".nx-list-query__menu-text");
     // The words under it start where an option's words do.
     expect(declared(words, "padding-inline")).toBe(
       declared(ruleFor(".nx-font-pick__option"), "padding")?.split(" ")[1]

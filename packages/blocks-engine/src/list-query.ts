@@ -793,32 +793,61 @@ interface KindNeed {
   readonly choose: string;
 }
 
+/** Whether an operator compares an order. */
+function ordersValues(op: ListFilterOp): boolean {
+  return (
+    op === "greater_than" ||
+    op === "greater_than_equal" ||
+    op === "less_than" ||
+    op === "less_than_equal"
+  );
+}
+
 /**
- * What a value must be for an operator on a field of `kind`, beyond what the
- * operator itself takes: an order on a date compares a day, an order on a
- * number a number, and a yes-or-no field a yes or no. Nothing for any other
- * pairing, or when the value already is one.
+ * What a value must be for an operator on a field of each kind, beyond what
+ * the operator itself takes: an order on a date compares a day, an order on
+ * a number a number, and a yes-or-no field a yes or no. A kind not named
+ * here takes any value its operators take.
  */
+const KIND_VALUE_RULES: Readonly<
+  Partial<
+    Record<
+      ListFieldKind,
+      {
+        readonly applies: (op: ListFilterOp) => boolean;
+        readonly fits: (value: unknown) => boolean;
+        readonly need: KindNeed;
+      }
+    >
+  >
+> = {
+  date: {
+    applies: ordersValues,
+    fits: isListDay,
+    need: { holds: "a date", choose: "a day, written YYYY-MM-DD" },
+  },
+  number: {
+    applies: ordersValues,
+    fits: value => typeof value === "number",
+    need: { holds: "a number", choose: "a number" },
+  },
+  boolean: {
+    applies: () => true,
+    fits: value => typeof value === "boolean",
+    need: { holds: "yes or no", choose: "yes or no" },
+  },
+};
+
+/** What a value must be for `op` on a field of `kind`, when it is not that. */
 function kindValueNeed(
   kind: ListFieldKind,
   op: ListFilterOp,
   value: unknown
 ): KindNeed | undefined {
-  const orders =
-    op === "greater_than" ||
-    op === "greater_than_equal" ||
-    op === "less_than" ||
-    op === "less_than_equal";
-  if (kind === "date" && orders && !isListDay(value)) {
-    return { holds: "a date", choose: "a day, written YYYY-MM-DD" };
-  }
-  if (kind === "number" && orders && typeof value !== "number") {
-    return { holds: "a number", choose: "a number" };
-  }
-  if (kind === "boolean" && typeof value !== "boolean") {
-    return { holds: "yes or no", choose: "yes or no" };
-  }
-  return undefined;
+  const rule = KIND_VALUE_RULES[kind];
+  return rule === undefined || !rule.applies(op) || rule.fits(value)
+    ? undefined
+    : rule.need;
 }
 
 /**

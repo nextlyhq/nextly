@@ -437,7 +437,7 @@ function sourceGroups(related: Related): { group: string; heading: string }[] {
 const NO_RELATED = (
   <div className="nx-list-query__menu-note">
     <p className="nx-vars__group-name nx-font-pick__heading">Related entries</p>
-    <p>
+    <p className="nx-list-query__menu-text">
       Not available here. On a collection&apos;s entry, or inside another list,
       a list can show the entry&apos;s related entries, such as its categories
       or tags.
@@ -469,6 +469,41 @@ function SourceHint({
   );
 }
 
+/** The mark a related source wears in the Source control. */
+const RELATED_MARK = (
+  <Link2 aria-hidden="true" size={14} className="nx-list-query__icon" />
+);
+
+/** The related source a stored relation names, among those offered. */
+function relatedSourceOf(
+  offered: readonly RelatedSource[],
+  relation: ListQuery["relation"]
+): RelatedSource | undefined {
+  return relation === undefined
+    ? undefined
+    : offered.find(
+        each => each.of === relation.of && each.field === relation.field
+      );
+}
+
+/** The Source menu's key for what is stored: a relation, or a collection. */
+function sourceKey(query: ListQuery): string {
+  return query.relation === undefined
+    ? `collection:${query.collection ?? ""}`
+    : `${query.relation.of}:${query.relation.field}`;
+}
+
+/** What describes the Source control: its error, else its hint, else none. */
+function sourceDescribedBy(state: {
+  readonly refused: boolean;
+  readonly hinted: boolean;
+  readonly errorId: string;
+  readonly hintId: string;
+}): string | undefined {
+  if (state.refused) return state.errorId;
+  return state.hinted ? state.hintId : undefined;
+}
+
 /** The Source control: a collection, or a relation where one can be read. */
 function SourceField({
   id,
@@ -492,11 +527,8 @@ function SourceField({
   const labelId = `${id}-label`;
   const errorId = `${id}-error`;
   const hintId = `${id}-hint`;
-  const relation = query.relation;
   const all = [...related.entry, ...related.item];
-  const currentRelated = all.find(
-    each => each.of === relation?.of && each.field === relation.field
-  );
+  const currentRelated = relatedSourceOf(all, query.relation);
   const shown = sourceShown(
     listed,
     query,
@@ -515,25 +547,15 @@ function SourceField({
         labelId={labelId}
         value={{
           ...shown,
-          icon:
-            relation === undefined ? undefined : (
-              <Link2
-                aria-hidden="true"
-                size={14}
-                className="nx-list-query__icon"
-              />
-            ),
+          icon: query.relation === undefined ? undefined : RELATED_MARK,
           invalid: refused,
-          describedBy: refused ? errorId : hinted ? hintId : undefined,
+          describedBy: sourceDescribedBy({ refused, hinted, errorId, hintId }),
         }}
         disabled={disabled || listed.kind === "loading"}
         list={{
           choices: sourceChoices(related, collections),
           groups: sourceGroups(related),
-          currentKey:
-            relation === undefined
-              ? `collection:${query.collection ?? ""}`
-              : `${relation.of}:${relation.field}`,
+          currentKey: sourceKey(query),
           label: "Sources",
           searchLabel: "Search sources",
           noMatch: "No source matches.",
@@ -604,17 +626,34 @@ function entryIdsByCollection(
 ): Map<string, Set<string>> {
   const byCollection = new Map<string, Set<string>>();
   for (const row of rows) {
-    const field = fields.find(each => each.name === row.field);
-    if (field?.kind !== "entry" || field.relationTo === undefined) continue;
-    const ids = Array.isArray(row.value) ? row.value : [row.value];
-    for (const id of ids) {
-      if (typeof id !== "string" || id === "") continue;
-      const set = byCollection.get(field.relationTo) ?? new Set<string>();
-      set.add(id);
-      byCollection.set(field.relationTo, set);
-    }
+    const named = entryIdsOf(row, fields);
+    if (named === undefined) continue;
+    const set = byCollection.get(named.collection) ?? new Set<string>();
+    for (const id of named.ids) set.add(id);
+    byCollection.set(named.collection, set);
   }
   return byCollection;
+}
+
+/**
+ * The entry ids one row names and the collection they are entries of, when
+ * the row filters an entry field; nothing for any other row.
+ */
+function entryIdsOf(
+  row: DraftFilter,
+  fields: readonly LoopListField[]
+): { readonly collection: string; readonly ids: string[] } | undefined {
+  const field = fields.find(each => each.name === row.field);
+  if (field?.kind !== "entry" || field.relationTo === undefined) {
+    return undefined;
+  }
+  const values = Array.isArray(row.value) ? row.value : [row.value];
+  return {
+    collection: field.relationTo,
+    ids: values.filter(
+      (id): id is string => typeof id === "string" && id !== ""
+    ),
+  };
 }
 
 /** A value typed as text, committed when the field is left or Enter pressed. */
@@ -799,7 +838,10 @@ function BooleanValue({
   draft,
   disabled,
   onValue,
-}: ValueProps): React.JSX.Element {
+}: Pick<
+  ValueProps,
+  "id" | "labelledBy" | "draft" | "disabled" | "onValue"
+>): React.JSX.Element {
   return (
     <SegmentedChoice
       id={id}
@@ -814,7 +856,19 @@ function BooleanValue({
 }
 
 /** A choice field's value: a menu of its choices, or a checklist of several. */
-function ChoiceValue(props: ValueProps): React.JSX.Element {
+function ChoiceValue(
+  props: Pick<
+    ValueProps,
+    | "id"
+    | "labelledBy"
+    | "field"
+    | "draft"
+    | "disabled"
+    | "invalid"
+    | "describedBy"
+    | "onValue"
+  >
+): React.JSX.Element {
   const { id, labelledBy, field, draft, disabled, invalid, describedBy } =
     props;
   if (takesList(draft.op)) {
@@ -889,8 +943,23 @@ function EntryChips({
   );
 }
 
-/** An entry field's value: the entry picker, once or for each of several. */
-function EntryValue(props: ValueProps): React.JSX.Element {
+/**
+ * An entry field's value: the entry picker, once or for each of several.
+ * The picker names itself by the field and shows its own errors, so the
+ * row's label and error are not handed to it.
+ */
+function EntryValue(
+  props: Pick<
+    ValueProps,
+    | "id"
+    | "field"
+    | "draft"
+    | "disabled"
+    | "services"
+    | "entryTitle"
+    | "onValue"
+  >
+): React.JSX.Element {
   const { id, field, draft, disabled, services, onValue } = props;
   const many = takesList(draft.op);
   const ids = many
@@ -898,29 +967,33 @@ function EntryValue(props: ValueProps): React.JSX.Element {
         (value): value is string => typeof value === "string"
       )
     : [];
+  // In a class of its own, so the filter's styles reach the picker inside
+  // and take the row under the operator, or under the chips.
   const pick = (
-    <RelationControl
-      id={id}
-      label={many ? `Add to ${field.label}` : field.label}
-      prop={{
-        name: "value",
-        schema: { type: "relation", relationTo: field.relationTo },
-        value: many ? undefined : draft.value,
-        defaultValue: undefined,
-        supported: true,
-        options: [],
-        offered: true,
-        readOnly: false,
-      }}
-      disabled={disabled}
-      services={services}
-      onCommit={(_name, chosen) => {
-        if (!many) onValue(chosen);
-        else if (typeof chosen === "string" && !ids.includes(chosen)) {
-          onValue([...ids, chosen]);
-        }
-      }}
-    />
+    <div className="nx-list-filter__entry">
+      <RelationControl
+        id={id}
+        label={many ? `Add to ${field.label}` : field.label}
+        prop={{
+          name: "value",
+          schema: { type: "relation", relationTo: field.relationTo },
+          value: many ? undefined : draft.value,
+          defaultValue: undefined,
+          supported: true,
+          options: [],
+          offered: true,
+          readOnly: false,
+        }}
+        disabled={disabled}
+        services={services}
+        onCommit={(_name, chosen) => {
+          if (!many) onValue(chosen);
+          else if (typeof chosen === "string" && !ids.includes(chosen)) {
+            onValue([...ids, chosen]);
+          }
+        }}
+      />
+    </div>
   );
   if (!many) return pick;
   return (
@@ -937,7 +1010,18 @@ function EntryValue(props: ValueProps): React.JSX.Element {
 }
 
 /** A typed value: text, a number or a day, or several texts as chips. */
-function TypedFilterValue(props: ValueProps): React.JSX.Element {
+function TypedFilterValue(
+  props: Pick<
+    ValueProps,
+    | "id"
+    | "labelledBy"
+    | "field"
+    | "draft"
+    | "disabled"
+    | "describedBy"
+    | "onValue"
+  >
+): React.JSX.Element {
   const { id, labelledBy, field, draft, disabled } = props;
   if (takesList(draft.op)) {
     return (
@@ -1705,7 +1789,6 @@ function SortRowMenu({
   );
 }
 
-/** One sort key: handle, field, direction in words, and its menu. */
 /** What a sort row's actions do to the stored keys. */
 interface SortRowActions {
   readonly field: (field: LoopListField) => void;
@@ -1715,6 +1798,41 @@ interface SortRowActions {
   readonly dragStart: (event: React.PointerEvent<HTMLElement>) => void;
 }
 
+/** The handle a sort row is dragged by, which a pointer alone uses. */
+function SortHandle({
+  disabled,
+  onDragStart,
+}: {
+  disabled: boolean;
+  onDragStart: SortRowActions["dragStart"];
+}): React.JSX.Element {
+  return (
+    <span
+      className="nx-list-sort__handle"
+      aria-hidden="true"
+      title="Drag to reorder"
+      onPointerDown={disabled ? undefined : onDragStart}
+    >
+      <GripVertical size={14} />
+    </span>
+  );
+}
+
+/** Alt+↑ and Alt+↓ on a sort row move it, unless the group is disabled. */
+function altMover(
+  disabled: boolean,
+  index: number,
+  move: SortRowActions["move"]
+): (event: React.KeyboardEvent<HTMLElement>) => void {
+  return event => {
+    const step = disabled ? undefined : altStep(event);
+    if (step === undefined) return;
+    event.preventDefault();
+    move(index + step);
+  };
+}
+
+/** One sort key: handle, field, direction in words, and its menu. */
 function SortRow({
   id,
   index,
@@ -1737,33 +1855,21 @@ function SortRow({
   on: SortRowActions;
 }): React.JSX.Element {
   const field = fields.find(each => each.name === sortKey.field);
-  const words = directionWords(field?.kind);
   const name = field?.label ?? sortKey.field;
   const labelId = `${id}-label`;
-  const errorId = `${id}-error`;
+  // The row's error, by id, when it has one.
+  const errorId = problem === undefined ? undefined : `${id}-error`;
   return (
     <li
       className="nx-list-sort"
       data-dragging={dragging ? "" : undefined}
-      data-invalid={problem === undefined ? undefined : ""}
-      onKeyDown={event => {
-        const step = disabled ? undefined : altStep(event);
-        if (step === undefined) return;
-        event.preventDefault();
-        on.move(index + step);
-      }}
+      data-invalid={errorId === undefined ? undefined : ""}
+      onKeyDown={altMover(disabled, index, on.move)}
     >
       <span id={labelId} className="nx-sr-only">
         {`Sort ${String(index + 1)} of ${String(count)}, by`}
       </span>
-      <span
-        className="nx-list-sort__handle"
-        aria-hidden="true"
-        title="Drag to reorder"
-        onPointerDown={disabled ? undefined : on.dragStart}
-      >
-        <GripVertical size={14} />
-      </span>
+      <SortHandle disabled={disabled} onDragStart={on.dragStart} />
       <SortFieldPicker
         id={`${id}-field`}
         labelId={labelId}
@@ -1771,12 +1877,12 @@ function SortRow({
         field={field}
         fields={fields}
         disabled={disabled}
-        errorId={problem === undefined ? undefined : errorId}
+        errorId={errorId}
         onField={on.field}
       />
       <DirectionPicker
         name={name}
-        words={words}
+        words={directionWords(field?.kind)}
         descending={sortKey.descending}
         disabled={disabled || field === undefined}
         onDirection={on.direction}
@@ -1789,7 +1895,7 @@ function SortRow({
         onMove={on.move}
         onRemove={on.remove}
       />
-      {problem === undefined ? null : (
+      {errorId === undefined ? null : (
         <FieldError id={errorId}>{problem}</FieldError>
       )}
     </li>

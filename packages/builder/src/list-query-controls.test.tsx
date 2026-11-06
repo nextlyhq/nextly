@@ -609,6 +609,23 @@ describe("what the canvas shows", () => {
   });
 });
 
+/**
+ * Whether a control has a name a screen reader reads: its own label, one it
+ * points at, its words, or a label for its id.
+ */
+function hasName(element: HTMLElement): boolean {
+  const said = (name: string) => (element.getAttribute(name) ?? "") !== "";
+  const labelled =
+    element.id !== "" &&
+    document.querySelector(`label[for="${element.id}"]`) !== null;
+  return (
+    said("aria-label") ||
+    said("aria-labelledby") ||
+    (element.textContent ?? "").trim() !== "" ||
+    labelled
+  );
+}
+
 describe("the group, from the keyboard", () => {
   it("reaches every control in tab order, with a name", async () => {
     mount({
@@ -622,13 +639,7 @@ describe("the group, from the keyboard", () => {
       group?.querySelectorAll<HTMLElement>("button, input, [tabindex]") ?? []
     ).filter(element => element.getAttribute("tabindex") !== "-1");
     for (const element of focusable) {
-      const named =
-        (element.getAttribute("aria-label") ?? "") !== "" ||
-        (element.getAttribute("aria-labelledby") ?? "") !== "" ||
-        (element.textContent ?? "").trim() !== "" ||
-        (element.id !== "" &&
-          document.querySelector(`label[for="${element.id}"]`) !== null);
-      expect(named, element.outerHTML).toBeTruthy();
+      expect(hasName(element), element.outerHTML).toBe(true);
     }
     expect(focusable.length).toBeGreaterThan(8);
   });

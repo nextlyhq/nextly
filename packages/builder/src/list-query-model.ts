@@ -199,25 +199,36 @@ function listWords(words: readonly string[], shown = 2): string {
   return `${words.slice(0, shown).join(", ")} and ${String(words.length - shown)} more`;
 }
 
-/** One value as an author reads it, for a field of `kind`. */
+/** How a value is said for a field of each kind. */
+const VALUE_WORDS: Readonly<
+  Record<
+    ListFieldKind,
+    (
+      value: ListFilterScalar,
+      field: QueryField,
+      entryTitle: (id: string) => string | undefined
+    ) => string
+  >
+> = {
+  boolean: value => (value === true ? "Yes" : "No"),
+  choice: (value, field) =>
+    field.options?.find(option => option.value === value)?.label ??
+    String(value),
+  entry: (value, _field, entryTitle) => entryTitle(String(value)) ?? "an entry",
+  date: value => (typeof value === "string" ? dayWords(value) : String(value)),
+  text: value => (typeof value === "string" ? `“${value}”` : String(value)),
+  number: value => String(value),
+};
+
+/** One value as an author reads it, for a field of its kind. */
 function valueWords(
   value: ListFilterScalar,
   field: QueryField | undefined,
   entryTitle: (id: string) => string | undefined
 ): string {
-  if (field?.kind === "boolean") return value === true ? "Yes" : "No";
-  if (field?.kind === "choice") {
-    return (
-      field.options?.find(option => option.value === value)?.label ??
-      String(value)
-    );
-  }
-  if (field?.kind === "entry") return entryTitle(String(value)) ?? "an entry";
-  if (field?.kind === "date" && typeof value === "string") {
-    return dayWords(value);
-  }
-  if (field?.kind === "text" && typeof value === "string") return `“${value}”`;
-  return String(value);
+  return field === undefined
+    ? String(value)
+    : VALUE_WORDS[field.kind](value, field, entryTitle);
 }
 
 /** A filter row as one sentence, in its three parts. */

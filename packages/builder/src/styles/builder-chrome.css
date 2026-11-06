@@ -9268,7 +9268,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /* The note's words, set in from the inset as an option's words are. */
-.nx-list-query__menu-note > p:not(.nx-font-pick__heading) {
+.nx-list-query__menu-text {
   margin: 0;
   padding-inline: 0.5rem;
 }
@@ -9464,29 +9464,22 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   color: var(--nx-foreground);
 }
 
-/* A relation's entry picker inside a filter: its own label column is not needed. */
-.nx-list-filter__body .nx-inspector__field {
-  grid-template-columns: minmax(0, 1fr);
-}
-
 /* The entry picker takes the row under the operator, named for a screen
    reader by the field it chooses for, as the row already shows it. */
-.nx-list-filter__body [data-content-control="relation"] {
+.nx-list-filter__entry {
   flex-basis: 100%;
+  min-width: 0;
 }
 
-.nx-list-filter__body .nx-inspector__field > .nx-inspector__field-name,
-.nx-list-filter__body .nx-inspector__field > label {
+/* The picker is stacked, one column; its name is said by the row already,
+   so it is kept for a screen reader only. */
+.nx-list-filter__entry .nx-inspector__field-name {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
-}
-
-.nx-list-filter__body .nx-inspector__field > * {
-  grid-column: 1;
 }
 
 /*
@@ -9523,8 +9516,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   white-space: nowrap;
 }
 
-/* The group's icon buttons, at the inspector's icon size. */
-.nx-list-query button > svg {
+/* The group's icons, at the inspector's icon size, over a control's own. */
+.nx-list-query .lucide {
   width: 14px;
   height: 14px;
 }

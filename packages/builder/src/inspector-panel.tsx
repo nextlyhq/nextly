@@ -1317,6 +1317,19 @@ function listViewOf(editor: EditorState, nodeId: string): ListView | undefined {
   };
 }
 
+/** What a group is told of the list view: none drawn empty when none is kept. */
+function listGroupView(listView: ListView | undefined): {
+  showsEmpty: boolean;
+  onShowEmpty: ListView["onShowEmpty"] | undefined;
+  sortFieldAsked: number | undefined;
+} {
+  return {
+    showsEmpty: listView?.showsEmpty === true,
+    onShowEmpty: listView?.onShowEmpty,
+    sortFieldAsked: listView?.sortFieldAsked,
+  };
+}
+
 /** The Content tab: one field per declared prop, or the note that there are none. */
 function ContentFields({
   inspection,
@@ -1413,9 +1426,7 @@ function ContentFields({
                 onCommitMany,
                 document,
                 nodeId: inspection.nodeId,
-                showsEmpty: listView?.showsEmpty === true,
-                onShowEmpty: listView?.onShowEmpty,
-                sortFieldAsked: listView?.sortFieldAsked,
+                ...listGroupView(listView),
               })}
             </React.Fragment>
           );
