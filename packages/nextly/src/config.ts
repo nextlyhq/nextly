@@ -144,6 +144,7 @@ export {
   email,
   password,
   code,
+  icon,
   number,
   checkbox,
   date,
@@ -176,6 +177,7 @@ export {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -194,6 +196,10 @@ export {
 } from "./collections/fields/guards";
 
 export type * from "./collections/fields/types";
+
+// The shape a stored icon id must have, as a value: the admin's form checks
+// an icon field with the same predicate the server's validators use.
+export { isIconIdShape } from "./collections/fields/types/icon";
 
 // Plugin identity and classification. Both modules are import-free, so the
 // admin can share the exact implementations the server uses without pulling
@@ -214,6 +220,9 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins/admin-places";
+// And the entry-list filters a plugin declares, as the workspace meta sends
+// them: the admin offers each one in the list's toolbar.
+export type { PluginListFilterDeclaration } from "./plugins/admin-contributions";
 // And the same for a plugin's HTTP routes, for the same reason and with a
 // sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
 // this derived twice produces a request to a path nothing serves, which the

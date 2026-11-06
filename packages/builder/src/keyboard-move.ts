@@ -71,7 +71,7 @@ import {
   type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
-import type { OpPosition, SlotAddress } from "./ops";
+import type { OpPosition, SlotAddress } from "./op-vocabulary";
 
 /**
  * What the author asked for.

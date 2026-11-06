@@ -36,6 +36,12 @@ describe("which fields a picker offers for a prop", () => {
     expect(canBindFieldToProp({ type: "text" }, { type: "url" })).toBe(false);
   });
 
+  it("offers an icon field wherever text fits, since its id is a string", () => {
+    expect(bindingKindOf({ type: "icon" })).toBe("text");
+    expect(canBindFieldToProp({ type: "icon" }, { type: "text" })).toBe(true);
+    expect(canBindFieldToProp({ type: "icon" }, { type: "media" })).toBe(false);
+  });
+
   it("offers an email prop text only", () => {
     expect(canBindFieldToProp({ type: "text" }, { type: "email" })).toBe(true);
     expect(canBindFieldToProp({ type: "select" }, { type: "email" })).toBe(

@@ -1570,10 +1570,25 @@ async function applyReload(opts?: {
     "../plugins/principals/registry"
   );
   const principalKinds = stagePrincipalKinds();
+  // The webhook event types the reloaded config declares, held the same way:
+  // subscriptions are judged against them only once the reload lands.
+  const { stageWebhookEventTypes } = await import(
+    "../domains/webhooks/event-type-registry"
+  );
+  const webhookEventTypes = stageWebhookEventTypes();
   try {
-    await applyReloadHolding(principalKinds, opts);
+    await applyReloadHolding(
+      {
+        commit: () => {
+          principalKinds.commit();
+          webhookEventTypes.commit();
+        },
+      },
+      opts
+    );
   } finally {
     principalKinds.abandon();
+    webhookEventTypes.abandon();
   }
 }
 

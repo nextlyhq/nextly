@@ -234,7 +234,9 @@ export { isLocaleSelector } from "nextly";
  * @experimental `PluginHookRegistry` — the `ctx.hooks` registration surface is
  *   not yet exercised by a first-party plugin (see STABILITY.md). Phase-2
  *   contribution types — `PluginRole` (D67), `PluginEmailProvider` /
- *   `PluginEmailTemplate` (D65), `ScheduledTask` (D61, reserved) — are also
+ *   `PluginEmailTemplate` (D65), `PluginSchedule` and the earlier
+ *   `ScheduledTask` (deprecated: mapped to a `PluginSchedule` and run, with
+ *   a warning, or not run, with a warning saying why) — are also
  *   `@experimental`, as are `PluginFieldCodegen` / `PluginFieldCodegenImport`:
  *   the codegen callbacks are new and unexercised by a first-party plugin.
  */
@@ -259,7 +261,10 @@ export type {
   PluginFieldValidationResult,
   PluginFieldCodegen,
   PluginFieldCodegenImport,
+  PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
   ServiceOpts,
   AuthUser,
@@ -348,9 +353,12 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md).
+ *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   (`ctx.security.webhooks`), verifying a received webhook against a
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
+ *   experimental too, until a first-party plugin receives webhooks with it.
  */
-export { PasswordTooLongError } from "nextly";
+export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
   PluginSecurityApi,
   PasswordHelper,
@@ -361,6 +369,13 @@ export type {
   OneTimeSecrets,
   SecretData,
   TxOption,
+  PluginReceivedWebhooks,
+  InboundWebhookScheme,
+  InboundWebhookDelivery,
+  InboundWebhookReading,
+  VerifyWebhookOptions,
+  WebhookVerification,
+  WebhookRefusal,
 } from "nextly";
 
 /**
@@ -670,7 +685,11 @@ export type {
  *   language) of fields of a plugin field type stored as JSON, judged by the
  *   person's read access. `updateIfUnchanged` makes the ordinary update as
  *   that person, refused with a `CONFLICT` error when the field no longer
- *   hashes, under the write's own row lock, to what was read.
+ *   hashes, under the write's own row lock, to what was read. Either may be
+ *   made as the system (`{ overrideAccess: true }`), judged as the Direct
+ *   API's own `overrideAccess: true` call is, by no access rule or field
+ *   read rule; the system may read any field stored as JSON, and its read
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`).
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
@@ -679,6 +698,9 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";
 
@@ -717,6 +739,17 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
   type PluginAdminPlaceDeclaration,
+} from "nextly";
+
+/**
+ * Entry-list filters a plugin declares (`contributes.admin.filters`): each
+ * option narrows the list by a `where` the list read applies with the
+ * caller's access, and the choice is kept in the page's URL.
+ * @experimental No first-party plugin declares a filter yet (see STABILITY.md).
+ */
+export type {
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
 } from "nextly";
 
 /**

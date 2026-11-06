@@ -102,6 +102,7 @@ export type BindingFieldType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   | "select"
   | "radio"
   | "upload"
@@ -124,6 +125,8 @@ export const FIELD_TYPE_BINDING_KIND: Readonly<
   email: "text",
   password: null,
   code: "text",
+  // An icon id ("lucide:star") is a short string and binds as text.
+  icon: "text",
   number: "number",
   checkbox: "boolean",
   date: "date",

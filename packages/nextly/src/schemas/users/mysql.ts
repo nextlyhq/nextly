@@ -39,6 +39,12 @@ export function usersColumns() {
     emailVerifiedVia: varchar("email_verified_via", { length: 16 }),
     passwordUpdatedAt: datetime("password_updated_at"),
     image: varchar("image", { length: 255 }),
+    // The interface language this person chose for the admin, as a language
+    // tag (`fr`, `pt-BR`); null follows the browser, then English. Kept apart
+    // from any content language. Nullable, so adding it to an existing table
+    // rewrites no row and every existing person keeps today's behaviour.
+    // Sized to the longest tag kept (`shared/lib/language-tag`).
+    interfaceLanguage: varchar("interface_language", { length: 35 }),
     passwordHash: varchar("password_hash", { length: 255 }),
     isActive: boolean("is_active").notNull().default(false),
     // When an administrator deactivated the account; null when none has. Kept

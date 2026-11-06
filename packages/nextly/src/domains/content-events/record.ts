@@ -17,6 +17,7 @@ import {
   type ContentEventSubjectKind,
 } from "../../schemas/content-events";
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
+import { isJsonValue } from "../../shared/lib/json-value";
 import { uuidV7 } from "../../utils/uuid-v7";
 import type { PrincipalDigests } from "../audit/principal-digest";
 import {
@@ -212,23 +213,6 @@ function checkedVersionNo(versionNo: number | null | undefined): number | null {
     });
   }
   return versionNo;
-}
-
-/** Whether a value is JSON as it will be read back: nothing lost or changed. */
-function isJsonValue(value: unknown): boolean {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return true;
-  }
-  if (typeof value === "number") return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (typeof value !== "object") return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return false;
-  return Object.values(value).every(isJsonValue);
 }
 
 /** The event's part values: each language once, and the shared marker. */

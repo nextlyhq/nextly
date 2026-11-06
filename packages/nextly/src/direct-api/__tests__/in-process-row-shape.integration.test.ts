@@ -136,7 +136,11 @@ describe.each(
 
     await nextly.updateSingle({
       slug: "site-config",
-      data: { tagline: "x", launchedAt: PUBLISHED_AT.toISOString() },
+      data: {
+        tagline: "x",
+        launchedAt: PUBLISHED_AT.toISOString(),
+        _overwrite: true,
+      },
       overrideAccess: true,
     });
 

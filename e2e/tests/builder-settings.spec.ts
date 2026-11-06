@@ -10,8 +10,14 @@
  * device buttons, styled and published. A role that may not manage the site's
  * settings is offered no Site tab.
  *
- * A breakpoint is removed here only while nothing is styled under it: the
- * styles stored under a removed breakpoint are not cleared by its removal.
+ * A breakpoint nothing is styled under is removed at Save, after a check that
+ * finds nothing. One with styles stored under it is removed only once
+ * confirmed: Save checks what uses it, shows what would go, and Back returns
+ * to the draft. Remove strips its styles from the site, followed until done,
+ * or until it says what it had to leave (a published page's live version
+ * under a pending draft). A removal refused because the breakpoints changed
+ * meanwhile says so, and Reload starts again from them; one still going when
+ * Settings opens holds editing until it is done.
  *
  * @module tests/builder-settings.spec
  */
@@ -23,7 +29,8 @@ import {
 } from "@playwright/test";
 
 import { block, clickBlock, pressSave } from "./canvas/editor-driver";
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, type Theme } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { storeSiteBreakpoints } from "./support/site-breakpoints";
@@ -63,9 +70,17 @@ async function createPage(
   return { id, slug };
 }
 
-async function openEditor(page: Page, id: string): Promise<void> {
+async function openEditor(
+  page: Page,
+  id: string,
+  theme: Theme = "light"
+): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await gotoAdmin(
+    page,
+    `/collections/pages/${id}/builder?field=content`,
+    theme
+  );
   await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
     timeout: 60_000,
   });
@@ -95,11 +110,19 @@ async function editBreakpoints(page: Page): Promise<Locator> {
   return dialog;
 }
 
+/** Whether a request to the breakpoints route stores the set: not a dry run. */
+function storesSet(request: { postData: () => string | null }): boolean {
+  const body = JSON.parse(request.postData() ?? "{}") as { dryRun?: boolean };
+  return body.dryRun !== true;
+}
+
 /** Save the breakpoints being edited, and wait for the route to store them. */
 async function saveBreakpoints(page: Page, dialog: Locator): Promise<void> {
+  // The set's own write: a save that drops a breakpoint asks the dry run first.
   const saved = page.waitForResponse(
     response =>
       new URL(response.url()).pathname.endsWith("/site/breakpoints") &&
+      storesSet(response.request()) &&
       response.ok()
   );
   await dialog.getByRole("button", { name: "Save breakpoints" }).click();
@@ -483,6 +506,419 @@ test.describe("Settings", () => {
       expect(refused.status()).toBe(403);
     } finally {
       await author.context.close();
+    }
+  });
+});
+
+const BREAKPOINTS_ROUTE =
+  "/admin/api/plugins/@nextlyhq/plugin-page-builder/site/breakpoints";
+
+/** A page whose text is coloured blue at breakpoint `id` alone. */
+async function createStyledPage(
+  request: APIRequestContext,
+  id: string,
+  status: "draft" | "published" = "draft"
+): Promise<{ id: string }> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = await request.post(ENTRIES, {
+    data: {
+      title: `Styled ${stamp}`,
+      slug: `styled-${stamp}`,
+      status,
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: TEXT_ID,
+            type: "core/text",
+            version: 1,
+            props: { text: "Hello" },
+            styles: { base: { [id]: { color: "#1155cc" } } },
+          },
+        ],
+      },
+    },
+  });
+  expect(created.ok(), `creating a page: ${created.status()}`).toBe(true);
+  return { id: ((await created.json()) as { item: { id: string } }).item.id };
+}
+
+/** Tablet, and `small` under it: the set every removal here starts from. */
+function setWith(small: string) {
+  return {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: small, label: "Small", maxWidth: 480 },
+    ],
+    container: [],
+  };
+}
+
+/**
+ * Hold the first request to `path` that `when` picks until released, so a
+ * step that lasts only while it is out can be seen. Every other request goes
+ * on to the handlers registered before this one.
+ */
+async function hold(
+  page: Page,
+  path: string,
+  when: (body: Record<string, unknown>) => boolean = () => true
+): Promise<{ seen: Promise<void>; release: () => void }> {
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => (release = resolve));
+  let saw: () => void = () => {};
+  const seen = new Promise<void>(resolve => (saw = resolve));
+  let held = false;
+  await page.route(`**${path}`, async route => {
+    try {
+      const body = (route.request().postDataJSON() ?? {}) as Record<
+        string,
+        unknown
+      >;
+      if (!held && when(body)) {
+        held = true;
+        saw();
+        await gate;
+      }
+      await route.fallback();
+    } catch {
+      // The page went away while it was held: nothing is left to answer.
+    }
+  });
+  return { seen, release };
+}
+
+/** The removal step on screen, by its state. */
+function step(dialog: Locator, state: string): Locator {
+  return dialog.locator(`[data-breakpoint-removal="${state}"]`);
+}
+
+/** The count a confirmation lists for one place. */
+function placeCount(dialog: Locator, place: string): Locator {
+  return step(dialog, "confirm")
+    .getByRole("term")
+    .filter({ hasText: place })
+    .locator("xpath=following-sibling::dd[1]");
+}
+
+test.describe("Removing a breakpoint in Settings", () => {
+  test("asks before removing a styled breakpoint, goes back to the draft, then follows the removal to done", async ({
+    page,
+  }) => {
+    const small = "small-confirm";
+    await storeSiteBreakpoints(page.request, setWith(small));
+    try {
+      const { id } = await createStyledPage(page.request, small);
+      await openEditor(page, id);
+      const dialog = await editBreakpoints(page);
+      await dialog.getByRole("button", { name: "Remove Small" }).click();
+
+      // Checking: held while the dry run is out.
+      const checked = await hold(
+        page,
+        BREAKPOINTS_ROUTE,
+        body => body.dryRun === true
+      );
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await checked.seen;
+      await expect(
+        step(dialog, "checking").getByText(
+          "Checking what uses Small before saving…"
+        )
+      ).toBeVisible();
+      await expect(
+        step(dialog, "checking").getByRole("button", {
+          name: "Save breakpoints",
+        })
+      ).toBeDisabled();
+      checked.release();
+
+      // Confirm: what the dry run counted, and nothing changed yet.
+      await expect(
+        dialog.getByRole("heading", {
+          name: "Remove Small and the styles set for it?",
+        })
+      ).toBeVisible();
+      await expect(placeCount(dialog, "Pages")).toHaveText("1");
+      await expect(dialog.getByText("This can't be undone.")).toBeVisible();
+      await expect(dialog.getByText("Default Layout")).toHaveCount(0);
+      expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
+
+      // Back: the draft as it was, Small still removed from it.
+      await dialog.getByRole("button", { name: "Back" }).click();
+      await expect(
+        dialog.getByRole("button", { name: "Save breakpoints" })
+      ).toBeEnabled();
+      await expect(
+        dialog.getByRole("button", { name: "Remove Small" })
+      ).toHaveCount(0);
+      expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
+
+      // The save answers as one that did not finish in its request, so the
+      // tab follows it through the removal route, which is real.
+      await page.route(`**${BREAKPOINTS_ROUTE}`, async route => {
+        try {
+          const body = (route.request().postDataJSON() ?? {}) as Record<
+            string,
+            unknown
+          >;
+          if (body.confirmRemoval !== true) {
+            await route.fallback();
+            return;
+          }
+          const response = await route.fetch();
+          const json = (await response.json()) as {
+            item: { removal?: { finished: boolean } };
+          };
+          if (json.item.removal !== undefined) {
+            json.item.removal.finished = false;
+          }
+          await route.fulfill({ response, json });
+        } catch {
+          // The page went away mid-answer.
+        }
+      });
+      const carried = await hold(page, `${BREAKPOINTS_ROUTE}/removal`);
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await dialog
+        .getByRole("button", { name: "Remove Small and its styles" })
+        .click();
+
+      // Removing: followed while the carry-on call is out.
+      await carried.seen;
+      await expect(
+        dialog.getByRole("heading", { name: "Removing Small's styles" })
+      ).toBeVisible();
+      await expect(dialog.getByRole("progressbar")).toBeVisible();
+      carried.release();
+
+      // Done, with what the dry run counted, and the page stripped.
+      await expect(dialog.getByText("Small was removed")).toBeVisible();
+      await expect(
+        dialog.getByText("Its styles are gone from 1 page.")
+      ).toBeVisible();
+      await expect(dialog.getByText("Default Layout")).toBeVisible();
+      await expect
+        .poll(async () => (await storedTextStyles(page.request, id))[small])
+        .toBeUndefined();
+      await dialog.getByRole("button", { name: "Close" }).click();
+      await expect(
+        devices(page).getByRole("radio", { name: /^Small/ })
+      ).toHaveCount(0);
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await storeSiteBreakpoints(page.request, null);
+    }
+  });
+
+  test("refuses a removal the breakpoints changed under, and Reload starts again from them", async ({
+    page,
+  }) => {
+    const small = "small-refused";
+    await storeSiteBreakpoints(page.request, setWith(small));
+    try {
+      const { id } = await createStyledPage(page.request, small);
+      await openEditor(page, id);
+      const dialog = await editBreakpoints(page);
+      await dialog.getByRole("button", { name: "Remove Small" }).click();
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await expect(
+        dialog.getByRole("button", { name: "Remove Small and its styles" })
+      ).toBeVisible();
+
+      // Someone else adds a breakpoint while this confirmation is open.
+      await storeSiteBreakpoints(page.request, {
+        ...setWith(small),
+        viewport: [
+          ...setWith(small).viewport,
+          { id: "tiny", label: "Tiny", maxWidth: 360 },
+        ],
+      });
+      await dialog
+        .getByRole("button", { name: "Remove Small and its styles" })
+        .click();
+
+      const refused = step(dialog, "refused");
+      await expect(refused.getByText("Nothing was removed")).toBeVisible();
+      await expect(refused).toContainText(
+        "The site's breakpoints changed after you checked what removing them drops. Check again before removing them."
+      );
+      expect((await storedTextStyles(page.request, id))[small]).toBeDefined();
+
+      await refused.getByRole("button", { name: "Reload breakpoints" }).click();
+      await expect(
+        dialog.getByRole("listitem").filter({ hasText: "Tiny" })
+      ).toContainText("up to 360 pixels");
+      await expect(
+        dialog.getByRole("listitem").filter({ hasText: "Small" })
+      ).toContainText("up to 480 pixels");
+      await expect(
+        dialog.getByRole("button", { name: "Edit breakpoints" })
+      ).toBeEnabled();
+      await expect(
+        dialog.getByRole("button", { name: "Save breakpoints" })
+      ).toHaveCount(0);
+    } finally {
+      await storeSiteBreakpoints(page.request, null);
+    }
+  });
+
+  test("says a removal it finds still going, holds editing, and follows it to done", async ({
+    page,
+  }) => {
+    const small = "small-resumed";
+    await storeSiteBreakpoints(page.request, setWith(small));
+    try {
+      const { id } = await createPage(page.request);
+      await openEditor(page, id);
+      // Nothing is styled under it: removed at Save, after a check, as a
+      // run of its own, whose id the save answers with.
+      const dialog = await editBreakpoints(page);
+      await dialog.getByRole("button", { name: "Remove Small" }).click();
+      const stored = page.waitForResponse(
+        response =>
+          new URL(response.url()).pathname.endsWith("/site/breakpoints") &&
+          storesSet(response.request())
+      );
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      const answer = (await (await stored).json()) as {
+        item: { removal?: { runId: string } };
+      };
+      const runId = answer.item.removal?.runId;
+      expect(runId, "the save's removal").toBeDefined();
+      await expect(dialog.getByText("Small was removed")).toBeVisible();
+      await expect(
+        dialog.getByText("Nothing was styled for it.")
+      ).toBeVisible();
+      await dialog.getByRole("button", { name: "Close" }).click();
+
+      // Opened again, the tab's read reports that run still open, as it
+      // would while the removal job carries a large one on.
+      let reported = false;
+      await page.route("**/plugin-page-builder/site/settings", async route => {
+        try {
+          if (reported) {
+            await route.fallback();
+            return;
+          }
+          reported = true;
+          const response = await route.fetch();
+          const json = (await response.json()) as Record<string, unknown>;
+          await route.fulfill({
+            response,
+            json: {
+              ...json,
+              removals: [
+                {
+                  runId,
+                  labels: ["Small"],
+                  open: true,
+                  left: 0,
+                  waitingOnDrafts: false,
+                },
+              ],
+            },
+          });
+        } catch {
+          // The page went away mid-answer.
+        }
+      });
+      const carried = await hold(page, `${BREAKPOINTS_ROUTE}/removal`);
+      const again = await showSettings(page);
+      await again.getByRole("tab", { name: "Site" }).click();
+      await carried.seen;
+      await expect(
+        step(again, "resumed").getByText(
+          "Small's styles are still being removed"
+        )
+      ).toBeVisible();
+      const edit = again.getByRole("button", { name: "Edit breakpoints" });
+      await expect(edit).toBeDisabled();
+      await expect(edit).toHaveAttribute(
+        "title",
+        "Breakpoints can be changed again once it has finished."
+      );
+      carried.release();
+      await expect(step(again, "done")).toContainText("Small was removed");
+      await expect(step(again, "done")).toContainText(
+        "Its styles are gone from the site."
+      );
+      await expect(edit).toBeEnabled();
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await storeSiteBreakpoints(page.request, null);
+    }
+  });
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`draws the confirmation to WCAG AA in the ${theme} theme`, async ({
+      page,
+    }) => {
+      const small = `small-axe-${theme}`;
+      await storeSiteBreakpoints(page.request, setWith(small));
+      try {
+        const { id } = await createStyledPage(page.request, small);
+        await openEditor(page, id, theme);
+        const dialog = await editBreakpoints(page);
+        await dialog.getByRole("button", { name: "Remove Small" }).click();
+        await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+        await expect(
+          dialog.getByRole("button", { name: "Remove Small and its styles" })
+        ).toBeVisible();
+        // The destructive button's label on its fill among the rest.
+        await expectNoAxeViolations(page, {
+          include: '[data-breakpoint-removal="confirm"]',
+        });
+        await dialog.getByRole("button", { name: "Back" }).click();
+      } finally {
+        await storeSiteBreakpoints(page.request, null);
+      }
+    });
+  }
+
+  // Last: its removal keeps holding the page it left until the draft is
+  // resolved, which the finally starts by publishing it.
+  test("says what a removal left: a published page's live version under a pending draft", async ({
+    page,
+  }) => {
+    const small = "small-left";
+    await storeSiteBreakpoints(page.request, setWith(small));
+    const { id } = await createStyledPage(page.request, small, "published");
+    try {
+      // An edit saved without publishing: a pending draft over the live row.
+      const edited = await page.request.patch(`${ENTRIES}/${id}`, {
+        data: { title: "Styled, edited" },
+      });
+      expect(edited.ok(), `saving a draft: ${edited.status()}`).toBe(true);
+      await openEditor(page, id);
+      const dialog = await editBreakpoints(page);
+      await dialog.getByRole("button", { name: "Remove Small" }).click();
+      await dialog.getByRole("button", { name: "Save breakpoints" }).click();
+      await expect(
+        dialog.getByText("1 page has a draft waiting to be published.")
+      ).toBeVisible();
+      await dialog
+        .getByRole("button", { name: "Remove Small and its styles" })
+        .click();
+      await expect(step(dialog, "left")).toContainText(
+        "Small was removed, except from 1 live version"
+      );
+      await expect(step(dialog, "left")).toContainText(
+        "It has a draft waiting to be published"
+      );
+      // Said again when Settings opens, until the draft is resolved.
+      await dialog.getByRole("button", { name: "Close" }).click();
+      const again = await showSettings(page);
+      await again.getByRole("tab", { name: "Site" }).click();
+      await expect(step(again, "left")).toContainText(
+        "except from 1 live version"
+      );
+    } finally {
+      await page.request.patch(`${ENTRIES}/${id}`, {
+        data: { status: "published" },
+      });
+      await storeSiteBreakpoints(page.request, null);
     }
   });
 });

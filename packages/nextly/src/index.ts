@@ -514,8 +514,16 @@ export {
   type PluginAuditApi,
   type PluginAuditDeclaration,
   // The helpers a plugin receives on `ctx.security`: passwords, opaque
-  // secrets and one-purpose secrets.
+  // secrets, one-purpose secrets and verifying the webhooks it receives.
   type PluginSecurityApi,
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type PluginReceivedWebhooks,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
@@ -572,7 +580,10 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
+  type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
   type PluginFilterRegistry,
@@ -618,6 +629,8 @@ export {
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
   type PluginAdminPlaceDeclaration,
+  type PluginListFilterDeclaration,
+  type PluginListFilterOption,
   type PluginMenuItem,
   type PluginNavSection,
   CORE_ADMIN_PLACES,
@@ -861,6 +874,9 @@ export type {
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemIdentity,
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";

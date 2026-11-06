@@ -8,6 +8,8 @@
  *   values if given.
  * - **set-placement-values** and **choose-variant** change one placement.
  * - **set-layout** chooses the page's Layout, or switches it off.
+ * - **set-list-query** changes a collection list's source, filters, sort,
+ *   limit and offset, as the list's inspector does.
  *
  * Each is read, planned and written as the caller. The stored page is read as
  * its working draft, as the editor opens it, and written back as a draft
@@ -27,6 +29,7 @@
  */
 import {
   applyOps,
+  COLLECTION_LIST_TYPE,
   COMPONENT_INSTANCE_TYPE,
   findNode,
   isComponentInstance,
@@ -40,6 +43,7 @@ import {
   type DocumentLimits,
   type OpPosition,
 } from "@nextlyhq/blocks-engine";
+import { pageActionJsonSchema, pageActionSchema } from "@nextlyhq/builder/ops";
 import {
   getCachedNextly,
   NextlyError,
@@ -53,18 +57,23 @@ import { PAGES_SLUG } from "./collections/pages";
 import { PATTERNS_SLUG } from "./collections/patterns";
 import {
   PAGE_ACTIONS_ROUTE_PATH,
+  type ListQueryChange,
   type PageAction,
+  type PageActionRequest,
   type PageActionResult,
 } from "./composition-actions-contract";
 import {
   actingCaller,
   asCaller,
   blocksDocumentOf,
+  parsedWith,
   planRefusal,
-  readBodyWith,
+  readJsonBody,
   readOrNull,
+  requestJsonSchema,
   savesLive,
   storeOf,
+  type ActionAnswer,
   type CompositionRouteContext,
 } from "./composition-route-kit";
 import { relationId } from "./default-layout/store";
@@ -79,57 +88,50 @@ import { readingAsUser, type ComponentStore } from "./library-route";
 const DEFAULT_FIELD = "content";
 
 const id = z.string().min(1).max(512);
-const position = z.union([
-  z.strictObject({ index: z.number().int().nonnegative() }),
-  z.strictObject({
-    parentId: id,
-    slot: id,
-    index: z.number().int().nonnegative(),
-  }),
-]);
-const values = z.record(z.string().max(512), z.unknown());
 
-const PageActionBody = z.strictObject({
+/**
+ * The request around the action: which page, and how to apply. The action
+ * itself is parsed by the builder's published schema, so the route and any
+ * client validating against `@nextlyhq/builder/ops` refuse the same actions.
+ */
+const PageActionEnvelope = z.strictObject({
   page: z.strictObject({
     collection: id,
     id,
     field: id.optional(),
     locale: id.optional(),
   }),
-  action: z.discriminatedUnion("kind", [
-    z.strictObject({
-      kind: z.literal("insert-pattern"),
-      patternId: id,
-      at: position.optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("place-component"),
-      componentId: id,
-      variant: id.optional(),
-      values: values.optional(),
-      at: position.optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("set-placement-values"),
-      instanceId: id,
-      values: values.optional(),
-      reset: z.array(z.string().max(512)).max(200).optional(),
-    }),
-    z.strictObject({
-      kind: z.literal("choose-variant"),
-      instanceId: id,
-      variant: id.nullable(),
-    }),
-    z.strictObject({
-      kind: z.literal("set-layout"),
-      layout: id.nullable(),
-      noHeaderFooter: z.boolean().optional(),
-    }),
-  ]),
+  action: z.unknown(),
   dryRun: z.boolean().optional(),
   expect: z.string().max(128).optional(),
   publish: z.boolean().optional(),
 });
+
+/** The JSON Schema of a page action request, as the route parses it. */
+export function pageActionRequestJsonSchema(): Record<string, unknown> {
+  return requestJsonSchema(PageActionEnvelope, pageActionJsonSchema());
+}
+
+/**
+ * A page action request read from outside input: a route body, or what a
+ * caller of the service passed. Refused with the path of each problem.
+ */
+export function pageActionRequestOf(raw: unknown): PageActionRequest {
+  const envelope = parsedWith(raw, PageActionEnvelope);
+  const { page, dryRun, expect, publish } = envelope;
+  return {
+    page: {
+      collection: page.collection,
+      id: page.id,
+      ...(page.field === undefined ? {} : { field: page.field }),
+      ...(page.locale === undefined ? {} : { locale: page.locale }),
+    },
+    action: parsedWith(envelope.action, pageActionSchema, "action"),
+    ...(dryRun === undefined ? {} : { dryRun }),
+    ...(expect === undefined ? {} : { expect }),
+    ...(publish === undefined ? {} : { publish }),
+  };
+}
 
 /** What the page actions are built with. */
 export interface PageActionsSetup {
@@ -138,7 +140,7 @@ export interface PageActionsSetup {
 }
 
 /** The context the page actions run with. */
-type PageActionsContext = CompositionRouteContext & {
+export type PageActionsContext = CompositionRouteContext & {
   services: {
     collections: Parameters<typeof savesLive>[0];
   };
@@ -172,13 +174,15 @@ interface PlannedWrite {
   readonly insertedId?: string;
 }
 
-/** Run one page action, as the docblock describes. */
-async function runPageAction(
-  req: Request,
+/**
+ * Run one page action, as the docblock describes, for the route and the
+ * service alike: every check, the dry run and the write are made here.
+ */
+export async function runPageAction(
   ctx: PageActionsContext,
+  body: PageActionRequest,
   setup: PageActionsSetup
-): Promise<Response> {
-  const body = await readBodyWith(req, PageActionBody, "page action");
+): Promise<ActionAnswer<PageActionResult>> {
   const page = body.page;
   const collections = ctx.services.collections;
   // Preconditions first: the caller may change this collection's entries,
@@ -244,16 +248,16 @@ async function runPageAction(
 
   if (judged.refusal !== null) {
     if (body.dryRun !== true) throw refusedAction(judged.refusal.messages);
-    return respondMutation<PageActionResult>(
-      "Nothing was written: the site would refuse this action.",
-      result(true, undefined, judged.refusal.messages)
-    );
+    return {
+      message: "Nothing was written: the site would refuse this action.",
+      item: result(true, undefined, judged.refusal.messages),
+    };
   }
   if (body.dryRun === true) {
-    return respondMutation<PageActionResult>(
-      "Nothing was written: this is what the action would do.",
-      result(true, judged.written, [])
-    );
+    return {
+      message: "Nothing was written: this is what the action would do.",
+      item: result(true, judged.written, []),
+    };
   }
   // The answer is the committed write's: a hook may store something other
   // than what the rolled-back judgement stored.
@@ -263,10 +267,11 @@ async function runPageAction(
     data,
     options
   );
-  return respondMutation<PageActionResult>(
-    "The page was changed.",
-    result(false, applied.item, [])
-  );
+  return {
+    message: "The page was changed.",
+    item: result(false, applied.item, []),
+    ...(applied.warnings === undefined ? {} : { warnings: applied.warnings }),
+  };
 }
 
 /**
@@ -423,6 +428,10 @@ async function opsFor(
           ),
         ],
       };
+    case "set-list-query":
+      return {
+        ops: [listQueryUpdate(document, action.listId, action.query)],
+      };
     case "choose-variant":
       return {
         ops: [
@@ -542,6 +551,30 @@ function placementUpdate(
   };
 }
 
+/**
+ * The update op that changes one collection list's query: each part given
+ * is set, each `null` removed, and the rest of its props kept as stored.
+ */
+function listQueryUpdate(
+  document: BlockDocument,
+  listId: string,
+  change: ListQueryChange
+): BuilderOp {
+  const node = findNode(document.nodes, listId);
+  if (node === undefined || node.type !== COLLECTION_LIST_TYPE) {
+    throw refusedAction([
+      `There is no collection list "${listId}" on this page.`,
+    ]);
+  }
+  const props: Record<string, unknown> = { ...node.props };
+  for (const [part, value] of Object.entries(change)) {
+    if (value === undefined) continue;
+    if (value === null) delete props[part];
+    else props[part] = value;
+  }
+  return { kind: "update", id: listId, patch: { props } };
+}
+
 /** A placement's props with values set and some fields reset to what they inherit. */
 function valuesSet(
   props: Record<string, unknown>,
@@ -611,6 +644,12 @@ export function pageActionsRoute(setup: PageActionsSetup = {}): {
     // Signed in is all reaching the route asks: which collection a page lives
     // in is in the body, so the handler asks for update on that collection
     // before it reads anything, and core judges the write itself.
-    handler: (req, ctx) => runPageAction(req, ctx, setup),
+    handler: async (req, ctx) => {
+      const request = pageActionRequestOf(
+        await readJsonBody(req, "page action")
+      );
+      const answered = await runPageAction(ctx, request, setup);
+      return respondMutation<PageActionResult>(answered.message, answered.item);
+    },
   };
 }

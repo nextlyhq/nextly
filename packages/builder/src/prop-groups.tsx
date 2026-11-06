@@ -21,6 +21,7 @@ import { imageGroupOf } from "./image-group";
 import type { EditableProp } from "./inspector";
 import { LinkGroupField } from "./link-control";
 import { linkGroupOf } from "./link-group";
+import { LIST_QUERY_PROPS, ListQueryField } from "./list-query-controls";
 
 /** What a group is drawn with. */
 export interface PropGroupContext {
@@ -37,6 +38,19 @@ export interface PropGroupContext {
   readonly onCommitMany: (
     changes: Readonly<Record<string, unknown>>
   ) => BlockDocument | null | void;
+  /** The document the block is in, for a group that reads around it. */
+  readonly document: BlockDocument;
+  /** The block's id. */
+  readonly nodeId: string;
+  /** Whether the canvas draws this block's empty state, for a list. */
+  readonly showsEmpty: boolean;
+  /** Draw a list's empty state on the canvas, or its entries again. */
+  readonly onShowEmpty?: ((empty: boolean) => void) | undefined;
+  /**
+   * The count of the latest ask, from a list's canvas note, to fix this
+   * list's sort: each new count takes the author to its first sort row.
+   */
+  readonly sortFieldAsked?: number | undefined;
 }
 
 /** One group of a block's props. */
@@ -101,8 +115,35 @@ const imageGroups: PropGroupFinder = props => {
   ];
 };
 
+/**
+ * A collection list's query: its source, filters, sort and window, drawn as
+ * one group where its collection sits. Asked for by the block declaring its
+ * filters with `display: "listFilters"`, beside the props the engine's
+ * `readListQuery` reads, so no prop of another block is drawn by it.
+ */
+const listQueryGroups: PropGroupFinder = props => {
+  const asks = props.some(
+    prop => prop.name === "filters" && prop.schema.display === "listFilters"
+  );
+  if (!asks || !props.some(prop => prop.name === "collection")) return [];
+  const drawn = new Set<string>(
+    LIST_QUERY_PROPS.filter(name => props.some(prop => prop.name === name))
+  );
+  return [
+    {
+      lead: "collection",
+      drawn,
+      render: context => <ListQueryField {...context} />,
+    },
+  ];
+};
+
 /** Every finder, in the order its groups claim props. */
-const FINDERS: readonly PropGroupFinder[] = [linkGroups, imageGroups];
+const FINDERS: readonly PropGroupFinder[] = [
+  linkGroups,
+  imageGroups,
+  listQueryGroups,
+];
 
 /**
  * The groups among a block's props, in finder order. A group naming a prop

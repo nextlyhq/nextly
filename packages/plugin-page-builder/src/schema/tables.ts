@@ -1,8 +1,9 @@
 /**
- * The page builder's own tables: the usage indexes' bookkeeping, the fence a
- * Layout's removal puts up, the runs that turn every copy of a component into
- * plain blocks before it is deleted, and the site-wide options only this
- * plugin writes.
+ * The page builder's own tables: the usage indexes and their bookkeeping, the
+ * fence a Layout's removal puts up, the runs that turn every copy of a
+ * component into plain blocks before it is deleted, the site-wide options only
+ * this plugin writes, and the runs that strip a removed breakpoint's values
+ * from the site.
  *
  * Kept in tables this plugin declares, reached only through its own `ctx.db`,
  * rather than in collections. A collection has an admin screen, a REST route
@@ -32,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 7;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -294,6 +295,212 @@ export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
     { indexes: [{ columns: ["name"], unique: true }] }
   );
 
+/** The columns of {@link breakpointRemovals}. */
+type BreakpointRemovalsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly removedIds: ColumnBuilder<string, false, false>;
+  readonly before: ColumnBuilder<string, false, false>;
+  readonly startedBy: ColumnBuilder<string, false, false>;
+  readonly phase: ColumnBuilder<string, false, true>;
+  readonly cursor: ColumnBuilder<string, true, false>;
+  readonly openKey: ColumnBuilder<string, true, false>;
+};
+
+/**
+ * One run stripping every value stored under breakpoints the site removed:
+ * the styles and own per-device hides of every document holding blocks, walked
+ * the way a component's hosts are (`host-rewrite/rewrite`), its progress kept
+ * in {@link componentDeletionHosts} under this row's id.
+ *
+ * - `removedIds` is the JSON list of the breakpoint ids removed.
+ * - `before` is the JSON record `{ stored, emitted }`: the breakpoint set the
+ *   site stored before the removal (`null` where it stored none and the
+ *   configured set applied), so the removal can be undone later, and the set
+ *   the stylesheet was emitted under then, so a run carried on after the
+ *   configured defaults changed carries hides under the cascade it began with.
+ * - `startedBy` names who saved the removal, as `user:<id>` or `api-key:<id>`.
+ *   The writes themselves are made as the system: every value under a removed
+ *   breakpoint goes, whoever may open the document holding it.
+ * - `phase` and `cursor` are the walk's, as for a component's run.
+ * - `openKey` is `site` while the run is open and `null` once it is done. Its
+ *   unique index lets one removal be open at a time: a second insert meets it
+ *   and is refused, and every finished run (all `null`) stays as a record.
+ */
+export const breakpointRemovals: TableDefinition<
+  "breakpoint_removals",
+  BreakpointRemovalsColumns
+> = defineTable<"breakpoint_removals", BreakpointRemovalsColumns>(
+  "breakpoint_removals",
+  {
+    id: col.id(),
+    removedIds: col.longText(),
+    before: col.longText(),
+    startedBy: col.varchar(255),
+    phase: col.varchar(16, { default: "converting" }),
+    cursor: col.varchar(1024, { nullable: true }),
+    openKey: col.varchar(16, { nullable: true }),
+  },
+  { indexes: [{ columns: ["openKey"], unique: true }] }
+);
+
+/** The columns of {@link breakpointRemovalFragments}. */
+type BreakpointRemovalFragmentsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly runId: ColumnBuilder<string, false, false>;
+  readonly documentKey: ColumnBuilder<string, false, false>;
+  readonly host: ColumnBuilder<unknown, true, false>;
+  readonly form: ColumnBuilder<string, false, false>;
+  readonly fragment: ColumnBuilder<unknown, false, false>;
+  readonly createdAt: ColumnBuilder<Date, false, true>;
+  readonly updatedAt: ColumnBuilder<Date, false, true>;
+};
+
+/**
+ * What each breakpoint removal took out of the site, kept so it can be put
+ * back: one row per stored value it stripped, written before the strip itself,
+ * so a value that was stripped always has its row.
+ *
+ * - `runId` is the removal ({@link breakpointRemovals}) that stripped it.
+ * - `documentKey` names the document (`host-rewrite/contract`'s
+ *   `documentKeyOf`), or the site style for the shared styles' fragment.
+ * - `host` is the address of the blocks value within it (its field path and
+ *   language), `null` for the shared styles, and `form` which stored form was
+ *   stripped: `published`, `draft`, or `site` for the shared styles.
+ * - `fragment` is what was taken out (`breakpoint-removal/strip`). JSON
+ *   columns, not text: a large page's fragment outgrows MySQL's `TEXT`.
+ * - A value stripped twice (a write brought values back) has a row for each;
+ *   the newest is the latest strip.
+ *
+ * Rows older than the window a removal can be undone in are deleted by the
+ * removal job.
+ */
+export const breakpointRemovalFragments: TableDefinition<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+> = defineTable<
+  "breakpoint_removal_fragments",
+  BreakpointRemovalFragmentsColumns
+>(
+  "breakpoint_removal_fragments",
+  {
+    id: col.id(),
+    runId: col.char(36),
+    documentKey: col.varchar(512),
+    host: col.json({ nullable: true }),
+    form: col.varchar(16),
+    fragment: col.json(),
+    ...col.timestamps(),
+  },
+  // Read and purged by run; the purge also reads by age.
+  { indexes: [{ columns: ["runId"] }, { columns: ["createdAt"] }] }
+);
+
+/** The columns every usage index row has: the document it describes. */
+type UsageSubjectColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly scope: ColumnBuilder<string, false, false>;
+  readonly entity: ColumnBuilder<string, false, false>;
+  readonly entityKey: ColumnBuilder<string, false, false>;
+  readonly field: ColumnBuilder<string, false, false>;
+  readonly locale: ColumnBuilder<string, false, false>;
+  readonly variant: ColumnBuilder<string, false, false>;
+};
+
+/**
+ * The subject columns, declared once for both index tables, so the two cannot
+ * come to describe a document differently. Each is a closed vocabulary or an
+ * identifier: `scope` is `collection` or `single`, `entity` a slug, `entityKey`
+ * a document id (empty for a Single, which has one document), `field` a field
+ * name, `locale` a locale code (empty for a field not stored per language) and
+ * `variant` `published` or `draft`.
+ */
+function usageSubjectColumns(): UsageSubjectColumns {
+  return {
+    id: col.id(),
+    scope: col.varchar(16),
+    entity: col.varchar(255),
+    entityKey: col.varchar(255),
+    field: col.varchar(255),
+    locale: col.varchar(64),
+    variant: col.varchar(16),
+  };
+}
+
+/** The columns of {@link classUsageRows}. */
+type ClassUsageColumns = UsageSubjectColumns & {
+  readonly classId: ColumnBuilder<string, false, false>;
+};
+
+/**
+ * The class usage index: one row per named class a stored document applies,
+ * or one marker row (`classId` longer than any class id may be) for a document
+ * that could not be read whole.
+ *
+ * A table rather than a collection, for the reason the module docblock gives:
+ * a row a super-admin added or removed by hand changed what a count said, and
+ * health had no way to tell. Rows are derived from the documents, on every
+ * save and by the backfill, and nothing else writes them.
+ *
+ * Indexed by document, which every maintenance pass reads by, and by class,
+ * which every count asks about.
+ */
+export const classUsageRows: TableDefinition<"class_usage", ClassUsageColumns> =
+  defineTable<"class_usage", ClassUsageColumns>(
+    "class_usage",
+    { ...usageSubjectColumns(), classId: col.varchar(255) },
+    {
+      indexes: [{ columns: ["entity", "entityKey"] }, { columns: ["classId"] }],
+    }
+  );
+
+/**
+ * The longest component id the plugin records: the width of the component
+ * index's `componentId` column, the widest MySQL lets it be beside the other
+ * columns of its index. A component definition is an entry of a collection,
+ * whose id core makes 36 characters long; a value longer than this names no
+ * component, and the derivation leaves it out rather than fail every write
+ * that would store it.
+ */
+export const MAX_COMPONENT_ID_LENGTH = 512;
+
+/** The columns of {@link componentUsageRows}. */
+type ComponentUsageColumns = UsageSubjectColumns & {
+  readonly kind: ColumnBuilder<string, false, false>;
+  readonly componentId: ColumnBuilder<string, false, false>;
+};
+
+/**
+ * The component usage index: one row per component a stored document can
+ * place, or one `unreadable` row for a document that could not be read whole.
+ *
+ * `componentId` is {@link MAX_COMPONENT_ID_LENGTH} wide; the derivation
+ * records no longer value. Indexed by document and by component, for the
+ * reasons the class index is.
+ */
+export const componentUsageRows: TableDefinition<
+  "component_usage",
+  ComponentUsageColumns
+> = defineTable<"component_usage", ComponentUsageColumns>(
+  "component_usage",
+  {
+    ...usageSubjectColumns(),
+    kind: col.varchar(16),
+    componentId: col.varchar(MAX_COMPONENT_ID_LENGTH),
+  },
+  {
+    indexes: [
+      { columns: ["entity", "entityKey"] },
+      { columns: ["componentId"] },
+    ],
+  }
+);
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -302,6 +509,10 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof componentDeletions,
   typeof componentDeletionHosts,
   typeof siteOptions,
+  typeof breakpointRemovals,
+  typeof breakpointRemovalFragments,
+  typeof classUsageRows,
+  typeof componentUsageRows,
 ] = [
   usageRuns,
   usageProgress,
@@ -309,4 +520,8 @@ export const PAGE_BUILDER_TABLES: readonly [
   componentDeletions,
   componentDeletionHosts,
   siteOptions,
+  breakpointRemovals,
+  breakpointRemovalFragments,
+  classUsageRows,
+  componentUsageRows,
 ];

@@ -21,7 +21,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { composedTextAt, exposedTextOp } from "./exposed-inline";
+import {
+  composedTextAt,
+  exposedPassage,
+  exposedRichOp,
+  exposedTextOp,
+} from "./exposed-inline";
 import { applyOps } from "./ops";
 
 beforeEach(() => {
@@ -412,5 +417,169 @@ describe("exposed text of a block the component locks in Layers", () => {
     expect(composedTextAt(document, composed, free!.id, "text")?.kind).toBe(
       "exposed"
     );
+  });
+});
+
+describe("a component's exposed rich text, edited on the canvas", () => {
+  /** A passage of one paragraph. */
+  const passage = (text: string) => ({
+    root: {
+      type: "root",
+      children: [
+        { type: "paragraph", children: [{ type: "text", text, format: 0 }] },
+      ],
+    },
+  });
+  const CARD: ComponentDocument = {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "component",
+    nodes: [
+      {
+        id: "c",
+        type: "acme/card",
+        version: 1,
+        props: { body: passage("From the component") },
+      },
+    ],
+    exposed: [
+      {
+        id: "intro",
+        label: "Intro",
+        nodeId: "c",
+        propPath: "body",
+        type: "richText",
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    registerBlocks(
+      [
+        {
+          name: "acme/card",
+          version: 1,
+          description: "A card.",
+          example: { props: {} },
+          render: () => null,
+          props: {
+            body: { type: "richText", inline: true, role: "content" },
+          },
+        },
+      ] as never,
+      { source: "acme-card" }
+    );
+  });
+
+  function setUpCard(...nodes: BlockNode[]) {
+    const document: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes,
+    };
+    const composed = resolveComponentInstances(
+      document,
+      new Map<string, BlockDocument>([["card", CARD]]),
+      { exposures: true }
+    ).document;
+    const cardOf = (placementId: string) =>
+      composed.nodes.find(
+        (entry: ResolvedBlockNode) => entry.instanceOf === placementId
+      )?.id ?? "";
+    return { document, composed, cardOf };
+  }
+  const card = (id: string, extra: Partial<BlockNode> = {}): BlockNode => ({
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId: "card" },
+    ...extra,
+  });
+
+  it("answers an exposed passage with its placement and exposure", () => {
+    const { document, composed, cardOf } = setUpCard(card("p1"));
+    expect(composedTextAt(document, composed, cardOf("p1"), "body")).toEqual({
+      kind: "exposed-rich",
+      target: {
+        nodeId: cardOf("p1"),
+        prop: "body",
+        placementId: "p1",
+        exposureId: "intro",
+      },
+    });
+  });
+
+  it("answers an exposed passage of a placement locked in Layers as part of it", () => {
+    const { document, composed, cardOf } = setUpCard(
+      card("p1", { locked: true })
+    );
+    expect(composedTextAt(document, composed, cardOf("p1"), "body")?.kind).toBe(
+      "part-of"
+    );
+  });
+
+  it("reads the passage the page shows, and none once it stops being editable", () => {
+    const { document, composed, cardOf } = setUpCard(card("p1"));
+    const target = {
+      nodeId: cardOf("p1"),
+      prop: "body",
+      placementId: "p1",
+      exposureId: "intro",
+    };
+    expect(exposedPassage(document, composed, target)?.stored).toEqual(
+      passage("From the component")
+    );
+    const locked = setUpCard(card("p1", { locked: true }));
+    expect(exposedPassage(locked.document, locked.composed, target)).toBeNull();
+  });
+
+  it("stores the edit on that placement only, as one op", () => {
+    const { document, composed, cardOf } = setUpCard(card("p1"), card("p2"));
+    const target = {
+      nodeId: cardOf("p1"),
+      prop: "body",
+      placementId: "p1",
+      exposureId: "intro",
+    };
+    const opened = passage("From the component");
+    const op = exposedRichOp(
+      document,
+      composed,
+      target,
+      passage("Ours"),
+      opened,
+      opened
+    );
+    expect(op).not.toBeNull();
+    const after = applyOps(document, op === null ? [] : [op]).document;
+    expect(
+      (findNode(after.nodes, "p1")?.props as { overrides?: unknown }).overrides
+    ).toEqual({ intro: passage("Ours") });
+    expect(
+      (findNode(after.nodes, "p2")?.props as { overrides?: unknown }).overrides
+    ).toBeUndefined();
+  });
+
+  it("writes nothing for an unchanged passage, or one the page changed meanwhile", () => {
+    const { document, composed, cardOf } = setUpCard(card("p1"));
+    const target = {
+      nodeId: cardOf("p1"),
+      prop: "body",
+      placementId: "p1",
+      exposureId: "intro",
+    };
+    const opened = passage("From the component");
+    expect(
+      exposedRichOp(document, composed, target, opened, opened, opened)
+    ).toBeNull();
+    expect(
+      exposedRichOp(
+        document,
+        composed,
+        target,
+        passage("Ours"),
+        opened,
+        passage("Something older")
+      )
+    ).toBeNull();
   });
 });
