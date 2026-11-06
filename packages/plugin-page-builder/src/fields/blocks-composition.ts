@@ -436,8 +436,10 @@ export async function compositionIssues(
  * `before` is the value as it stood before this write, which the store no
  * longer holds: a nesting break it already composed to is kept, as the first
  * judgement keeps one the stored forms hold, and a component's hosts are
- * judged against it. Locks are not judged here, nor anything else that does
- * not depend on other documents.
+ * judged against it. A slot lock a placed component holds is judged here too,
+ * measured against the same value: a component can tighten one while a page
+ * fills that slot. Nothing that does not depend on other documents is judged
+ * again.
  */
 export async function compositionGraphIssues(
   value: unknown,
@@ -509,7 +511,8 @@ export async function compositionGraphIssues(
 
 /**
  * The graph half of {@link judgeOwnComposition}: the document's composed
- * nesting and depth, a nesting break measured against `stored`.
+ * nesting, depth and slot locks, a nesting or lock break measured against
+ * `stored`.
  */
 async function judgeGraph(args: {
   document: BlockDocument;
@@ -535,18 +538,20 @@ async function judgeGraph(args: {
     report.add("COMPOSITION_UNCHECKED", OUTGROWN);
     return;
   }
-  const graphFaults = faultsIn(document, composed.composition, setup, {
-    components: lookupOf(library),
-  }).filter(fault => !LOCK_FAULTS.has(fault.code));
-  const faults = await measuredAgainstStored(graphFaults, {
-    document,
-    composition: composed.composition,
-    setup,
-    reading: { library, read, limits: setup.limits, work },
-    stored: args.stored,
-    field: undefined,
-    writtenTo: undefined,
-  });
+  const faults = await measuredAgainstStored(
+    faultsIn(document, composed.composition, setup, {
+      components: lookupOf(library),
+    }),
+    {
+      document,
+      composition: composed.composition,
+      setup,
+      reading: { library, read, limits: setup.limits, work },
+      stored: args.stored,
+      field: undefined,
+      writtenTo: undefined,
+    }
+  );
   for (const fault of faults) report.add(fault.code, fault.message);
 }
 

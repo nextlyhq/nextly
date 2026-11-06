@@ -13,8 +13,8 @@
  * this refuses is rolled back whole.
  *
  * Only what depends on other documents is judged again: loops, the composed
- * nesting and depth of the document, and for a component the documents placing
- * it (`compositionGraphIssues`). Everything else was judged by the validation
+ * nesting, depth and slot locks of the document, and for a component the
+ * documents placing it (`compositionGraphIssues`). Everything else was judged by the validation
  * already, and nothing another write commits can change it.
  *
  * The lock is taken only by a write whose blocks value or status changed, so a

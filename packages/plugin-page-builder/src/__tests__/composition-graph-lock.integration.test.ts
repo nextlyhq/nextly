@@ -25,6 +25,13 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  expandSlotDefaults,
+  hasBlock,
+  makeNode,
+  registerBlocks,
+  registryBlockSource,
+  registryNestingSource,
+  type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
@@ -82,6 +89,54 @@ const document = (kind: "page" | "component", nodes: Node[]) => ({
   kind,
   nodes,
 });
+
+/**
+ * A headline, and a hero whose one slot is locked to the two headlines it
+ * starts with: nothing may be added to it, nor taken out.
+ */
+function registerLockedHero(): void {
+  if (hasBlock("acme/locked-hero")) return;
+  const base = {
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  };
+  registerBlocks(
+    [
+      {
+        ...base,
+        name: "acme/headline",
+        props: { text: { type: "text", role: "content" } },
+        defaultProps: { text: "Title" },
+      },
+      {
+        ...base,
+        name: "acme/locked-hero",
+        slots: {
+          content: {
+            defaultBlock: [
+              { type: "acme/headline" },
+              { type: "acme/headline" },
+            ],
+            lock: "all",
+          },
+        },
+      },
+    ] as never,
+    { source: "acme" }
+  );
+}
+
+/** A block as inserting it places it, its slots filled with their defaults. */
+function inserted(type: string): BlockNode {
+  return makeNode(
+    type,
+    1,
+    {},
+    expandSlotDefaults(type, registryBlockSource(), registryNestingSource())
+  );
+}
 
 /** The issue codes a refused write carries. */
 function codesOf(error: unknown): string[] {
@@ -337,6 +392,83 @@ describe.each(getConfiguredTestDialects())(
       expect(
         codesOf(two.status === "rejected" ? two.reason : undefined)
       ).toEqual(["depth-exceeded"]);
+    });
+
+    it("refuses page content in a slot a concurrent save of its component locks", async () => {
+      // The component exposes a slot pages fill. Before the first save it is
+      // a box's, which holds anything; the save moves it to a hero whose slot
+      // is locked to its two headlines. The page, judged before against the
+      // box, fills the slot with three.
+      const t = await boot();
+      // After the boot, which starts the block registry afresh.
+      registerLockedHero();
+      const shell = box("shell", []);
+      const c = String(
+        (
+          await t.nextly.create({
+            collection: COMPONENTS_SLUG,
+            data: {
+              title: "promo",
+              slug: "promo",
+              content: {
+                ...document("component", [shell]),
+                slots: {
+                  extra: { label: "Extra", nodeId: "shell", slot: "children" },
+                },
+              },
+            },
+            overrideAccess: true,
+          })
+        ).item.id
+      );
+      const hero = inserted("acme/locked-hero");
+
+      const [one, two] = await interleaved(
+        c,
+        () =>
+          t.nextly.update({
+            collection: COMPONENTS_SLUG,
+            id: c,
+            data: {
+              content: {
+                ...document("component", [hero]),
+                slots: {
+                  extra: { label: "Extra", nodeId: hero.id, slot: "content" },
+                },
+              },
+              _overwrite: true,
+            },
+            overrideAccess: true,
+          }),
+        "fills-the-locked-slot",
+        () =>
+          t.nextly.create({
+            collection: "pages",
+            data: {
+              title: "Home",
+              slug: "home",
+              content: document("page", [
+                {
+                  ...placing("fills-the-locked-slot", c),
+                  slots: {
+                    extra: [
+                      makeNode("acme/headline", 1, { text: "One" }),
+                      makeNode("acme/headline", 1, { text: "Two" }),
+                      makeNode("acme/headline", 1, { text: "Three" }),
+                    ],
+                  },
+                },
+              ]),
+            },
+            overrideAccess: true,
+          })
+      );
+
+      expect(one.status).toBe("fulfilled");
+      expect(two.status).toBe("rejected");
+      expect(
+        codesOf(two.status === "rejected" ? two.reason : undefined)
+      ).toEqual(["locked-slot-altered"]);
     });
 
     it("refuses a Single placing a component that a concurrent save makes too deep", async () => {
