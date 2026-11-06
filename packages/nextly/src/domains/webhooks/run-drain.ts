@@ -35,6 +35,7 @@ import {
   CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+  RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 import {
@@ -47,6 +48,10 @@ import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
 } from "../../plugins/security/one-time-secrets-prune";
+import {
+  pruneReceivedWebhooks,
+  RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS,
+} from "../../plugins/security/received-webhooks-prune";
 import {
   PREVIEW_LINKS_SWEEP_INTERVAL_MS,
   prunePreviewLinks,
@@ -112,6 +117,12 @@ export interface RunDrainDeps {
      */
     oneTimeSecrets?: boolean;
     /**
+     * Sweep plugins' received-webhook claims past their retention, for the
+     * secrets sweep's reason: an install that stops receiving webhooks makes
+     * no write that offers the pass.
+     */
+    receivedWebhooks?: boolean;
+    /**
      * Sweep recorded preview links long past their end, for the secrets
      * sweep's reason: an install that goes quiet makes no write that offers
      * the pass.
@@ -155,6 +166,8 @@ export interface RunDrainResult {
     emailDeliveries: number;
     /** Plugins' one-purpose secrets removed on this call. */
     oneTimeSecrets: number;
+    /** Plugins' received-webhook claims removed on this call. */
+    receivedWebhooks: number;
     /** Recorded preview links long past their end removed on this call. */
     previewLinks: number;
     /** Cache tag expiries past the ledger's age removed on this call. */
@@ -228,6 +241,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       auth: 0,
       emailDeliveries: 0,
       oneTimeSecrets: 0,
+      receivedWebhooks: 0,
       previewLinks: 0,
       cacheTagExpiries: 0,
       notices: 0,
@@ -344,6 +358,20 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           : false;
       if (secretsTurn) heldTurns.add(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
 
+      // Received-webhook claims, claimed with the others for the reason the
+      // secrets sweep is.
+      const receivedTurn =
+        retention.receivedWebhooks === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
+              RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS
+            )
+          : false;
+      if (receivedTurn) {
+        heldTurns.add(RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY);
+      }
+
       // Recorded preview links, claimed with the others for the reason the
       // secrets sweep is.
       const previewLinksTurn =
@@ -423,6 +451,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         (noticesTurn && !done.notices ? 1 : 0) +
         (contentEventsTurn ? 1 : 0) +
         (secretsTurn ? 1 : 0) +
+        (receivedTurn ? 1 : 0) +
         (previewLinksTurn ? 1 : 0) +
         (cacheTagsTurn ? 1 : 0);
 
@@ -631,13 +660,17 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           retention.prune.adapter,
           now(),
           {
-            // Its share, not the whole remainder, while the preview-links
-            // sweep or the ledger prune still follows: a backlog here would
-            // otherwise take every drain's last moments and leave them none.
+            // Its share, not the whole remainder, while the received-webhooks
+            // or preview-links sweep or the ledger prune still follows: a
+            // backlog here would otherwise take every drain's last moments and
+            // leave them none.
             deadline: shareOfRemaining(
               deadline,
               now,
-              1 + (previewLinksTurn ? 1 : 0) + (cacheTagsTurn ? 1 : 0)
+              1 +
+                (receivedTurn ? 1 : 0) +
+                (previewLinksTurn ? 1 : 0) +
+                (cacheTagsTurn ? 1 : 0)
             )?.getTime(),
             clock: () => now().getTime(),
           }
@@ -654,6 +687,41 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         result.pruned.oneTimeSecrets = swept.removed;
         if (swept.started) {
           heldTurns.delete(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+        }
+      }
+
+      // Received-webhook claims, after the secrets and on the same terms: the
+      // sweep stops between batches at the deadline, and the turn is kept only
+      // if a batch was attempted.
+      if (receivedTurn && !deadlineSpent()) {
+        // Mirrors the secrets sweep above deliberately, as the preview-links
+        // sweep below does: a share that leaves the passes after it their own,
+        // the same quiet failure and the same rule for keeping the turn.
+        // fallow-ignore-next-line code-duplication
+        const swept = await pruneReceivedWebhooks(
+          retention.prune.adapter,
+          now(),
+          {
+            deadline: shareOfRemaining(
+              deadline,
+              now,
+              1 + (previewLinksTurn ? 1 : 0) + (cacheTagsTurn ? 1 : 0)
+            )?.getTime(),
+            clock: () => now().getTime(),
+          }
+        ).catch((error: unknown) => {
+          // Quietly, as the secrets sweep: a database not yet updated has no
+          // table, and a drain whose deliveries succeeded must not reject.
+          warnQuietly(
+            retention.prune.logger,
+            "Received webhooks retention pass failed",
+            { error: error instanceof Error ? error.message : "unknown error" }
+          );
+          return { removed: 0, started: true };
+        });
+        result.pruned.receivedWebhooks = swept.removed;
+        if (swept.started) {
+          heldTurns.delete(RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY);
         }
       }
 
