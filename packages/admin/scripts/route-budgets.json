@@ -14,6 +14,7 @@
     "CodeMirrorEditor": 246349,
     "groups-drawing": 2169,
     "highlight-source": 223405,
+    "IconInput": 5963,
     "Lexical": 59706,
     "LexicalCodePrism": 113848,
     "LexicalHistory": 79963,
@@ -83,7 +84,7 @@
     "RestartOverlay": 466,
     "rich-text-kit": 147157,
     "RichTextInput": 203674,
-    "SchedulePublishDialog": 83978,
+    "ScheduleDocumentDialog": 95262,
     "TextMarkdown": 158087,
     "UploadTray": 1710
   }

@@ -113,6 +113,7 @@ describe.each(getConfiguredTestDialects())(
               styles: { base: { mobile: { color: "#222222" } } },
             },
           ],
+          _overwrite: true,
         },
         overrideAccess: true,
         context: { ...SITE_SETTINGS_WRITE_CONTEXT },
@@ -242,7 +243,10 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: "frontpage",
-        data: { content: doc("page", [heading("f", atMobile)]) },
+        data: {
+          content: doc("page", [heading("f", atMobile)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       // May manage the site and open pages; may not open components.
@@ -299,6 +303,45 @@ describe.each(getConfiguredTestDialects())(
         "tablet",
         "mobile",
       ]);
+    });
+
+    it("names a page by its saved title, as the editor shows it", async () => {
+      // Published as Home, then renamed in a pending working draft: someone
+      // who may edit it knows it by the draft's title, as the editor shows.
+      const t = await boot();
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          status: "published",
+          content: doc("page", [heading("a", atMobile)]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.update({
+        collection: "pages",
+        id: String(created.item.id),
+        data: { title: "Home, renamed", _overwrite: true },
+        overrideAccess: true,
+      });
+      const set = {
+        breakpoints: { viewport: [TABLET], container: [] },
+        dryRun: true,
+      };
+      const editor = await holding(
+        t,
+        "manage-page-builder-site",
+        "read-pages",
+        "update-pages"
+      );
+      const edited = await ask(editor, set);
+      const [mobile] = (edited.body.item as Record<string, unknown>)
+        .removed as Record<string, unknown>[];
+      expect(mobile?.documents).toEqual({
+        named: ["Home, renamed"],
+        unnamed: 0,
+      });
     });
 
     it("answers that nothing is dropped when nothing is removed", async () => {

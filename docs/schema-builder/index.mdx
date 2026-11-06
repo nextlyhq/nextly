@@ -26,13 +26,13 @@ Each Schema Builder uses a two-column layout:
 
 The field palette groups field types into five categories, in this order:
 
-| Category   | Field types in the picker                                       |
-| ---------- | --------------------------------------------------------------- |
-| Basic      | Text, Long text, Editor (rich text), Email, Password, Number    |
-| Advanced   | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips) |
-| Media      | Media (upload)                                                  |
-| Relational | Relationship                                                    |
-| Structured | Repeater, Group, Component                                      |
+| Category   | Field types in the picker                                          |
+| ---------- | ------------------------------------------------------------------ |
+| Basic      | Text, Long text, Editor (rich text), Email, Password, Number, Icon |
+| Advanced   | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips)    |
+| Media      | Media (upload)                                                     |
+| Relational | Relationship                                                       |
+| Structured | Repeater, Group, Component                                         |
 
 This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced) so the prose can talk about families that don't all map to a single picker tab.
 
@@ -45,7 +45,7 @@ Click a field on the canvas to slide the field editor over the palette. The edit
 | **General**    | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern).                                                        |
 | **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`.                                                         |
 | **Display**    | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder. |
-| **Advanced**   | `unique` constraint, database `index`, and a reserved `localized` flag (not yet wired through to runtime localization).                                                                                                    |
+| **Advanced**   | `unique` constraint, database `index`, and the `localized` flag, which keeps a value per language on a localized collection, Single or field group (see [Choose what gets translated](/docs/localization#choose-what-gets-translated)).                                                                                                    |
 
 Conditional visibility supports type-aware operators (`equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `isEmpty`, `isNotEmpty`, numeric comparisons, `between`, date `before` / `after`, and boolean `isTrue` / `isNotTrue`).
 

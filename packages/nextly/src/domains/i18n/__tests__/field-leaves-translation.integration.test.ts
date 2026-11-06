@@ -154,7 +154,7 @@ describeEachDialect("a field that stops being translated", dialect => {
     for (const locale of ["es", "ar"]) {
       const translated = await entries.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true, locale },
-        { heading: VALUES[locale] }
+        { heading: VALUES[locale], _overwrite: true }
       );
       expect(translated.success, JSON.stringify(translated)).toBe(true);
     }
@@ -173,9 +173,12 @@ describeEachDialect("a field that stops being translated", dialect => {
     for (const locale of LOCALES) {
       const written = await singles.update(
         "hero",
-        locale === "en"
-          ? { heading: VALUES.en, views: 7 }
-          : { heading: VALUES[locale] },
+        {
+          ...(locale === "en"
+            ? { heading: VALUES.en, views: 7 }
+            : { heading: VALUES[locale] }),
+          _overwrite: true,
+        },
         { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);

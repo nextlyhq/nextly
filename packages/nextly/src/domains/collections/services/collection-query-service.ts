@@ -156,6 +156,7 @@ import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
+  TRANSLATION_OVERVIEW_KEY,
   fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
@@ -5529,6 +5530,14 @@ export class CollectionQueryService extends BaseService {
             draftEntry[DOCUMENT_REVISION_COLUMN] =
               expandedEntry[DOCUMENT_REVISION_COLUMN];
           }
+          // Every language's status is the document's, not the pending
+          // change's: the overview read for the live document stays on the
+          // document the read hands back, so the editor still tells every
+          // language while the one being edited holds a change.
+          if (TRANSLATION_OVERVIEW_KEY in expandedEntry) {
+            draftEntry[TRANSLATION_OVERVIEW_KEY] =
+              expandedEntry[TRANSLATION_OVERVIEW_KEY];
+          }
           expandedEntry = draftEntry;
           draftOverlaid = true;
         }
@@ -5759,6 +5768,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition: caseInsensitiveContains(
+              this.dialect,
               sql`${t}.${col}`,
               searchText
             ),
@@ -5767,7 +5777,7 @@ export class CollectionQueryService extends BaseService {
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip
-        return caseInsensitiveContains(column, searchText);
+        return caseInsensitiveContains(this.dialect, column, searchText);
       })
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -5806,6 +5816,7 @@ export class CollectionQueryService extends BaseService {
     return buildDrizzleCondition(
       whereClause,
       schema,
+      this.dialect,
       localizedCtx,
       buildLocalizedWhereExists
     );

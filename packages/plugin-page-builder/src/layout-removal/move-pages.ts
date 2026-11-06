@@ -11,7 +11,8 @@
  * and reported, never written past their rights. A published page's LIVE row
  * is left as it is, since no write changes a live row without publishing the
  * draft beside it; once the Layout is gone that row draws the site default,
- * which the dialog told the person before they started.
+ * which the dialog told the person before they started, and the page's next
+ * publish clears the deleted Layout from it (`page-reference-guard.ts`).
  *
  * ## Ticks, polled by the dialog
  *

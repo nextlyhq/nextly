@@ -5,9 +5,9 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261104_182048_097_create_usage_index_tables",
-  schemaVersion: 5,
-  checksum: "3911a0be23132b4b2273b6526fe27a8d4393058ba80d0ece664cc25406f6e497",
+  name: "20261106_064811_678_create_usage_index_tables",
+  schemaVersion: 6,
+  checksum: "0cbdf9ad6b983bd026d8a42178c69c9c052b270a775b2de854b7eade40ed7615",
   dialects: {
     postgresql: {
       up: [
@@ -328,6 +328,57 @@ export default {
             {
               name: "uq_page_builder__site_options_name",
               columns: ["name"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
               unique: true,
             },
           ],
@@ -751,6 +802,57 @@ export default {
           checks: [],
         },
         {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "varchar(16)",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
           name: "page_builder__class_usage",
           columns: [
             {
@@ -1160,6 +1262,57 @@ export default {
             {
               name: "uq_page_builder__site_options_name",
               columns: ["name"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
               unique: true,
             },
           ],
@@ -1588,6 +1741,57 @@ export default {
           foreignKeys: [],
           checks: [],
         },
+        {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
       ],
     },
     mysql: {
@@ -1879,6 +2083,57 @@ export default {
           foreignKeys: [],
           checks: [],
         },
+        {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "varchar(36)",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "varchar(255)",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "varchar(16)",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "varchar(1024)",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "varchar(16)",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
       ],
     },
     sqlite: {
@@ -2164,6 +2419,57 @@ export default {
             {
               name: "uq_page_builder__site_options_name",
               columns: ["name"],
+              unique: true,
+            },
+          ],
+          foreignKeys: [],
+          checks: [],
+        },
+        {
+          name: "page_builder__breakpoint_removals",
+          columns: [
+            {
+              name: "id",
+              type: "text",
+              nullable: false,
+              primaryKey: true,
+            },
+            {
+              name: "removed_ids",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "before",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "started_by",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "phase",
+              type: "text",
+              nullable: false,
+              default: "'converting'",
+            },
+            {
+              name: "cursor",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "open_key",
+              type: "text",
+              nullable: true,
+            },
+          ],
+          indexes: [
+            {
+              name: "uq_page_builder__breakpoint_removals_open_key",
+              columns: ["open_key"],
               unique: true,
             },
           ],

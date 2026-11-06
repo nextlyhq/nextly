@@ -231,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: hero(kept), status: "published" },
+        data: { content: hero(kept), status: "published", _overwrite: true },
         overrideAccess: true,
       });
     }
@@ -270,7 +270,7 @@ describe.each(getConfiguredTestDialects())(
       );
       await t.nextly.updateSingle({
         slug: HOMEPAGE,
-        data: { content: placing("page", heroId, BOTH) },
+        data: { content: placing("page", heroId, BOTH), _overwrite: true },
         overrideAccess: true,
       });
       // The index forgets one note, as if it never saw it.
@@ -324,6 +324,7 @@ describe.each(getConfiguredTestDialects())(
         id,
         data: {
           content: placing("page", heroId, { title: "Draft", body: "Kept" }),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -348,7 +349,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: PAGES_SLUG,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       expect(await stored(t, PAGES_SLUG, id)).toEqual({ body: "Kept" });
@@ -361,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: heroId,
-        data: { content: hero(["body"]) },
+        data: { content: hero(["body"]), _overwrite: true },
         overrideAccess: true,
       });
 
@@ -388,7 +389,11 @@ describe.each(getConfiguredTestDialects())(
       const save = t.nextly.update({
         collection: NOTES,
         id,
-        data: { title: "Edited", content: placing("page", heroId, BOTH) },
+        data: {
+          title: "Edited",
+          content: placing("page", heroId, BOTH),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await held;
@@ -427,7 +432,11 @@ describe.each(getConfiguredTestDialects())(
       const save = t.nextly.update({
         collection: NOTES,
         id,
-        data: { title: "Edited", content: placing("page", heroId, BOTH) },
+        data: {
+          title: "Edited",
+          content: placing("page", heroId, BOTH),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await held;

@@ -410,7 +410,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: LAYOUTS_SLUG,
           id: other,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
           overrideAccess: true,
         });
         expect(await fence().removalOf(other)).toBeNull();
@@ -493,7 +493,7 @@ describe.each(getConfiguredTestDialects())(
             await t.nextly.update({
               collection: PAGES_SLUG,
               id: home,
-              data: { layout: other },
+              data: { layout: other, _overwrite: true },
               overrideAccess: true,
             });
           }
@@ -526,7 +526,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: home,
-          data: { layout: other },
+          data: { layout: other, _overwrite: true },
           overrideAccess: true,
         });
         // A read hook answers not found for the page's working draft (the one
@@ -609,7 +609,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: LAYOUTS_SLUG,
             id: other,
-            data: { status: "draft" },
+            data: { status: "draft", _overwrite: true },
             overrideAccess: true,
           })
         );
@@ -626,7 +626,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: LAYOUTS_SLUG,
           id: other,
-          data: { title: "Renamed", status: "published" },
+          data: { title: "Renamed", status: "published", _overwrite: true },
           overrideAccess: true,
         });
 
@@ -757,7 +757,7 @@ describe.each(getConfiguredTestDialects())(
         ).getEntryService();
         const published = await entries.updateEntries(
           { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-          [{ id: other, data: { status: "published" } }],
+          [{ id: other, data: { status: "published", _overwrite: true } }],
           { skipHooks: true }
         );
         expect(published.successful).toBe(1);
@@ -940,7 +940,12 @@ describe.each(getConfiguredTestDialects())(
           )
             return;
           promoted = true;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "delete");
@@ -970,7 +975,12 @@ describe.each(getConfiguredTestDialects())(
           )
             return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "delete");
@@ -998,7 +1008,12 @@ describe.each(getConfiguredTestDialects())(
           const original = (context as { originalData?: unknown }).originalData;
           if (!armed || relationId(original) !== other) return;
           armed = false;
-          await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+          await writeLayoutSettings(
+            t.nextly,
+            SLUGS,
+            await readLayoutSettings(t.nextly, SLUGS),
+            { defaultLayout: other }
+          );
         });
 
         const answer = await remove(cookie, other, "unpublish");
@@ -1115,7 +1130,10 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
           })
         );
-        const patched = await patchPage(cookie, home, { layout: other });
+        const patched = await patchPage(cookie, home, {
+          layout: other,
+          _overwrite: true,
+        });
 
         expect(JSON.stringify(created)).toContain(
           pageLayoutRefusal("removing")
@@ -1138,7 +1156,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: home,
-          data: { layout: null },
+          data: { layout: null, _overwrite: true },
           overrideAccess: true,
         });
         await fenced(other);
@@ -1147,7 +1165,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: home,
-          data: { title: "Home, renamed", layout: null },
+          data: { title: "Home, renamed", layout: null, _overwrite: true },
           overrideAccess: true,
         });
         // A stale copy naming the Layout again adds a reference: refused, and
@@ -1156,7 +1174,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: PAGES_SLUG,
             id: home,
-            data: { title: "Stale", layout: other },
+            data: { title: "Stale", layout: other, _overwrite: true },
             overrideAccess: true,
           })
         );
@@ -1182,7 +1200,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: home,
-          data: { title: "Home, renamed", layout: other },
+          data: { title: "Home, renamed", layout: other, _overwrite: true },
           overrideAccess: true,
         });
 
@@ -1206,13 +1224,13 @@ describe.each(getConfiguredTestDialects())(
         const allowed = await inTime(
           entriesService(t).updateEntries(
             { collectionName: PAGES_SLUG, overrideAccess: true },
-            [{ id: home, data: { layout: free } }]
+            [{ id: home, data: { layout: free, _overwrite: true } }]
           )
         );
         const refused = await inTime(
           entriesService(t).updateEntries(
             { collectionName: PAGES_SLUG, overrideAccess: true },
-            [{ id: home, data: { layout: other } }]
+            [{ id: home, data: { layout: other, _overwrite: true } }]
           )
         );
 
@@ -1230,7 +1248,7 @@ describe.each(getConfiguredTestDialects())(
         const free = await layout(t, "Free", "free");
         const control = await entriesService(t).updateEntries(
           { collectionName: PAGES_SLUG, overrideAccess: true },
-          [{ id: home, data: { layout: free } }],
+          [{ id: home, data: { layout: free, _overwrite: true } }],
           { skipHooks: true }
         );
         expect(control.successful, JSON.stringify(control)).toBe(1);
@@ -1238,7 +1256,7 @@ describe.each(getConfiguredTestDialects())(
 
         const answer = await entriesService(t).updateEntries(
           { collectionName: PAGES_SLUG, overrideAccess: true },
-          [{ id: home, data: { layout: other } }],
+          [{ id: home, data: { layout: other, _overwrite: true } }],
           { skipHooks: true }
         );
 
@@ -1268,7 +1286,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: home,
-          data: { layout: other },
+          data: { layout: other, _overwrite: true },
           overrideAccess: true,
         });
 
@@ -1329,13 +1347,18 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: LAYOUTS_SLUG,
             id: other,
-            data: { title: "Renamed" },
+            data: { title: "Renamed", _overwrite: true },
             overrideAccess: true,
           })
         );
         const batch = await entriesService(t).updateEntries(
           { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-          [{ id: other, data: { title: "Renamed in a batch" } }]
+          [
+            {
+              id: other,
+              data: { title: "Renamed in a batch", _overwrite: true },
+            },
+          ]
         );
 
         expect(messageOf(plain)).toBe(LAYOUT_EDIT_DURING_REMOVAL);
@@ -1349,7 +1372,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: LAYOUTS_SLUG,
           id: other,
-          data: { title: "Renamed" },
+          data: { title: "Renamed", _overwrite: true },
           overrideAccess: true,
         });
         // A save of a published Layout lands in its working draft.
@@ -1372,7 +1395,7 @@ describe.each(getConfiguredTestDialects())(
 
         const answer = await entriesService(t).updateEntries(
           { collectionName: LAYOUTS_SLUG, overrideAccess: true },
-          [{ id: other, data: { status: "published" } }]
+          [{ id: other, data: { status: "published", _overwrite: true } }]
         );
 
         expect(answer.successful, JSON.stringify(answer)).toBe(1);
@@ -1679,7 +1702,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         /** The Layouts titled as the deleted one, other than the deleted id. */
         const restoredOnes = async () =>
           (
@@ -1733,7 +1761,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1780,7 +1813,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1829,7 +1867,12 @@ describe.each(getConfiguredTestDialects())(
         const seed = String((await settingsOf(t)).seededLayout);
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1913,7 +1956,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const restoredOnes = async () =>
           (
             await t.nextly.find({
@@ -1973,7 +2021,12 @@ describe.each(getConfiguredTestDialects())(
         for (const [at, slug] of taken.entries()) {
           holders.push(await layout(t, `Holder ${String(at)}`, slug));
         }
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         await expect(ensure(t)).rejects.toThrow();
         await settleLayoutRemovals({
@@ -1994,7 +2047,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: LAYOUTS_SLUG,
           id: String(holders[0]),
-          data: { slug: "elsewhere", status: "published" },
+          data: { slug: "elsewhere", status: "published", _overwrite: true },
           overrideAccess: true,
         });
         expect(await ensure(t)).toBe("restored");
@@ -2009,7 +2062,12 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const other = await layout(t, "Other", "other");
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         expect(await ensure(t)).toBe("restored");
 
@@ -2038,7 +2096,12 @@ describe.each(getConfiguredTestDialects())(
         });
         const other = String(created.item.id);
         await deletedThenStopped(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
 
         expect(await ensure(t)).toBe("restored");
 
@@ -2058,7 +2121,12 @@ describe.each(getConfiguredTestDialects())(
         // still there. The default names it, so the default is unusable.
         const other = await layout(t, "Other", "other", "draft");
         await stoppedAtFinal(t, other);
-        await writeLayoutSettings(t.nextly, SLUGS, { defaultLayout: other });
+        await writeLayoutSettings(
+          t.nextly,
+          SLUGS,
+          await readLayoutSettings(t.nextly, SLUGS),
+          { defaultLayout: other }
+        );
         const count = (
           await t.nextly.find({
             collection: LAYOUTS_SLUG,
@@ -2222,7 +2290,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: edited,
-          data: { title: "Edited again" },
+          data: { title: "Edited again", _overwrite: true },
           overrideAccess: true,
         });
 
@@ -2239,6 +2307,56 @@ describe.each(getConfiguredTestDialects())(
           step: "removed",
           pagesLeft: 0,
         });
+      });
+
+      it("clears the deleted Layout from a published page's live row when the page is next published", async () => {
+        const t = await boot();
+        const { cookie } = await owner(t);
+        const other = await layout(t, "Other", "other");
+        const kept = await layout(t, "Kept", "kept");
+        const hidden = await layout(t, "Hidden", "hidden", "draft");
+        const live = await page(t, "Live", {
+          layout: other,
+          status: "published",
+        });
+        const resent = await page(t, "Resent", {
+          layout: other,
+          status: "published",
+        });
+        const onKept = await page(t, "On kept", {
+          layout: kept,
+          status: "published",
+        });
+        const onHidden = await page(t, "On hidden", {
+          layout: hidden,
+          status: "published",
+        });
+
+        expect((await runMove(cookie, other)).state).toBe("done");
+        expect(await layoutRow(t, other)).toBeUndefined();
+        // The live rows still name it until the pages are published again.
+        expect(await liveLayout(t, live)).toBe(other);
+        expect(await liveLayout(t, resent)).toBe(other);
+
+        const publish = (id: string, data: Record<string, unknown>) =>
+          t.nextly.update({
+            collection: PAGES_SLUG,
+            id,
+            data: { ...data, status: "published", _overwrite: true },
+            overrideAccess: true,
+          });
+        // A publish that leaves the Layout out, and one that sends the stored
+        // choice back, as a form holding the whole page does.
+        await publish(live, { title: "Live again" });
+        await publish(resent, { layout: other });
+        await publish(onKept, { title: "On kept again" });
+        await publish(onHidden, { title: "On hidden again" });
+
+        expect(await liveLayout(t, live)).toBeNull();
+        expect(await liveLayout(t, resent)).toBeNull();
+        // The controls: a Layout that exists stays chosen, published or not.
+        expect(await liveLayout(t, onKept)).toBe(kept);
+        expect(await liveLayout(t, onHidden)).toBe(hidden);
       });
 
       it("moves the pages and then unpublishes the Layout", async () => {
@@ -2404,7 +2522,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: String(page),
-          data: { layout: chosen },
+          data: { layout: chosen, _overwrite: true },
           overrideAccess: true,
         });
 
@@ -2413,7 +2531,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: PAGES_SLUG,
             id: String(page),
-            data: { layout: null },
+            data: { layout: null, _overwrite: true },
             context: { [LAYOUT_CLEAR_CONTEXT_KEY]: other },
             overrideAccess: true,
           })
@@ -2425,7 +2543,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: String(page),
-          data: { layout: null },
+          data: { layout: null, _overwrite: true },
           context: { [LAYOUT_CLEAR_CONTEXT_KEY]: chosen },
           overrideAccess: true,
         });

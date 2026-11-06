@@ -37,6 +37,8 @@ export const UI_SCHEMA_FIELD_TYPES = [
   "component",
   "json",
   "chips",
+  // One icon, stored as its id.
+  "icon",
   // A page built from blocks.
   "blocks",
 ] as const;

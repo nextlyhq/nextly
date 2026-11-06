@@ -22,6 +22,7 @@ import {
   readSharedStyleUses,
   removeSharedStyles,
   sharedStyleRoutes,
+  siteStyleClassStore,
   type SharedStyleStore,
   type StillUsedCheck,
   type SharedStyleUsageSource,
@@ -48,11 +49,19 @@ const NOT_WHOLE: UsageIndexHealth = {
   coversExistingDocuments: false,
 };
 
-function storeOf(classes: Record<string, unknown>[]) {
+/** A store over `classes`, read at version `rev`, recording each write. */
+function storeOf(classes: Record<string, unknown>[], rev?: string) {
   const write = vi.fn<SharedStyleStore["write"]>(async () => undefined);
-  const store: SharedStyleStore = { read: async () => classes, write };
+  const store: SharedStyleStore = {
+    read: async () => ({ entries: classes, rev }),
+    write,
+  };
   return { store, write };
 }
+
+/** The read a write was made from, as `storeOf` gives it. */
+const fromRead = (rev?: string) =>
+  expect.objectContaining({ entries: expect.any(Array), rev });
 
 const KINDS: Record<string, SharedStyleUsageKind> = {
   components: "components",
@@ -198,7 +207,8 @@ describe("locking a shared style", () => {
     );
     expect(write).toHaveBeenCalledWith(
       [{ ...card, locked: true }, hero],
-      SHARED_STYLE_LOCK_WRITE_CONTEXT
+      SHARED_STYLE_LOCK_WRITE_CONTEXT,
+      fromRead()
     );
     expect(await response.json()).toEqual({
       message: "Card is locked.",
@@ -215,7 +225,8 @@ describe("locking a shared style", () => {
     );
     expect(write).toHaveBeenCalledWith(
       [card, hero],
-      SHARED_STYLE_LOCK_WRITE_CONTEXT
+      SHARED_STYLE_LOCK_WRITE_CONTEXT,
+      fromRead()
     );
   });
 
@@ -643,7 +654,7 @@ describe("removing unused shared styles", () => {
       new Set(),
       NOT_STILL_USED
     );
-    expect(write).toHaveBeenCalledWith([hero], {});
+    expect(write).toHaveBeenCalledWith([hero], {}, fromRead());
     expect(await response.json()).toEqual({
       message: "The shared style was removed.",
       item: { ids: ["c-card"] },
@@ -848,6 +859,44 @@ describe("naming a stored use in a refusal", () => {
     expect(
       await firstReadableTitle(uses, none, async () => false)
     ).toBeUndefined();
+  });
+});
+
+describe("the version a shared-style write sends", () => {
+  // The list is written whole, so it is written from the read it was made
+  // from: a save of the Single since refuses the write rather than losing a
+  // shared style someone else added.
+  it("hands the store the read the list was made from", async () => {
+    const { store, write } = storeOf([card, hero], "4");
+    await lockSharedStyle(
+      post({ classId: "c-card", locked: true }),
+      store,
+      new Set()
+    );
+    expect(write.mock.calls[0]?.[2]).toEqual({
+      entries: [card, hero],
+      rev: "4",
+    });
+  });
+
+  it("writes the Single with the version its read gave", async () => {
+    const updates: Record<string, unknown>[] = [];
+    const store = siteStyleClassStore(
+      { self: { singles: {} }, user: null } as never,
+      {
+        findSingle: async () => ({ classes: [card], _rev: "4" }),
+        updateSingle: async args => {
+          updates.push(args.data);
+          return {};
+        },
+      }
+    );
+
+    const read = await store.read();
+    expect(read).toEqual({ entries: [card], rev: "4" });
+    await store.write([card, hero], {}, read);
+
+    expect(updates).toEqual([{ classes: [card, hero], _rev: "4" }]);
   });
 });
 

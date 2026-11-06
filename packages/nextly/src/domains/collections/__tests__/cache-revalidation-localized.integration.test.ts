@@ -147,6 +147,7 @@ describe("cache revalidation — localized slugs (sqlite)", () => {
       collectionName: "locposts",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     // The localized-slug read runs post-commit, so it must never turn a

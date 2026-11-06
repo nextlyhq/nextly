@@ -401,8 +401,8 @@ so on) is refused by name rather than ignored. This is a contract your provider 
 not a sandbox: code holding the Direct API can still read whatever it is trusted to.
 
 Filter rows are typed `{ field, op, value }`, with `op` one of `equals`, `not_equals`, `gt`,
-`gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case for
-ASCII letters on every database; letters outside ASCII follow each database's own rules.
+`gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case on every
+database, for letters outside ASCII too (the Turkish "İ" matches a plain "i").
 
 ### Singles, site settings and field shapes
 

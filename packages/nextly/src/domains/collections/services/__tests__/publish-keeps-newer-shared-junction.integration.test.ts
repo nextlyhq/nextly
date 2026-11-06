@@ -83,7 +83,7 @@ function save(
 ) {
   return entries.updateEntry(
     { collectionName: COLLECTION, entryId: id, overrideAccess: true, locale },
-    body
+    { ...body, _overwrite: true }
   );
 }
 
@@ -180,6 +180,7 @@ describe("publishing a Builder collection's shared junction", () => {
       entryId: id,
       overrideAccess: true,
       locale: "en",
+      version: { _overwrite: true },
     });
     expect(taken.data).toEqual({ taken: ["tags"], outOfDate: [] });
     const published = await save(entries, id, "en", { status: "published" });

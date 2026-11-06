@@ -245,6 +245,31 @@ export type {
   PageActionResult,
 } from "./composition-actions-contract";
 export type { ActionBy } from "./component-actions-contract";
+export type { ActionAnswer } from "./composition-route-kit";
+// What a client reads before composing: the site's patterns, components and
+// Layouts by the ids the actions take, and the actions with their schemas.
+export {
+  compositionManifestSchema,
+  MANIFEST_FORMAT_VERSION,
+  MANIFEST_LOCALE_PARAM,
+  MANIFEST_ROUTE_PATH,
+} from "./composition-manifest";
+export type {
+  CompositionManifest,
+  ManifestAction,
+  ManifestComponent,
+  ManifestLayout,
+  ManifestPattern,
+  ManifestRequest,
+  ManifestTier,
+} from "./composition-manifest";
+// The same actions and manifest for code serving a request of its own, as
+// `nextly.plugins["@nextlyhq/plugin-page-builder"].composition`.
+export { COMPOSITION_SERVICE } from "./composition-service";
+export type {
+  CompositionCaller,
+  CompositionService,
+} from "./composition-service";
 export type {
   SavePatternDryRun,
   SavePatternDryRunResponse,

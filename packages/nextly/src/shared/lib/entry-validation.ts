@@ -26,6 +26,7 @@
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
+import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isVirtualField } from "../../collections/fields/virtual";
 import { omitDirectComponentFields } from "../../domains/field-groups/direct-component-fields";
 import {
@@ -545,6 +546,26 @@ async function validateFieldValue(
             });
           }
         }
+      }
+      break;
+    }
+
+    case "icon": {
+      // Only the id's shape ("lucide:star") is judged. Icon sets are
+      // registered at runtime, so an id from an unknown set or naming an
+      // unknown icon is stored as given and reported elsewhere, never refused.
+      if (typeof value !== "string") {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be an icon id.`,
+        });
+      } else if (!isIconIdShape(value)) {
+        issues.push({
+          path,
+          code: "INVALID_FORMAT",
+          message: `${label} must be an icon id such as "lucide:star".`,
+        });
       }
       break;
     }

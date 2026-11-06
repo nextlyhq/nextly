@@ -191,9 +191,15 @@ async function boot(dialect: TestDialect): Promise<{
     collection: POSTS,
     data: { title: "First", subtitle: "One" },
   });
-  await api.updateSingle({ slug: BANNER, data: { title: "First" } });
+  await api.updateSingle({
+    slug: BANNER,
+    data: { title: "First", _overwrite: true },
+  });
   const pub = await api.create({ collection: PUB, data: { title: "Draft" } });
-  await api.updateSingle({ slug: PUB_BANNER, data: { title: "Draft" } });
+  await api.updateSingle({
+    slug: PUB_BANNER,
+    data: { title: "Draft", _overwrite: true },
+  });
   return { key, id: entry.item.id, owner: owner.item.id, pubId: pub.item.id };
 }
 
@@ -360,7 +366,11 @@ const OPERATIONS: Operation[] = [
     kind: "collection",
     run: (_key, id) =>
       viaDirect(() =>
-        direct().update({ collection: POSTS, id, data: { subtitle: "Uno" } })
+        direct().update({
+          collection: POSTS,
+          id,
+          data: { subtitle: "Uno", _overwrite: true },
+        })
       ),
   },
   {
@@ -379,7 +389,10 @@ const OPERATIONS: Operation[] = [
     kind: "single",
     run: () =>
       viaDirect(() =>
-        direct().updateSingle({ slug: BANNER, data: { subtitle: "Uno" } })
+        direct().updateSingle({
+          slug: BANNER,
+          data: { subtitle: "Uno", _overwrite: true },
+        })
       ),
   },
   {
@@ -408,6 +421,7 @@ const OPERATIONS: Operation[] = [
     run: (key, id) =>
       viaRest(key, "PATCH", ["collections", POSTS, "entries", id], {
         subtitle: "Uno",
+        _overwrite: true,
       }),
   },
   {
@@ -424,7 +438,11 @@ const OPERATIONS: Operation[] = [
   {
     name: "REST Single update",
     kind: "single",
-    run: key => viaRest(key, "PATCH", ["singles", BANNER], { subtitle: "Uno" }),
+    run: key =>
+      viaRest(key, "PATCH", ["singles", BANNER], {
+        subtitle: "Uno",
+        _overwrite: true,
+      }),
   },
 ];
 
@@ -576,7 +594,7 @@ describe.each(getConfiguredTestDialects())(
             direct().update({
               collection: slug,
               id: ids[i],
-              data: { subtitle: "Uno" },
+              data: { subtitle: "Uno", _overwrite: true },
             })
           ),
         ];
@@ -689,7 +707,7 @@ describe.each(getConfiguredTestDialects())(
               entries.updateEntryInTransaction(
                 tx,
                 { ...params, entryId: target.id },
-                { subtitle: "Uno" }
+                { subtitle: "Uno", _overwrite: true }
               ),
           ],
           [
@@ -759,6 +777,7 @@ describe.each(getConfiguredTestDialects())(
               ).discardWorkingDraft({
                 collectionName: POSTS,
                 entryId: target.id,
+                version: { _overwrite: true },
               }),
           ],
           [
@@ -772,7 +791,10 @@ describe.each(getConfiguredTestDialects())(
                     p: Record<string, unknown>
                   ): Promise<void>;
                 }
-              ).discardWorkingDraft({ slug: BANNER }),
+              ).discardWorkingDraft({
+                slug: BANNER,
+                version: { _overwrite: true },
+              }),
           ],
         ];
       for (const [name, kind, slug, run] of discards) {
@@ -812,7 +834,7 @@ describe.each(getConfiguredTestDialects())(
                   new ServiceContainer(t().adapter),
                   "publishAllLocales",
                   { collectionName: PUB, entryId: target.pubId } as never,
-                  undefined
+                  { _overwrite: true }
                 )
               ),
           ],
@@ -825,7 +847,7 @@ describe.each(getConfiguredTestDialects())(
                 dispatchSingles(
                   "publishAllSingleLocales",
                   { slug: PUB_BANNER } as never,
-                  undefined
+                  { _overwrite: true }
                 )
               ),
           ],
@@ -990,7 +1012,7 @@ describe.each(getConfiguredTestDialects())(
         registry.retractDynamicSchema(BANNER_TABLE);
         await direct().updateSingle({
           slug: BANNER,
-          data: { title: "Second" },
+          data: { title: "Second", _overwrite: true },
         });
         expect(await bannerTitles()).toEqual(["Second"]);
       } finally {

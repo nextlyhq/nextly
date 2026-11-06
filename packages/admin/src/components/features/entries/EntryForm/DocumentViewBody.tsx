@@ -425,6 +425,7 @@ export function DocumentViewBody({
             onTakeOver={lock.takeOver}
             onRequestAccess={lock.requestAccess}
             onRetry={lock.retryLoad}
+            onChoose={lock.answerChange}
           />
           {recoveryOffer.claimed ? null : (
             <LiveDocumentRecoveryOffer

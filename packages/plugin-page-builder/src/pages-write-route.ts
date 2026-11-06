@@ -41,6 +41,7 @@ import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { readBodyWith } from "./composition-route-kit";
+import { withVersionFrom } from "./document-version";
 import {
   entryOf,
   findAsCaller,
@@ -66,6 +67,7 @@ import {
   PAGE_TITLE_MAX,
   PAGES_ROUTE_PATH,
   type CreatePageRequest,
+  type RenamePageRequest,
 } from "./pages-write-contract";
 import { parseRouteParams } from "./route-query";
 
@@ -101,7 +103,7 @@ const name = z.string().trim().min(1).max(NAME_MAX);
 const title = z.string().trim().min(1).max(PAGE_TITLE_MAX);
 
 const CreateBody = z.strictObject({ collection: name, title });
-const RenameBody = z.strictObject({ title });
+const RenameBody = z.strictObject({ title, rev: z.string().min(1).optional() });
 const PageParams = z.object({ collection: name, id: name });
 
 /** One page as the route's path names it, checked at the boundary. */
@@ -116,9 +118,12 @@ export async function readCreateBody(req: Request): Promise<CreatePageRequest> {
   return readBodyWith(req, CreateBody, "create page");
 }
 
-/** A rename's body, checked at the boundary: its title, and nothing else. */
-export async function readRenameBody(req: Request): Promise<string> {
-  return (await readBodyWith(req, RenameBody, "rename page")).title;
+/**
+ * A rename's body, checked at the boundary: its title, and the version of the
+ * page it was made from.
+ */
+export async function readRenameBody(req: Request): Promise<RenamePageRequest> {
+  return readBodyWith(req, RenameBody, "rename page");
 }
 
 /**
@@ -386,7 +391,9 @@ export async function duplicatePage(
 export async function renamePage(
   page: PageReference,
   newTitle: string,
-  writes: PagesWrites
+  writes: PagesWrites,
+  /** The page's version the rename was made from, sent back with the write. */
+  rev?: string
 ): Promise<PageItem> {
   const source = await pageSource(writes, page.collection);
   const titleName = textTitleOf(source);
@@ -401,9 +408,11 @@ export async function renamePage(
       ],
     });
   }
-  const row = await writes.update(source.slug, page.id, {
-    [titleName]: newTitle,
-  });
+  const row = await writes.update(
+    source.slug,
+    page.id,
+    withVersionFrom({ [titleName]: newTitle }, rev)
+  );
   return writtenItem(row, source);
 }
 
@@ -506,9 +515,10 @@ export function pagesWriteRoutes(
         // The path first, then the body, so a bad address is refused before
         // anything else is read.
         const page = parsePageParams(ctx.params);
+        const rename = await readRenameBody(req);
         return respondMutation<PageItem>(
           "The page was renamed.",
-          await renamePage(page, await readRenameBody(req), writesFor(ctx))
+          await renamePage(page, rename.title, writesFor(ctx), rename.rev)
         );
       },
     },
