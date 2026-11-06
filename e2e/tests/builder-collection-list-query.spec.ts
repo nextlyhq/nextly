@@ -159,7 +159,9 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await expect(
     inspector.getByRole("button", { name: "Source Blog posts" })
   ).toBeVisible();
-  await expect(inspector.getByText(/match(es)?, so \d+ shows?\./)).toBeVisible();
+  await expect(
+    inspector.getByText(/match(es)?, so \d+ shows?\./)
+  ).toBeVisible();
 
   // 1. A filter: only the fields visitors can see are offered.
   await inspector.getByRole("button", { name: "Add filter" }).click();
