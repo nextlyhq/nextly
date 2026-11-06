@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
@@ -629,8 +630,12 @@ export {
   type PluginAdminContributions,
   type PluginAdminPage,
   type PluginCollectionView,
+  type OverridableDocumentAction,
+  type PluginDocumentActionOverride,
+  type PluginDocumentActionOverrides,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginPanelSection,
   type PluginAdminPlaceDeclaration,
   type AdminBlockContribution,
   type AdminBulkActionContribution,

@@ -32,7 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
-import type { JSX } from "react";
+import { Fragment, type JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -67,6 +67,18 @@ export interface ActionBinding {
    * permissions on every keystroke.
    */
   disabledReason?: string;
+  /**
+   * A way out of the reason, drawn as its own row directly under the held
+   * one: the held row cannot be focused, so what ends the hold has to be a
+   * control of its own to be reached by keyboard.
+   */
+  recovery?: ActionRecovery;
+}
+
+/** A control that ends what holds an action, such as Retry. */
+export interface ActionRecovery {
+  label: string;
+  onSelect: () => void;
 }
 
 /**
@@ -485,15 +497,35 @@ function OptionRow({
 }) {
   const reason = reasonFor(action, binding);
   return (
-    <DropdownMenuItem
-      disabled={reason !== undefined}
-      // `onSelect`, which Radix withholds from a disabled item.
-      onSelect={binding.onSelect}
-      data-action={action.id}
-      className={cn(danger && "text-destructive focus:text-destructive")}
-      {...reasonAttributes(reason)}
-    >
-      <ActionRow label={action.label} reason={reason} />
+    <>
+      <DropdownMenuItem
+        disabled={reason !== undefined}
+        // `onSelect`, which Radix withholds from a disabled item.
+        onSelect={binding.onSelect}
+        data-action={action.id}
+        className={cn(danger && "text-destructive focus:text-destructive")}
+        {...reasonAttributes(reason)}
+      >
+        <ActionRow label={action.label} reason={reason} />
+      </DropdownMenuItem>
+      <RecoveryRow entry={{ action, binding }} />
+    </>
+  );
+}
+
+/**
+ * The way out of a held row, directly under it, where its binding offers one
+ * and it is held: an enabled row of its own, so the menu's keyboard reaches
+ * it as it skips the held one.
+ */
+function RecoveryRow({ entry: { action, binding } }: { entry: Bound }) {
+  const { recovery } = binding;
+  if (recovery === undefined || reasonFor(action, binding) === undefined) {
+    return null;
+  }
+  return (
+    <DropdownMenuItem onSelect={recovery.onSelect} data-retry-for={action.id}>
+      {recovery.label}
     </DropdownMenuItem>
   );
 }
@@ -622,12 +654,12 @@ function DocumentMenu({
         ))}
         {narrowItems.length > 0 && wideMenu ? <DropdownMenuSeparator /> : null}
         {documentItems.map(({ action, binding }) => (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={reasonFor(action, binding) !== undefined}
-            onClick={binding.onSelect}
-            data-action={action.id}
-            /*
+          <Fragment key={action.id}>
+            <DropdownMenuItem
+              disabled={reasonFor(action, binding) !== undefined}
+              onClick={binding.onSelect}
+              data-action={action.id}
+              /*
               The reason travels with the item, not just the buttons. A
               permission an author lacks makes this the ONLY place the
               refusal is visible, and a menu row that is grey and silent
@@ -635,13 +667,15 @@ function DocumentMenu({
               pointer and `aria-description` reaches a screen reader; the
               label alone reaches neither.
             */
-            {...reasonAttributes(reasonFor(action, binding))}
-          >
-            <ActionRow
-              label={action.label}
-              reason={reasonFor(action, binding)}
-            />
-          </DropdownMenuItem>
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+            <RecoveryRow entry={{ action, binding }} />
+          </Fragment>
         ))}
         {/*
           A separator only between two populated groups. Drawn
@@ -652,19 +686,21 @@ function DocumentMenu({
           <DropdownMenuSeparator />
         ) : null}
         {dangerItems.map(({ action, binding }) => (
-          <DropdownMenuItem
-            key={action.id}
-            disabled={reasonFor(action, binding) !== undefined}
-            onClick={binding.onSelect}
-            data-action={action.id}
-            className="text-destructive focus:text-destructive"
-            {...reasonAttributes(reasonFor(action, binding))}
-          >
-            <ActionRow
-              label={action.label}
-              reason={reasonFor(action, binding)}
-            />
-          </DropdownMenuItem>
+          <Fragment key={action.id}>
+            <DropdownMenuItem
+              disabled={reasonFor(action, binding) !== undefined}
+              onClick={binding.onSelect}
+              data-action={action.id}
+              className="text-destructive focus:text-destructive"
+              {...reasonAttributes(reasonFor(action, binding))}
+            >
+              <ActionRow
+                label={action.label}
+                reason={reasonFor(action, binding)}
+              />
+            </DropdownMenuItem>
+            <RecoveryRow entry={{ action, binding }} />
+          </Fragment>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

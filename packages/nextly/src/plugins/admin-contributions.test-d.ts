@@ -1,9 +1,11 @@
 import { expectTypeOf } from "vitest";
 
-import type {
-  ComponentPath,
-  PluginAdminContributions,
-  PluginMenuItem,
+import {
+  OVERRIDABLE_DOCUMENT_ACTIONS,
+  type ComponentPath,
+  type OverridableDocumentAction,
+  type PluginAdminContributions,
+  type PluginMenuItem,
 } from "./admin-contributions";
 import type { PluginContributions } from "./contributions";
 import { definePlugin } from "./plugin-context";
@@ -101,4 +103,16 @@ definePlugin({
 // admin.styles declares precompiled plugin CSS; accepts one path or several.
 expectTypeOf<PluginAdminContributions["styles"]>().toEqualTypeOf<
   string | string[] | undefined
+>();
+
+// The overridable document actions have ONE statement: the list the boot
+// check and the admin read. The union is that list's element type, so an
+// action added to one is in the other; the list keeps its literal members
+// rather than widening to the union, which is what makes the derivation
+// possible at all.
+expectTypeOf(OVERRIDABLE_DOCUMENT_ACTIONS).toEqualTypeOf<
+  readonly ["delete", "unpublish"]
+>();
+expectTypeOf<OverridableDocumentAction>().toEqualTypeOf<
+  (typeof OVERRIDABLE_DOCUMENT_ACTIONS)[number]
 >();

@@ -1111,9 +1111,11 @@ export function pageItemOf(
 function pathOf(row: unknown, source: PageCollection): { path?: string } {
   if (source.pathTemplate === undefined) return {};
   if (typeof row !== "object" || row === null) return {};
-  const path = previewUrlFromTemplate(source.pathTemplate)(
-    row as Record<string, unknown>
-  );
+  // Only the plugin's own Pages have a template, and their slug is a path
+  // (`db.slugPaths`), so its `/` stays, as in their preview.
+  const path = previewUrlFromTemplate(source.pathTemplate, {
+    pathFields: source.slugField === undefined ? [] : [source.slugField.name],
+  })(row as Record<string, unknown>);
   return typeof path === "string" && path !== "" ? { path } : {};
 }
 

@@ -2330,6 +2330,17 @@ function validateVisibility(
     });
     return;
   }
+  // Placement gates exist only while a page is drawn; a document saved with
+  // one would ask the renderer for a gate no author set.
+  if (Object.hasOwn(vis, "within")) {
+    state.issues.push({
+      path: pointer(visPath, "within"),
+      code: "invalid-visibility",
+      severity: "error",
+      message:
+        "visibility.within is set only while a page is drawn and can't be stored.",
+    });
+  }
   if (vis.conditions !== undefined) {
     // Each condition needs a string `field` AND a string `op`; the optional
     // `value` may be anything. Index-based loops (not `.every`, which skips

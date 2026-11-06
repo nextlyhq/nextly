@@ -43,12 +43,13 @@ describe("the canonical address", () => {
     expect(claimKey("address", at("/"))).toBe("addr:en|/");
   });
 
-  it("normalises Unicode, so composed and decomposed letters are one address", () => {
-    expect(claimKey("address", at("/café"))).toBe(
-      claimKey("address", at("/café"))
+  it("keeps composed and decomposed letters apart, as the route serves them", () => {
+    expect(claimKey("address", at("/caf\u00e9"))).not.toBe(
+      claimKey("address", at("/cafe\u0301"))
     );
+    // One spelling, encoded or not, is still one address.
     expect(claimKey("address", at("/caf%C3%A9"))).toBe(
-      claimKey("address", at("/café"))
+      claimKey("address", at("/caf\u00e9"))
     );
   });
 

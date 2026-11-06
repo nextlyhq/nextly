@@ -55,9 +55,9 @@ export interface LookInspectorProps
   readonly canvasRoot?: HTMLElement | null;
 }
 
-/** Why a look whose id another block type's own look shares is held. */
+/** Why an own look whose id another entry in the library carries is held. */
 const SHARED_ID_REASON =
-  "Another block type's own look has the same id, so this one can't be edited here. Give one of them its own name in your site's code.";
+  "Another look or shared style on this site has the same id, so this one can't be edited here. Give one of them its own name in your site's code.";
 
 /** The stand-in block's id, which no document block can share. */
 const STAND_IN_ID = "nx-look-stand-in";
@@ -106,8 +106,8 @@ export function LookInspector({
   ...style
 }: LookInspectorProps): React.JSX.Element {
   const read = useLookTarget(look, host);
-  // A look whose id another block type's own look shares is held: a write
-  // by id would reach both, so the bar says why and nothing is written.
+  // An own look whose id another look or shared style carries is held: a
+  // write by id would reach both, so the bar says why and nothing is written.
   const target =
     read !== undefined && read.kind === "shared" && look.sharedId
       ? { ...read, readOnly: SHARED_ID_REASON }

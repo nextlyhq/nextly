@@ -74,7 +74,11 @@ import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { hashId } from "./style/node-class";
 import { mintDomId, remapIdReferences } from "./tree";
-import { isConditionGated } from "./visibility";
+import {
+  conditionGatesOf,
+  isConditionGated,
+  placementGatesOf,
+} from "./visibility";
 
 /**
  * Why an instance was left standing instead of being replaced by its
@@ -274,6 +278,18 @@ export interface ResolveComponentOptions {
    * leaves it off, and its output carries no map.
    */
   exposures?: boolean;
+  /**
+   * What happens to an instance carrying visibility conditions. `"stand"`,
+   * the default, leaves it standing, gate and all, for the pass that prunes
+   * hidden nodes to remove: a reader that decides no condition composes
+   * nothing it will not serve. `"carry"` expands it, and every root that
+   * replaces it carries the instance's conditions joined to its own, for a
+   * reader that decides each condition against the entry or the list item:
+   * the composed tree then shows exactly where the instance would have.
+   *
+   * @experimental Settles with the editor's condition controls.
+   */
+  conditioned?: "stand" | "carry";
 }
 
 /** One instance that was left standing, and why. */
@@ -961,6 +977,7 @@ export function resolveComponentInstances(
     maxNodes: limits.maxNodes,
     maxComposedDepth: options.maxComposedDepth ?? MAX_COMPOSED_DEPTH,
     exposures: options.exposures === true,
+    carryConditions: options.conditioned === "carry",
     // What is LEFT under the cap, not the cap itself. `maxNodes` bounds a
     // document, and the composed tree IS the document every later pass walks —
     // the style compiler, the renderer, the SEO derivation. Starting a fresh
@@ -1010,6 +1027,8 @@ interface ResolveRun {
   maxComposedDepth: number;
   /** Whether composed nodes record the exposures that feed them. */
   exposures: boolean;
+  /** Whether an instance carrying conditions is expanded, carrying them. */
+  carryConditions: boolean;
   /** Nodes this resolution may still produce, across every instance. */
   budget: number;
   /**
@@ -1671,7 +1690,7 @@ function expandInstance(
   // the later pass sees a tree with nothing left to prune. That is the
   // direction `visibility.ts` names as the unrecoverable one — content shown
   // to a reader it was withheld from cannot be taken back.
-  if (isConditionGated(instance)) return [instance];
+  if (isConditionGated(instance) && !run.carryConditions) return [instance];
 
   const componentId = componentIdOf(instance);
   if (componentId === undefined) {
@@ -1810,7 +1829,43 @@ function inlinedDefinition(
     ctx
   );
   if (inlined === null) return null;
-  return withInstanceDevices(inlined, instance);
+  return withInstanceConditions(
+    withInstanceDevices(inlined, instance),
+    instance
+  );
+}
+
+/**
+ * Carry an instance's visibility conditions onto the roots that replace it,
+ * for a resolution that expands conditioned instances (`conditioned:
+ * "carry"`). A root shows where the instance would have AND where it would
+ * itself, so each of the instance's gates joins the root's own as a gate of
+ * its own (`within`), judged separately rather than multiplied into the
+ * root's groups: the product of two ORs grows with every nesting level, and
+ * past the per-block limit would hide a block whose conditions all hold.
+ *
+ * An instance gated by a shape nothing can read passes that shape on as a
+ * gate, so each root fails closed as the instance would have. A root whose
+ * own envelope nothing can read is left as it is, still gated by it.
+ */
+function withInstanceConditions(
+  roots: ResolvedBlockNode[],
+  instance: ResolvedBlockNode
+): ResolvedBlockNode[] {
+  const carried = conditionGatesOf(instance.visibility);
+  if (carried.length === 0) return roots;
+  return roots.map(root => {
+    const own: unknown = root.visibility;
+    if (own !== undefined && own !== null && !isPlainRecord(own)) return root;
+    const earlier = isPlainRecord(own) ? placementGatesOf(own) : [];
+    const kept: NodeVisibility = root.visibility ?? {};
+    // A render-time key, outside the stored visibility's type: only this
+    // pass writes it, on the document being drawn.
+    const visibility: NodeVisibility = Object.assign({}, kept, {
+      within: [...earlier, ...carried],
+    });
+    return { ...root, visibility };
+  });
 }
 
 /**

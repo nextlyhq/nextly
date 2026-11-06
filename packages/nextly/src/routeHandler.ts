@@ -180,6 +180,7 @@ import {
   type ContributionAudience,
 } from "./plugins/admin-contributions-offer";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
+import { assertDocumentSurfaces } from "./plugins/document-surfaces";
 import {
   contributionAudienceFor,
   NOBODY,
@@ -2685,6 +2686,9 @@ export function createDynamicHandlers(options?: {
     // And the document views: two screens claiming one address on one
     // document would leave the admin drawing whichever it reached first.
     assertDocumentViews(options.config.plugins ?? []);
+    // And the document actions and panel sections, refused here for the
+    // same reason.
+    assertDocumentSurfaces(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 
