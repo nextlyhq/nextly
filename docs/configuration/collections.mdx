@@ -585,7 +585,7 @@ hooks: {
 
 - `before*` hooks: return modified data to pass to the next hook (or the DB).
 - `after*` hooks: return value is ignored; use these for side effects.
-- Throwing aborts the operation and rolls back the transaction.
+- Throwing in a `before*` hook aborts the operation and rolls back the transaction. An `after*` hook runs once the change is saved, so throwing there does not undo it.
 
 ### When to use which hook
 
