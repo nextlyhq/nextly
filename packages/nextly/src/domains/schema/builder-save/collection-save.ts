@@ -153,9 +153,22 @@ export interface CollectionSaveResult {
  */
 export async function writeCollectionSave(
   deps: CollectionSaveDeps,
-  save: CollectionSave
+  save: CollectionSave,
+  options: {
+    /**
+     * The history checks ran already (`checkSaveHistory`), before work the
+     * caller did first: a delete checks before its teardown.
+     */
+    historyChecked?: boolean;
+    /**
+     * Keep the files a failure leaves: the caller changed the database before
+     * the save (a delete's teardown), so they are what `nextly migrate`
+     * finishes from.
+     */
+    keepFilesOnFailure?: boolean;
+  } = {}
 ): Promise<CollectionSaveResult> {
-  await refuseUnsettledHistory(deps);
+  if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
   refuseUnconfirmedConversions(plan, save);
 
@@ -171,7 +184,9 @@ export async function writeCollectionSave(
     if (deps.applies) await runWritten(deps, files, plan.table);
     return { files: [...written], applied: deps.applies };
   } catch (error) {
-    await undoUnapplied(deps, written, before, definitionPath, error);
+    if (options.keepFilesOnFailure !== true) {
+      await undoUnapplied(deps, written, before, definitionPath, error);
+    }
     throw error;
   }
 }
@@ -358,6 +373,7 @@ function refuseUnconfirmedConversions(
   plan: SavePlan,
   save: CollectionSave
 ): void {
+  if (save.entity === null) return;
   const acknowledged = new Set(save.acknowledgedConversions ?? []);
   const unconfirmed = (plan.adoption?.conversions ?? []).filter(
     c => !acknowledged.has(c.column)
@@ -413,7 +429,12 @@ async function writeFiles(
   // before the person's change has touched the table.
   let offset = adopt === undefined ? 0 : 1;
   const convert: string[] = [];
-  if ((plan.adoption?.conversions.length ?? 0) > 0 && save.previous !== null) {
+  // A delete converts nothing: the table goes.
+  if (
+    (plan.adoption?.conversions.length ?? 0) > 0 &&
+    save.previous !== null &&
+    save.entity !== null
+  ) {
     convert.push(
       ...(await generateFor(deps, {
         manifest: withCollection(plan.current, save.slug, save.previous),
@@ -446,7 +467,9 @@ async function writeFiles(
  * as boot loads it. A refusal reaches the person saving as a conflict with the
  * text the command prints, naming what to settle.
  */
-async function refuseUnsettledHistory(deps: CollectionSaveDeps): Promise<void> {
+export async function checkSaveHistory(
+  deps: CollectionSaveDeps
+): Promise<void> {
   const [
     {
       assertAppliedFilesPresent,

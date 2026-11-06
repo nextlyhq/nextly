@@ -11,6 +11,7 @@ import { toDbError } from "../../../database/errors";
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
@@ -25,8 +26,10 @@ import type { CollectionArtifacts } from "../../dynamic-collections/services/dyn
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
+  checkSaveHistory,
   writeCollectionSave,
   type BuilderSaveSetup,
+  type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import {
@@ -41,6 +44,7 @@ import type { TeardownAdapter } from "./teardown-adapter-in-transaction";
 /** The parts of a collection's registry row its delete reads. */
 interface DeletedCollectionRow {
   tableName: string;
+  labels?: { singular: string; plural: string };
   fields?: FieldDefinition[];
   /** Set on a code-first collection's row: its definition is the code's. */
   locked?: boolean | number | null;
@@ -461,30 +465,20 @@ export class CollectionMetadataService extends BaseService {
     /** Whether the migration that ran wrote the registry row already. */
     rowWritten: boolean;
   }> {
-    if (
-      this.builderSave !== undefined &&
-      artifacts.manifestEntity !== undefined
-    ) {
+    const deps = this.saveDeps();
+    if (deps !== undefined && artifacts.manifestEntity !== undefined) {
       try {
-        await writeCollectionSave(
-          {
-            ...this.builderSave,
-            adapter: this.adapter,
-            logger: this.logger,
-            applies: this.isDevelopment(),
-          },
-          {
-            slug: artifacts.metadata.slug,
-            previous: null,
-            entity: artifacts.manifestEntity,
-            change: "create",
-            junctions: this.collectionService.junctionStatements(
-              artifacts.tableName,
-              [],
-              artifacts.metadata.fields
-            ),
-          }
-        );
+        await writeCollectionSave(deps, {
+          slug: artifacts.metadata.slug,
+          previous: null,
+          entity: artifacts.manifestEntity,
+          change: "create",
+          junctions: this.collectionService.junctionStatements(
+            artifacts.tableName,
+            [],
+            artifacts.metadata.fields
+          ),
+        });
         return { rowWritten: this.isDevelopment() };
       } catch (error: unknown) {
         const refused = errorToMetadataResult(
@@ -1366,6 +1360,11 @@ export class CollectionMetadataService extends BaseService {
   private async removeTogether(
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>
   ): Promise<void> {
+    const deps = this.saveDeps();
+    if (deps !== undefined) {
+      await this.removeThroughWriter(ordered, deps);
+      return;
+    }
     const [{ teardownAdapterIn }, { splitStatements }] = await Promise.all([
       import("./teardown-adapter-in-transaction"),
       import("../../schema/pipeline/sql-statement-utils"),
@@ -1411,6 +1410,81 @@ export class CollectionMetadataService extends BaseService {
         unregistered.get(slug) ?? { removed: 0, stored: undefined }
       );
     }
+  }
+
+  /**
+   * Remove the collections deleted together through the Builder save writer.
+   * The history checks `nextly migrate` runs first refuse the delete before
+   * anything is torn down. One transaction then removes every collection's
+   * field-group values, translations and registry row, as without the writer.
+   * Then, in drop order, each collection's definition goes and its drop
+   * migration is written, with its junction tables' drops, and in development
+   * run as `nextly migrate` runs it. A failure there is refused with its
+   * reason and keeps the files, which `nextly migrate` finishes from: the
+   * registry rows are gone already.
+   */
+  private async removeThroughWriter(
+    ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
+    deps: CollectionSaveDeps
+  ): Promise<void> {
+    await checkSaveHistory(deps);
+    const { teardownAdapterIn } = await import(
+      "./teardown-adapter-in-transaction"
+    );
+    const unregistered = new Map<string, UnregisteredCollectionRow>();
+    try {
+      await this.adapter.transaction(async tx => {
+        const teardownAdapter = teardownAdapterIn(this.adapter, tx);
+        for (const { slug, collection } of ordered) {
+          await this.tearDownStoredWithIt(slug, collection, teardownAdapter);
+        }
+        for (const { slug } of ordered) {
+          unregistered.set(
+            slug,
+            await this.collectionService.unregisterCollectionIn(tx, slug)
+          );
+        }
+      });
+    } catch (error) {
+      clearRegistryRowCache();
+      throw this.deleteFailed(error, ordered);
+    }
+    for (const { slug, collection } of ordered) {
+      await writeCollectionSave(
+        deps,
+        {
+          slug,
+          previous: definitionOfRow(slug, collection),
+          entity: null,
+          change: "delete",
+          junctions: this.collectionService.junctionStatements(
+            collection.tableName,
+            collection.fields ?? [],
+            []
+          ),
+        },
+        { historyChecked: true, keepFilesOnFailure: true }
+      );
+    }
+    for (const { slug, collection } of ordered) {
+      await this.forgetDeleted(
+        slug,
+        collection,
+        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+      );
+    }
+  }
+
+  /** The writer's dependencies for a save here, when a writer is set up. */
+  private saveDeps(): CollectionSaveDeps | undefined {
+    return this.builderSave === undefined
+      ? undefined
+      : {
+          ...this.builderSave,
+          adapter: this.adapter,
+          logger: this.logger,
+          applies: this.isDevelopment(),
+        };
   }
 
   /**
@@ -1514,4 +1588,20 @@ export class CollectionMetadataService extends BaseService {
       logger: this.logger,
     });
   }
+}
+
+/**
+ * A deleted collection as the definition records it, read from its registry
+ * row, whose fields the definition holds as stored: what the delete's
+ * migration is generated from.
+ */
+function definitionOfRow(
+  slug: string,
+  row: DeletedCollectionRow
+): UiSchemaEntity {
+  return {
+    slug,
+    labels: row.labels ?? { singular: slug, plural: slug },
+    fields: row.fields ?? [],
+  };
 }

@@ -4,7 +4,7 @@
  * migration where the config's `db` block says, and in development runs it as `nextly migrate`
  * does: nothing goes to the old `src/db/migrations/dynamic` folder, on every dialect.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,6 +166,61 @@ describe.each(getConfiguredTestDialects())(
       } finally {
         await rm(folder, { recursive: true, force: true });
       }
+    });
+
+    it("in development deletes the collection through its own applied drop file", async () => {
+      process.env.NODE_ENV = "development";
+      const service = t.getService<CollectionService>("collectionService");
+      await service.createCollection(created("articles"), {});
+
+      await service.deleteCollection("articles", {});
+
+      const folder = join(t.basePath, "database", "history");
+      const files = readdirSync(folder)
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      expect(files.map(f => f.replace(/^\d{8}_\d{6}_\d{3}_/, ""))).toEqual([
+        "articles_create.sql",
+        "articles_delete.sql",
+      ]);
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      expect(await adapter.tableExists("dc_articles")).toBe(false);
+      const definition = JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as { collections: { slug: string }[] };
+      expect(definition.collections).toEqual([]);
+      const repo = new SchemaEventsRepository(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect
+      );
+      expect(
+        (await repo.listFileApplies())
+          .filter(row => row.status === "applied")
+          .map(row => row.filename)
+          .sort()
+      ).toEqual(files);
+    });
+
+    it("refuses a delete the history checks refuse, before anything is torn down", async () => {
+      process.env.NODE_ENV = "development";
+      const service = t.getService<CollectionService>("collectionService");
+      await service.createCollection(created("articles"), {});
+      const folder = join(t.basePath, "database", "history");
+      const [first] = readdirSync(folder).filter(f => f.endsWith(".sql"));
+      writeFileSync(
+        join(folder, first!),
+        `${readFileSync(join(folder, first!), "utf-8")}\n-- edited\n`
+      );
+
+      await expect(
+        service.deleteCollection("articles", {})
+      ).rejects.toMatchObject({ statusCode: 409 });
+
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      expect(await adapter.tableExists("dc_articles")).toBe(true);
+      await expect(
+        service.getCollection("articles", {})
+      ).resolves.toBeDefined();
     });
 
     it("outside development writes them and runs nothing", async () => {
