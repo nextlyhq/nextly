@@ -575,7 +575,7 @@ describe("the delete", () => {
     );
     expect(
       await screen.findByRole("heading", {
-        name: "Someone else is deleting this component",
+        name: "Delete in progress",
       })
     ).toBeTruthy();
   });

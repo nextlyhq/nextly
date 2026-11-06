@@ -563,7 +563,7 @@ function checkedFaceOf(
 /** Someone else's delete is open: nothing to do until it is finished. */
 function someoneElseFace(message: string, { cancelRef }: FaceArgs): Face {
   return {
-    title: "Someone else is deleting this component",
+    title: "Delete in progress",
     sentence: message,
     body: null,
     announce: message,
