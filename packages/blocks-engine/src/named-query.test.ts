@@ -1,0 +1,265 @@
+/**
+ * Named queries' declarations: the boot's checks, the process registry, and
+ * the one judgement of a list's stored inputs the save and the run share.
+ */
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+
+import {
+  allNamedQueries,
+  clearNamedQueries,
+  defineNamedQuery,
+  getNamedQuery,
+  judgeNamedParams,
+  namedQueryDeclaration,
+  namedQueryNeedsInput,
+  namedQueryProblem,
+  namedQueryTimeout,
+  param,
+  registeredNamedQueries,
+  registerNamedQueries,
+  type NamedQueryDefinition,
+} from "./named-query";
+
+const run = () => Promise.resolve({ rows: [] });
+
+const events = defineNamedQuery({
+  name: "events.upcoming",
+  label: "Upcoming events",
+  params: {
+    city: param.choice({
+      label: "City",
+      required: true,
+      options: [
+        { value: "lahore", label: "Lahore" },
+        { value: "karachi", label: "Karachi" },
+      ],
+    }),
+    keyword: param.text({ label: "Keyword", maxLength: 10 }),
+    from: param.day({ label: "From", default: "today" }),
+    within: param.number({
+      label: "Within",
+      integer: true,
+      min: 1,
+      max: 365,
+      default: 30,
+    }),
+    freeOnly: param.boolean({ label: "Free only" }),
+    venue: param.entry({ label: "Venue", collection: "venues" }),
+  },
+  reads: { collections: ["events", "venues"] },
+  rows: {
+    key: "id",
+    fields: [
+      { name: "id", type: "text" },
+      { name: "title", type: "text" },
+    ],
+  },
+  run,
+});
+
+/** A definition with one part replaced, to judge that part alone. */
+function withPart(part: Record<string, unknown>): unknown {
+  return { ...events, ...part };
+}
+
+afterEach(() => clearNamedQueries());
+
+describe("a named query's declaration", () => {
+  it("types run's inputs by their declarations", () => {
+    defineNamedQuery({
+      name: "typed",
+      label: "Typed",
+      params: events.params,
+      reads: { collections: ["venues"] },
+      rows: { collection: "venues" },
+      run: args => {
+        // Required, defaulted and yes-or-no inputs are always present.
+        expectTypeOf(args.params.city).toEqualTypeOf<"lahore" | "karachi">();
+        expectTypeOf(args.params.within).toEqualTypeOf<number>();
+        expectTypeOf(args.params.freeOnly).toEqualTypeOf<boolean>();
+        // An optional one with no default may be absent.
+        expectTypeOf(args.params.keyword).toEqualTypeOf<string | undefined>();
+        expectTypeOf(args.params.venue).toEqualTypeOf<
+          string | number | undefined
+        >();
+        return run();
+      },
+    });
+  });
+
+  it("accepts a well-formed definition", () => {
+    expect(namedQueryProblem(events).problem).toBeUndefined();
+  });
+
+  it.each([
+    ["a name that is not lowercase dotted words", { name: "Events" }, "name"],
+    ["a name over 64 characters", { name: "a".repeat(65) }, "name"],
+    ["no label", { label: "" }, "no label"],
+    ["a label over 60 characters", { label: "x".repeat(61) }, "label"],
+    ["no run function", { run: undefined }, "run function"],
+    ["a timeout over 30 seconds", { timeoutMs: 30_001 }, "timeoutMs"],
+    [
+      "rows of a collection it does not read",
+      { rows: { collection: "posts" } },
+      'entries of "posts"',
+    ],
+    [
+      "a row key that is not a declared field",
+      { rows: { key: "slug", fields: [{ name: "id", type: "text" }] } },
+      'key "slug"',
+    ],
+    [
+      "a row key that is not text or a number",
+      { rows: { key: "at", fields: [{ name: "at", type: "date" }] } },
+      "not a text or number field",
+    ],
+    [
+      "an entry input of a collection it does not read",
+      {
+        params: { author: param.entry({ label: "Author", collection: "x" }) },
+      },
+      'entry of "x"',
+    ],
+    [
+      "a default that does not fit its input",
+      {
+        params: {
+          n: param.number({ label: "N", min: 1, max: 5, default: 9 }),
+        },
+      },
+      "default does not fit",
+    ],
+    [
+      "a choice with no options",
+      { params: { c: { type: "choice", label: "C", options: [] } } },
+      "no options",
+    ],
+    [
+      "an input of an unknown type",
+      { params: { c: { type: "time", label: "C" } } },
+      'type "time"',
+    ],
+    [
+      "more than 12 inputs",
+      {
+        params: Object.fromEntries(
+          Array.from({ length: 13 }, (_, index) => [
+            `p${String(index)}`,
+            param.text({ label: "P" }),
+          ])
+        ),
+      },
+      "13 inputs",
+    ],
+  ])("refuses %s", (_case, part, named) => {
+    expect(namedQueryProblem(withPart(part)).problem).toContain(named);
+  });
+
+  it("names the reads the site does not know, without refusing them", () => {
+    const judged = namedQueryProblem(events, {
+      collection: slug => slug === "events",
+      single: () => false,
+    });
+    expect(judged.problem).toBeUndefined();
+    expect(judged.unknownReads).toEqual(["venues"]);
+  });
+
+  it("keeps run out of the declaration", () => {
+    expect("run" in namedQueryDeclaration(events)).toBe(false);
+  });
+
+  it("bounds the time a run may take", () => {
+    expect(namedQueryTimeout(events)).toBe(5000);
+    expect(namedQueryTimeout({ ...events, timeoutMs: 1200 })).toBe(1200);
+  });
+
+  it("says when a query needs an input an author must give", () => {
+    expect(namedQueryNeedsInput(events)).toBe(true);
+    expect(namedQueryNeedsInput({ ...events, params: {} })).toBe(false);
+  });
+});
+
+describe("the named query registry", () => {
+  it("registers all or nothing, naming the definition refused", () => {
+    expect(() =>
+      registerNamedQueries([events, withPart({ name: "Bad" }) as never], {
+        source: "@acme/events",
+      })
+    ).toThrow(/named query "Bad" from "@acme\/events"/);
+    expect(allNamedQueries()).toEqual([]);
+  });
+
+  it("names both sources when two register one name", () => {
+    registerNamedQueries([events], { source: "@acme/events" });
+    expect(() =>
+      registerNamedQueries([events], { source: "@acme/other" })
+    ).toThrow(/registered by "@acme\/events".*again by "@acme\/other"/);
+    expect(() =>
+      registerNamedQueries([
+        { ...events, name: "twice" },
+        { ...events, name: "twice" },
+      ])
+    ).toThrow(/registered twice/);
+  });
+
+  it("answers a registered query, its declaration without run, and clears", () => {
+    registerNamedQueries([events]);
+    expect(getNamedQuery("events.upcoming")).toBe(events);
+    const declaration =
+      registeredNamedQueries().declarationOf("events.upcoming");
+    expect(declaration?.label).toBe("Upcoming events");
+    expect(declaration !== undefined && "run" in declaration).toBe(false);
+    clearNamedQueries();
+    expect(getNamedQuery("events.upcoming")).toBeUndefined();
+  });
+
+  it("holds a definition of typed inputs as one of any inputs", () => {
+    const held: NamedQueryDefinition = events;
+    expect(held.name).toBe("events.upcoming");
+  });
+});
+
+describe("a list's stored inputs, judged", () => {
+  it("fills defaults, leaves out an optional empty input and an undeclared one", () => {
+    const judged = judgeNamedParams(
+      events,
+      { city: "lahore", old: 1 },
+      { today: "2026-11-06" }
+    );
+    expect(judged.problems).toEqual([]);
+    expect(judged.unknown).toEqual(["old"]);
+    expect(judged.values).toEqual({
+      city: "lahore",
+      from: "2026-11-06",
+      within: 30,
+      freeOnly: false,
+    });
+  });
+
+  it("names a required input left out, in the editor's words", () => {
+    expect(judgeNamedParams(events, {}).problems).toEqual([
+      {
+        param: "city",
+        kind: "missing",
+        message: "Choose a city. Upcoming events needs one to run.",
+      },
+    ]);
+    expect(
+      judgeNamedParams(events, {}, { atRun: true }).problems[0]?.message
+    ).toBe("Upcoming events needs a city, which this list doesn't set.");
+  });
+
+  it.each([
+    ["city", "paris", "Choose one of Upcoming events's city options."],
+    ["keyword", "x".repeat(11), "Enter at most 10 characters."],
+    ["within", 2.5, "Enter a whole number from 1 to 365."],
+    ["within", 0, "Enter a whole number from 1 to 365."],
+    ["from", "2026-02-30", "Enter a day written YYYY-MM-DD."],
+    ["freeOnly", "yes", "Choose yes or no."],
+    ["venue", true, "Choose an entry by its id."],
+  ])("refuses %s = %j", (key, value, message) => {
+    const judged = judgeNamedParams(events, { city: "lahore", [key]: value });
+    expect(judged.problems).toEqual([{ param: key, kind: "invalid", message }]);
+    expect(key in judged.values).toBe(false);
+  });
+});

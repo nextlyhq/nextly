@@ -45,6 +45,7 @@ import {
 } from "./list-query";
 import { boundedLimit, surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
+import type { NamedQuerySource } from "./named-query";
 import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import {
@@ -254,6 +255,12 @@ export interface ValidationContext {
    * its relation up in the collection {@link bindingEntry} names.
    */
   listFields?: ListFieldSource;
+  /**
+   * The named queries the site registers, for judging a list whose source
+   * is a custom one (`list-query`). Absent, such a list is judged by its
+   * shape alone.
+   */
+  namedQueries?: NamedQuerySource;
 }
 
 /** The validator's own codes, before the binding codes are added. */
@@ -653,6 +660,9 @@ export function validateDocument(
       // judgement also carries is left to the editor that asks for it.
       ...listQueryIssues(envelope.nodes, {
         ...(ctx.listFields === undefined ? {} : { fields: ctx.listFields }),
+        ...(ctx.namedQueries === undefined
+          ? {}
+          : { namedQueries: ctx.namedQueries }),
         // A Single's page is no collection's entry: its renderer has no
         // entry to read a relation of.
         ...(entry === undefined

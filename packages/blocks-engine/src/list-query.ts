@@ -26,6 +26,11 @@
  *   (`of: "entry"`) or of the item the list sits in (`of: "item"`), named
  *   by its field. `collection` then names the related collection, so what
  *   the list's children bind to is checked as for any list.
+ * - `namedQuery`: a custom source, `{ name, params }`: a query a developer
+ *   registered in code, and a typed literal for each of its inputs. It is
+ *   the list's whole source, so `collection`, `relation`, `filters` and
+ *   `sort` are absent beside it: a reader that predates it then sees a list
+ *   with no source, never an unfiltered collection.
  *
  * Which fields a list may name is a question about the schema and about who
  * may read it, so it is asked of a {@link ListFieldSource} the caller
@@ -37,8 +42,19 @@
  */
 import type { BindingFieldShape } from "./binding-rules";
 import { bindingKindOf } from "./binding-vocabulary";
+import { isCalendarDay } from "./calendar-day";
 import type { BlockDocument, BlockNode } from "./document";
 import { describeValue, pointer } from "./issue-text";
+import {
+  isNamedQueryName,
+  isNamedQueryParamKey,
+  judgeNamedParams,
+  NAMED_QUERY_MAX_PARAMS,
+  NAMED_QUERY_TEXT,
+  NAMED_QUERY_TEXT_MAX,
+  type NamedQueryParamValue,
+  type NamedQuerySource,
+} from "./named-query";
 import { isPlainRecord } from "./plain-record";
 import { locateNode } from "./tree";
 
@@ -137,11 +153,20 @@ export const LIST_MAX_VALUES = 100;
 export const LIST_MAX_SORT_KEYS = 20;
 export const LIST_MAX_SORT_LENGTH = 2000;
 
+/** A list's custom source: a registered query's name and its inputs. */
+export interface ListNamedQuery {
+  readonly name: string;
+  /** One literal per input set; an empty optional input is absent. */
+  readonly params: Readonly<Record<string, NamedQueryParamValue>>;
+}
+
 /** A list's query as stored, each part present only when it was stored well. */
 export interface ListQuery {
   /** The collection read, trimmed; absent when none is named. */
   readonly collection?: string;
   readonly relation?: ListRelation;
+  /** A custom source, in place of a collection. */
+  readonly namedQuery?: ListNamedQuery;
   readonly filters: readonly ListFilter[];
   readonly sort: readonly ListSortKey[];
   readonly limit?: number;
@@ -155,7 +180,8 @@ export type ListQueryProp =
   | "filters"
   | "sort"
   | "limit"
-  | "offset";
+  | "offset"
+  | "namedQuery";
 
 /** Why part of a stored list query could not be read. */
 export interface ListQueryProblem {
@@ -170,7 +196,9 @@ export type ListShapeCode =
   | "list-offset-invalid"
   | "list-filter-invalid"
   | "list-sort-invalid"
-  | "list-relation-invalid";
+  | "list-relation-invalid"
+  | "list-named-query-invalid"
+  | "list-source-conflict";
 
 /** The codes a list is refused with when judged against the schema. */
 export type ListFieldCode =
@@ -181,7 +209,13 @@ export type ListFieldCode =
   | "list-filter-unsuited"
   | "list-relation-unsuitable"
   | "list-relation-no-entry"
-  | "list-too-deep";
+  | "list-too-deep"
+  | "list-named-query-unknown"
+  | "list-named-query-param-missing"
+  | "list-named-query-param-invalid"
+  | "list-named-query-param-unknown"
+  | "list-named-query-reads-hidden"
+  | "list-named-query-rows-hidden";
 
 /** Every code a list query is judged with, each described for authors. */
 export const LIST_ISSUE_CODES: {
@@ -212,13 +246,26 @@ export const LIST_ISSUE_CODES: {
     "A list shows related entries of the page's entry on a page that is not an entry of a collection.",
   "list-too-deep":
     "A list shows related entries of a list that already shows related entries.",
+  "list-named-query-invalid":
+    "A list's custom source is not a query's name and a record of input values.",
+  "list-source-conflict":
+    "A list's custom source sits beside a collection, related entries, filters or sort.",
+  "list-named-query-unknown":
+    "A list's custom source names a query this site does not register.",
+  "list-named-query-param-missing":
+    "A list's custom source leaves out an input its query needs.",
+  "list-named-query-param-invalid":
+    "A list's custom source holds an input value its query does not take.",
+  "list-named-query-param-unknown":
+    "A list's custom source holds an input its query no longer declares.",
+  "list-named-query-reads-hidden":
+    "A list's custom source reads a collection visitors cannot read.",
+  "list-named-query-rows-hidden":
+    "A list's custom source lists entries of a collection visitors cannot read.",
 };
 
 /** A field name as a list may write it: no paths, operators or quoting. */
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** A calendar day, as a date filter stores it. */
-const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** Whether a value is a field name a list may write. */
 function isFieldName(value: unknown): value is string {
@@ -240,16 +287,7 @@ export function isListFilterOp(op: unknown): op is ListFilterOp {
  * stores the day an author picked, and the reader compares whole days.
  */
 export function isListDay(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const match = DAY.exec(value);
-  if (match === null) return false;
-  const [year, month, day] = [match[1], match[2], match[3]].map(Number);
-  const date = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day ?? 1));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() + 1 === month &&
-    date.getUTCDate() === day
-  );
+  return isCalendarDay(value);
 }
 
 function isScalar(value: unknown): value is ListFilterScalar {
@@ -462,6 +500,103 @@ function readRelation(
   return { of: value.of, field: value.field };
 }
 
+/** A problem with a list's custom source. */
+function namedProblem(message: string): ListQueryProblem {
+  return { prop: "namedQuery", code: "list-named-query-invalid", message };
+}
+
+/** Why one stored input is not a literal a list may hold, or nothing. */
+function storedParamProblem(key: string, value: unknown): string | undefined {
+  if (!isNamedQueryParamKey(key)) {
+    return `The custom source holds an input named "${describeValue(key)}", which is not an input's key.`;
+  }
+  if (
+    typeof value !== "string" &&
+    typeof value !== "boolean" &&
+    !(typeof value === "number" && Number.isFinite(value))
+  ) {
+    return `Input "${key}" holds ${describeValue(value)}, which is not a text, number or yes-or-no value.`;
+  }
+  if (typeof value === "string" && value.length > NAMED_QUERY_TEXT_MAX) {
+    return `Input "${key}" holds more than ${String(NAMED_QUERY_TEXT_MAX)} characters.`;
+  }
+  return undefined;
+}
+
+/** A stored custom source's inputs, or why they are not a record of literals. */
+function readNamedParams(
+  value: unknown
+): Record<string, NamedQueryParamValue> | ListQueryProblem {
+  if (value === undefined || value === null) return {};
+  if (!isPlainRecord(value)) {
+    return namedProblem(
+      "The custom source's inputs are not a record of values."
+    );
+  }
+  const keys = Object.keys(value);
+  if (keys.length > NAMED_QUERY_MAX_PARAMS) {
+    return namedProblem(
+      `A custom source holds at most ${String(NAMED_QUERY_MAX_PARAMS)} inputs; this one holds ${String(keys.length)}.`
+    );
+  }
+  const params: Record<string, NamedQueryParamValue> = {};
+  for (const key of keys) {
+    const problem = storedParamProblem(key, value[key]);
+    if (problem !== undefined) return namedProblem(problem);
+    params[key] = value[key] as NamedQueryParamValue;
+  }
+  return params;
+}
+
+/** A stored custom source read, or why it could not be. */
+function readNamedQuery(
+  value: unknown
+): ListNamedQuery | ListQueryProblem | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).some(key => key !== "name" && key !== "params")
+  ) {
+    return namedProblem("The custom source is not { name, params }.");
+  }
+  if (!isNamedQueryName(value.name)) {
+    return namedProblem(
+      `The custom source names "${describeValue(value.name)}", which is not a query name.`
+    );
+  }
+  const params = readNamedParams(value.params);
+  return isProblem(params) ? params : { name: value.name, params };
+}
+
+/**
+ * Why a stored custom source sits beside another source, or nothing. Empty
+ * filters and an empty sort name nothing, so they do not count.
+ */
+function sourceConflict(
+  record: Readonly<Record<string, unknown>>,
+  collection: string | undefined
+): ListQueryProblem | undefined {
+  if (record.namedQuery === undefined || record.namedQuery === null) {
+    return undefined;
+  }
+  const stored = (value: unknown) => value !== undefined && value !== null;
+  const filters = record.filters;
+  const sort = record.sort;
+  const others =
+    collection !== undefined ||
+    stored(record.relation) ||
+    (Array.isArray(filters) ? filters.length > 0 : stored(filters)) ||
+    (typeof sort === "string" ? sort.trim() !== "" : stored(sort));
+  return others
+    ? {
+        prop: "namedQuery",
+        code: "list-source-conflict",
+        message:
+          "This list's source is a custom source, so it can't also name a collection, related entries, filters or sort.",
+      }
+    : undefined;
+}
+
 function isProblem(value: unknown): value is ListQueryProblem {
   return isPlainRecord(value) && typeof value.code === "string";
 }
@@ -564,17 +699,21 @@ export function readListQuery(props: unknown): {
   const filters = readFilters(record.filters);
   const sorted = readSort(record.sort);
   const relation = readRelation(record.relation, collection);
+  const named = readNamedQuery(record.namedQuery);
   const problems = [
     limit.problem,
     offset.problem,
     ...filters.problems,
     "problem" in sorted ? sorted.problem : undefined,
     isProblem(relation) ? relation : undefined,
+    isProblem(named) ? named : undefined,
+    sourceConflict(record, collection),
   ].filter((problem): problem is ListQueryProblem => problem !== undefined);
   return {
     query: {
       ...(collection === undefined ? {} : { collection }),
       ...(relation === undefined || isProblem(relation) ? {} : { relation }),
+      ...(named === undefined || isProblem(named) ? {} : { namedQuery: named }),
       filters: filters.filters,
       sort: "keys" in sorted ? sorted.keys : [],
       ...(limit.value === undefined ? {} : { limit: limit.value }),
@@ -620,6 +759,13 @@ export interface ListQueryJudgement {
    * its shape alone.
    */
   readonly entryCollection?: string | null;
+  /**
+   * The named queries the site registers, for a list whose source is one.
+   * Absent, such a list is judged by its shape alone; given, its name and
+   * inputs are judged against the query's declaration, and, with
+   * {@link fields}, whether visitors can read what it lists.
+   */
+  readonly namedQueries?: NamedQuerySource;
   /**
    * The document's stored forms. A problem one of them already holds, on the
    * same block, is a warning rather than an error: a list stored before a
@@ -1048,6 +1194,12 @@ function relationSource(
       code: "list-relation-invalid",
     };
   }
+  if (outer.query.namedQuery !== undefined) {
+    return {
+      problem: NAMED_QUERY_TEXT.nestedRelated,
+      code: "list-relation-invalid",
+    };
+  }
   if (outer.query.relation !== undefined) {
     return {
       problem: `Too deep for a related field. This list is inside a list that already shows each ${outer.query.relation.of === "entry" ? "entry's" : "item's"} ${outer.query.relation.field}, and related entries go one level deep. Choose a collection, or move this list out of that list.`,
@@ -1139,6 +1291,97 @@ function relationFindings(
       ];
 }
 
+/** A query's collection by the name authors read it by, its slug standing in. */
+function collectionWords(
+  judgement: ListQueryJudgement,
+  collection: string
+): string {
+  return judgement.fields?.fieldsOf(collection)?.label ?? collection;
+}
+
+/**
+ * Whether visitors can read nothing of a collection, as far as the schema
+ * says: `false` when its fields are not known.
+ */
+function unreadable(
+  judgement: ListQueryJudgement,
+  collection: string
+): boolean {
+  const fields = judgement.fields?.fieldsOf(collection);
+  return fields !== undefined && fields.readable.length === 0;
+}
+
+/**
+ * The judgement of a list's custom source against its query's declaration:
+ * a name nothing registers, each input missing, not fitting or no longer
+ * declared, and, where the schema is known, a query whose rows visitors can
+ * never read or that reads a collection they cannot.
+ */
+function namedFindings(
+  query: ListQuery,
+  judgement: ListQueryJudgement,
+  at: (prop: ListQueryProp) => string,
+  nodeId: string
+): Finding[] {
+  const named = query.namedQuery;
+  const source = judgement.namedQueries;
+  if (named === undefined || source === undefined) return [];
+  const declaration = source.declarationOf(named.name);
+  if (declaration === undefined) {
+    return [
+      {
+        path: at("namedQuery"),
+        nodeId,
+        code: "list-named-query-unknown",
+        message: NAMED_QUERY_TEXT.unknown(named.name),
+      },
+    ];
+  }
+  const inputAt = (key: string) =>
+    pointer(pointer(at("namedQuery"), "params"), key);
+  const judged = judgeNamedParams(declaration, named.params);
+  const found: Finding[] = [
+    ...judged.problems.map(problem => ({
+      path: inputAt(problem.param),
+      nodeId,
+      code:
+        problem.kind === "missing"
+          ? ("list-named-query-param-missing" as const)
+          : ("list-named-query-param-invalid" as const),
+      message: problem.message,
+    })),
+    ...judged.unknown.map(key => ({
+      path: inputAt(key),
+      nodeId,
+      code: "list-named-query-param-unknown" as const,
+      message: NAMED_QUERY_TEXT.paramUnknown(declaration.label, key),
+    })),
+  ];
+  const rows = declaration.rows;
+  const rowsCollection = "collection" in rows ? rows.collection : undefined;
+  if (rowsCollection !== undefined && unreadable(judgement, rowsCollection)) {
+    found.push({
+      path: at("namedQuery"),
+      nodeId,
+      code: "list-named-query-rows-hidden",
+      message: NAMED_QUERY_TEXT.rowsHidden(
+        declaration.label,
+        collectionWords(judgement, rowsCollection)
+      ),
+    });
+  }
+  for (const read of declaration.reads.collections ?? []) {
+    if (read === rowsCollection || !unreadable(judgement, read)) continue;
+    found.push({
+      path: at("namedQuery"),
+      nodeId,
+      code: "list-named-query-reads-hidden",
+      message: NAMED_QUERY_TEXT.readsHidden(collectionWords(judgement, read)),
+    });
+  }
+  return found;
+}
+
 /** Everything found about one list node. */
 function findingsFor(
   node: Readonly<Record<string, unknown>>,
@@ -1156,6 +1399,7 @@ function findingsFor(
     message: problem.message,
   }));
   findings.push(...relationFindings(query, outer, judgement, at, nodeId));
+  findings.push(...namedFindings(query, judgement, at, nodeId));
   const fields =
     query.collection === undefined || judgement.fields === undefined
       ? undefined
@@ -1254,7 +1498,10 @@ function signature(finding: Finding): string {
  * collection does not have, one the public may not read, a list-valued sort
  * key, and a related source that is not a to-many relation to the list's
  * collection. Each is an error, except one a stored form already held on
- * the same block, which is a warning.
+ * the same block, which is a warning. A custom source's name and inputs are
+ * judged when `judgement.namedQueries` is given; an input the query no
+ * longer takes, and a declared read visitors cannot read, are always
+ * warnings.
  */
 export function listQueryIssues(
   nodes: readonly unknown[],
@@ -1281,9 +1528,22 @@ export function listQueryIssues(
     nodeId: finding.nodeId,
     code: finding.code,
     message: finding.message,
-    severity: held.has(signature(finding)) ? "warning" : "error",
+    severity:
+      ALWAYS_WARNINGS.has(finding.code) || held.has(signature(finding))
+        ? "warning"
+        : "error",
   }));
 }
+
+/**
+ * The codes that are warnings whatever the stored forms hold: an input the
+ * query no longer takes, which is left out, and a declared read visitors
+ * cannot read. In neither has the author done anything a save should refuse.
+ */
+const ALWAYS_WARNINGS: ReadonlySet<string> = new Set<ListFieldCode>([
+  "list-named-query-param-unknown",
+  "list-named-query-reads-hidden",
+]);
 
 /**
  * The codes only the schema or the page's host can decide, so a caller
@@ -1297,4 +1557,10 @@ export const LIST_FIELD_CODES: ReadonlySet<string> = new Set<ListFieldCode>([
   "list-filter-unsuited",
   "list-relation-unsuitable",
   "list-relation-no-entry",
+  "list-named-query-unknown",
+  "list-named-query-param-missing",
+  "list-named-query-param-invalid",
+  "list-named-query-param-unknown",
+  "list-named-query-reads-hidden",
+  "list-named-query-rows-hidden",
 ]);
