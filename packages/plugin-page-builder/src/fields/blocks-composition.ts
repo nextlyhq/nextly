@@ -765,7 +765,7 @@ async function judgeComposedLists(args: {
   const found = await composedListQueryIssues(
     args.composed,
     args.document,
-    listSettingOf(args.write),
+    listSettingOf(args.write, args.document),
     {
       ...(fieldsOf === undefined ? {} : { fieldsOf }),
       maxNodes: args.setup.limits.maxNodes,

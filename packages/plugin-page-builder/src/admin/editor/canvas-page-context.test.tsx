@@ -36,6 +36,17 @@ describe("the collection a document's lists read the entry of", () => {
     expect(listEntryCollectionOf({ kind: "single", slug: "home" })).toBeNull();
     expect(listEntryCollectionOf(null)).toBeUndefined();
   });
+
+  it("is not known for a component, whatever entry stores it, as its save judges it", () => {
+    // A component is drawn on the pages placing it, which are the entries.
+    const component = { formatVersion: 1, kind: "component", nodes: [] };
+    const store = { kind: "collection", slug: "nx_pb_components" };
+    expect(listEntryCollectionOf(store, component)).toBeUndefined();
+    // CONTROL: a page stored there is that collection's entry.
+    expect(listEntryCollectionOf(store, { ...component, kind: "page" })).toBe(
+      "nx_pb_components"
+    );
+  });
 });
 
 describe("the canvas's page context", () => {

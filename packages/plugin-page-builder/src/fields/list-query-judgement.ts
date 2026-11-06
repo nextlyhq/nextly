@@ -120,10 +120,21 @@ export interface ListSetting {
  * of, for a list of the entry's related entries; `null` for a Single's, whose
  * page has no entry to read a relation of, so such a list is refused rather
  * than judged by its shape.
+ *
+ * A component is no page, though it is stored as an entry of the component
+ * store: it is drawn on the pages placing it, whose entries its lists relate
+ * to, and each such page is judged as its own entry. So the entry is left
+ * unknown, and such a list judged by its shape, as a component placing the
+ * one being saved is.
  */
-export function listSettingOf(write: PluginFieldWrite): ListSetting {
+export function listSettingOf(
+  write: PluginFieldWrite,
+  document: unknown
+): ListSetting {
+  const locale = write.locale === undefined ? {} : { locale: write.locale };
+  if (isPlainRecord(document) && document.kind === "component") return locale;
   return {
-    ...(write.locale === undefined ? {} : { locale: write.locale }),
+    ...locale,
     entryCollection: write.kind === "collection" ? write.slug : null,
   };
 }
@@ -274,7 +285,7 @@ export async function newListQueryIssues(
   // already reported the shape of each of the page's own lists on this write.
   const found = await listErrorsIn(
     nodes,
-    listSettingOf(args.write),
+    listSettingOf(args.write, value),
     site,
     issue => LIST_FIELD_CODES.has(issue.code)
   );

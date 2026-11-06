@@ -92,6 +92,39 @@ describe("a write's collection lists, judged by the server", () => {
     ).toEqual([]);
   });
 
+  it("judges a component's list of the entry's related entries by its shape, since the pages placing it are the entries", async () => {
+    // The component store is a collection too, and holds no such relation.
+    const STORE: ListFields = {
+      declared: new Set(["id", "title", "content"]),
+      readable: [{ name: "id", type: "text" }],
+    };
+    const fieldsOf = vi.fn(async (collection: string) =>
+      collection === "nx_pb_components" ? STORE : FIELDS[collection]
+    );
+    const asComponent = { ...relatedToEntry, kind: "component" };
+    expect(
+      await newListQueryIssues(
+        asComponent,
+        args({ slug: "nx_pb_components", locale: "fr" }),
+        "Content",
+        { fieldsOf }
+      )
+    ).toEqual([]);
+    // Still judged in the write's language, and never against the store.
+    expect(fieldsOf.mock.calls).toEqual([["categories", "fr"]]);
+    // CONTROL: the same document as a page of that collection is refused.
+    expect(
+      (
+        await newListQueryIssues(
+          relatedToEntry,
+          args({ slug: "nx_pb_components" }),
+          "Content",
+          { fieldsOf }
+        )
+      ).map(issue => issue.code)
+    ).toEqual(["list-field-unknown"]);
+  });
+
   it("asks for each collection's fields in the language the write is judged in", async () => {
     const fieldsOf = vi.fn(async (collection: string) => FIELDS[collection]);
     await newListQueryIssues(

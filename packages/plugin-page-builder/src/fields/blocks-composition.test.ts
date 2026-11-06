@@ -1216,6 +1216,58 @@ describe("a page's placed lists, judged as the page composes them", () => {
     ).toEqual(["list-field-protected"]);
   });
 
+  it("judges a component's newly placed list of the entry's related entries by its shape, as the pages placing it are judged", async () => {
+    // A component holding a list of each entry's categories, placed for the
+    // first time by another component: the entries are the pages' own.
+    const related = component([
+      {
+        id: "r1",
+        type: "core/collection-loop",
+        version: 1,
+        props: {
+          collection: "categories",
+          relation: { of: "entry", field: "categories" },
+        },
+        slots: { children: [] },
+      },
+    ]);
+    const { readStored } = storeOf({
+      [COMPONENTS]: { related: { published: related } },
+    });
+    // The component store as the server reads it: a collection with no
+    // such relation.
+    const storeFields: ListFieldsReader = async collection =>
+      collection === COMPONENTS || collection === "pages"
+        ? {
+            declared: new Set(["id", "title", FIELD]),
+            readable: [{ name: "id", type: "text" }],
+          }
+        : collection === "categories"
+          ? {
+              declared: new Set(["id", "name"]),
+              readable: [{ name: "id", type: "text" }],
+            }
+          : undefined;
+    expect(
+      await judge(
+        component([placing("i1", "related")]),
+        write(readStored, COMPONENTS, "outer"),
+        { listFields: storeFields }
+      )
+    ).toEqual([]);
+    // CONTROL: placed on a page of a collection without that relation, the
+    // list is that page's to fix, and refused.
+    expect(
+      codes(
+        await judge(
+          page([placing("i1", "related")]),
+          write(readStored, "pages", "p9"),
+          { listFields: storeFields }
+        )
+      )
+    ).toEqual(["list-field-unknown"]);
+  });
+
   it("keeps a sort the stored page already composed to, however it reads", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { cards: { published: sorted } },
