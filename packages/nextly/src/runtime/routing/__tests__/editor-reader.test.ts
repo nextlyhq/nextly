@@ -17,6 +17,7 @@ import {
   createEditorReader,
   toEditorFind,
   type EditorReaderPerson,
+  type EditorReaderSource,
 } from "../editor-reader";
 import type {
   PublicReaderDeclarations,
@@ -234,6 +235,47 @@ describe("the canvas's reader", () => {
     await expect(
       createEditorReader(reader, person, { declarations }).findSingle({
         slug: "home",
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("reads one entry by id as the person, its working draft where they may edit it", async () => {
+    // A list read returns the live row; only the by-id read carries a pending
+    // working draft, so the page's own entry is read through it.
+    const find = vi.fn();
+    const findByID = vi.fn(async (_args: unknown) => ({
+      id: "p1",
+      title: "Spring sale (working draft)",
+      body: "b",
+    }));
+    const reader = { find, findByID } as unknown as EditorReaderSource;
+    const entry = await createEditorReader(reader, person, {
+      declarations,
+    }).findById({ collection: "posts", id: "p1", select: ["title"] });
+    expect(entry).toEqual({ id: "p1", title: "Spring sale (working draft)" });
+    expect(find).not.toHaveBeenCalled();
+    expect(findByID.mock.calls[0]?.[0]).toMatchObject({
+      collection: "posts",
+      id: "p1",
+      overrideAccess: false,
+      user: person.user,
+      status: "all",
+      draft: true,
+      depth: 0,
+    });
+  });
+
+  it("answers nothing for an entry by id it may not read", async () => {
+    const reader = {
+      find: vi.fn(),
+      findByID: vi.fn(async () => {
+        throw NextlyError.forbidden();
+      }),
+    } as unknown as EditorReaderSource;
+    await expect(
+      createEditorReader(reader, person, { declarations }).findById({
+        collection: "posts",
+        id: "p1",
       })
     ).resolves.toBeNull();
   });

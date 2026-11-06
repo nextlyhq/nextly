@@ -58,12 +58,16 @@ const answer = (title: string) => ({
 
 describe("the canvas's binding sources", () => {
   it("asks for what the page's bindings read, and nothing for a page without", () => {
-    expect(canvasBindingsRequest(page(), identity, "en")).toBeUndefined();
+    expect(canvasBindingsRequest([page()], identity, "en")).toBeUndefined();
     expect(
-      canvasBindingsRequest(page({ text: { $bind: "title" } }), null, "en")
+      canvasBindingsRequest([page({ text: { $bind: "title" } })], null, "en")
     ).toBeUndefined();
     expect(
-      canvasBindingsRequest(page({ text: { $bind: "title" } }), identity, "en")
+      canvasBindingsRequest(
+        [page({ text: { $bind: "title" } })],
+        identity,
+        "en"
+      )
     ).toEqual({
       source: { kind: "collection", slug: "posts", id: "p1" },
       demand: {
@@ -103,14 +107,52 @@ describe("the canvas's binding sources", () => {
         },
       ],
     } as BlockDocument;
-    expect(canvasBindingsRequest(listed, identity, undefined)?.lists).toEqual([
-      "posts",
-    ]);
+    expect(canvasBindingsRequest([listed], identity, undefined)?.lists).toEqual(
+      ["posts"]
+    );
+  });
+
+  it("asks for what a Layout region's bindings read, beside the page's", () => {
+    // The page binds nothing; its header region binds a Single. The canvas
+    // draws both, so it asks for both, as the published route reads them.
+    const header = page({
+      text: { $bind: "tagline", source: "single", sourceKey: "brand" },
+    });
+    expect(
+      canvasBindingsRequest([page(), header], identity, "en")?.demand.singles
+    ).toEqual({ brand: { fields: ["tagline"], follows: {} } });
+  });
+
+  it("asks no entry for a component's own document", () => {
+    // A placed component reads each placing page's entry, so its preview
+    // must not read the component's storage row as one.
+    const bound = page({
+      text: { $bind: "title" },
+      level: { $bind: "size", source: "single", sourceKey: "brand" },
+    });
+    const asked = canvasBindingsRequest([bound], identity, "en", true);
+    expect(asked?.demand.entry).toBeUndefined();
+    expect(asked?.demand.singles).toEqual({
+      brand: { fields: ["size"], follows: {} },
+    });
+    // With nothing else to read, nothing is asked at all.
+    expect(
+      canvasBindingsRequest(
+        [page({ text: { $bind: "title" } })],
+        identity,
+        "en",
+        true
+      )
+    ).toBeUndefined();
+    // The control: the same page, not a component, asks for its entry.
+    expect(
+      canvasBindingsRequest([bound], identity, "en")?.demand.entry
+    ).toEqual({ fields: ["title"], follows: {} });
   });
 
   it("reads them back as the renderer takes them", async () => {
     const request = canvasBindingsRequest(
-      page({ text: { $bind: "title" } }),
+      [page({ text: { $bind: "title" } })],
       identity,
       undefined
     );
@@ -124,7 +166,7 @@ describe("the canvas's binding sources", () => {
 
   it("never hands one person's kept answer to another", async () => {
     const request = canvasBindingsRequest(
-      page({ text: { $bind: "title" } }),
+      [page({ text: { $bind: "title" } })],
       identity,
       "fr"
     );
@@ -144,7 +186,7 @@ describe("the canvas's binding sources", () => {
 
   it("drops the earlier answer when a changed ask fails", async () => {
     editing.identity = identity;
-    const bound = page({ text: { $bind: "title" } });
+    const bound = [page({ text: { $bind: "title" } })];
     writePluginRoute.mockResolvedValueOnce(answer("English title"));
     const { result, rerender } = renderHook(
       ({ locale }: { locale: string }) => useCanvasBindings(bound, locale),
@@ -170,7 +212,7 @@ describe("the canvas's binding sources", () => {
     writePluginRoute.mockClear();
     writePluginRoute.mockResolvedValue(answer("Someone's draft"));
     const { result } = renderHook(() =>
-      useCanvasBindings(page({ text: { $bind: "title" } }), "es")
+      useCanvasBindings([page({ text: { $bind: "title" } })], "es")
     );
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(writePluginRoute).not.toHaveBeenCalled();

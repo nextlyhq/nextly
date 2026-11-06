@@ -125,6 +125,7 @@ import {
 } from "./use-host-commit";
 import { useOpenAtSection } from "./use-open-at-section";
 import {
+  useBoundCanvasRender,
   useCanvasInputs,
   useSiteStyleInputs,
   type CanvasInputs,
@@ -1043,6 +1044,14 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
+  // The canvas's render inputs with the sources its bindings read, asked of
+  // the page and of the Layout regions drawn around it together.
+  const canvasRender = useBoundCanvasRender(
+    canvas.canvasRender,
+    { document: mount.editor.document, regions: panels.canvasRegions },
+    mount.locale,
+    mount.initialDocument.kind === "component"
+  );
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     control,
@@ -1100,6 +1109,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     ...style,
     ...canvas,
     ...panels,
+    canvasRender,
     documentDirty,
     pageTitle,
     componentView,
