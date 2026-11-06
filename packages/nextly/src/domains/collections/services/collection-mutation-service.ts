@@ -3662,11 +3662,15 @@ export class CollectionMutationService extends BaseService {
     executor?: unknown;
     /**
      * The paths that hold a value kept from the stored row because a rule
-     * denies it to this writer, so the whole-number rule leaves them to the
-     * row — a legacy stored fraction under one is the row's own content,
-     * not this write's. Empty on a write that restores nothing.
+     * denies it to this writer, with the value each path holds, so the
+     * whole-number rule leaves them to the row unless a hook changed one —
+     * a legacy stored fraction under one is the row's own content, not
+     * this write's. Empty on a write that restores nothing.
      */
-  }): Promise<ReadonlySet<string>> {
+  }): Promise<{
+    storedPaths: ReadonlySet<string>;
+    storedValues: ReadonlyMap<string, unknown>;
+  }> {
     // One resolver for the entry's rules and the field groups', read on the
     // write's own connection: inside a transaction, the pool's would wait on
     // the connection the transaction holds and miss its writes.
@@ -3772,6 +3776,12 @@ export class CollectionMutationService extends BaseService {
        * library (a blocks field's composition) judges it on this write.
        */
       write: EntryWriteContext;
+      /**
+       * Whether `data` is the row's own, carried by an assembled document the
+       * write promotes or publishes: the instances' own pass then leaves a
+       * legacy stored fraction alone, as the gate judged this document.
+       */
+      assembledFromStorage?: boolean;
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
@@ -3788,6 +3798,7 @@ export class CollectionMutationService extends BaseService {
         // Who the write is made as, for each instance's own field rules.
         access: args.access,
         write: args.write,
+        assembledFromStorage: args.assembledFromStorage,
       });
     } catch (error: unknown) {
       throw markWriteIntegrityFailure(error);
@@ -13470,7 +13481,7 @@ export class CollectionMutationService extends BaseService {
       // is passed so owner/record-aware access rules can evaluate.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      const storedPaths = await this.keepDeniedFieldsAtStored({
+      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -13560,7 +13571,10 @@ export class CollectionMutationService extends BaseService {
         fields,
         "",
         await this.hookWalkComponentResolver(fields),
-        storedPaths
+        storedPaths,
+        // A hook can reach what the restore kept; a value it changed there
+        // is judged, while the row's own content stays the row's.
+        storedValues
       );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });
@@ -18132,7 +18146,8 @@ export class CollectionMutationService extends BaseService {
           finalData,
           fields,
           "",
-          await this.hookWalkComponentResolver(fields)
+          // On the write's own connection, as the gate on this path reads.
+          await this.hookWalkComponentResolver(fields, tx.getDrizzle())
         );
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
@@ -18810,7 +18825,7 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
-      const storedPaths = await this.keepDeniedFieldsAtStored({
+      const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored({
         data: finalData,
         storedId: String(existingEntry.id),
         collectionName: params.collectionName,
@@ -18890,8 +18905,10 @@ export class CollectionMutationService extends BaseService {
           finalData,
           fields,
           "",
-          await this.hookWalkComponentResolver(fields),
-          storedPaths
+          // On the write's own connection, as the gate on this path reads.
+          await this.hookWalkComponentResolver(fields, tx.getDrizzle()),
+          storedPaths,
+          storedValues
         );
         if (hookIssues.length > 0) {
           throw NextlyError.validation({ errors: hookIssues });
@@ -19608,6 +19625,13 @@ export class CollectionMutationService extends BaseService {
               localizedUpdate
             )
           ),
+          // A write that promotes or publishes carries the row's own content
+          // in its component values — the merged document the gate judged
+          // assembled — so the instances' own pass leaves a legacy stored
+          // fraction to the row, as the gate did.
+          ...(publishes && !alreadyLive
+            ? { assembledFromStorage: true }
+            : {}),
         });
         // Which media items the entry uses now, from what this update stored.
         // A held edit stored nothing, so it changes nothing here either.

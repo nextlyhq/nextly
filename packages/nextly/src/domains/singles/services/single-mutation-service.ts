@@ -2484,7 +2484,7 @@ export class SingleMutationService extends BaseService {
           locale,
         });
       const storedLocales = this.localization?.locales.map(l => l.code) ?? [];
-      const storedPaths = await keepDeniedAtStoredOnUpdate({
+      const { storedPaths, storedValues } = await keepDeniedAtStoredOnUpdate({
         data: currentData,
         stored: await storedFieldGroupsIn(options.locale),
         storedIn: {
@@ -2664,7 +2664,8 @@ export class SingleMutationService extends BaseService {
               componentSlug
             )) ?? null
         ),
-        storedPaths
+        storedPaths,
+        storedValues
       );
       if (hookIssues.length > 0) {
         throw NextlyError.validation({ errors: hookIssues });

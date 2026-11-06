@@ -164,6 +164,15 @@ describe.each(getConfiguredTestDialects())(
           if (meta && meta.rating === 2) {
             meta.rating = 2.5;
           }
+        } else if (data.title === "hookrestored-1") {
+          // The restore has already put the row's own 2.5 back under
+          // `locked` when the hooks run; the hook overwrites it. What the
+          // hook leaves there is this write's production, judged like any
+          // caller's value.
+          const locked = data.locked as Record<string, unknown> | undefined;
+          if (locked && locked.rating === 2.5) {
+            locked.rating = 3.5;
+          }
         }
         return data;
       });
@@ -576,6 +585,41 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expectFractionRefusal(refusal, "quantity");
+    });
+
+    it("a hook that changes a restored denied value is judged like a caller's", async () => {
+      // The update names the group, so the restore puts the row's own 2.5
+      // back under the denied child; the hook then overwrites it with 3.5.
+      // The floor skips the row's own value — unchanged, it rides — but the
+      // hook's 3.5 is this write's production, refused with the field named
+      // before any row is written.
+      const refusal = await refusalOf(
+        collections.updateEntry(
+          SLUG,
+          "denied-frac-1",
+          { title: "hookrestored-1", quantity: 4, locked: { label: "kept" } },
+          {
+      overrideAccess: false,
+      user: {
+        id: "sibling-editor",
+        email: "sibling-editor@example.test",
+        role: "",
+        permissions: [],
+      },
+    }
+          )
+      );
+      expect(NextlyError.is(refusal)).toBe(true);
+      expect(refusal.code).toBe("VALIDATION_ERROR");
+      const issues =
+        (refusal.publicData as { errors: ValidationIssueShape[] })?.errors ??
+        [];
+      const hit = issues.find(issue => issue.path === "locked.rating");
+      expect(
+        hit,
+        `no issue names the field: ${JSON.stringify(issues)}`
+      ).toBeDefined();
+      expect(hit?.message).toBe("rating must be a whole number.");
     });
   }
 );

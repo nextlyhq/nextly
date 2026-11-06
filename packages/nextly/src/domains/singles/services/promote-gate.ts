@@ -475,11 +475,13 @@ async function promotedDocument(
   if (ctx.callerData) {
     Object.assign(
       promoted,
-      await keepDeniedAtStored({
-        update: ctx.callerData,
-        stored: promoted,
-        applyRules: promotionRules(ctx, live),
-      })
+      (
+        await keepDeniedAtStored({
+          update: ctx.callerData,
+          stored: promoted,
+          applyRules: promotionRules(ctx, live),
+        })
+      ).kept
     );
   }
   // Written with the status it publishes, whatever its snapshot was saved

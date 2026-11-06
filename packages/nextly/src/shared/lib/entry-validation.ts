@@ -23,6 +23,8 @@
  * - Custom `validate` functions run after built-in rules (string return =
  *   error), matching their documented contract.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
@@ -296,7 +298,8 @@ function componentInstanceIssues(
   value: unknown,
   childPath: string,
   componentFields: (slug: string) => ValidatableField[] | undefined,
-  storedPaths: ReadonlySet<string> | undefined
+  storedPaths: ReadonlySet<string> | undefined,
+  storedValues: ReadonlyMap<string, unknown> | undefined
 ): ValidationIssue[] {
   const { single, many } = extractFieldGroupReferences(field);
   const instances: Array<[unknown, string]> = Array.isArray(value)
@@ -324,7 +327,8 @@ function componentInstanceIssues(
         own,
         at,
         componentFields,
-        storedPaths
+        storedPaths,
+        storedValues
       )
     );
   }
@@ -408,7 +412,8 @@ export function hookChangedWholeNumberIssues(
   fields: ValidatableField[],
   path = "",
   componentFields?: (slug: string) => ValidatableField[] | undefined,
-  storedPaths?: ReadonlySet<string>
+  storedPaths?: ReadonlySet<string>,
+  storedValues?: ReadonlyMap<string, unknown>
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const byName = new Map(
@@ -429,10 +434,17 @@ export function hookChangedWholeNumberIssues(
     if (!field || !isJudgedOnWrite(field)) continue;
     const childPath = path ? `${path}.${key}` : key;
     // A value kept from the row because a rule denies it was never this
-    // write's to judge — the caller's own values were refused at the gate,
-    // so anything the walk would flag under a denied path is the row's own
-    // stored content, carried by the restore, not produced by a hook.
-    if (isStoredProvenancePath(childPath, storedPaths)) continue;
+    // write's to judge — the caller's own values were refused at the gate.
+    // A hook, though, holds the whole document and can reach what the
+    // restore kept: what is still the row's own stays the row's, and what
+    // the hook changed there is this write's production, judged like any
+    // other. Without the values the skip is whole, as the gate judged it.
+    if (isStoredProvenancePath(childPath, storedPaths)) {
+      const stored = storedValues?.get(childPath);
+      if (storedValues === undefined || isDeepStrictEqual(data[key], stored)) {
+        continue;
+      }
+    }
 
     // A group or repeater carries rows of child fields: the hook runner
     // recurses into those rows and its handlers mutate them IN PLACE, so
@@ -459,7 +471,8 @@ export function hookChangedWholeNumberIssues(
             field.fields as ValidatableField[],
             field.type === "repeater" ? `${childPath}[${index}]` : childPath,
             componentFields,
-            storedPaths
+            storedPaths,
+            storedValues
           )
         );
       });
@@ -479,7 +492,8 @@ export function hookChangedWholeNumberIssues(
           data[key],
           childPath,
           componentFields,
-          storedPaths
+          storedPaths,
+          storedValues
         )
       );
       continue;

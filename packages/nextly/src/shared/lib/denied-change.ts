@@ -215,7 +215,16 @@ export async function keepDeniedAtStored(input: {
   stored: Record<string, unknown>;
   /** Applies the field rules to the document it is given, in place. */
   applyRules: (document: Record<string, unknown>) => Promise<void>;
-}): Promise<Record<string, unknown>> {
+}): Promise<{
+  /** The document to write: the update, with denied values kept from the row. */
+  kept: Record<string, unknown>;
+  /**
+   * What the rules left of the update as the caller sent it — the caller's
+   * own permitted document, against which {@link storedProvenance} tells
+   * the restored document's own values from the caller's.
+   */
+  permitted: Record<string, unknown>;
+}> {
   const permitted = detachData(input.update);
   await input.applyRules(permitted);
   const stored: Record<string, unknown> = {};
@@ -242,87 +251,109 @@ export async function keepDeniedAtStored(input: {
   for (const key of Object.keys(input.update)) {
     if (!hasOwn(permitted, key)) delete out[key];
   }
-  return out;
+  return { kept: out, permitted };
 }
 
 /**
- * The paths of the restored document that hold a value the rules deny —
- * the values {@link keepDeniedAtStored} put back from the row, wherever it
- * placed them.
+ * The paths of the restored document that hold the row's own value — what
+ * {@link keepDeniedAtStored} put back because a rule denies it to this
+ * writer — with the value each path holds.
  *
- * Computed on the RESTORED document by applying the rules to a detached
- * copy and collecting where the copy loses a value, because the restore
- * walks by row identity and splices whole rows back: a path recorded while
- * restoring would address the document as the restore built it, not as the
- * caller holds it when the write is judged. Both sides here are the one
- * restored document's shape, so a path answers for it as it is written.
+ * Told apart from the caller's own values against `permitted`, what the
+ * rules left of the update AS THE CALLER SENT IT: a path the restored
+ * document holds and `permitted` does not is nobody's write — the rules
+ * removed the caller's value there and the row's own stands in its place.
+ * No rule runs again, so a rule that reads a denied sibling answers the
+ * same way it answered when the restore was decided; recomputing
+ * authorization over the restored document would see the restored sibling
+ * and could mark a value the caller sent.
  *
  * Lists pair by the same row identity the restore pairs by, so a restored
- * row among kept ones denies only itself — a position-only walk would
- * shift every later row onto the wrong stored value. Rows without ids
- * still fall back to position, as the restore itself does for them.
+ * row among kept ones is its own path and the rows its removal would shift
+ * keep their own paths. Rows without ids still fall back to position, as
+ * the restore itself does for them.
  */
-export async function storedProvenancePaths(
-  document: Record<string, unknown>,
-  applyRules: (document: Record<string, unknown>) => Promise<void>
-): Promise<Set<string>> {
-  const permitted = detachData(document);
-  await applyRules(permitted);
-  return new Set(deniedStoredPaths(document, permitted, ""));
+export function storedProvenance(
+  restored: Record<string, unknown>,
+  permitted: Record<string, unknown>
+): {
+  paths: Set<string>;
+  values: Map<string, unknown>;
+} {
+  const paths = new Set<string>();
+  const values = new Map<string, unknown>();
+  storedPaths(restored, permitted, "", paths, values);
+  return { paths, values };
 }
 
-/**
- * Where `before` holds a value `after` lost, lists paired by row identity
- * rather than position — the restore's own pairing — so a row the rules
- * removed denies itself alone and the rows after it keep their own paths.
- */
-function deniedStoredPaths(
+/** One stored-provenance walk: {@link storedProvenance} over one level. */
+function storedPaths(
   before: unknown,
   after: unknown,
-  prefix: string
-): string[] {
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
   if (Array.isArray(before)) {
-    return deniedStoredListPaths(before, after, prefix);
+    storedListPaths(before, after, prefix, paths, values);
+    return;
   }
-  return deniedStoredRecordPaths(before, after, prefix);
+  storedRecordPaths(before, after, prefix, paths, values);
 }
 
-/** The denied paths under one list, its rows paired by identity. */
-function deniedStoredListPaths(
+/** The stored paths under one list, its rows paired by identity. */
+function storedListPaths(
   before: readonly unknown[],
   after: unknown,
-  prefix: string
-): string[] {
-  if (!Array.isArray(after)) return prefix === "" ? [] : [prefix];
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
+  if (!Array.isArray(after)) {
+    if (prefix !== "") {
+      paths.add(prefix);
+      values.set(prefix, before);
+    }
+    return;
+  }
   const pairing = rowPairing(before, after);
-  return before.flatMap((row, index) => {
-    const at = pairing(index);
-    return deniedStoredPaths(
-      row,
-      at === undefined ? undefined : after[at],
-      `${prefix}[${index}]`
-    );
+  before.forEach((row, index) => {
+    const at = `${prefix}[${index}]`;
+    const paired = pairing(index);
+    if (paired === undefined) {
+      paths.add(at);
+      values.set(at, row);
+      return;
+    }
+    storedPaths(row, after[paired], at, paths, values);
   });
 }
 
-/** The denied paths under one record: the keys the rules removed, and under them. */
-function deniedStoredRecordPaths(
+/** The stored paths under one record: the keys `permitted` does not hold. */
+function storedRecordPaths(
   before: unknown,
   after: unknown,
-  prefix: string
-): string[] {
-  if (!isRecord(before)) return [];
-  if (!isRecord(after)) return prefix === "" ? [] : [prefix];
-  const out: string[] = [];
+  prefix: string,
+  paths: Set<string>,
+  values: Map<string, unknown>
+): void {
+  if (!isRecord(before)) return;
+  if (!isRecord(after)) {
+    if (prefix !== "") {
+      paths.add(prefix);
+      values.set(prefix, before);
+    }
+    return;
+  }
   for (const key of Object.keys(before)) {
     const path = prefix ? `${prefix}.${key}` : key;
     if (!hasOwn(after, key)) {
-      out.push(path);
+      paths.add(path);
+      values.set(path, before[key]);
       continue;
     }
-    out.push(...deniedStoredPaths(before[key], after[key], path));
+    storedPaths(before[key], after[key], path, paths, values);
   }
-  return out;
 }
 
 /**
