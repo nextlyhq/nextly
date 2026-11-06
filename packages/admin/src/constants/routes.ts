@@ -24,6 +24,8 @@ export const ROUTES = {
   USERS: "/admin/users",
   USERS_CREATE: "/admin/users/create",
   USERS_EDIT: "/admin/users/edit/[id]",
+  /** The signed-in person's own account page. */
+  ACCOUNT: "/admin/account",
 
   // Media routes
   MEDIA: "/admin/media",
