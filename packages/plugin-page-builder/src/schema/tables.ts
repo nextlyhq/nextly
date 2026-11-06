@@ -33,7 +33,7 @@ export const SCHEMA_PREFIX = "page_builder";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /** The columns of {@link usageRuns}, as `defineTable` checks and publishes them. */
 type UsageRunsColumns = {
@@ -425,7 +425,7 @@ type UsageSubjectColumns = {
 };
 
 /**
- * The subject columns, declared once for both index tables, so the two cannot
+ * The subject columns, declared once for every index table, so the two cannot
  * come to describe a document differently. Each is a closed vocabulary or an
  * identifier: `scope` is `collection` or `single`, `entity` a slug, `entityKey`
  * a document id (empty for a Single, which has one document), `field` a field
@@ -513,6 +513,33 @@ export const componentUsageRows: TableDefinition<
   }
 );
 
+/**
+ * The widest variable identity the variable index records: the engine's bound
+ * on a token name, with room for the marker row, which is longer than any
+ * identity on purpose (`UNDETERMINED_TOKEN_ID`).
+ */
+const TOKEN_ID_WIDTH = 512;
+
+/** The columns of {@link tokenUsageRows}. */
+type TokenUsageColumns = UsageSubjectColumns & {
+  readonly tokenId: ColumnBuilder<string, false, false>;
+};
+
+/**
+ * The variable usage index: one row per variable a stored document names in a
+ * `$token` reference, in a block's styles or the document's own settings, or
+ * one marker row for a document that could not be read whole. Indexed by
+ * document and by variable, for the reasons the class index is.
+ */
+export const tokenUsageRows: TableDefinition<"token_usage", TokenUsageColumns> =
+  defineTable<"token_usage", TokenUsageColumns>(
+    "token_usage",
+    { ...usageSubjectColumns(), tokenId: col.varchar(TOKEN_ID_WIDTH) },
+    {
+      indexes: [{ columns: ["entity", "entityKey"] }, { columns: ["tokenId"] }],
+    }
+  );
+
 /** Every table this plugin declares, in creation order. */
 export const PAGE_BUILDER_TABLES: readonly [
   typeof usageRuns,
@@ -525,6 +552,7 @@ export const PAGE_BUILDER_TABLES: readonly [
   typeof breakpointRemovalFragments,
   typeof classUsageRows,
   typeof componentUsageRows,
+  typeof tokenUsageRows,
 ] = [
   usageRuns,
   usageProgress,
@@ -536,4 +564,5 @@ export const PAGE_BUILDER_TABLES: readonly [
   breakpointRemovalFragments,
   classUsageRows,
   componentUsageRows,
+  tokenUsageRows,
 ];

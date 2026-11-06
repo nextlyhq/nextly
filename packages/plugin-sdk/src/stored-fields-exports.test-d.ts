@@ -3,7 +3,8 @@
  * from the SDK.
  *
  * Both are made as a person, named by the identity a plugin route resolves,
- * or as the system, `{ overrideAccess: true }`;
+ * or as the system, `{ overrideAccess: true }`, and the write also as a
+ * person whose expectation the system read;
  * a request names exactly one document, an entry or a Single, never both; the
  * read answers a discriminated result per field, so an absent value is never
  * confused with a stored one; and the expectation carries the hash the SDK's
@@ -17,6 +18,7 @@ import { expectTypeOf } from "vitest";
 
 import type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginRouteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
@@ -24,6 +26,7 @@ import type {
   PluginStoredIdentity,
   PluginStoredLifecycle,
   PluginStoredValue,
+  PluginSystemCheckedWrite,
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "@nextlyhq/plugin-sdk";
@@ -37,9 +40,18 @@ import {
 expectTypeOf(readStoredFields)
   .parameter(0)
   .toEqualTypeOf<PluginStoredIdentity>();
+// A conditional write may also be made as a caller whose expectation the
+// system read: the update the caller's, the expectation's read the system's.
 expectTypeOf(updateIfUnchanged)
   .parameter(0)
-  .toEqualTypeOf<PluginStoredIdentity>();
+  .toEqualTypeOf<PluginConditionalWriteIdentity>();
+expectTypeOf<PluginConditionalWriteIdentity>().toEqualTypeOf<
+  PluginStoredIdentity | PluginSystemCheckedWrite
+>();
+expectTypeOf<PluginSystemCheckedWrite>().toEqualTypeOf<{
+  readonly caller: PluginRouteIdentity;
+  readonly checkedBy: PluginSystemIdentity;
+}>();
 expectTypeOf<PluginStoredIdentity>().toEqualTypeOf<
   | (PluginRouteIdentity & { readonly overrideAccess?: never })
   | PluginSystemIdentity
@@ -55,6 +67,20 @@ expectTypeOf({
 // A caller with the system's flag spread in is neither: the runtime refuses
 // it, and the type does too.
 declare const caller: PluginRouteIdentity;
+// A caller whose expectation the system read is no identity a stored read is
+// made as: the read is the system's or the caller's, never both.
+expectTypeOf({
+  caller,
+  checkedBy: { overrideAccess: true as const },
+}).not.toMatchTypeOf<PluginStoredIdentity>();
+expectTypeOf({
+  caller,
+  checkedBy: { overrideAccess: true as const },
+}).toMatchTypeOf<PluginConditionalWriteIdentity>();
+expectTypeOf({
+  caller,
+  checkedBy: { overrideAccess: false as const },
+}).not.toMatchTypeOf<PluginConditionalWriteIdentity>();
 declare const asked: PluginStoredFieldsRequest;
 // @ts-expect-error a caller carrying `overrideAccess` is no stored identity
 void readStoredFields({ ...caller, overrideAccess: true as const }, asked);
