@@ -91,12 +91,15 @@ import { changedSinceRead } from "../host-rewrite/expectations";
 import { fenceIssues, type FencedComponents } from "../host-rewrite/fence";
 
 import { isForest } from "./blocks-document";
-import type { ListFieldsReader } from "./list-query-judgement";
 import {
   LAYERS_LOCK_CHANGED,
   placedLockMessage,
   variantLockMessage,
 } from "./layers-lock-wording";
+import {
+  composedListQueryIssues,
+  type ListFieldsReader,
+} from "./list-query-judgement";
 import {
   composedFormsRead,
   lockBaselines,
@@ -381,6 +384,7 @@ export async function compositionIssues(
       work,
       report,
       stored,
+      write,
       field: args.path,
       writtenTo: documentOf(write),
     });
@@ -643,6 +647,8 @@ async function judgeOwnComposition(args: {
    * found broken, and whether they could be read.
    */
   stored: () => Promise<StoredRead>;
+  /** The write, for the language and host its lists are judged in. */
+  write: PluginFieldWrite;
   /** The blocks field being written, for the server log. */
   field?: string;
   /** Which document is being written, for the server log. */
@@ -684,6 +690,15 @@ async function judgeOwnComposition(args: {
   for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
+  await judgeComposedLists({
+    document,
+    composed: composed.composition.document,
+    setup,
+    reading: { library, read, limits: setup.limits, work },
+    stored: args.stored,
+    write: args.write,
+    report,
+  });
   // Every placement's definition, the ones a condition gates included: the
   // composition never expanded those, and both checks below read them.
   await readEveryPlacedDefinition(document, library, read, setup.limits);
@@ -716,6 +731,52 @@ async function judgeOwnComposition(args: {
     stored: args.stored,
     report,
   });
+}
+
+/**
+ * Refuse a list a placed component holds that the page, as composed, makes
+ * name a field the schema refuses, as the page's own lists are refused: a
+ * placement's value or variant can change a list's source, filters or sort,
+ * and the published page reads the composed list. Judged only where the
+ * schema can be read; a problem the stored page already composed to is kept.
+ */
+async function judgeComposedLists(args: {
+  document: BlockDocument;
+  composed: unknown;
+  setup: CompositionSetup;
+  reading: {
+    library: HeldLibrary;
+    read: BoundedReader;
+    limits: DocumentLimits;
+    work: WorkAllowance;
+  };
+  stored: () => Promise<StoredRead>;
+  write: PluginFieldWrite;
+  report: Report;
+}): Promise<void> {
+  const fieldsOf = args.setup.listFields;
+  if (fieldsOf === undefined) return;
+  const found = await composedListQueryIssues(
+    args.composed,
+    args.document,
+    args.write,
+    {
+      fieldsOf,
+      maxNodes: args.setup.limits.maxNodes,
+      // The stored forms composed as this page is, so a list they already
+      // composed to keeps its problem as a warning.
+      storedForms: async () => {
+        const stored = await args.stored();
+        if (!stored.readable) return { forms: [], readable: false };
+        const composed = await composedFormsRead({
+          ...args.reading,
+          hosts: stored.forms,
+        });
+        return { forms: composed.forms as BlockDocument[], readable: true };
+      },
+    }
+  );
+  for (const issue of found) args.report.add(issue.code, issue.message);
 }
 
 /**

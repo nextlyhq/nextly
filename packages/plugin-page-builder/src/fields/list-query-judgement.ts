@@ -16,28 +16,40 @@
  * @module fields/list-query-judgement
  */
 import {
+  COLLECTION_LIST_TYPE,
+  componentPlacementsIn,
   isErrorIssue,
   isPlainRecord,
   LIST_FIELD_CODES,
   listQueryIssues,
+  walkNodes,
   type BindingFieldShape,
   type BlockDocument,
+  type BlockNode,
   type ListFields,
   type ListFieldSource,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
   addressableFields,
   type PluginFieldIssue,
   type PluginFieldValidateArgs,
+  type PluginFieldWrite,
 } from "@nextlyhq/plugin-sdk";
 
 import { pluralLabelOf } from "../collection-labels";
 
 import type { StoredForms } from "./added-undefined-ids";
 
-/** The fields of one collection, read when asked. */
+/**
+ * The fields of one collection, read when asked, in the language a write is
+ * judged in (`locale`), or every configured language when none is named: a
+ * field's public read rule may depend on the language, and the published
+ * list is read in the page's.
+ */
 export type ListFieldsReader = (
-  collection: string
+  collection: string,
+  locale?: string
 ) => Promise<ListFields | undefined>;
 
 /** The timestamps a collection keeps unless it turns them off, as dates. */
@@ -58,10 +70,11 @@ const TIMESTAMPS: readonly BindingFieldShape[] = [
 export function listFieldsFrom(reads: {
   readonly record: (collection: string) => Promise<unknown>;
   readonly readable: (
-    collection: string
+    collection: string,
+    locale?: string
   ) => Promise<readonly BindingFieldShape[] | undefined>;
 }): ListFieldsReader {
-  return async collection => {
+  return async (collection, locale) => {
     const found = await reads.record(collection).catch(() => undefined);
     if (typeof found !== "object" || found === null) return undefined;
     const record = found as { timestamps?: unknown; fields?: unknown };
@@ -73,7 +86,9 @@ export function listFieldsFrom(reads: {
     for (const field of addressableFields(record.fields)) {
       if (typeof field.name === "string") declared.add(field.name);
     }
-    const shapes = await reads.readable(collection);
+    const shapes = await (locale === undefined
+      ? reads.readable(collection)
+      : reads.readable(collection, locale));
     // The name the editor's Source menu shows, so a finding names the
     // collection as the author reads it.
     const { pluralLabel } = pluralLabelOf(found as Record<string, unknown>);
@@ -90,10 +105,19 @@ export function listFieldsFrom(reads: {
   };
 }
 
+/**
+ * The collection a write's page is an entry of, for a list of the entry's
+ * related entries: `null` for a Single's, whose page has no entry to read a
+ * relation of, so such a list is refused rather than judged by its shape.
+ */
+function entryCollectionOf(write: PluginFieldWrite): string | null {
+  return write.kind === "collection" ? write.slug : null;
+}
+
 /** The collections a judgement over `nodes` asks about, and nothing read. */
 function collectionsAsked(
   nodes: readonly unknown[],
-  entryCollection: string | undefined
+  entryCollection: string | null
 ): Set<string> {
   const asked = new Set<string>();
   listQueryIssues(nodes, {
@@ -103,7 +127,7 @@ function collectionsAsked(
         return undefined;
       },
     },
-    ...(entryCollection === undefined ? {} : { entryCollection }),
+    entryCollection,
   });
   return asked;
 }
@@ -111,13 +135,18 @@ function collectionsAsked(
 /** Each asked collection's fields, read once, as the engine's sync source. */
 async function sourceFor(
   forests: readonly (readonly unknown[])[],
-  entryCollection: string | undefined,
+  write: PluginFieldWrite,
   read: ListFieldsReader,
   known: Map<string, ListFields | undefined>
 ): Promise<ListFieldSource> {
   for (const nodes of forests) {
-    for (const collection of collectionsAsked(nodes, entryCollection)) {
-      if (!known.has(collection)) known.set(collection, await read(collection));
+    for (const collection of collectionsAsked(
+      nodes,
+      entryCollectionOf(write)
+    )) {
+      if (!known.has(collection)) {
+        known.set(collection, await read(collection, write.locale));
+      }
     }
   }
   return { fieldsOf: collection => known.get(collection) };
@@ -128,6 +157,59 @@ function nodesOf(document: unknown): readonly unknown[] | undefined {
   return isPlainRecord(document) && Array.isArray(document.nodes)
     ? document.nodes
     : undefined;
+}
+
+/** One list's issue, as the engine names it, before it is addressed. */
+type ListIssue = ReturnType<typeof listQueryIssues>[number];
+
+/** What a forest's lists are judged with, besides the forest. */
+interface ListJudging {
+  readonly fieldsOf: ListFieldsReader;
+  /** The forms the forest is stored as, read only once a problem is found. */
+  readonly storedForms?: () => Promise<StoredForms>;
+  readonly maxNodes?: number;
+}
+
+/**
+ * The errors only the schema or the page's host decides, about the lists in
+ * `nodes`, in the write's language. A problem a stored form already held on
+ * the same block is kept rather than refused, so the stored forms are read
+ * only once a problem is found.
+ */
+async function schemaIssuesIn(
+  nodes: readonly unknown[],
+  write: PluginFieldWrite,
+  site: ListJudging
+): Promise<ListIssue[]> {
+  const known = new Map<string, ListFields | undefined>();
+  const judge = async (stored: readonly BlockDocument[]) =>
+    listQueryIssues(nodes, {
+      fields: await sourceFor(
+        [
+          nodes,
+          ...stored.flatMap(form => {
+            const forest = nodesOf(form);
+            return forest === undefined ? [] : [forest];
+          }),
+        ],
+        write,
+        site.fieldsOf,
+        known
+      ),
+      entryCollection: entryCollectionOf(write),
+      ...(stored.length === 0 ? {} : { stored }),
+      ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
+      // Only what the schema decides: the engine's own validation already
+      // reported the shape of each list on this write.
+    }).filter(issue => LIST_FIELD_CODES.has(issue.code) && isErrorIssue(issue));
+  let found = await judge([]);
+  if (found.length > 0 && site.storedForms !== undefined) {
+    const snapshot = await site.storedForms();
+    if (snapshot.readable && snapshot.forms.length > 0) {
+      found = await judge(snapshot.forms);
+    }
+  }
+  return found;
 }
 
 /**
@@ -143,50 +225,63 @@ export async function newListQueryIssues(
   value: unknown,
   args: PluginFieldValidateArgs,
   label: string,
-  site: {
-    readonly fieldsOf: ListFieldsReader;
-    /** The page's stored forms, shared by every check of one write. */
-    readonly storedForms?: () => Promise<StoredForms>;
-    readonly maxNodes?: number;
-  }
+  site: ListJudging
 ): Promise<PluginFieldIssue[]> {
   const nodes = nodesOf(value);
-  if (nodes === undefined) return [];
-  // A list related to the page's entry looks its relation up in the
-  // collection the page is an entry of.
-  const entryCollection =
-    args.write?.kind === "collection" ? args.write.slug : undefined;
-  const known = new Map<string, ListFields | undefined>();
-  const judge = async (stored: readonly BlockDocument[]) =>
-    listQueryIssues(nodes, {
-      fields: await sourceFor(
-        [
-          nodes,
-          ...stored.flatMap(form => {
-            const forest = nodesOf(form);
-            return forest === undefined ? [] : [forest];
-          }),
-        ],
-        entryCollection,
-        site.fieldsOf,
-        known
-      ),
-      ...(entryCollection === undefined ? {} : { entryCollection }),
-      ...(stored.length === 0 ? {} : { stored }),
-      ...(site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }),
-      // Only what the schema decides: the engine's own validation already
-      // reported the shape of each list on this write.
-    }).filter(issue => LIST_FIELD_CODES.has(issue.code) && isErrorIssue(issue));
-  let found = await judge([]);
-  if (found.length > 0 && site.storedForms !== undefined) {
-    const snapshot = await site.storedForms();
-    if (snapshot.readable && snapshot.forms.length > 0) {
-      found = await judge(snapshot.forms);
-    }
-  }
+  if (nodes === undefined || args.write === undefined) return [];
+  const found = await schemaIssuesIn(nodes, args.write, site);
   return found.map(issue => ({
     path: args.path,
     code: issue.code,
     message: `${label}${issue.path}: ${issue.message}`,
   }));
+}
+
+/**
+ * The issues of the lists a page's placed components hold, as the page
+ * composes them: a placement's values and its variant can change a list's
+ * source, filters or sort, and only the composition holds the list as the
+ * published page reads it. The page's own lists are {@link
+ * newListQueryIssues}'s, so only a list a component's definition put here is
+ * judged, named by the component the page places it through. A problem the
+ * stored page already composed to is kept, as for the page's own lists.
+ */
+export async function composedListQueryIssues(
+  composed: unknown,
+  host: BlockDocument,
+  write: PluginFieldWrite,
+  site: ListJudging
+): Promise<{ code: string; message: string }[]> {
+  const nodes = nodesOf(composed);
+  if (nodes === undefined) return [];
+  // Each composed list a definition put here, by the host's own placement.
+  const placedLists = new Map<string, string>();
+  walkNodes(
+    nodes as BlockNode[],
+    node => {
+      const through = (node as ResolvedBlockNode).instanceOf;
+      if (node.type === COLLECTION_LIST_TYPE && typeof through === "string") {
+        placedLists.set(node.id, through);
+      }
+    },
+    site.maxNodes === undefined ? {} : { maxNodes: site.maxNodes }
+  );
+  if (placedLists.size === 0) return [];
+  const found = (await schemaIssuesIn(nodes, write, site)).filter(issue =>
+    placedLists.has(issue.nodeId)
+  );
+  if (found.length === 0) return [];
+  const componentOf = new Map<string, string>();
+  for (const placement of componentPlacementsIn(host, site.maxNodes)
+    .placements) {
+    const id = isPlainRecord(placement.node) ? placement.node.id : undefined;
+    if (typeof id === "string") componentOf.set(id, placement.target);
+  }
+  return found.map(issue => {
+    const component = componentOf.get(placedLists.get(issue.nodeId) ?? "");
+    return {
+      code: issue.code,
+      message: `${component === undefined ? "A component" : `Component "${component}"`}, as this page places it, holds a collection list it cannot show. ${issue.message}`,
+    };
+  });
 }

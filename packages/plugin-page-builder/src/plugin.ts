@@ -1601,10 +1601,15 @@ export const pageBuilder = (
         listFields: listFieldsFrom({
           record: collection =>
             ctx.services.collections.getCollection(collection, {}),
-          readable: async collection => {
+          // In the write's language: a field's public read rule may depend
+          // on it, and the published list is read in the page's.
+          readable: async (collection, locale) => {
             // Imported at call time, for the reason the readers above give.
             const { bindingFieldShapes } = await import("nextly/runtime");
-            return bindingFieldShapes({ collection });
+            return bindingFieldShapes(
+              { collection },
+              locale === undefined ? {} : { locale }
+            );
           },
         }),
         siteDefinitions: async () => {

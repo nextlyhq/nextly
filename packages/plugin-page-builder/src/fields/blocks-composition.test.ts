@@ -28,6 +28,7 @@ import {
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
+import type { ListFieldsReader } from "./list-query-judgement";
 
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
@@ -206,6 +207,7 @@ function judge(
     onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
     localized?: boolean;
+    listFields?: ListFieldsReader;
   } = {}
 ) {
   const { status, limits, composesDocuments, localized, ...callbacks } =
@@ -1041,6 +1043,86 @@ describe("a page judged as a reader receives it", () => {
     // A default being judged, or a caller of validateFieldValues: there is no
     // write to read the library through.
     expect(await judge(page([placing("i1", "cols")]), undefined)).toEqual([]);
+  });
+});
+
+describe("a page's placed lists, judged as the page composes them", () => {
+  // A component holding a list of posts whose sort a placement may choose.
+  const sorted = component(
+    [
+      {
+        id: "l1",
+        type: "core/collection-loop",
+        version: 1,
+        props: { collection: "posts", sort: "title" },
+        slots: { children: [] },
+      },
+    ],
+    {
+      exposed: [
+        {
+          id: "order",
+          label: "Order",
+          nodeId: "l1",
+          propPath: "sort",
+          type: "text",
+        },
+      ],
+    }
+  );
+  const placed = (overrides: Record<string, unknown>) =>
+    page([
+      { ...placing("i1", "cards"), props: { componentId: "cards", overrides } },
+    ]);
+  const listFields: ListFieldsReader = async collection =>
+    collection === "posts"
+      ? {
+          declared: new Set(["id", "title", "secret"]),
+          readable: [
+            { name: "id", type: "text" },
+            { name: "title", type: "text" },
+          ],
+        }
+      : undefined;
+
+  it("refuses a placement value sorting a component's list by a field visitors can't see", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+    });
+    // CONTROL: placed with a public field, the list reads as visitors may.
+    expect(
+      await judge(
+        placed({ order: "-title" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+        }
+      )
+    ).toEqual([]);
+    const issues = await judge(
+      placed({ order: "secret" }),
+      write(readStored, "pages", "p1"),
+      { listFields }
+    );
+    expect(codes(issues)).toEqual(["list-field-protected"]);
+    expect(issues[0]!.message).toContain('"cards"');
+    expect(issues[0]!.message).toContain('"secret"');
+  });
+
+  it("keeps a problem the stored page already composed to", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { cards: { published: sorted } },
+      pages: { p1: { published: placed({ order: "secret" }) } },
+    });
+    expect(
+      await judge(
+        placed({ order: "secret" }),
+        write(readStored, "pages", "p1"),
+        {
+          listFields,
+        }
+      )
+    ).toEqual([]);
   });
 });
 
