@@ -353,9 +353,12 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md).
+ *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   (`ctx.security.webhooks`), verifying a received webhook against a
+ *   `standardWebhooks` or a plugin's own `InboundWebhookScheme`, is
+ *   experimental too, until a first-party plugin receives webhooks with it.
  */
-export { PasswordTooLongError } from "nextly";
+export { PasswordTooLongError, standardWebhooks } from "nextly";
 export type {
   PluginSecurityApi,
   PasswordHelper,
@@ -366,6 +369,13 @@ export type {
   OneTimeSecrets,
   SecretData,
   TxOption,
+  PluginReceivedWebhooks,
+  InboundWebhookScheme,
+  InboundWebhookDelivery,
+  InboundWebhookReading,
+  VerifyWebhookOptions,
+  WebhookVerification,
+  WebhookRefusal,
 } from "nextly";
 
 /**

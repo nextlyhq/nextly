@@ -514,8 +514,16 @@ export {
   type PluginAuditApi,
   type PluginAuditDeclaration,
   // The helpers a plugin receives on `ctx.security`: passwords, opaque
-  // secrets and one-purpose secrets.
+  // secrets, one-purpose secrets and verifying the webhooks it receives.
   type PluginSecurityApi,
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type PluginReceivedWebhooks,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
