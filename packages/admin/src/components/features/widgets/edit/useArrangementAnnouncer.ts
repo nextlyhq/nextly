@@ -23,7 +23,8 @@ import type { GridAnnouncer } from "../useGridAnnouncer";
  */
 export interface ArrangementAnnouncer {
   moved: (title: string, from: number, to: number, count: number) => void;
-  width: (title: string, widthName: string) => void;
+  /** A card was resized, by its size's name ("6 columns by 4 rows"). */
+  size: (title: string, sizeName: string) => void;
   removed: (title: string) => void;
   restored: (title: string) => void;
   reset: () => void;
@@ -75,8 +76,8 @@ export function useAnnouncerRelay(): AnnouncerRelay {
     () => ({
       moved: (title, from, to, count) =>
         announcer.current?.announceMoved(title, from, to, count),
-      width: (title, widthName) =>
-        announcer.current?.announceWidth(title, widthName),
+      size: (title, sizeName) =>
+        announcer.current?.announceSize(title, sizeName),
       removed: title => announcer.current?.announceRemoved(title),
       restored: title => announcer.current?.announceRestored(title),
       reset: () => announcer.current?.announceReset(),

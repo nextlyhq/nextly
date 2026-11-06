@@ -60,17 +60,14 @@ async function registeredEntitySlugs(): Promise<string[]> {
  * that is the only answer that agrees with what a row read will give. This used
  * to derive the set from permission SLUGS -- filtering `read-{slug}` for a key
  * and `{slug}:read` for a session -- and that is a second implementation of a
- * decision `checkAccess` already makes, which was more permissive than the
- * original in one direction and less in the other:
+ * decision `checkAccess` already makes, and more permissive than it: a
+ * collection whose `access.read` REFUSES the caller still has the `{slug}:read`
+ * row a slug filter admits it on, so `/stats` disclosed its count and
+ * `/activity` its entry titles, user names and emails, while
+ * `GET /api/collections/{slug}` correctly answered 403. A code rule only
+ * narrows the grant, so no collection is readable without its row.
  *
- * - A collection whose `access.read` REFUSES the caller still has the
- *   `{slug}:read` row a slug filter admits it on, so `/stats` disclosed its
- *   count and `/activity` its entry titles, user names and emails, while
- *   `GET /api/collections/{slug}` correctly answered 403.
- * - A collection authorized ENTIRELY in code has no permission row to find, so
- *   a slug filter dropped a collection the caller can actually open.
- *
- * Asking removes both, and with them the two hand-rolled parsers and their
+ * Asking removes that, and with it the two hand-rolled parsers and their
  * subtleties: there is no prefix to strip by length so that `read-site-settings`
  * keeps naming `site-settings`, because nothing is parsed. There is no
  * super-admin branch either -- `checkAccess` short-circuits on `isSuperAdmin`

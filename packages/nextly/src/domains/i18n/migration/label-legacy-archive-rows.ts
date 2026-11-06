@@ -24,17 +24,18 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
-import { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
-import { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
-import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
-import {
+import { loadedDialect } from "../../../database/dialect-tables";
+import type { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
+import type { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
+import type { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
+import type {
   buildDynamicFieldGroupsMysql,
   buildDynamicFieldGroupsPg,
   buildDynamicFieldGroupsSqlite,
 } from "../../../schemas/dynamic-field-groups";
-import { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
+import type { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
+import type { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
+import type { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
 import {
   nextlyI18nArchiveTables,
   UNKNOWN_ARCHIVE_KIND,
@@ -92,24 +93,13 @@ async function registries(
   adapter: LabelArchiveAdapter
 ): Promise<{ kind: I18nTransitionKind; table: RegistryTable }[]> {
   const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter);
-  const byDialect = {
-    postgresql: () => [
-      dynamicCollectionsPg,
-      dynamicSinglesPg,
-      buildDynamicFieldGroupsPg(fieldGroupRegistry),
-    ],
-    mysql: () => [
-      dynamicCollectionsMysql,
-      dynamicSinglesMysql,
-      buildDynamicFieldGroupsMysql(fieldGroupRegistry),
-    ],
-    sqlite: () => [
-      dynamicCollectionsSqlite,
-      dynamicSinglesSqlite,
-      buildDynamicFieldGroupsSqlite(fieldGroupRegistry),
-    ],
-  } as const;
-  const [collections, singles, fieldGroups] = byDialect[adapter.dialect]();
+  // The loaded dialect's own tables and builder, so only that dialect's files
+  // are imported; `createAdapter` loads them.
+  const loaded = loadedDialect(adapter.dialect);
+  const collections = loaded.tables.dynamicCollections;
+  const singles = loaded.tables.dynamicSingles;
+  const fieldGroups =
+    loaded.builders.buildDynamicFieldGroups(fieldGroupRegistry);
   return [
     { kind: "collection", table: collections },
     { kind: "single", table: singles },
@@ -197,6 +187,47 @@ function creationMargin(dialect: SupportedDialect): number {
   return 1;
 }
 
+/** The entity the labelling gives a slug's unknown rows: the slug's one holder, or none. */
+export interface LegacyLabel {
+  kind: I18nTransitionKind;
+  /** When the holder was created; a row archived before it belongs to an earlier holder. */
+  createdAt: Date;
+}
+
+/** The label for `slug`, from its holders: only a slug exactly one entity holds is labelled. */
+function labelFrom(
+  holders: Map<string, LegacyLabel[]>,
+  slug: string
+): LegacyLabel | undefined {
+  const found = holders.get(slug) ?? [];
+  return found.length === 1 ? found[0] : undefined;
+}
+
+/**
+ * The label `labelLegacyArchiveRows` would give `slug`'s unknown rows, read and not written: a
+ * dry run counts the slug's legacy rows by it, through `ownedSince`, as the labelling sets them.
+ */
+export async function legacyLabelFor(
+  adapter: LabelArchiveAdapter,
+  slug: string
+): Promise<LegacyLabel | undefined> {
+  const db = adapter.getDrizzle<LabelDb>();
+  return labelFrom(await holdersOf(adapter, db, [slug]), slug);
+}
+
+/**
+ * The condition an unknown row meets to be its label's entity's: archived well after the entity
+ * was created (`creationMargin`), compared as instants (`archivedEpoch`). Rows archived before
+ * the entity existed belong to whatever held the slug then.
+ */
+export function ownedSince(
+  dialect: SupportedDialect,
+  archivedAt: AnyColumn,
+  createdAt: Date
+): SQL {
+  return sql`${archivedEpoch(dialect, archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(dialect)}`;
+}
+
 /**
  * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
  * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
@@ -220,18 +251,16 @@ export async function labelLegacyArchiveRows(
 
   const holders = await holdersOf(adapter, db, slugs);
   for (const slug of slugs) {
-    const found = holders.get(slug) ?? [];
-    if (found.length !== 1) continue;
-    const [{ kind, createdAt }] = found;
+    const label = labelFrom(holders, slug);
+    if (label === undefined) continue;
     await db
       .update(archive)
-      .set({ entityKind: kind })
+      .set({ entityKind: label.kind })
       .where(
         and(
           unknown,
           eq(archive.collection, slug),
-          // Rows archived before the entity existed belong to whatever held the slug then.
-          sql`${archivedEpoch(adapter.dialect, archive.archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(adapter.dialect)}`
+          ownedSince(adapter.dialect, archive.archivedAt, label.createdAt)
         )
       );
   }

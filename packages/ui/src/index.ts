@@ -418,6 +418,25 @@ export { ColorPicker } from "./components/color-picker";
 /** @experimental */
 export type { ColorPickerProps, ColorSwatch } from "./components/color-picker";
 
+/**
+ * @experimental An icon field and its search-first picker.
+ *
+ * The kit carries no icons: the host passes `loadIcons`, which resolves to an
+ * `IconSource` that searches one set and resolves a stored id, so the set is
+ * loaded only where a field or picker needs it.
+ */
+export { IconField, IconPicker } from "./components/icon-picker";
+/** @experimental */
+export type { IconFieldProps, IconPickerProps } from "./components/icon-picker";
+/** @experimental Draws one icon from a source's body without inserting markup. */
+export { IconGlyph } from "./components/icon-glyph";
+/** @experimental */
+export type {
+  IconGlyphProps,
+  IconSource,
+  IconSourceIcon,
+} from "./components/icon-glyph";
+
 /** @experimental */
 // Types: Table
 export type {
@@ -478,7 +497,7 @@ export {
  * Renders only the visible window, which is what makes a document of thousands of blocks usable
  * and what forces the flat `aria-level` markup: an item's children may not be in the DOM at all.
  */
-export { TreeView } from "./components/tree-view";
+export { TREE_INDENT_PX, TreeView } from "./components/tree-view";
 /** @experimental The node shape a tree is built from, and the control's props. */
 export type { TreeNode, TreeViewProps } from "./components/tree-view";
 

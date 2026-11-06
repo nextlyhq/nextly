@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ENTRY_UNNAMED
+description: "The file given to `--plugin` exports no plugin definition with a name."
+---
+
+## Cause
+
+The file given to `--plugin` exports no plugin definition with a name.
+
+A plugin's migrations are recorded under its name, so the definition `--plugin` reads must have one.
+
+## Fix
+
+Point `--plugin` at the file that exports the plugin, made with `definePlugin` and given a `name`.
+
+## Example
+
+```text
+✗ The plugin entry src/plugin.ts exports no definition with a name, so its migrations cannot be attributed.
+  Why:  A plugin's migrations are recorded under its name.
+  Next: Point `--plugin` at the file that exports the plugin, made with `definePlugin` and given a `name`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-entry-unnamed  (PLUGIN_ENTRY_UNNAMED)
+```

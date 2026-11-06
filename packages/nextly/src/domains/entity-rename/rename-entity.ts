@@ -20,12 +20,15 @@ import { container } from "../../di";
 import { collectionTag, singleTag } from "../../revalidation/compute-tags";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { writingPermissions } from "../../services/lib/permissions";
+import type { Logger } from "../../shared/types";
+import { withSchemaChangeExcluded } from "../schema/services/schema-change-exclusion";
 import type { WebhookEndpointRegistry } from "../webhooks/endpoint-registry";
 import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../webhooks/recording-policy";
 
+import { refuseManyToManyLinks } from "./many-to-many-links";
 import {
   moveEntitySlug,
   slugKeyedTablesPresent,
@@ -36,6 +39,15 @@ import {
  * Write the registry row with `writeRegistry` and move every declared table
  * to the new slug, on one transaction. `writeRegistry` answers null when no
  * row held the old slug; nothing is moved then, and null is returned.
+ *
+ * A collection a many-to-many relationship uses is refused first, in the same
+ * transaction and before the registry row is written (`refuseManyToManyLinks`).
+ *
+ * All of it holds the schema lock, as every Schema Builder change does
+ * (`withSchemaChangeExcluded`), because it rewrites the registry: a rename
+ * started while a migration or another schema change holds the lock is refused
+ * at once, before anything is read or written. It writes rows and no DDL, so
+ * it creates no lock table where there is none.
  *
  * The transaction runs inside the permissions gate, because it moves the
  * entity's permission rows: every cached answer about who may do what is
@@ -51,19 +63,29 @@ export async function renameEntity<T>(
     dialect: SupportedDialect;
     move: EntitySlugMove;
     writeRegistry: (tx: TransactionContext) => Promise<T | null>;
+    logger: Logger;
   }
 ): Promise<T | null> {
-  const { dialect, move, writeRegistry } = input;
-  const present = await slugKeyedTablesPresent(adapter);
-  const written = await writingPermissions(
-    getDialectTables(dialect).permissions,
-    () =>
-      adapter.transaction(async tx => {
-        const row = await writeRegistry(tx);
-        if (row === null) return null;
-        await moveEntitySlug(tx, { dialect, present, move });
-        return row;
-      })
+  const { dialect, move, writeRegistry, logger } = input;
+  const written = await withSchemaChangeExcluded(
+    {
+      adapter,
+      logger,
+      label: `rename ${move.kind} "${move.from}" to "${move.to}"`,
+      issuesDdl: false,
+    },
+    async () => {
+      const present = await slugKeyedTablesPresent(adapter);
+      return writingPermissions(getDialectTables(dialect).permissions, () =>
+        adapter.transaction(async tx => {
+          await refuseManyToManyLinks(tx, move);
+          const row = await writeRegistry(tx);
+          if (row === null) return null;
+          await moveEntitySlug(tx, { dialect, present, move });
+          return row;
+        })
+      );
+    }
   );
   if (written !== null && container.has("webhookEndpointRegistry")) {
     container

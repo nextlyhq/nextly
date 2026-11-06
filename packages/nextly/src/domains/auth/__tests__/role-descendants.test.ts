@@ -19,10 +19,8 @@ vi.mock("drizzle-orm", () => ({
   inArray: (_column: unknown, values: string[]) => ({ batch: values }),
 }));
 
-import {
-  MAX_ROLE_HIERARCHY_DEPTH,
-  walkDescendantRoleIds,
-} from "../services/role-descendants";
+import { walkDescendantRoleIds } from "../services/role-descendants";
+import { MAX_ROLE_HIERARCHY_DEPTH } from "../services/role-graph";
 
 /**
  * A reader over `children`, a function from a role to the roles it inherits.

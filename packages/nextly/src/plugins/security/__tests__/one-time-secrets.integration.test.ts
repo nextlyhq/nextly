@@ -462,10 +462,16 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps a token minted before a secret was configured readable while '[null]' keeps it", async () => {
+      // Cleared after the boot, not before it: the test harness gives an
+      // instance booted without NEXTLY_SECRET a random one, and a token minted
+      // under that secret is not the unkeyed generation this case is about.
+      // The helper reads the install's secrets per call, so clearing them here
+      // is what the mint sees.
+      const { a } = await boot();
       vi.stubEnv("NEXTLY_SECRET", undefined);
       vi.stubEnv("NEXTLY_SECRET_PREVIOUS", undefined);
       _resetEnvCache();
-      const { a } = await boot();
+      expect(env.NEXTLY_SECRET).toBeUndefined();
       const { token } = await a.security.secrets.mintToken({
         purpose: "reset",
         subject,

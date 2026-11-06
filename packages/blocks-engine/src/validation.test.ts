@@ -273,7 +273,42 @@ describe("issue-code vocabulary is stable and complete", () => {
     expect(placement?.path).toBe("/nodes/0/slots/default/0");
     expect(placement?.severity).toBe("error");
     // Names where the block WILL go, because that is the author's next action.
-    expect(placement?.message).toContain("core/columns");
+    expect(placement?.message).toContain("goes inside a Columns.");
+  });
+
+  it("words a slot refusal the right way round, as the editor does", () => {
+    // The slot refuses the block, so the sentence names what the SLOT takes.
+    // It used to say the block "may only sit inside" the slot's list, which
+    // turned the slot's allow-list into the block's parents.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "acme/row",
+          version: 1,
+          props: {},
+          slots: {
+            default: [{ id: "img", type: "acme/image", version: 1, props: {} }],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: () => undefined,
+        slotAllowOf: () => ["acme/cell"],
+      },
+    });
+
+    const refusal = issues.find(i => i.code === "not-allowed-in-slot");
+    expect(refusal?.message).toBe(
+      "An Image can't go here. This spot takes a Cell."
+    );
   });
 
   it("reports a restricted node at the TOP LEVEL, where it has no container", () => {
@@ -432,8 +467,8 @@ describe("issue-code vocabulary is stable and complete", () => {
     });
 
     const placement = issues.find(i => i.code === "restricted-at-root");
-    expect(placement?.message).toContain("core/columns");
-    expect(placement?.message).not.toContain("acme/somewhere-else");
+    expect(placement?.message).toContain("goes inside a Columns.");
+    expect(placement?.message).not.toContain("Somewhere else");
   });
 
   it.each(["columns", "core/columns/", "", "core//columns"])(

@@ -85,8 +85,8 @@ the published type advertised less than the component actually promised.
 Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialog`,
 `Avatar`, `Card`, `Collapsible`, `Command`, `ContextMenu` and its family, `Popover`,
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
-`Skeleton`, `Slider`, `Spinner`, `Table` and its family, `TableSearch`, `TableSkeleton`,
-`TreeView`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
+`Skeleton`, `Slider`, `Spinner`, `Table` and its family, `IconField`, `IconPicker`, `IconGlyph`, `TableSearch`, `TableSkeleton`,
+`TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
 `PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
@@ -98,11 +98,21 @@ The alternative is a second table naming the same tokens, which drifts silently 
 each copy reads correctly beside its own neighbours. Exported so there is one answer
 rather than two that happen to agree.
 
+`TREE_INDENT_PX` is exported for the same reason: an editor that reads a dragged row's
+depth from the pointer steps by the tree's own indent, and draws its drop line there.
+
 `Slider` (with `SliderThumbProps`) joins them for the inspector: a bounded numeric property — opacity, blur radius,
 letter spacing, a colour's alpha — is the single most repeated control in an editing surface,
 and a hand-rolled one gets pointer capture, step rounding and the per-thumb ARIA pattern wrong
 quietly. Its `value` is an array even for one thumb, which is what makes a range slider the
 same component rather than a second one.
+
+`IconField`, `IconPicker` and `IconGlyph` (with `IconSource` and `IconSourceIcon`) are the icon
+field's controls: one button that shows the chosen icon and opens a search-first picker. The kit
+stays free of icon data; a host passes `loadIcons`, resolving to an `IconSource` that searches one
+set and resolves a stored id like `lucide:star`, so the set loads only where a field needs it.
+`IconGlyph` draws an icon's body from flat SVG shape elements alone and draws any other markup as
+nothing, so a body is never inserted as HTML.
 
 The shortcut manager is the third editor-shell primitive, and the one that cannot live in a
 plugin at all: its whole purpose is to be the only listener, so a plugin shipping its own copy
@@ -304,4 +314,6 @@ of the same hue rather than a different one.
 from 1,000 compact ("1.2k", "3.4M"); a floor reads "N+"; the accessible name is always the full
 value ("1,248", "100 or more"). `formatChange` carries a change's direction in an arrow and a
 sign as well as in words. Every figure a card shows, in its body, chart, tooltip, table and text
-alternative, goes through these, so one value never reads two ways.
+alternative, goes through these, so one value never reads two ways. `chartColour(slot)` names the five shared
+chart colours as the `--nx-chart-N` token a mark is drawn in, beside the formatters, so a chart a
+server renders names its colours exactly as the admin's do.

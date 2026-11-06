@@ -10,12 +10,18 @@
  * at boot with a named error rather than producing broken pages later.
  */
 import type { AnyBlockDefinition, BlockSupports } from "./block";
-import { COMPONENT_INSTANCE_TYPE, isBlockType, isPartName } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  isBlockType,
+  isPartName,
+  isTokenRef,
+} from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isSlotLock } from "./slot-lock";
+import { childGapIssues } from "./style/child-gap";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { SlotDefaultSource } from "./tree";
 import type { BlockTypeLookup } from "./validation";
@@ -317,6 +323,35 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
           `block "${def.name}" part "${named}" must be a plain object.`
         );
       }
+    }
+  }
+  // A length, the number zero, or a token reference and nothing else: what the
+  // declared type allows, and what the catalog's `gap` and margin accept. A
+  // structure or any other number would reach the compile context as a value
+  // neither can take.
+  if (def.childGap !== undefined) {
+    const gap: unknown = def.childGap;
+    const usable =
+      typeof gap === "string" ||
+      gap === 0 ||
+      // A token reference, scaled or not: what it may carry beside the
+      // name is the style values' rule, which `childGapIssues` applies.
+      isTokenRef(gap);
+    if (!usable) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length or a { $token } reference.`
+      );
+    }
+    // And a length both of its forms take, since it is written as a margin in
+    // block flow and as `gap` under flex or grid: refused here rather than
+    // lost silently on every page that switches the container's layout.
+    const issues = childGapIssues(gap, "/childGap");
+    if (issues.length > 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length that both a margin and a gap take: ${issues[0].message}`
+      );
     }
   }
   if (def.slots !== undefined) {

@@ -6,7 +6,7 @@
  * and served it by the Direct API.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { hasPermission } from "../../../services/lib/permissions";
 
@@ -17,6 +17,13 @@ import {
   createMockDb,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 vi.mock("../../../services/lib/permissions", () => ({
   hasPermission: vi.fn(),

@@ -23,6 +23,11 @@
 
 export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
+/**
+ * The shell's preferences kept per signed-in user, for a host that knows who
+ * is signed in: pass it as `store`. @experimental
+ */
+export { userPreferenceStore } from "./shell-state";
 
 /**
  * The compiled cascade behind the page, for chrome that names where a value
@@ -53,7 +58,7 @@ export type { BuilderShellProps } from "./builder-shell";
  * A pure function over a document, so it crosses this entry carrying no state
  * and no React.
  */
-export { selectionIsInspectable } from "./inspector";
+export { lockViewOf, selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -86,7 +91,49 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * from a server module while the writer lives behind the boundary — two halves
  * of one contract that could then be versioned apart.
  */
-export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
+export {
+  CANVAS_ROOT_CLASS,
+  Canvas,
+  DropRefusal,
+  nodeIdFromEvent,
+} from "./canvas";
+
+/**
+ * @experimental The frame the canvas is drawn in, and how the code around the
+ * canvas learns about it.
+ *
+ * `CanvasFrame` is both the component and the type `useCanvasFrame` answers
+ * with: what the frame is, its document and window, its painted scale and
+ * viewport, and the point mapping between it and the editor. The provider
+ * goes ABOVE the editor's shell, so the panels, the toolbar and the keys
+ * outside the canvas see the frame the canvas registers into it.
+ *
+ * `CanvasMarks` draws the selection and the drop container over the page.
+ *
+ * A `CanvasFrameSource` says where the frame's page comes from: the editor's
+ * blank page, or a page the site serves so the canvas is drawn inside the
+ * site's own layout, with `onSourceFallback` told when that page cannot be
+ * shown.
+ */
+export {
+  CanvasFrame,
+  CANVAS_FRAME_TITLE_PREFIX,
+  canvasFrameTitle,
+} from "./canvas-frame";
+export type {
+  BlankFrameSource,
+  CanvasFrameFallback,
+  CanvasFrameProps,
+  CanvasFrameSource,
+  SiteFrameSource,
+} from "./canvas-frame";
+export { CanvasFrameProvider, useCanvasFrame } from "./canvas-frame-context";
+/**
+ * @experimental Where the docs explain the canvas route, for a note saying the
+ * canvas is drawn without the site's layout.
+ */
+export { CANVAS_ROUTE_DOCS_HREF } from "./docs-links";
+export { CanvasMarks } from "./canvas-marks";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
@@ -103,7 +150,10 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
  * Alt+Arrow reach the page behind the dialog.
  */
 export { useModalKeyboardHold } from "./modal-keyboard-hold";
-export type { CanvasPreview, CanvasProps } from "./canvas";
+export type { CanvasProps } from "./canvas";
+// The regions of a page's Layout, drawn locked around the page on the canvas.
+export type { CanvasRegion } from "./canvas-regions";
+export { REGION_ATTRIBUTE } from "./canvas-regions";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -130,7 +180,24 @@ export type { CanvasPreview, CanvasProps } from "./canvas";
  * with this one about the merge rule for a patch.
  */
 export { InspectorPanel } from "./inspector-panel";
-export type { InspectorPanelProps } from "./inspector-panel";
+export type {
+  BlockInspectorResolver,
+  InspectorPanelProps,
+} from "./inspector-panel";
+// What a host tells the inspector about the component it edits, beside it.
+export type { ComponentFieldsHost } from "./component-fields";
+// The banner over a component's own view: its name, its reach, and Back.
+export { ComponentBanner } from "./component-banner";
+export type { ComponentBannerProps } from "./component-banner";
+// And about its variants: how many placements chose one, for the delete dialog.
+export type {
+  ComponentVariantsHost,
+  VariantPreviewBinding,
+  VariantUse,
+} from "./component-variants";
+// The variant open in a component's view, previewed on the host's canvas.
+export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
+export type { VariantPreviewState } from "./variant-preview";
 
 /**
  * The Style half of the same inspector.
@@ -146,6 +213,8 @@ export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps, LibraryTierState } from "./insert-panel";
+export { ComponentsPanel } from "./components-panel";
+export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
@@ -161,7 +230,11 @@ export type { SavedPattern } from "./inserter";
  * would offer two ways to mount one feature that must agree about when the
  * saved set has actually been read.
  */
-export { authoredBreakpoints, sameBreakpoints } from "./breakpoints";
+export {
+  authoredBreakpoints,
+  BASE_DEVICE_LABEL,
+  sameBreakpoints,
+} from "./breakpoints";
 export { BreakpointManager } from "./breakpoint-manager";
 export type { BreakpointManagerProps } from "./breakpoint-manager";
 
@@ -197,8 +270,12 @@ export type { CanvasZoomControlProps } from "./canvas-zoom-control";
 export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
+  DESKTOP_PREVIEW_WIDTH,
   editedBreakpointAtWidth,
+  editingBreakpointOf,
   offeredTiers,
+  previewHeight,
+  previewWidth,
   selectableTiers,
   widthForBreakpoint,
 } from "./canvas-width";
@@ -224,7 +301,11 @@ export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
+  ComponentVerbsHost,
+  SharedStyleVerbHost,
 } from "./keyboard-actions";
+// Which way "Turn into component…" may go, as the host is told when it opens.
+export type { TurnIntoChoice } from "./toolbar-actions";
 
 /**
  * The floating toolbar, from this entry because it is a client component and
@@ -272,6 +353,13 @@ export type { BlockToolbarProps } from "./block-toolbar";
 export { SpacingOverlay } from "./spacing-overlay";
 export type { SpacingOverlayProps } from "./spacing-overlay";
 /*
+ * The notice a host renders above the canvas while a locked area holds what
+ * its lock doesn't allow: it shows the repair's steps and applies them, once
+ * confirmed, as one edit. `@experimental` until the editor's lock surfaces
+ * ship together.
+ */
+export { RepairNotice } from "./repair-notice";
+/*
  * The scrub context a host has to supply for a handle to write anywhere but the
  * base breakpoint of the resting state. The overlay defaults to that tier and
  * says so; a host drawing tiers or compiling under a scope passes this instead.
@@ -290,6 +378,8 @@ export type { SpacingScrubContext, SpacingSubject } from "./spacing-handles";
  */
 export { EmptyContainerAppenders } from "./empty-container-appender";
 export type { EmptyContainerAppendersProps } from "./empty-container-appender";
+export { PageInserters } from "./page-inserters";
+export type { PageInsertersProps } from "./page-inserters";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -301,6 +391,23 @@ export type { EmptyContainerAppendersProps } from "./empty-container-appender";
  */
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
+
+/**
+ * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
+ * declares, or a block an author locked in Layers. The answer is a union, and
+ * `isLayersLockFacts` tells the two apart: a Layers lock names the locked
+ * block (`label`, `relation`, `verb`), a slot lock names its holder
+ * (`holderType`, `lock`). `lockRefusalWording` words either.
+ */
+export {
+  isLayersLockFacts,
+  lockRefusalWording,
+  type LayersLockRefusalFacts,
+  type LockedRelation,
+  type LockedVerb,
+  type LockRefusalFacts,
+  type SlotLockRefusalFacts,
+} from "./lock-refusal";
 
 /**
  * Dragging blocks on the canvas, behind the same client banner: the hook holds
@@ -339,7 +446,22 @@ export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
  * never fetch.
  */
 export { useInlineEditing } from "./use-inline-editing";
+/**
+ * The registry an inspector rich-text field holds its open passage in, so the
+ * host's `useInlineEditing` finishes it before the document is stored.
+ * Made once per editor and lent to both the inspector and the inline editing.
+ *
+ * @experimental
+ */
+export { createOpenPassages } from "./open-passages";
+export type { OpenPassages } from "./open-passages";
 export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What a host says when a double-click lands on text a component does not
+ * expose: the hook selects the placement and hands the host its id, and the
+ * host reads the placement with `inspectInstance` against its own library.
+ */
+export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
 /**
  * What finishing an inline edit did.
  *
@@ -422,15 +544,25 @@ export type {
  * document and ships from the root entry.
  */
 export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps } from "./layers-panel";
+export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
-export { TokensPanel } from "./tokens-panel";
-export type { TokensPanelProps } from "./tokens-panel";
+export { TokensPanel, useVariablesHeader } from "./tokens-panel";
+export type {
+  SpacingModeControl,
+  TokensPanelProps,
+  VariablesHeader,
+} from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The editor's words, spelled once, for every surface a host draws beside the
+ * shell's own: a panel it mounts names its places with these.
+ */
+export { EDITOR_WORDS } from "./editor-words";
+export type { EditorWord } from "./editor-words";
 /*
  * The two class surfaces, and the rules both answer from.
  *
@@ -441,13 +573,20 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  * not the save.
  */
 export { ClassSelector } from "./class-selector";
+export type { ClassSelectorProps } from "./class-selector";
 /*
- * `ClassCreation` travels with the selector's props because a HOST implements
- * `onCreateClass` and has to name what it answers with. It was reachable only
- * through `ClassSelectorProps["onCreateClass"]`, which spells one type as a
- * lookup into another and reads as though the answer were private.
+ * Saving a block's look as a shared style: the dialog the host raises from
+ * the block verb, and what the Style tab borrows from the host to edit a
+ * shared style as its target.
  */
-export type { ClassCreation, ClassSelectorProps } from "./class-selector";
+export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
+export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
+export type { SharedStylesHost } from "./style-target";
+export type {
+  SharedStyleChange,
+  SharedStyleOffer,
+} from "./shared-style-target";
+export { sharedStyleNameTaken } from "./shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *
@@ -461,11 +600,22 @@ export type { ClassCreation, ClassSelectorProps } from "./class-selector";
  */
 export { useNoticeQueue } from "./builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./builder-notices";
-export { ClassManagerPanel } from "./class-manager-panel";
+export { SharedStylesPanel } from "./shared-styles-panel";
 export type {
-  ClassManagerPanelProps,
   ClassRenameOutcome,
-} from "./class-manager-panel";
+  PageClassBlocks,
+  SharedStylesAccess,
+  SharedStylesPanelProps,
+} from "./shared-styles-panel";
+export type {
+  SharedStyleKind,
+  SharedStyleReach,
+  SharedStyleRefusal,
+  SharedStylesCount,
+  SharedStylesUsage,
+  SharedStyleUse,
+  SharedStyleUsesPage,
+} from "./shared-style-library";
 export {
   classRows,
   filterClassRows,
@@ -491,20 +641,39 @@ export type {
 } from "./class-library";
 
 /**
- * The fonts panel, and the rules it draws from.
+ * The Design panel's Fonts tab, and the rules it draws from.
  *
- * A reader over the site's faces and its `fontFamily` tokens rather than an
- * editor: creating and renaming those tokens belongs to the tokens studio, and
- * the question this answers — whether a family a token names will actually
- * render — needs both lists at once, which is why neither the studio nor the
- * inspector can ask it.
+ * It lists the site's fonts and font variables, adds a font by uploading a
+ * file or through the host's Google Fonts catalogue, and removes one. Font
+ * variables are listed here and changed in Variables.
+ *
+ * @experimental The catalogue's shapes may change while the feature settles.
  */
 export { FontsPanel } from "./fonts-panel";
-export type { FontsPanelProps, FontFaceUpload } from "./fonts-panel";
-export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
+export type {
+  CatalogueAddRequest,
+  CatalogueFamilyView,
+  FontCatalogue,
+  FontsPanelProps,
+  FontFaceUpload,
+} from "./fonts-panel";
+export {
+  fontTokenRows,
+  readStack,
+  rowsNeedingAttention,
+  withoutFamily,
+} from "./font-library";
 export type {
   FamilyReading,
   FamilySource,
   FontTokenRow,
+  SiteFamily,
   StackReading,
 } from "./font-library";
+
+/**
+ * Which values each placement of a new component may change: the picker the
+ * host's "Turn into component" form draws.
+ */
+export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
+export type { ExposurePickerProps } from "./exposure-picker";

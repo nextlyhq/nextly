@@ -6,6 +6,7 @@ import type { CollectionRelationshipService } from "../../../services/collection
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { LocalizationSource } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 
 import {
   FieldGroupMutationService,
@@ -103,9 +104,9 @@ export class FieldGroupDataService {
     slug: string,
     executor?: unknown
   ): Promise<boolean> {
-    return (
-      (await this.getComponentDefinition(slug, executor))?.localized === true
-    );
+    // Where its values are stored, as the mutation service writes them: per language when the
+    // component is translatable or the site keeps every translatable value so.
+    return storesPerLanguage(await this.getComponentDefinition(slug, executor));
   }
 
   /**
@@ -193,5 +194,21 @@ export class FieldGroupDataService {
     params: PopulateComponentDataManyParams
   ): Promise<Record<string, unknown>[]> {
     return this.queryService.populateComponentDataMany(params);
+  }
+
+  /**
+   * One entry's component data in several languages at once, each component
+   * table read once for them all; see
+   * `FieldGroupQueryService.populateComponentDataByLanguage`.
+   */
+  // Reached through the component-subtree reader's optional dependency, which
+  // the dead-code gate cannot trace to the class.
+  // fallow-ignore-next-line unused-class-member
+  populateComponentDataByLanguage(
+    params: Parameters<
+      FieldGroupQueryService["populateComponentDataByLanguage"]
+    >[0]
+  ): Promise<Record<string, unknown>[]> {
+    return this.queryService.populateComponentDataByLanguage(params);
   }
 }

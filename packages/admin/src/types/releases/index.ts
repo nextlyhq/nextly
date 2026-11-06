@@ -131,6 +131,12 @@ export interface Release {
    */
   memberAction?: ReleaseMemberAction;
   /**
+   * The membership's own id, on the same `containing` read as `memberAction`,
+   * so the document's screen can take the document out of this release without
+   * matching it to a member itself.
+   */
+  memberId?: string;
+  /**
    * What stands between this release and its instant, per member.
    *
    * Sent only on a detail read of a BLOCKED release, and derived there rather
@@ -211,12 +217,89 @@ export interface ScheduleReleasePayload {
   timezone: string;
 }
 
+/** One document put into a release, going live or coming down at its moment. */
 export interface AddReleaseMemberPayload {
   scopeKind: "collection" | "single";
   scopeSlug: string;
   entryId: string;
   action: ReleaseMemberAction;
 }
+
+/**
+ * Several documents put into one release in one step, each with its action.
+ * The server adds all of them or none.
+ */
+export interface AddReleaseMembersPayload {
+  members: AddReleaseMemberPayload[];
+}
+
+/** A document an added one links to that will not be live at the release's moment. */
+export interface UnpublishedLink {
+  scopeKind: "collection";
+  scopeSlug: string;
+  entryId: string;
+  /** Every field of the added document that links to it. */
+  fields: string[];
+}
+
+/**
+ * What an add says of an added document's links, as the reader may be told
+ * them: the linked documents they may read, and counts for the rest.
+ */
+export interface UnpublishedLinksReport {
+  links: UnpublishedLink[];
+  /** Links to, or from, documents the reader may not read. */
+  hiddenCount: number;
+  /** Links in fields the reader may not view. */
+  inHiddenFields: number;
+  /** Fields linking to documents that no longer exist, and how many each. */
+  deletedLinks: Array<{ field: string; count: number }>;
+}
+
+/** A member as an add answers it, with its document's unpublished links. */
+export interface AddedReleaseMember extends ReleaseMember {
+  unpublishedLinks: UnpublishedLinksReport;
+}
+
+/**
+ * One document put into a release in one all-or-nothing step, going live or
+ * coming down at the release's moment. Mirrors the server's strict body: a key
+ * it does not read is refused.
+ *
+ * - `own`: the server creates a single-document release named `title`, puts
+ *   the document in it and schedules it at `at` in `timezone`, or does none of
+ *   it.
+ * - `existing`: the document joins the ordinary release `releaseId`.
+ * - `new`: the server creates a draft release named `title`, with an optional
+ *   `description`, holding the document; it is scheduled from its own page.
+ */
+export type ScheduleDocumentPayload =
+  | {
+      into: "own";
+      document: ScheduledDocumentRef;
+      /** The release's name. */
+      title: string;
+      /** ISO 8601 with an explicit offset or `Z`; the route refuses anything else. */
+      at: string;
+      /** An IANA zone name. The route validates it through `Intl`. */
+      timezone: string;
+    }
+  | {
+      into: "existing";
+      document: ScheduledDocumentRef;
+      releaseId: string;
+    }
+  | {
+      into: "new";
+      document: ScheduledDocumentRef;
+      title: string;
+      description?: string | null;
+    };
+
+/** The document a schedule puts in a release, and what the release does to it. */
+export type ScheduledDocumentRef = ReleaseDocumentRef & {
+  action: ReleaseMemberAction;
+};
 
 /** A document, as the release list's `containing` filter names it. */
 export interface ReleaseDocumentRef {
@@ -380,3 +463,34 @@ export interface ReleaseReadiness {
 export type ReleaseReadinessEntry =
   | (ReleaseReadiness & { checked: true })
   | { releaseId: string; checked: false; reason: "over-member-limit" };
+
+/** A rename, a new description, or both; `null` clears the description. */
+export interface UpdateReleasePayload {
+  title?: string;
+  description?: string | null;
+}
+
+/**
+ * The document a release's member names, as its page shows it: what it is
+ * called, and where it stands now.
+ *
+ * Read for the documents the reader may read, which are the only ones the
+ * members list names. A member the read does not answer for has no entry: a
+ * document deleted since it was added, whose own check then says so.
+ */
+export interface ReleaseDocumentInfo {
+  /** What the document is called, or `null` when nothing in it names it. */
+  title: string | null;
+  /** Its status now, where its collection has one. */
+  status: "draft" | "published" | null;
+  /** Whether it has ever been published, where that is recorded. */
+  everPublished: boolean | null;
+  /** When it was last saved, where that is recorded. */
+  updatedAt: string | null;
+}
+
+/** A collection's or Single's display names, as the release page groups by them. */
+export interface ReleaseScopeNames {
+  singular: string;
+  plural: string;
+}

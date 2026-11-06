@@ -1,0 +1,52 @@
+name: Sweep pull request caches
+
+# Every hour, deletes the Actions caches of open pull requests that no run
+# will read again: a family's older keys on a pull request's ref, once a newer
+# push has saved it, and a pull request's copy of a key `main` also holds.
+# Until eviction reached them they held the repository's cache allowance, and
+# eviction removed `main`'s caches as readily. Nothing outside a pull
+# request's merge ref is touched: `scripts/sweep-pull-request-caches.mjs` has
+# the rule. A closed pull request's caches go when it closes
+# (`cancel-closed-pull-request-runs.yml`).
+#
+# Scheduled, never on a pull request's event: this job holds `actions: write`,
+# and only the default branch's code runs with it. A dispatch can name any
+# branch, whose own copy of this file and the script would then run, so the job
+# refuses every ref but `main`.
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sweep-pull-request-caches
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Delete pull request caches nothing reads
+    if: github.repository == 'nextlyhq/nextly' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/sweep-pull-request-caches.mjs

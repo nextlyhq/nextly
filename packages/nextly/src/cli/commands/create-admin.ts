@@ -56,22 +56,46 @@ import { seedPermissions } from "../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   isFirstAdministratorTaken,
   superAdminRoleHeld,
 } from "../../domains/users/services/last-super-admin";
-import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { failWithError, printCliError, type CliError } from "../errors";
+import {
+  adminEmailInUse,
+  adminEmailInvalid,
+  adminNameMissing,
+  adminPasswordMissing,
+  adminPasswordsDiffer,
+  adminPasswordTooWeak,
+  setupAlreadyComplete,
+  setupInProgress,
+} from "../errors/areas/commands";
 // Types only: the program hands this module its context factory, so this
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import {
+  createCliAdapter,
+  openDryRunAdapter,
+  type MissingDatabase,
+} from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import { answered } from "../utils/prompt-cancelled";
 
-export const CREATE_ADMIN_COMMAND = "users:create-admin";
+import {
+  ADMIN_PASSWORD_ENV,
+  CREATE_ADMIN_COMMAND,
+} from "./create-admin.command";
 
-/** Where the password is read from when no prompt can ask for it. */
-export const ADMIN_PASSWORD_ENV = "NEXTLY_ADMIN_PASSWORD";
+export {
+  ADMIN_PASSWORD_ENV,
+  CREATE_ADMIN_COMMAND,
+  registerCreateAdminCommand,
+} from "./create-admin.command";
 
 /** The first administrator's details, the password among them. */
 export interface FirstAdminDetails {
@@ -135,6 +159,36 @@ export async function createFirstAdministrator(
   } finally {
     await claim.release();
   }
+}
+
+/**
+ * What creating the first administrator would do, asked through the same
+ * steps and written by none of them: no setup claim is taken, so a web setup
+ * running at the same moment is not seen. Each refusal is the real run's, in
+ * its words.
+ */
+export async function previewFirstAdministrator(
+  setup: FirstAdminSetup,
+  details: FirstAdminDetails
+): Promise<DryRunPlan> {
+  const refusal = (await setup.administratorExists())
+    ? REFUSALS["administrator-exists"]()
+    : (await setup.accountExists(details.email))
+      ? REFUSALS["email-in-use"]()
+      : undefined;
+  if (refusal) return { changes: [], refusals: [refusal.what] };
+  return {
+    changes: [
+      {
+        action: "write",
+        target: `the first administrator, ${details.email}, with the super-admin role and its permissions`,
+      },
+      { action: "remove", target: "the setup token, spent" },
+    ],
+    notes: [
+      "A dry run takes no setup claim, so a web setup running at the same moment is not seen.",
+    ],
+  };
 }
 
 /** The narrow view of the query builder the email check reads through. */
@@ -227,20 +281,36 @@ export function firstAdminSetupFor(
 /** What the command reads from outside: its environment and its terminal. */
 export interface CreateAdminIo {
   env: Record<string, string | undefined>;
-  /** Whether a person can be asked: a terminal on both ends. */
+  /** Whether a person can be asked: `canPrompt`'s answer. */
   interactive: boolean;
-  /** Ask for a value that is not echoed; `null` when the person cancels. */
+  /**
+   * Ask for a value that is not echoed; `null` for no answer. A cancel
+   * (Ctrl+C) ends the run with exit 130 rather than returning.
+   */
   askSecret(message: string): Promise<string | null>;
-  /** Ask for a value; `null` when the person cancels. */
+  /**
+   * Ask for a value; `null` for no answer. A cancel (Ctrl+C) ends the run
+   * with exit 130 rather than returning.
+   */
   ask(message: string): Promise<string | null>;
-  /** Connect to the install's database: its steps, and how to let it go. */
-  connect(): Promise<{ setup: FirstAdminSetup; close(): Promise<void> }>;
+  /**
+   * Connect to the install's database: its steps, and how to let it go.
+   * `readOnly` opens it as a dry run does, and a database that is not there
+   * comes back as `missing` instead of being made.
+   */
+  connect(
+    readOnly?: boolean
+  ): Promise<
+    { setup: FirstAdminSetup; close(): Promise<void> } | MissingDatabase
+  >;
 }
 
 /** The flags the command takes. There is no password flag, by design. */
 export interface CreateAdminOptions {
   email?: string;
   name?: string;
+  /** `--dry-run`: run the checks and name what would be created, create nothing. */
+  dryRun?: boolean;
 }
 
 const EmailSchema = z.string().trim().email();
@@ -273,46 +343,43 @@ export async function readAdminPassword(
   return again === first ? first : undefined;
 }
 
-/** What the person is told for each outcome, and the exit code it carries. */
-const OUTCOMES: Record<FirstAdminOutcome, { message: string; code: number }> = {
-  created: { message: "Created the first administrator.", code: 0 },
-  "administrator-exists": {
-    message:
-      "Setup is already complete: this install has an administrator. Nothing was created.",
-    code: 1,
-  },
-  "email-in-use": {
-    message:
-      "An account already uses that email. Nothing was created; choose another email.",
-    code: 1,
-  },
-  "setup-in-progress": {
-    message:
-      "Another setup is in progress for this install. Nothing was created; try again once it ends.",
-    code: 1,
-  },
+/** What each refused outcome ends the command with. */
+const REFUSALS: Record<
+  Exclude<FirstAdminOutcome, "created">,
+  () => CliError
+> = {
+  "administrator-exists": () => setupAlreadyComplete(CREATE_ADMIN_COMMAND),
+  "email-in-use": adminEmailInUse,
+  "setup-in-progress": () => setupInProgress(CREATE_ADMIN_COMMAND),
 };
 
-/** The details, or the reason they cannot be had, as the line to print. */
+/** The details, or the reason they cannot be had, as the command's error. */
 async function gatherDetails(
   options: CreateAdminOptions,
   io: CreateAdminIo
-): Promise<FirstAdminDetails | { problem: string }> {
+): Promise<FirstAdminDetails | { problem: CliError }> {
   const email = await valueOf(options.email, "Email", io);
   if (email === null || !EmailSchema.safeParse(email).success) {
-    return { problem: "Give a valid email with --email." };
+    return { problem: adminEmailInvalid(email) };
   }
   const name = await valueOf(options.name, "Name", io);
-  if (name === null)
-    return { problem: "Give the administrator's name with --name." };
+  if (name === null) return { problem: adminNameMissing() };
   const password = await readAdminPassword(io);
-  if (password === undefined) return { problem: "The two passwords differ." };
+  if (password === undefined) return { problem: adminPasswordsDiffer() };
   if (password === null) {
-    return {
-      problem: `Set ${ADMIN_PASSWORD_ENV}, or run this in a terminal to be asked. The password is never taken from an argument.`,
-    };
+    return { problem: adminPasswordMissing(ADMIN_PASSWORD_ENV) };
   }
   return { email, name, password };
+}
+
+/**
+ * Prints `error` in the error shape and answers the failing code, 1. The
+ * command resolves to its exit code rather than exiting, so the shape is
+ * printed here and the code is the caller's to set.
+ */
+function refuse(logger: CommandContext["logger"], error: CliError): number {
+  printCliError(logger, error);
+  return 1;
 }
 
 /**
@@ -327,26 +394,47 @@ export async function runCreateAdmin(
   const { logger } = context;
   const details = await gatherDetails(options, io);
   if ("problem" in details) {
-    logger.error(details.problem);
-    return 1;
+    // A dry run names it as the real run's refusal, and exits 0.
+    if (options.dryRun === true) {
+      reportDryRun(logger, { changes: [], refusals: [details.problem.what] });
+      return 0;
+    }
+    return refuse(logger, details.problem);
   }
-  const connection = await io.connect();
+  const dryRun = options.dryRun === true;
+  const connection = await io.connect(dryRun);
+  // A dry run whose database is not there names that as the refusal.
+  if ("missing" in connection) {
+    reportDryRun(logger, { changes: [], refusals: [connection.missing] });
+    return 0;
+  }
   try {
     // The connect loads the install's config, which publishes the configured
     // minimum the password rule judges against — so the check runs after it,
     // not before, or an install that raised its minimum would be judged by
     // the default.
     const strength = validatePasswordStrength(details.password);
+    if (dryRun) {
+      reportDryRun(
+        logger,
+        strength.ok
+          ? await previewFirstAdministrator(connection.setup, details)
+          : {
+              changes: [],
+              refusals: [adminPasswordTooWeak(strength.errors).what],
+            }
+      );
+      return 0;
+    }
     if (!strength.ok) {
-      logger.error("That password is too weak:");
-      for (const rule of strength.errors) logger.error(`  - ${rule}`);
-      return 1;
+      return refuse(logger, adminPasswordTooWeak(strength.errors));
     }
     const outcome = await createFirstAdministrator(connection.setup, details);
-    const { message, code } = OUTCOMES[outcome];
-    if (code === 0) logger.success(`${message} Sign in as ${details.email}.`);
-    else logger.error(message);
-    return code;
+    if (outcome !== "created") return refuse(logger, REFUSALS[outcome]());
+    logger.success(
+      `Created the first administrator. Sign in as ${details.email}.`
+    );
+    return 0;
   } finally {
     await connection.close();
   }
@@ -356,10 +444,12 @@ export async function runCreateAdmin(
  * Connect to the database the install's environment names, with the system
  * tables registered so the account services can resolve them.
  */
-export async function connectToInstall(context: CommandContext): Promise<{
-  setup: FirstAdminSetup;
-  close(): Promise<void>;
-}> {
+export async function connectToInstall(
+  context: CommandContext,
+  readOnly = false
+): Promise<
+  { setup: FirstAdminSetup; close(): Promise<void> } | MissingDatabase
+> {
   const { logger } = context;
   // The config first, as every command that reads the database loads it: it
   // publishes the configured PostgreSQL schema the connection resolves in, so
@@ -375,23 +465,21 @@ export async function connectToInstall(context: CommandContext): Promise<{
     loadConfigResult.config.auth?.minPasswordLength ??
       DEFAULT_MIN_PASSWORD_LENGTH
   );
-  const database = validateDatabaseEnv();
-  if (!database.valid) {
-    // The settings it names are the operator's own, so each is reported, and
-    // printed with the error's context where the command reports a failure.
-    throw NextlyError.validation({
-      errors: database.errors.map(message => ({
-        path: "env",
-        code: "INVALID_DATABASE_SETTING",
-        message,
-      })),
-      logContext: { problems: database.errors },
-    });
-  }
-  const cli = await createCliAdapter({
-    dialect: database.dialect,
+  // The settings are the operator's own, so the error names the first one to fix, under the
+  // code every command reports it with.
+  const database = databaseEnvOrThrow();
+  const dialectSetting = database.dialect;
+  // A failure here already carries its code: `createCliAdapter` gives it one.
+  // A dry run opens read-only, and a database that is not there is answered.
+  const connection = {
+    dialect: dialectSetting,
     databaseUrl: database.databaseUrl,
-  });
+  };
+  const opened = readOnly
+    ? await openDryRunAdapter(connection)
+    : await createCliAdapter(connection);
+  if ("missing" in opened) return opened;
+  const cli = opened;
   const adapter = cli as unknown as DrizzleAdapter;
   const { dialect } = adapter.getCapabilities();
   const registry = new SchemaRegistry(dialect);
@@ -408,40 +496,35 @@ export async function connectToInstall(context: CommandContext): Promise<{
 
 /** The terminal and environment the command runs with. */
 function processIo(context: CommandContext): CreateAdminIo {
-  const answer = (value: string | symbol): string | null =>
-    p.isCancel(value) ? null : value;
   return {
     env: process.env,
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    askSecret: async message => answer(await p.password({ message })),
-    ask: async message => answer(await p.text({ message })),
-    connect: () => connectToInstall(context),
+    // The CLI's one answer to whether anyone can be asked: `--non-interactive`
+    // and `CI` say no even at a terminal.
+    interactive: canPrompt(),
+    // Ctrl+C at either prompt ends the run with exit 130 (`answered`).
+    askSecret: async message => answered(await p.password({ message })),
+    ask: async message => answered(await p.text({ message })),
+    connect: readOnly => connectToInstall(context, readOnly),
   };
 }
 
-/** Register `nextly users:create-admin`. */
-export function registerCreateAdminCommand(
-  program: Command,
+/**
+ * The action of `nextly users:create-admin`, loaded when it runs, building its
+ * context with the factory the program hands in.
+ */
+export function createAdminAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(CREATE_ADMIN_COMMAND)
-    .description(
-      `Create the first administrator in this install's database (password from ${ADMIN_PASSWORD_ENV} or a prompt)`
-    )
-    .option("--email <email>", "The administrator's email")
-    .option("--name <name>", "The administrator's name")
-    .action(async (options: CreateAdminOptions, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      try {
-        process.exitCode = await runCreateAdmin(
-          options,
-          context,
-          processIo(context)
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exitCode = 1;
-      }
-    });
+): (options: CreateAdminOptions, cmd: Command) => Promise<void> {
+  return async (options: CreateAdminOptions, cmd: Command) => {
+    const context = createContext(cmd.optsWithGlobals());
+    try {
+      process.exitCode = await runCreateAdmin(
+        options,
+        context,
+        processIo(context)
+      );
+    } catch (error) {
+      failWithError(context.logger, error);
+    }
+  };
 }

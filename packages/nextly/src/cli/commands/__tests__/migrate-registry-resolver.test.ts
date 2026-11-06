@@ -13,9 +13,16 @@
  * property the sweep depends on. A spy would also pass on a resolver that
  * registered the wrong dialect's tables, or none at all.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeAll } from "vitest";
 
 import { installRegistryResolver } from "../migrate";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 function adapterFor(dialect: "postgresql" | "mysql" | "sqlite") {
   const setTableResolver = vi.fn();

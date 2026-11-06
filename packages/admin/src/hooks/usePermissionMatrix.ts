@@ -56,6 +56,8 @@ type PermissionMatrixState = {
     contentTypes: ContentTypePermissions[],
     action: string
   ) => boolean;
+  /** What the matrix shows ticked: the role's own and its locked permissions. */
+  shown: string[];
 };
 
 /**
@@ -76,6 +78,14 @@ export function usePermissionMatrix({
   const organizedPermissions = useMemo(
     () => organizePermissions(permissions),
     [permissions]
+  );
+
+  // The value is the role's own permissions; a locked one is the base's,
+  // shown ticked beside them but never added to them, so it is not saved as
+  // the role's own.
+  const shown = useMemo(
+    () => Array.from(new Set([...value, ...lockedIds])),
+    [value, lockedIds]
   );
 
   // Filter content types based on search term
@@ -115,15 +125,13 @@ export function usePermissionMatrix({
       if (checked) {
         // Add all permissions for this content type
         permissionIds.forEach(id => {
-          if (!newValue.includes(id)) {
+          if (!newValue.includes(id) && !lockedIds.includes(id)) {
             newValue.push(id);
           }
         });
       } else {
         // Remove all permissions for this content type
-        newValue = newValue.filter(
-          id => !permissionIds.includes(id) || lockedIds.includes(id)
-        );
+        newValue = newValue.filter(id => !permissionIds.includes(id));
       }
 
       onChange(newValue);
@@ -145,15 +153,13 @@ export function usePermissionMatrix({
       if (checked) {
         // Add all permissions for this action
         permissionIds.forEach(id => {
-          if (!newValue.includes(id)) {
+          if (!newValue.includes(id) && !lockedIds.includes(id)) {
             newValue.push(id);
           }
         });
       } else {
         // Remove all permissions for this action
-        newValue = newValue.filter(
-          id => !permissionIds.includes(id) || lockedIds.includes(id)
-        );
+        newValue = newValue.filter(id => !permissionIds.includes(id));
       }
 
       onChange(newValue);
@@ -164,26 +170,26 @@ export function usePermissionMatrix({
   // Helper functions with value baked in
   const checkIsAllSelected = useCallback(
     (contentType: ContentTypePermissions): boolean =>
-      isAllSelected(contentType, value),
-    [value]
+      isAllSelected(contentType, shown),
+    [shown]
   );
 
   const checkIsPartiallySelected = useCallback(
     (contentType: ContentTypePermissions): boolean =>
-      isPartiallySelected(contentType, value),
-    [value]
+      isPartiallySelected(contentType, shown),
+    [shown]
   );
 
   const checkIsAllSelectedForAction = useCallback(
     (contentTypes: ContentTypePermissions[], action: string): boolean =>
-      isAllSelectedForAction(contentTypes, action, value),
-    [value]
+      isAllSelectedForAction(contentTypes, action, shown),
+    [shown]
   );
 
   const checkIsPartiallySelectedForAction = useCallback(
     (contentTypes: ContentTypePermissions[], action: string): boolean =>
-      isPartiallySelectedForAction(contentTypes, action, value),
-    [value]
+      isPartiallySelectedForAction(contentTypes, action, shown),
+    [shown]
   );
 
   return {
@@ -207,5 +213,7 @@ export function usePermissionMatrix({
     isPartiallySelected: checkIsPartiallySelected,
     isAllSelectedForAction: checkIsAllSelectedForAction,
     isPartiallySelectedForAction: checkIsPartiallySelectedForAction,
+
+    shown,
   };
 }

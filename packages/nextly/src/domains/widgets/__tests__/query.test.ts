@@ -1318,6 +1318,8 @@ describe("a timeseries' range", () => {
       /range and since or until each name a window/,
     ],
     [{ range: "30d", interval: "day" }, /range sets the interval/],
+    // 🔴 The range sets the points drawn, so a limit beside it would be accepted and ignored.
+    [{ range: "30d", limit: 1 }, /range sets how many points are drawn/],
     [{ range: "60d" }, /range must be one of 7d, 30d, 90d, 12m/],
   ])("refuses %j on a timeseries", (keys, reason) => {
     expect(() =>
@@ -1328,6 +1330,18 @@ describe("a timeseries' range", () => {
         ...keys,
       })
     ).toThrow(reason);
+  });
+
+  it("carries no limit on a ranged query, so what it returns validates again unchanged", () => {
+    // 🔴 A limit added by default would be refused the next time the query is checked.
+    const once = validateWidgetQuery({
+      source: "collection:dated",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "30d",
+    });
+    expect(once).not.toHaveProperty("limit");
+    expect(validateWidgetQuery(once)).toEqual(once);
   });
 
   it("refuses a range on any op but a timeseries", () => {

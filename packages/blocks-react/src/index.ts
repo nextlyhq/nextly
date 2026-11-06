@@ -14,18 +14,33 @@
  * @module index
  */
 export type {
+  AccordionTitleLevel,
+  BindingIssuesHandler,
   BlockHostPolicy,
   BlockRenderArgs,
+  BlocksFieldShapeRef,
+  BlocksFieldShapes,
+  BlocksSiteSettings,
   BlocksDataProvider,
+  BlocksDataProviderFactory,
+  BlocksFilter,
+  BlocksFilterOp,
+  BlocksPublicReader,
   BlocksQuery,
   BlocksResult,
+  DefaultDataProviderOptions,
+  PageBindings,
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
+  ResolvedIcon,
   ResolvedMedia,
 } from "./context";
 export {
+  createDefaultDataProvider,
+  createQueryBudget,
   createStandaloneContext,
+  DEFAULT_MAX_QUERIES,
   defineBlock,
   emptyDataProvider,
 } from "./context";
@@ -41,8 +56,8 @@ export type { PageRendererProps } from "./page-renderer";
 // The rest are `SiteSheetInput`'s TRANSITIVE closure, and they are not padding.
 // Naming the outer type alone lets a consumer declare a variable and not build
 // one: the tokens are a `SiteTokenSet` of `SiteToken`s whose `kind` is a
-// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, and `darkMode` is
-// a `DarkModeStrategy`. A caller writing a site's design system needs every one
+// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, `darkMode` is
+// a `DarkModeStrategy` and `spacingMode` is a `SpacingMode`. A caller writing a site's design system needs every one
 // of them by name, so withholding any makes the prop typeable but unusable —
 // which is the same defect as not exporting the outer type, one level in.
 /**
@@ -64,6 +79,7 @@ export type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
+  SpacingMode,
   TokenKind,
 } from "@nextlyhq/blocks-engine";
 
@@ -107,10 +123,12 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 //
 // `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
 // container to draw an affordance on asks this attribute rather than keeping
-// its own copy of the string the renderer emits.
+// its own copy of the string the renderer emits. `LIST_ACTION_ATTRIBUTE` too:
+// the editor's canvas acts on the action a list's note offers by it.
 export {
   EDITOR_NAMESPACE,
   INSTANCE_ATTRIBUTE,
+  LIST_ACTION_ATTRIBUTE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
@@ -118,7 +136,33 @@ export {
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.
 export { isAllowedAttribute } from "./block-boundary";
-export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
+export type {
+  BlockBoundaryProps,
+  BlockListProps,
+  BoundaryBindings,
+} from "./block-boundary";
+// The binding pass's own types, which the props above and a block's `bound`
+// argument name. A consumer passing bindings or reading a bound value has no
+// other path to them: the engine is this package's dependency, not theirs.
+export type {
+  BindablePropKind,
+  BindingFieldShape,
+  BindingFormatter,
+  BindingIssue,
+  BindingIssueCode,
+  BindingRun,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  BindingSources,
+  BlockPropsLookup,
+  BoundValue,
+  BoundValues,
+  CheckedFormat,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+  FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * Draw stored rich text as React.
@@ -187,8 +231,17 @@ export type {
  * from the evidence, which is why it exists rather than a documented instruction to pass a flag.
  */
 export { pruneHiddenNodes } from "./visibility";
-export { prepareDocumentForRead, rendersOwnMarkup } from "./prepare-document";
-export type { PrepareDocumentArgs } from "./prepare-document";
+export {
+  pageBindingRun,
+  prepareDocumentForRead,
+  rendersOwnMarkup,
+} from "./prepare-document";
+/**
+ * @experimental The tree the renderer walks, placeholders included, for a
+ * surface listing a page's parts beside a picture of it.
+ */
+export { prepareDocumentAsDrawn } from "./prepare-document";
+export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
 
@@ -262,6 +315,10 @@ export type {
   CompiledPageCss,
   ComponentPath,
   Condition,
+  // Reachable from `BlockDefinition.contentModel`, which a block author
+  // declares; a type reachable through a re-exported one but unnamed is a hole.
+  ContentKind,
+  ContentModel,
   DocumentFormatVersion,
   DocumentKind,
   DocumentLimits,
@@ -286,9 +343,21 @@ export type {
   // cannot write these down cannot annotate the call it is required to make.
   ComponentUnresolvedReason,
   DefinitionsById,
+  // A resolved node maps each exposed prop to the placement exposure feeding it.
+  PropExposure,
   ResolvedBlockNode,
   ResolvedDocument,
   UnresolvedInstance,
+  // Named by the composition and exposed-property types above: a resolution's
+  // options carry a work allowance, and an exposed property states its type,
+  // so a host typing either needs these without reaching into the engine.
+  ExposedPropertyType,
+  ResolveComponentOptions,
+  WorkAllowance,
+  // Named by the engine's insert of a locked subtree, which types above reach:
+  // where a block lands, and the block that lands there.
+  OpPosition,
+  Placed,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
@@ -339,3 +408,15 @@ export {
   COMPONENT_DOCUMENT_FIELD,
   type ComponentSource,
 } from "./component-source";
+// The same discovery for a reader that needs the definitions themselves: the
+// page builder's Layout choices read a region's components, nested ones
+// included, at the posture the published route reads them.
+export { definitionsFor } from "./component-source";
+
+// How a page and the regions of its Layout share one site sheet and keep
+// their own styles apart: one answer for the published route and the editor's
+// canvas, so an author sees the cascade a visitor gets.
+export { layoutPartSheets, type PagePart, type PartSheet } from "./page-parts";
+// The area type `PagePart` names, re-exported so a consumer of this entry can
+// name it without a dependency on the engine.
+export type { RegionArea } from "@nextlyhq/blocks-engine";

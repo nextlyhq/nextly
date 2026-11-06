@@ -9,9 +9,12 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
+import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
   clearRegistry,
   registerComponent,
@@ -49,11 +52,13 @@ vi.mock(
   }
 );
 
+// A marker, so whether the page draws the banner itself or hands it to the
+// form can be told apart.
 vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
-  ScheduledReleaseBanner: () => null,
+  ScheduledReleaseBanner: () => <p>scheduled release banner</p>,
 }));
-vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
-  useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
+vi.mock("@admin/components/features/releases/ScheduleDocumentAction", () => ({
+  useScheduleDocumentAction: () => ({ dialog: null, contributed: null }),
 }));
 
 let collectionSchema: Record<string, unknown> = {};
@@ -72,6 +77,8 @@ vi.mock("@admin/hooks/queries/useEntry", () => ({
 // here the page is handed the entry as the populated read gives it, unless a
 // case sets `mergedEntry` to stand for a merge that differs from it.
 let mergedEntry: Record<string, unknown> | undefined;
+/** When the entry was read and how to read it again, for a case that gains it. */
+let entryLatest: DocumentLatest | undefined;
 vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
   useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
   useWithStoredReferences: ({
@@ -82,7 +89,20 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     document: mergedEntry ?? populated.data,
     isLoading: populated.isLoading,
     error: populated.error,
+    latest: entryLatest,
   }),
+}));
+/** What the server's answer says about the user changing this collection. */
+let updateAnswer: UpdateAnswer = "allowed";
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
+  useUpdateAnswer: () => updateAnswer,
+}));
+// The requests judged in other languages: allowed, so these cases stay
+// about the claim.
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: () => true,
+  useAsksTranslationStatus: () => false,
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
@@ -122,6 +142,7 @@ function claimRequest(): Record<string, unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  updateAnswer = "allowed";
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver,
@@ -134,6 +155,7 @@ beforeEach(() => {
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
   mergedEntry = undefined;
+  entryLatest = undefined;
   customViewProps = undefined;
   entryFormProps = undefined;
 });
@@ -239,6 +261,42 @@ describe("a custom collection edit view", () => {
     });
   });
 
+  it("makes no claim for a user who may only read, and hands the view a read-only page with its writes withheld", () => {
+    // The server refuses such a user's claim, and its refusal would read as
+    // "could not check whether anyone else is editing" over editable fields.
+    // A view gates its own save on `actionsDisabled`, so that is withheld as
+    // well as the fields.
+    withCustomView();
+    updateAnswer = "refused";
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(claimRequest()).toMatchObject({ enabled: false });
+    expect(customViewProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
+    expect(screen.getByTestId("document-lock-banner")).toHaveTextContent(
+      "Your access lets you view this, but not change it."
+    );
+  });
+
+  it("holds the view's writes while a language switch's answer is on its way", () => {
+    // The answer on screen is the language moved from, which grants nothing in
+    // the new one: the view's save stays withheld until that one's answer
+    // arrives, with no reader's banner on its word.
+    withCustomView();
+    updateAnswer = "switching";
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(customViewProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
+    expect(screen.queryByTestId("document-lock-banner")).toBeNull();
+  });
+
   it("withholds nothing while the claim is this editor's own", () => {
     withCustomView();
 
@@ -275,6 +333,74 @@ describe("a custom collection edit view", () => {
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
     expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+
+  it("says an entry a reader may not read is not found, as the server answers it", () => {
+    // The server answers an entry the caller may not read exactly as a
+    // missing one, 404 "Not found.", so the page says so and claims nothing.
+    updateAnswer = "refused";
+    entryQuery = {
+      data: undefined,
+      isLoading: false,
+      error: new Error("Not found."),
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // The server's message as it is, with nothing put in front of it.
+    expect(screen.getByRole("alert")).toHaveTextContent(/^Not found\.$/);
+    expect(screen.queryByTestId("document-lock-banner")).toBeNull();
+    expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+
+  it("tells an edit injection a reader's page holds its writes", () => {
+    // Before/AfterEdit open on read as the editor does, so one written to
+    // change the entry is told to hold its writes, as a custom view is.
+    let slotProps: Record<string, unknown> | undefined;
+    registerComponent(
+      "@acme/notes/admin#BeforeEdit",
+      (props: Record<string, unknown>) => {
+        slotProps = props;
+        return <div>before the editor</div>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { BeforeEdit: "@acme/notes/admin#BeforeEdit" } },
+    };
+    updateAnswer = "refused";
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("before the editor")).toBeInTheDocument();
+    expect(slotProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
+  });
+
+  it("tells an edit injection to hold its writes while a language switch's answer is on its way", () => {
+    let slotProps: Record<string, unknown> | undefined;
+    registerComponent(
+      "@acme/notes/admin#AfterEdit",
+      (props: Record<string, unknown>) => {
+        slotProps = props;
+        return <div>after the editor</div>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { AfterEdit: "@acme/notes/admin#AfterEdit" } },
+    };
+    updateAnswer = "switching";
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("after the editor")).toBeInTheDocument();
+    expect(slotProps?.documentLock).toEqual({
+      readOnly: true,
+      actionsDisabled: true,
+    });
   });
 
   it("leaves the claim to the form when there is no custom view", () => {
@@ -352,11 +478,10 @@ describe("a routed document view", () => {
     ).toBe(VIEW);
   });
 
-  it("answers not found for a field-type view on a collection without the field", () => {
+  it("opens a field-type view on a collection whose field of its type sits in a named group", () => {
     registerDocumentViews([
       { fieldType: "blocks", path: "builder", component: VIEW },
     ]);
-    // Only nested inside a group, which does not count.
     collectionSchema = {
       ...collectionSchema,
       fields: [
@@ -364,6 +489,35 @@ describe("a routed document view", () => {
         {
           name: "extra",
           type: "group",
+          fields: [{ name: "body", type: "blocks" }],
+        },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      (entryFormProps?.documentView as { component: string } | undefined)
+        ?.component
+    ).toBe(VIEW);
+  });
+
+  it("answers not found for a field-type view on a collection without the field", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    // Only inside a repeater's rows, which a view does not reach: a row is
+    // addressed by its position, which names another row after a reorder.
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "extra",
+          type: "repeater",
           fields: [{ name: "body", type: "blocks" }],
         },
       ],
@@ -408,5 +562,75 @@ describe("a routed document view", () => {
 
     expect(entryFormProps).toBeDefined();
     expect(entryFormProps?.documentView).toBeUndefined();
+  });
+});
+
+describe("the scheduled-release banner on the default editor", () => {
+  it("is handed to the form to draw under its header, not drawn above it", () => {
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // The replaced form draws only its marker, so a banner on screen here
+    // would be one the page drew above the form, where the header covers it.
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      screen.queryByText("scheduled release banner")
+    ).not.toBeInTheDocument();
+    render(<>{entryFormProps?.documentBanner}</>);
+    expect(screen.getByText("scheduled release banner")).toBeInTheDocument();
+  });
+});
+
+describe("a custom edit view that gains the entry", () => {
+  it("starts again from the copy loaded after the gain, not the one it read before", async () => {
+    // A view may read `initialData` once, as it mounts, and keep its own copy.
+    // Handed the newer entry as a prop alone, it would unlock over the copy it
+    // read while the colleague held the entry, and its next save would put
+    // that copy back over what they saved.
+    registerComponent(
+      CUSTOM_VIEW,
+      ({ initialData }: { initialData?: Record<string, unknown> }) => {
+        const [title] = useState(String(initialData?.title));
+        return <p>editing {title}</p>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    const reload = vi.fn(() => Promise.resolve());
+    entryLatest = { readAt: 1, failed: false, reload };
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "held-by-other",
+        holder: { ownerId: "u2", ownerLabel: "Ada", expiresInSeconds: 90 },
+        requestSent: false,
+      },
+      gains: 0,
+      takeOver,
+    });
+    const view = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42" }} />
+    );
+    expect(screen.getByText("editing A post")).toBeInTheDocument();
+
+    // Ada saved and left: this editor gains the entry and reloads it.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver,
+    });
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // The reads made since arrive with what Ada saved.
+    entryQuery = {
+      data: { id: "42", title: "Ada's post" },
+      isLoading: false,
+      error: null,
+    };
+    entryLatest = { readAt: 2, failed: false, reload };
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
   });
 });

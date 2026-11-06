@@ -1,0 +1,24 @@
+---
+title: BASELINE_LOCK_RELEASED
+description: "The schema lock was released before `nextly migrate:baseline` adopted the database, so nothing was written."
+---
+
+## Cause
+
+The schema lock was released before `nextly migrate:baseline` adopted the database, so nothing was written.
+
+`nextly migrate:baseline` takes the schema lock before it writes the baseline migration and records it as applied. The lock was released before that work ran, so the command stopped rather than report a baseline it never wrote.
+
+## Fix
+
+- Run `nextly migrate:baseline` again once no other schema operation, such as `nextly migrate` or `db:sync`, is running.
+- If it keeps happening, run `nextly migrate:status` to check nothing else is changing the schema.
+
+## Example
+
+```text
+✗ The migrate lock was released without adopting the database.
+  Why:  Nothing was written.
+  Next: Retry once no other schema operation is running.
+  Docs: https://nextlyhq.com/docs/cli/errors/baseline-lock-released  (BASELINE_LOCK_RELEASED)
+```

@@ -27,6 +27,7 @@ import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
 import * as richTextModule from "./rich-text";
+import * as pagePartsModule from "./page-parts";
 import * as pageRendererModule from "./page-renderer";
 import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
@@ -101,19 +102,23 @@ const SOURCE_MODULES: ReadonlyArray<{
   {
     name: "component-source",
     module: componentSourceModule,
-    // Only the question a caller outside the render can legitimately ask is
-    // public. The discovery loop, its constants and its lookup memo are the
-    // render's own machinery: a consumer reaching for `definitionsFor` wants
-    // the definitions the pipeline already builds for it, and one reaching for
+    // The questions a caller outside the render can legitimately ask are
+    // public: which components a page lacks, and the definitions it reaches
+    // (the page builder's Layout choices read a region's components, nested
+    // ones included, as the published route reads them). The constants and
+    // the lookup memo are the render's own machinery: a consumer reaching for
     // the constants is sizing a batch the render decides.
     internal: [
       "COMPONENT_TAG_COLLECTION",
       "EMPTY_DEFINITIONS",
       "MAX_DISCOVERED_COMPONENTS",
-      "definitionsFor",
     ],
   },
   { name: "context", module: contextModule, internal: [] },
+  // Public whole: how a page and the regions of its Layout share one site
+  // sheet and keep their styles apart, asked by the published route and the
+  // editor's canvas alike.
+  { name: "page-parts", module: pagePartsModule, internal: [] },
   {
     name: "rich-text",
     module: richTextModule,
@@ -122,8 +127,10 @@ const SOURCE_MODULES: ReadonlyArray<{
     // from the engine, which is the same walk the CMS uses, rather than a
     // second one here. These are exported only so their own test can drive
     // them at a depth React's renderer could not reach, and at the
-    // partition's bound from both sides.
+    // partition's bound from both sides. `drawsInteractive` is shared with the
+    // rich-text block's content model in this package, not offered outside it.
     internal: [
+      "drawsInteractive",
       "holdsBlockContent",
       "holdsInteractive",
       "MAX_PARTITION_DEPTH",
@@ -152,10 +159,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     //
     // The pre-hash label exists to explain an unexpected recompile from inside,
     // not to be compared by a consumer who would then be holding a second
-    // opinion about staleness.
+    // opinion about staleness. `stampedUnderCurrentEncoding` is that same
+    // staleness question, asked by `styles.ts` on a read with no context.
     internal: [
       "sharedStyleInputsId",
       "sharedStyleInputsLabel",
+      "stampedUnderCurrentEncoding",
       "UNIDENTIFIED_SHARED_INPUTS",
     ],
   },
@@ -294,7 +303,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     // implementation of one pass, which is the drift the pass's own docblock
     // argues against — but it is an internal derivation rather than something a
     // host composes with, so it crosses a module boundary and stops there.
+    //
+    // `pageCompileContext` is internal too: it lets the `/next` route draw a
+    // page and its Layout's regions with one site sheet between them, each
+    // document compiled under the context the renderer itself would derive.
+    // A host renders one document and has the renderer derive it.
     internal: [
+      "pageCompileContext",
       "pruneRenderedPlaceholders",
       "statedBreakpoints",
       "withoutStatedNulls",
@@ -343,11 +358,18 @@ const SOURCE_MODULES: ReadonlyArray<{
     // view would predict a different tree than the one that renders. Exported
     // to delete that second view, not to offer one: a consumer holding a
     // definitions map wants `prepareDocumentForRead`, which builds this itself.
+    //
+    // `prepareDocument` and `readStagesFor` are the route preparing a page once
+    // and the renderer reusing that preparation. The prop that carries one is
+    // internal, and what it carries is sealed inside this module, so there is
+    // nothing here a consumer could build.
     internal: [
       "isUnresolvedInstance",
+      "prepareDocument",
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
+      "readStagesFor",
       "repairingLookup",
     ],
   },
@@ -381,8 +403,13 @@ describe("the root entry", () => {
       "COMPONENT_DOCUMENT_FIELD",
       // The editor marker namespace, public so an editor refuses a name the
       // renderer would drop rather than keeping a list beside it.
+      // The read budget's default: see `createQueryBudget`.
+      "DEFAULT_MAX_QUERIES",
       "EDITOR_NAMESPACE",
       "INSTANCE_ATTRIBUTE",
+      // The action a collection list's note offers on the editor's canvas,
+      // public so the canvas acts on the name the renderer writes.
+      "LIST_ACTION_ATTRIBUTE",
       "NODE_ID_ATTRIBUTE",
       // The container names a preview compile aims its breakpoints at. Public
       // because the surface doing the previewing must put the same identifier
@@ -402,16 +429,29 @@ describe("the root entry", () => {
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
+      // The provider a route reads its lists through when given none, public
+      // so a route's own `data` can narrow it rather than rewrite it.
+      "createDefaultDataProvider",
+      // The bound on one render's reads, and its default, public so every
+      // surface that draws a page (the editor's canvas too) bounds alike.
+      "createQueryBudget",
       "createStandaloneContext",
       "defineBlock",
+      // The definitions a document reaches, discovered as the render does.
+      "definitionsFor",
       "emptyDataProvider",
       "fetchPolicyLabel",
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
       "islandsFor",
+      // Which part of a page drawn inside its Layout emits the site sheet, and
+      // the scope each part compiles under.
+      "layoutPartSheets",
       "migrationSourceFor",
+      "pageBindingRun",
       "pageStyleTrace",
+      "prepareDocumentAsDrawn",
       "prepareDocumentForRead",
       "preparePageForRead",
       "previewContainerFor",
@@ -540,6 +580,7 @@ describe("the blocks entry", () => {
       // them by relative import, and publishing them would add four names no
       // consumer needs and which could then never be renamed.
       "CORE_CATEGORIES",
+      "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
       "FORM_METHODS",
       "HEADING_LEVELS",
@@ -561,6 +602,9 @@ describe("the blocks entry", () => {
       "heading",
       "image",
       "list",
+      // Added deliberately: the editor's count of a list's matching entries,
+      // taken from the list's own read, so the two cannot disagree.
+      "listEntryCount",
       "paragraph",
       "quote",
       "renderContainer",

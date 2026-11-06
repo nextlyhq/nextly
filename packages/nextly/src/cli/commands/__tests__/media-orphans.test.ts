@@ -26,6 +26,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { retiredSizesColumnDdl } from "../../../__tests__/helpers/retired-image-sizes";
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
 import type {
   IStorageAdapter,
@@ -34,6 +35,7 @@ import type {
 } from "../../../storage/types";
 import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
 import type { ReferencedNow } from "../../../domains/media/orphan-thumbnails";
+import type { CliError } from "../../errors";
 import { mediaOrphans, type MediaReferences } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -208,6 +210,24 @@ async function run(
     now: NOW,
   });
   return { code, said: said.join("\n") };
+}
+
+/** As `run`, with the command's `fail`, which takes the reason a run fails. */
+async function runFailing(layout: Layout) {
+  const said: string[] = [];
+  const failures: CliError[] = [];
+  const code = await mediaOrphans({
+    storage: layout.storage,
+    prefix: "media",
+    exclusive: true,
+    referenced: async () => refs(layout.referenced),
+    referencedNow: askedOf(async () => refs(layout.referenced)),
+    apply: true,
+    say: line => said.push(line),
+    fail: error => failures.push(error),
+    now: NOW,
+  });
+  return { code, said: said.join("\n"), failures };
 }
 
 describe("nextly media orphans", () => {
@@ -684,6 +704,40 @@ describe("nextly media orphans", () => {
     expect(await layout.stored()).toContain(layout.orphan);
   });
 
+  it("names a thumbnail it could not remove in the run's error, when it is given `fail`", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).failOn = layout.orphan;
+
+    const { code, said, failures } = await runFailing(layout);
+
+    expect(code).toBe(1);
+    expect(failures.map(failure => failure.code)).toEqual([
+      "MEDIA_THUMBNAILS_NOT_REMOVED",
+    ]);
+    expect(failures[0]?.why).toContain(`Could not remove ${layout.orphan}`);
+    // Said once, in the error, and the count is still said with the rest.
+    expect(said).not.toContain("Could not remove");
+    expect(said).toContain("0 removed, 0 kept, 1 not removed.");
+  });
+
+  it("says a storage that cannot list its files in the run's error, when it is given `fail`", async () => {
+    const layout = inBucket("s3");
+    const { list: _list, ...unlistable } = layout.storage as Bucket;
+    const storage = Object.assign(
+      Object.create(Object.getPrototypeOf(layout.storage)),
+      unlistable,
+      { list: undefined }
+    );
+
+    const { code, said, failures } = await runFailing({ ...layout, storage });
+
+    expect(code).toBe(1);
+    expect(failures.map(failure => failure.code)).toEqual([
+      "MEDIA_STORAGE_UNLISTABLE",
+    ]);
+    expect(said).toBe("");
+  });
+
   it("names a thumbnail it could not remove, and ends with an error", async () => {
     const layout = inBucket("s3");
     (layout.storage as Bucket).failOn = layout.orphan;
@@ -755,6 +809,9 @@ describe("referencedStoredPaths", () => {
   async function mediaTable() {
     const { createTestDb } = await import("../../../__tests__/fixtures/db");
     const db = await createTestDb();
+    // A database from before image sizes were removed, whose items still
+    // name their size files in the retired `sizes` column.
+    db.sqlite.exec(retiredSizesColumnDdl("sqlite"));
     await db.db.insert(db.schema.users).values({
       id: "user-1",
       email: "user@example.com",
@@ -787,8 +844,13 @@ describe("referencedStoredPaths", () => {
       uploadedAt: new Date(),
       updatedAt: new Date(),
     }));
-    for (const row of rows)
+    const setSizes = db.sqlite.prepare(
+      'UPDATE "media" SET "sizes" = ? WHERE "id" = ?'
+    );
+    for (const { sizes, ...row } of rows) {
       await db.db.insert(db.schema.media).values(row as never);
+      setSizes.run(sizes, row.id);
+    }
 
     return db;
   }
@@ -837,9 +899,9 @@ describe("referencedStoredPaths", () => {
       .set({ thumbnailUrl: "https://cdn.example.com/renamed/abc123" })
       .where(eq(db.schema.media.id, "media-3"));
 
-    const now = await referencedNowIn(db.adapter as never)([
-      "2026/10/0b7f-thumb_left.png",
-    ]);
+    const now = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(["2026/10/0b7f-thumb_left.png"]);
 
     expect(now).toBeNull();
   });
@@ -848,12 +910,30 @@ describe("referencedStoredPaths", () => {
     const { referencedNowIn } = await import("../media");
     const db = await mediaTable();
 
-    const now = await referencedNowIn(db.adapter as never)([
-      "2026/10/b4-thumb_p.png",
-      "2026/10/0b7f-thumb_left.png",
-    ]);
+    const now = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(["2026/10/b4-thumb_p.png", "2026/10/0b7f-thumb_left.png"]);
 
     expect(now ? [...now] : now).toEqual(["2026/10/b4-thumb_p.png"]);
+  });
+
+  // On a storage that keeps keys as written two spellings of a key are two
+  // objects, and only the one an item names is in use; on local disk both
+  // are the one file.
+  it("compares exactly where the storage keeps keys as written, and canonically on local disk", async () => {
+    const { referencedNowIn } = await import("../media");
+    const db = await mediaTable();
+    const asked = ["2026/10//b4-thumb_p.png"];
+
+    const onS3 = await referencedNowIn(db.adapter as never, {
+      getType: () => "s3",
+    })(asked);
+    const onDisk = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(asked);
+
+    expect(onS3 ? [...onS3] : onS3).toEqual([]);
+    expect(onDisk ? [...onDisk] : onDisk).toEqual(asked);
   });
 
   // A page read by offset after an item on an earlier page went would start
@@ -865,6 +945,8 @@ describe("referencedStoredPaths", () => {
     const select = db.adapter.select.bind(db.adapter);
     let pages = 0;
     const between = {
+      getDrizzle: () => db.adapter.getDrizzle(),
+      dialect: db.adapter.dialect,
       select: async (...args: Parameters<typeof select>) => {
         const rows = await select(...args);
         if (pages++ === 0) {

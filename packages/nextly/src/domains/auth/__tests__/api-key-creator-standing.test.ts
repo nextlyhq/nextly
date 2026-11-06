@@ -68,11 +68,15 @@ describe("ApiKeyService.authenticateApiKey and the key's creator", () => {
   it("admits the key while its creator is active", async () => {
     accountIsActive.mockResolvedValue(true);
 
+    // The whole answer: the key, its creator, and when its standing was
+    // asked (a monotonic reading the scope compares later), unexpiring here.
     expect(await service.authenticateApiKey(key)).toEqual({
       id: keyId,
       userId: creatorId,
       tokenType: "read-only",
       roleId: null,
+      expiresAt: null,
+      standingAskedAt: expect.any(Number),
     });
     expect(accountIsActive).toHaveBeenCalledWith(creatorId);
   });

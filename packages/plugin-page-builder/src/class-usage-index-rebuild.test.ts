@@ -17,6 +17,7 @@ import { usageTarget } from "./class-usage-write";
 import {
   rebuildClassUsageIndex,
   rebuildPageBuilderUsageIndexes,
+  walkUsageIndexes,
   type ClassUsageDocumentStore,
 } from "./class-usage-index-rebuild";
 import { componentUsageIndex } from "./component-usage";
@@ -944,5 +945,138 @@ describe("repairing every index a site maintains", () => {
       classes: classes.written.map(r => r.classId),
       components: components.written.map(r => r.componentId),
     }).toEqual({ classes: ["hero"], components: ["header"] });
+  });
+});
+
+describe("a walk resumed across ticks", () => {
+  /** Three pages in id order, each using its own class, listed by keyset. */
+  const pages = ["a", "b", "c"].map(id => ({
+    id,
+    content: documentUsing(`class-${id}`),
+  }));
+
+  /** A document store that pages by id after `after`, as the real one does. */
+  function keysetStore() {
+    const asked: (string | undefined)[] = [];
+    const store: ClassUsageDocumentStore = {
+      find: async args => {
+        asked.push(args.after);
+        const items = pages.filter(
+          page => args.after === undefined || page.id > args.after
+        );
+        return { items, meta: { hasNext: false } };
+      },
+      exists: async ({ id }) => pages.some(page => page.id === id),
+    };
+    return { store, asked };
+  }
+
+  /** The rows a finished first tick left for page `a`. */
+  const rowOfA = {
+    id: "row-a",
+    scope: "collection",
+    entity: "pages",
+    entityKey: "a",
+    field: "content",
+    locale: "",
+    variant: "published",
+    classId: "class-a",
+  };
+
+  const scope = {
+    collection: "pages",
+    field: "content",
+    locale: "",
+    variant: "published" as const,
+    limits: DEFAULT_LIMITS,
+  };
+
+  it("stops after the document the budget ran out on, and records it", async () => {
+    const { store } = keysetStore();
+    const index = indexStore();
+    const checkpoints: string[] = [];
+
+    const walk = await walkUsageIndexes(
+      {
+        ...scope,
+        documents: store,
+        targets: [usageTarget(classUsageIndex, index.store)],
+      },
+      {
+        checkpoint: async cursor => {
+          checkpoints.push(cursor);
+        },
+        // Spent from the first check, so one document is all this tick does.
+        stop: () => true,
+      }
+    );
+
+    expect(walk.finished).toBe(false);
+    expect(checkpoints).toEqual(["a"]);
+    expect(index.calls).toEqual(["create:published:a:class-a"]);
+  });
+
+  it("resumes after the cursor, and the sweep keeps the earlier tick's rows", async () => {
+    // The second tick never sees page `a`, so `a` is missing from the visited
+    // set. Read as an orphan for that, its rows would go, and the class it
+    // renders would read as unused. The existence check is what keeps them.
+    const { store, asked } = keysetStore();
+    const deletes: string[] = [];
+    const index: ClassUsageIndexStore = {
+      find: async args =>
+        args.where.entityKey === undefined
+          ? { items: [rowOfA], meta: { hasNext: false } }
+          : { items: [], meta: { hasNext: false } },
+      create: async () => ({}),
+      delete: async args => {
+        deletes.push(args.id);
+        return {};
+      },
+    };
+
+    const walk = await walkUsageIndexes(
+      {
+        ...scope,
+        documents: store,
+        targets: [usageTarget(classUsageIndex, index)],
+      },
+      { after: "a", checkpoint: async () => undefined, stop: () => false }
+    );
+
+    expect(asked).toEqual(["a"]);
+    expect(walk).toMatchObject({ finished: true, report: { scanned: 2 } });
+    expect(deletes).toEqual([]);
+  });
+
+  it("does not move its cursor past a document it could not repair", async () => {
+    // The next tick resumes at the last cursor recorded. One recorded past a
+    // failed document would leave that document unrepaired for good, while
+    // the scope was later recorded as walked.
+    const { store } = keysetStore();
+    const checkpoints: string[] = [];
+    const failing: ClassUsageIndexStore = {
+      find: async () => ({ items: [], meta: { hasNext: false } }),
+      create: async () => {
+        throw new Error("the index store is unavailable");
+      },
+      delete: async () => ({}),
+    };
+
+    const walk = await walkUsageIndexes(
+      {
+        ...scope,
+        documents: store,
+        targets: [usageTarget(classUsageIndex, failing)],
+      },
+      {
+        checkpoint: async cursor => {
+          checkpoints.push(cursor);
+        },
+        stop: () => false,
+      }
+    );
+
+    expect(walk.report.unrepaired).toBe(3);
+    expect(checkpoints).toEqual([]);
   });
 });

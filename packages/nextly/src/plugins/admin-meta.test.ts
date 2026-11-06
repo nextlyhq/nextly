@@ -264,18 +264,18 @@ describe("buildPluginAdminMeta", () => {
       });
     });
 
-    it("is manage-settings when it names none", () => {
+    it("is update-settings when it names none", () => {
       const meta = buildPluginAdminMeta(
         asPlugins([
           { ...base, contributes: { admin: { settings: settingsPage } } },
         ]),
         undefined
       );
-      expect(meta[0].settings?.permission).toBe("manage-settings");
+      expect(meta[0].settings?.permission).toBe("update-settings");
     });
   });
 
-  it("folds headerSlot + widgets for enabled plugins", () => {
+  it("folds headerSlot for enabled plugins, and publishes nothing a plugin carries under admin.widgets", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -287,7 +287,7 @@ describe("buildPluginAdminMeta", () => {
                 {
                   id: "stats",
                   component: "@acme/p/admin#Stats",
-                  size: "half",
+                  size: { default: { w: 6, h: 4 } },
                   requiredPermission: "read-stats",
                 },
               ],
@@ -298,12 +298,9 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
-    expect(meta[0].widgets?.[0]).toMatchObject({
-      id: "stats",
-      component: "@acme/p/admin#Stats",
-      size: "half",
-      requiredPermission: "read-stats",
-    });
+    // The key is no field, and startup refuses a plugin carrying it: a widget
+    // reaches the admin only through the registry.
+    expect(meta[0]).not.toHaveProperty("widgets");
   });
 
   it("folds contributes.admin.header (slot + hideDefaults + hide) for enabled plugins", () => {
@@ -366,7 +363,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].headerSlot).toBeUndefined();
   });
 
-  it("omits headerSlot + widgets for enabled:false plugins", () => {
+  it("omits headerSlot for enabled:false plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
         {
@@ -383,7 +380,7 @@ describe("buildPluginAdminMeta", () => {
       undefined
     );
     expect(meta[0].headerSlot).toBeUndefined();
-    expect(meta[0].widgets).toBeUndefined();
+    expect(meta[0]).not.toHaveProperty("widgets");
   });
 
   it("serializes contributes.fieldTypes type→component, even when disabled", () => {
@@ -1251,5 +1248,41 @@ describe("buildPluginAdminMeta menu slugs", () => {
       to: "/admin/collections/saved-patterns",
       requiredPermission: "read-saved-patterns",
     });
+  });
+});
+
+describe("buildPluginAdminMeta, a plugin's translations", () => {
+  const catalog = { en: { "acme-p.cart.title": "Cart" } };
+
+  it("serves a plugin's translations whether or not it is enabled, as its field editors still mount", () => {
+    const [enabled] = buildPluginAdminMeta(
+      asPlugins([{ ...base, contributes: { translations: catalog } }]),
+      undefined
+    );
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([
+        { ...base, enabled: false, contributes: { translations: catalog } },
+      ]),
+      undefined
+    );
+
+    expect(enabled?.translations).toEqual(catalog);
+    expect(disabled?.translations).toEqual(catalog);
+  });
+
+  it("refuses to serve a catalog startup would refuse", () => {
+    expect(() =>
+      buildPluginAdminMeta(
+        asPlugins([
+          {
+            ...base,
+            contributes: {
+              translations: { en: { "other.cart.title": "Cart" } },
+            },
+          },
+        ]),
+        undefined
+      )
+    ).toThrow(NextlyError);
   });
 });

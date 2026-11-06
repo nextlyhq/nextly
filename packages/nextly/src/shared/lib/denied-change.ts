@@ -421,7 +421,7 @@ function keepDeniedLiveOnlyRows(
  * no identity has nothing else to pair on; where they do, identity survives a
  * reorder, an insertion and a removal, and position survives none of them.
  */
-function rowPairing(
+export function rowPairing(
   from: readonly unknown[],
   to: readonly unknown[]
 ): (index: number) => number | undefined {

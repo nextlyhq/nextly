@@ -1,13 +1,12 @@
 /**
  * form-builder's default access rules, judged by the real access gate.
  *
- * A collection's code rule is the whole answer for a signed-in user, so a
- * default that admits "anyone signed in" lets every staff member read every
- * submission and edit every form, whatever the role screen says. The defaults
- * therefore check the caller's permission for the operation, and these tests
- * hold that through the gate on each configured dialect: a role without the
- * permission is refused, a role with it is admitted, and the two public axes —
- * reading a form, creating a submission — stay open to a visitor.
+ * The gate checks the caller's permission before a collection's code rule,
+ * and the rule only narrows it. The defaults check the permission for the
+ * operation too, and these tests hold the outcome through the gate on each
+ * configured dialect: a role without the permission is refused, a role with
+ * it is admitted, and the two public axes — reading a form, creating a
+ * submission — stay open to a visitor.
  *
  * The roles are named for what they hold, never `admin` or `editor`, so a
  * default that still decided by role name could not pass the admitted cases.
@@ -39,8 +38,8 @@ interface Direct {
     }) => Promise<{ item: { id: string } }>;
   };
   permissions: {
-    create: (a: { data: Record<string, unknown> }) => Promise<{
-      item: { id: string };
+    find: (a: { limit: number }) => Promise<{
+      items: { id: string; slug: string }[];
     }>;
   };
   roles: {
@@ -51,10 +50,9 @@ interface Direct {
 }
 
 /**
- * The permissions the defaults are judged against. The harness runs none of
- * boot's seeding, so they are written here under the slug the seeder composes,
- * `<action>-<resource>`. `read-forms` is what the role without any of the
- * others holds, since a role must hold at least one permission.
+ * The permissions the defaults are judged against, as boot's seeding stores
+ * them, `<action>-<resource>`. `read-forms` is what the role without any of
+ * the others holds, since a role must hold at least one permission.
  */
 const PERMISSIONS = [
   { action: "read", resource: "forms" },
@@ -67,17 +65,22 @@ async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
     plugins: [formBuilder().plugin],
+    // The boot's seeding, so the Public role a visitor is judged by holds what
+    // a real boot grants it: the read of a form, and the plugin's submission
+    // create.
+    seedPublic: true,
   });
   const { nextly } = current;
   const direct = nextly as unknown as Direct;
 
+  // Seeded by the boot, so each is looked up rather than written here.
+  const seeded = (await direct.permissions.find({ limit: 1000 })).items;
   const ids = new Map<string, string>();
   for (const { action, resource } of PERMISSIONS) {
     const slug = `${action}-${resource}`;
-    const created = await direct.permissions.create({
-      data: { name: slug, slug, action, resource },
-    });
-    ids.set(slug, created.item.id);
+    const found = seeded.find(permission => permission.slug === slug);
+    if (!found) throw new Error(`boot seeded no ${slug}`);
+    ids.set(slug, String(found.id));
   }
 
   // The install's first user holds super-admin, so it is made first and kept
@@ -194,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
           nextly.update({
             collection: "forms",
             id: formId,
-            data: { name: "Renamed" },
+            data: { name: "Renamed", _overwrite: true },
             overrideAccess: false,
             user: staff,
           })
@@ -212,7 +215,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = await nextly.update({
         collection: "forms",
         id: formId,
-        data: { name: "Renamed" },
+        data: { name: "Renamed", _overwrite: true },
         overrideAccess: false,
         user: editor,
       });

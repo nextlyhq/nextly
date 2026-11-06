@@ -29,17 +29,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
+import {
+  loadedDialect,
+  loadedDialectHolding,
+} from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { getStaticRelations } from "../../database/static-relations";
 import { NextlyError } from "../../errors";
 import type { PrincipalRef } from "../../plugins/principals/types";
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
-import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
-import { emailSendClaimsMysql } from "../../schemas/email-send-claims/mysql";
-import { emailSendClaimsPg } from "../../schemas/email-send-claims/postgres";
-import { emailSendClaimsSqlite } from "../../schemas/email-send-claims/sqlite";
+import type { emailSendClaimsMysql } from "../../schemas/email-send-claims/mysql";
+import type { emailSendClaimsPg } from "../../schemas/email-send-claims/postgres";
+import type { emailSendClaimsSqlite } from "../../schemas/email-send-claims/sqlite";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
@@ -217,11 +218,11 @@ export type EmailSendClaimsTable =
 export function sendClaimsTableFor(dialect: string): EmailSendClaimsTable {
   switch (dialect) {
     case "postgresql":
-      return emailSendClaimsPg;
     case "mysql":
-      return emailSendClaimsMysql;
     case "sqlite":
-      return emailSendClaimsSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.emailSendClaims;
     default:
       throw NextlyError.internal({
         logContext: {
@@ -239,10 +240,11 @@ export function sendClaimsTableFor(dialect: string): EmailSendClaimsTable {
 export function sendClaimsTableBeside(
   deliveries: unknown
 ): EmailSendClaimsTable | undefined {
-  if (deliveries === emailDeliveriesPg) return emailSendClaimsPg;
-  if (deliveries === emailDeliveriesMysql) return emailSendClaimsMysql;
-  if (deliveries === emailDeliveriesSqlite) return emailSendClaimsSqlite;
-  return undefined;
+  // The loaded dialect that holds this delivery table, so only that
+  // dialect's files are imported; `createAdapter` loads them.
+  const loaded = loadedDialectHolding(deliveries);
+  if (!loaded || loaded.tables.emailDeliveries !== deliveries) return undefined;
+  return loaded.tables.emailSendClaims;
 }
 
 /** A claim row, as the three dialect tables produce it. */

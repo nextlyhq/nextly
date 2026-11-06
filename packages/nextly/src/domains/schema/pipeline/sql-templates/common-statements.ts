@@ -24,13 +24,12 @@ import type {
   RenameTableOp,
 } from "../diff/types";
 
-import { createIndexSql } from "./create-index";
+import { createIndexSql, tableColumnTypes } from "./create-index";
 import {
   checkClause,
   columnDefinition,
   createTableBody,
   foreignKeyClause,
-  renderedType,
   type QuoteIdentifier,
 } from "./create-table-body";
 
@@ -47,9 +46,7 @@ function addTableSql(
 ): string {
   const body = createTableBody(op.table, q, "  ", dialect);
   const createTable = `CREATE TABLE ${q(op.table.name)} (\n${body}\n)`;
-  const columnTypes = new Map(
-    op.table.columns.map(c => [c.name, renderedType(c)])
-  );
+  const columnTypes = tableColumnTypes(op.table);
   const indexStmts = (op.table.indexes ?? []).map(index =>
     createIndexSql(op.table.name, index, dialect, q, { columnTypes })
   );

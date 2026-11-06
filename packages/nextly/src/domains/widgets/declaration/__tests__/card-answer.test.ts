@@ -6,6 +6,9 @@ import { describe, expect, it } from "vitest";
 
 import { cardAnswerProblem, cardAnswerResult } from "../card-answer";
 
+/** The card's subject, as the log names it: the widget and the owner that declared it. */
+const ORDERS = { widget: "acme/orders", owner: 'plugin "@acme/shop"' };
+
 describe("whether a value can be a card's data", () => {
   it("accepts a value that travels as itself in the shape its display draws", () => {
     expect(cardAnswerProblem("metric", { total: 3 })).toBeUndefined();
@@ -51,13 +54,14 @@ describe("whether a value can be a card's data", () => {
 
 describe("a data function's answer as its card's slot carries it", () => {
   it("is the result of the one op a core display draws", () => {
-    expect(cardAnswerResult("metric", { total: 3 }, "acme/orders")).toEqual({
+    expect(cardAnswerResult("metric", { total: 3 }, ORDERS)).toEqual({
       op: "count",
       total: 3,
     });
-    expect(
-      cardAnswerResult("list", { items: [{ id: "a" }] }, "acme/orders")
-    ).toEqual({ op: "list", items: [{ id: "a" }] });
+    expect(cardAnswerResult("list", { items: [{ id: "a" }] }, ORDERS)).toEqual({
+      op: "list",
+      items: [{ id: "a" }],
+    });
   });
 
   it("keeps core's op when the authored data carries one of its own", () => {
@@ -65,21 +69,21 @@ describe("a data function's answer as its card's slot carries it", () => {
     // so an `op` in the data reaches the result. Core's must win: a metric's
     // answer read as a list has no items, and the card would draw it unreadable.
     expect(
-      cardAnswerResult("metric", { total: 3, op: "list" }, "acme/orders")
+      cardAnswerResult("metric", { total: 3, op: "list" }, ORDERS)
     ).toEqual({ op: "count", total: 3 });
   });
 
   it("is core's data result for a widget's own component, carrying the value as it is", () => {
     const value = { anything: ["goes", 1, null] };
     expect(
-      cardAnswerResult({ component: "acme/orders#Card" }, value, "acme/orders")
+      cardAnswerResult({ component: "acme/orders#Card" }, value, ORDERS)
     ).toEqual({ op: "data", data: value });
   });
 
-  it("fails this card alone when refused, naming the widget and the problem for the log only", () => {
+  it("fails this card alone when refused, naming the widget, its owner and the problem for the log only", () => {
     let refused: unknown;
     try {
-      cardAnswerResult("metric", { total: "a secret" }, "acme/orders");
+      cardAnswerResult("metric", { total: "a secret" }, ORDERS);
     } catch (error) {
       refused = error;
     }
@@ -89,6 +93,7 @@ describe("a data function's answer as its card's slot carries it", () => {
       logContext: {
         reason: "widget-data-answer-refused",
         widget: "acme/orders",
+        owner: 'plugin "@acme/shop"',
         kind: "shape",
       },
     });

@@ -1,6 +1,9 @@
 "use client";
 
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { usePluginPageRegistration } from "@admin/hooks/usePluginPageRegistration";
 
 /**
@@ -10,6 +13,9 @@ import { usePluginPageRegistration } from "@admin/hooks/usePluginPageRegistratio
  */
 export function PluginPageRegistrar(): null {
   const branding = useBranding();
-  usePluginPageRegistration(branding?.plugins);
+  // The workspace half carries the plugin list; its settling, not the list's
+  // presence, says whether plugin pages are known.
+  const { isPending, isUnavailable } = useBrandingStatus();
+  usePluginPageRegistration(branding?.plugins, !isPending && !isUnavailable);
   return null;
 }

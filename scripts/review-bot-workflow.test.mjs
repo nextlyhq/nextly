@@ -351,10 +351,17 @@ describe("where a model agent runs", () => {
       return [step, manifest, ...reached(stepsOfAction(manifest), readAction, seen)];
     });
   }
-  /** The repository path of the local action a step uses, or nothing for any other step. */
+  /**
+   * The repository path of the local action a step uses, or nothing for any
+   * other step. One used from a checkout of this repository in a folder of its
+   * own (`./<folder>/.github/actions/…`) is the same file at the repository's root.
+   */
   function localActionOf(step) {
     if (!step.uses?.startsWith("./")) return undefined;
-    return step.uses.slice(2).replace(/\/$/, "");
+    return step.uses
+      .slice(2)
+      .replace(/^[^/]+\/(?=\.github\/actions\/)/, "")
+      .replace(/\/$/, "");
   }
   /** A composite action's steps; an action of another kind runs none of this repository's. */
   const stepsOfAction = manifest => manifest.runs?.steps ?? [];

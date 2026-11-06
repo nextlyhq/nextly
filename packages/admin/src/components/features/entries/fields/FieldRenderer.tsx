@@ -20,6 +20,7 @@ import type {
   EmailFieldConfig,
   PasswordFieldConfig,
   CodeFieldConfig,
+  IconFieldConfig,
   NumberFieldConfig,
   CheckboxFieldConfig,
   SelectFieldConfig,
@@ -40,6 +41,8 @@ import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
+
+import { useWithheldFields } from "../../versions/withheld-fields-context";
 
 import {
   conditionSourcePath,
@@ -75,6 +78,11 @@ const RichTextInput = lazy(() =>
 const CodeInput = lazy(() =>
   import("./text/CodeInput").then(mod => ({ default: mod.CodeInput }))
 );
+// IconInput names the icon set's dynamic import. Lazy, so that import sits in
+// a chunk of its own and the admin's main bundle never references the set.
+const IconInput = lazy(() =>
+  import("./special/IconInput").then(mod => ({ default: mod.IconInput }))
+);
 
 // Special inputs
 
@@ -87,6 +95,14 @@ function EditorSkeleton() {
       <span className="text-sm text-muted-foreground">Loading editor...</span>
     </div>
   );
+}
+
+/**
+ * Stands in for the icon field while its control loads: the field's own
+ * height, so the form does not shift when the control arrives.
+ */
+function IconFieldSkeleton() {
+  return <div className="h-10 rounded-md bg-muted" />;
 }
 
 /**
@@ -187,6 +203,7 @@ function getNestedError(
  * ### Text Fields
  * - `text` - Single-line text input
  * - `textarea` - Multi-line text area
+ * - `icon` - One icon, chosen from a search-first picker
  *
  * ### Number Fields
  * - `number` - Number input with min/max/step
@@ -295,6 +312,8 @@ export function FieldRenderer({
     { shown: true, readOnly: Boolean(readOnly), disabled: Boolean(disabled) },
     conditionFieldValue
   );
+  // Read before the early return below, as every hook here must be.
+  const isWithheld = useWithheldFields();
   if (!gate.shown) return null;
   const isReadOnly = gate.readOnly;
   const isDisabled = gate.disabled;
@@ -323,8 +342,11 @@ export function FieldRenderer({
   // Asked through the shared predicate: stored definitions rewritten by the
   // storage migration carry `fieldGroup`, and a dispatch against one literal
   // rendered the migrated field as an unknown type.
+  // A component a viewed version withheld from the reader takes the wrapper's
+  // path instead, which names it and says it is held back: drawn as a
+  // component it would read as one that holds nothing.
   const fieldType = field.type as string;
-  if (isFieldGroupFieldType(fieldType)) {
+  if (isFieldGroupFieldType(fieldType) && !isWithheld(fieldPath)) {
     return (
       <ComponentInput
         {...commonProps}
@@ -361,8 +383,10 @@ export function FieldRenderer({
     <FieldWrapper
       field={field}
       error={error?.message}
+      fieldPath={fieldPath}
       horizontal={useHorizontalLayout}
       editorIsOpaque={hasPluginEditor}
+      writesHeld={isReadOnly || isDisabled}
     >
       {renderField()}
     </FieldWrapper>
@@ -421,6 +445,15 @@ export function FieldRenderer({
           <ClientOnly>
             <Suspense fallback={<EditorSkeleton />}>
               <CodeInput {...commonProps} field={field as CodeFieldConfig} />
+            </Suspense>
+          </ClientOnly>
+        );
+
+      case "icon":
+        return (
+          <ClientOnly fallback={<IconFieldSkeleton />}>
+            <Suspense fallback={<IconFieldSkeleton />}>
+              <IconInput {...commonProps} field={field as IconFieldConfig} />
             </Suspense>
           </ClientOnly>
         );

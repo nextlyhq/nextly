@@ -110,6 +110,62 @@ export function changeSummary(labels: readonly string[]): string {
  */
 export type PartsLabel = (parts: readonly string[]) => string;
 
+/**
+ * A takeover, from the editor it displaced: "Took over from Ana". The server
+ * names that editor when history is read, by name only; one it cannot name
+ * (no name, or no account any more) is said to be unavailable, as an author
+ * who cannot be named is, rather than guessed or left blank.
+ */
+function takeoverSentence(event: DocumentEvent): string {
+  const from = event.payload?.fromName;
+  return typeof from === "string" && from !== ""
+    ? `Took over from ${from}`
+    : "Took over (previous editor unavailable)";
+}
+
+/** Who or what made the changes an overwrite replaced, as words, when not a person. */
+const REPLACED_KIND_WORDS: Readonly<Record<string, string>> = {
+  principal: "a member",
+  apiKey: "an API key",
+  release: "a scheduled release",
+  system: "the system",
+  agent: "an agent",
+};
+
+/**
+ * An overwrite, from what it replaced: "Overwrote changes by Ben". The server
+ * names a person when history is read, by name only; one it cannot name, or a
+ * change whose maker was never recorded, is said to be unavailable, as a
+ * takeover's previous editor is. A plugin's signed-in person is a member, by
+ * kind alone. An overwrite that gave no version, or the current one, replaced
+ * nobody it can name, and says only that it was an overwrite.
+ */
+function overwriteSentence(event: DocumentEvent): string {
+  const payload = event.payload ?? {};
+  if (payload.given === "stale") {
+    const by = replacedBy(payload);
+    return by
+      ? `Overwrote changes by ${by}`
+      : "Overwrote changes (previous editor unavailable)";
+  }
+  return payload.given === "none"
+    ? "Saved as an overwrite (no version given)"
+    : "Saved as an overwrite";
+}
+
+/**
+ * Who made the changes a stale overwrite replaced, in words: a person by the
+ * name the server gave, anything else by its kind. Null when there is nobody
+ * to name.
+ */
+function replacedBy(payload: Record<string, unknown>): string | null {
+  const replaced = payload.replaced as { kind?: unknown } | null | undefined;
+  const kind = typeof replaced?.kind === "string" ? replaced.kind : null;
+  if (kind !== "person") return (kind && REPLACED_KIND_WORDS[kind]) || null;
+  const name = payload.replacedName;
+  return typeof name === "string" && name !== "" ? name : null;
+}
+
 /** What an event that is a row of its own says happened. */
 export function eventSentence(
   event: DocumentEvent,
@@ -124,6 +180,10 @@ export function eventSentence(
       return `Unpublished${to}`;
     case "draft-discarded":
       return `Discarded the draft${parts ? ` of ${parts}` : ""}`;
+    case "taken-over":
+      return takeoverSentence(event);
+    case "overwritten":
+      return overwriteSentence(event);
     default: {
       // A kind a plugin registered: its name, read as words, then what it
       // applied to, set apart since the name is not a verb we can phrase.

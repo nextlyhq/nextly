@@ -7,7 +7,7 @@
  *
  * @module layers.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearBlocks,
@@ -19,10 +19,14 @@ import {
 
 import {
   ancestorIds,
+  blockNameOf,
+  componentTitles,
   filterLayers,
   layerLabel,
   layersOf,
   pathTo,
+  regionsTo,
+  slotRowsIn,
 } from "./layers";
 
 const base = {
@@ -98,6 +102,133 @@ describe("layerLabel", () => {
     register();
     expect(layerLabel(node("a", "core/heading", { name: "   " }))).toBe(
       "Heading"
+    );
+  });
+
+  it("reads the label from the lookup a caller names, not the registry", () => {
+    // A surface that registers nothing resolves blocks through its own
+    // resolver. Asked of the registry there, a block labelled "Hero" would be
+    // humanised from its type and named differently than the editor names it.
+    const hero = { name: "acme/hero-banner", editor: { label: "Hero" } };
+    const lookup = (type: string) =>
+      type === hero.name ? (hero as never) : undefined;
+
+    expect(layerLabel(node("a", "acme/hero-banner"), lookup)).toBe("Hero");
+    expect(
+      layerLabel(node("b", "acme/hero-banner", { name: "Top" }), lookup)
+    ).toBe("Top");
+  });
+});
+
+describe("a component placement's name", () => {
+  // A placement is one node of the engine's own type, so the type says only
+  // that it IS a placement. What the author placed is the component, which
+  // only the library can name.
+  const placement = (
+    id: string,
+    componentId: unknown,
+    extra: Partial<BlockNode> = {}
+  ) =>
+    node(id, "nextly/component-instance", { props: { componentId }, ...extra });
+  const titles = componentTitles([
+    { id: "cmp-hero", title: "Hero banner" },
+    { id: "cmp-blank", title: "   " },
+  ]);
+
+  it("is the component's title", () => {
+    expect(layerLabel(placement("a", "cmp-hero"), undefined, titles)).toBe(
+      "Hero banner"
+    );
+  });
+
+  it("is the name the author gave the placement, over the title", () => {
+    expect(
+      layerLabel(
+        placement("a", "cmp-hero", { name: "Top banner" }),
+        undefined,
+        titles
+      )
+    ).toBe("Top banner");
+  });
+
+  it('is "Component" when nothing names the component', () => {
+    // Not the type humanised: "Component instance" names the engine's
+    // mechanism, which is not a word an author used for anything.
+    expect(layerLabel(placement("a", "cmp-gone"), undefined, titles)).toBe(
+      "Component"
+    );
+    expect(layerLabel(placement("b", "cmp-blank"), undefined, titles)).toBe(
+      "Component"
+    );
+    expect(layerLabel(placement("c", "cmp-hero"))).toBe("Component");
+    // A stored id that is not a string reaches no lookup.
+    expect(layerLabel(placement("d", 42), undefined, titles)).toBe("Component");
+  });
+
+  it("reads the same in the tree and the trail", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: { children: [placement("a", "cmp-hero")] },
+      }),
+    ]);
+
+    expect(layersOf(document, titles)[0].children[0].label).toBe("Hero banner");
+    expect(pathTo(document, "a", titles).map(row => row.label)).toEqual([
+      "Box",
+      "Hero banner",
+    ]);
+  });
+
+  it("reads the same on the canvas's tag, found by address anywhere in the page", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: { children: [placement("a", "cmp-hero")] },
+      }),
+    ]);
+
+    expect(blockNameOf(document, "a", titles)).toBe("Hero banner");
+    expect(blockNameOf(document, "box", titles)).toBe("Box");
+    // An address the page no longer holds names nothing.
+    expect(blockNameOf(document, "gone", titles)).toBeUndefined();
+  });
+
+  it("reads the page once for every name the canvas asks, and again only for a new page", () => {
+    register();
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: {
+          children: [placement("a", "cmp-hero"), placement("b", "cmp-hero")],
+        },
+      }),
+    ]);
+    const asked = vi.fn(titles);
+    // The canvas asks for a placement's name every time it draws its frame.
+    for (let draw = 0; draw < 3; draw += 1) {
+      expect(blockNameOf(document, "a", asked)).toBe("Hero banner");
+    }
+    expect(blockNameOf(document, "b", asked)).toBe("Hero banner");
+    expect(blockNameOf(document, "box", asked)).toBe("Box");
+    // One read of the page named every placement on it, once each, however
+    // often a name was asked.
+    expect(asked).toHaveBeenCalledTimes(2);
+    // An edit is a new page, read afresh.
+    const edited = documentOf([placement("a", "cmp-blank")]);
+    expect(blockNameOf(edited, "a", asked)).toBe("Component");
+  });
+
+  it("names the placement holding a lock by its title", () => {
+    register();
+    const document = documentOf([
+      placement("a", "cmp-hero", {
+        locked: true,
+        slots: { children: [node("t", "core/text")] },
+      }),
+    ]);
+
+    expect(layersOf(document, titles)[0].children[0].lockedBy).toBe(
+      "Hero banner"
     );
   });
 });
@@ -293,5 +424,185 @@ describe("filterLayers", () => {
 
   it("returns nothing when nothing matches", () => {
     expect(filterLayers(tree(), "zzz").roots).toEqual([]);
+  });
+});
+
+describe("a lock in the tree", () => {
+  it("marks the rows inside a locked block with the name of the block that holds it", () => {
+    register();
+    const rows = layersOf(
+      documentOf([
+        node("hero", "core/heading", {
+          locked: true,
+          name: "Hero",
+          slots: {
+            children: [
+              node("inner", "core/heading", {
+                locked: true,
+                name: "Inner",
+                slots: { children: [node("deep", "core/heading")] },
+              }),
+            ],
+          },
+        }),
+        node("free", "core/heading"),
+      ])
+    );
+    const [hero, free] = rows;
+    const inner = hero?.children[0];
+    // A row locked itself says so and is held by nothing; the nearest lock
+    // above names a row that is not; a row nothing covers carries neither.
+    expect(hero).toMatchObject({ locked: true });
+    expect(hero?.lockedBy).toBeUndefined();
+    expect(inner).toMatchObject({ locked: true });
+    expect(inner?.lockedBy).toBeUndefined();
+    expect(inner?.children[0]).toMatchObject({
+      locked: false,
+      lockedBy: "Inner",
+    });
+    expect(free?.lockedBy).toBeUndefined();
+  });
+});
+
+describe("hiddenHere", () => {
+  const site = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1024 },
+      { id: "mobile", label: "Mobile", maxWidth: 640 },
+    ],
+    container: [],
+  };
+  const document = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "a",
+        type: "core/heading",
+        version: 1,
+        props: {},
+        // Hidden from Desktop down and shown again on Mobile: Tablet stores
+        // nothing and is still hidden.
+        visibility: { devices: { base: false, mobile: true } },
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  it("is the block's state on the device asked for, through the cascade", () => {
+    const on = (id: string) =>
+      layersOf(document, undefined, { breakpoints: site, id })[0]?.hiddenHere;
+    expect(on("base")).toBe(true);
+    expect(on("tablet")).toBe(true);
+    expect(on("mobile")).toBe(false);
+  });
+
+  it("is not said at all when no device is asked for", () => {
+    expect(layersOf(document)[0]?.hiddenHere).toBeUndefined();
+  });
+
+  it("names the hidden block a row is hidden with", () => {
+    const nested = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          name: "Hero",
+          props: {},
+          visibility: { devices: { tablet: false } },
+          slots: {
+            children: [
+              { id: "in", type: "core/heading", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const [box] = layersOf(nested, undefined, {
+      breakpoints: site,
+      id: "tablet",
+    });
+    expect(box?.hiddenHere).toBe(true);
+    expect(box?.children[0]?.hiddenHere).toBe(false);
+    expect(box?.children[0]?.hiddenWith).toBe("Hero");
+  });
+});
+
+describe("a collection list's regions", () => {
+  const list = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "list",
+        type: "core/collection-loop",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            { id: "card", type: "core/heading", version: 1, props: {} },
+          ],
+          empty: [
+            {
+              id: "none",
+              type: "core/heading",
+              version: 1,
+              props: {},
+              name: "No posts",
+            },
+          ],
+        },
+      },
+    ],
+  } as BlockDocument;
+
+  it("names both regions on the list, and the one each child sits in", () => {
+    const [row] = layersOf(list);
+    expect(row?.slotRows?.map(each => each.label)).toEqual([
+      "Each entry",
+      "When empty",
+    ]);
+    expect(row?.children.map(child => [child.id, child.slot])).toEqual([
+      ["card", "children"],
+      ["none", "empty"],
+    ]);
+  });
+
+  it("opens the region a match sits in, as it opens the list", () => {
+    const tree = layersOf(list);
+    const emptyRow = tree[0]?.slotRows?.[1]?.rowId;
+    const found = filterLayers(tree, "No posts");
+    expect(found.expand).toEqual(["list", emptyRow]);
+    expect(regionsTo(list, "none")).toEqual([
+      { parentId: "list", slot: "empty", rowId: emptyRow },
+    ]);
+    expect(slotRowsIn(tree).get(emptyRow ?? "")).toEqual({
+      parentId: "list",
+      slot: "empty",
+    });
+    expect(slotRowsIn(tree).has("list")).toBe(false);
+  });
+
+  it("gives each region row an id no block of the document has", () => {
+    // A stored id may be any string, a row's own spelling too.
+    const taken = {
+      ...list,
+      nodes: [
+        ...list.nodes,
+        {
+          id: "nx-slot:empty:list",
+          type: "core/heading",
+          version: 1,
+          props: {},
+        },
+      ],
+    } as BlockDocument;
+    const tree = layersOf(taken);
+    const rowIds = tree[0]?.slotRows?.map(row => row.rowId) ?? [];
+    expect(rowIds).toHaveLength(2);
+    expect(rowIds).not.toContain("nx-slot:empty:list");
+    expect(slotRowsIn(tree).has("nx-slot:empty:list")).toBe(false);
   });
 });

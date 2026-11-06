@@ -30,7 +30,7 @@ Seven categories partition the field inventory.
 
 | Category | Fields |
 |---|---|
-| [Basic](#basic) | `text`, `textarea`, `richText`, `email`, `password`, `code`, `number`, `checkbox`, `date` |
+| [Basic](#basic) | `text`, `textarea`, `richText`, `email`, `icon`, `password`, `code`, `number`, `checkbox`, `date` |
 | [Selection](#selection) | `select`, `radio`, `chips` |
 | [Media](#media) | `upload` |
 | [Relationship](#relationship) | `relationship` |
@@ -179,6 +179,22 @@ email({
       : "Must be a company email address",
 });
 ```
+
+---
+
+### icon
+
+One icon from the site's icon sets. The admin shows an icon picker, and the stored value is the icon's id, a plain string of the form `<set>:<name>`, for example `"lucide:star"`. It is stored in a text column, like an email address.
+
+```typescript
+icon({ name: "badge", defaultValue: "lucide:star" })
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `defaultValue` | `string` | — | An icon id such as `"lucide:star"`. Any other shape is refused when the config is defined. |
+
+A saved value must have the id's shape: a set and a name, each of lowercase letters, digits and hyphens, joined by one colon (`"lucide:arrow-up-right"`). Only the shape is checked. An id whose set or icon is not registered is still saved, because icon sets are registered when the site runs; such an id is reported as an issue rather than refused.
 
 ---
 
@@ -797,7 +813,7 @@ Every field type inherits the following from `BaseFieldConfig`. Where a specific
 | `required` | `boolean` | `false` | Whether the field must have a non-null, non-empty value. |
 | `unique` | `boolean` | `false` | Enforce database-level uniqueness. |
 | `index` | `boolean` | `false` | Create a single-field database index. |
-| `localized` | `boolean` | `false` | **Reserved for a future release.** When implemented, will store separate values per locale. |
+| `localized` | `boolean` | Per type | On a localized collection, Single or field group: whether the field keeps a value per language. Unset, the text-like types (`text`, `textarea`, `richText`, `email`, `code`) are translated and every other type is shared. `password` and virtual fields are never translated, and the flag does nothing where the collection or Single is not localized. Nor does it on a `component` reference, which has no value of its own to translate: set `localized` on the component's own fields instead. A many-to-many `relationship` keeps its links in one table for every language, so it is shared whatever the flag says. See [Choose what gets translated](/docs/localization#choose-what-gets-translated). |
 | `custom` | `Record<string, unknown>` | — | Arbitrary metadata for plugins or hooks. Not persisted. |
 | `virtual` | `boolean` | `false` | On a collection, Single or component: store nothing. The field gets no column, a value sent for it on create or update is dropped before the write, write validation skips it (so `required` and `validate` do not apply), and it is never localized. Compute its value in an `afterRead` hook. Group and repeater also accept `options.virtual`. Custom user fields are always stored, so user config validation refuses `virtual` on them. |
 
@@ -968,6 +984,12 @@ text({
   },
 });
 ```
+
+A refusal never names a field the caller may not read: an issue on such a field, or
+inside one, reaches them as "A field you can't see doesn't pass validation.", whatever
+its message. Every other message is shown as written, including one that names no
+field, so don't put a field's value in it: a validator handed `data` could quote a
+field the caller can't see.
 
 ### `defaultValue`
 

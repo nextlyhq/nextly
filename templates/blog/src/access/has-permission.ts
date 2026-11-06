@@ -8,10 +8,10 @@
  * the permission it needed, and every API key whose roles carried none of
  * those names, while the Roles screen said both could act.
  *
- * When a collection declares a rule for an operation, that rule is what a
- * signed-in user is judged by, so the permission check lives here. Narrow it
- * with a condition of your own (`hasPermission(args) && ...`) rather than
- * replacing it. Rules receive permissions as the Roles screen spells them,
+ * The grant is checked before any rule a collection declares, and a rule
+ * only narrows it, so this check repeats what the gate already asked; it
+ * keeps the rule's meaning plain where it is read. Narrow it with a
+ * condition of your own (`hasPermission(args) && ...`). Rules receive permissions as the Roles screen spells them,
  * for a session and an API key alike; a visitor holds none and is refused. Super-admins are
  * admitted before any rule runs.
  */

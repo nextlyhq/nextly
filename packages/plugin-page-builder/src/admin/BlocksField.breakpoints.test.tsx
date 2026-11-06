@@ -20,6 +20,7 @@
  * @module admin/BlocksField.breakpoints.test
  */
 import { cleanup, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,17 +39,55 @@ const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
+  frame: Record<string, unknown> | undefined;
   switcher: Record<string, unknown> | undefined;
   layers: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
+  frame: undefined,
   switcher: undefined,
   layers: undefined,
 };
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
+/** The device the shell restores on load, as an author left it. */
+let storedDevice: string | null = null;
+/** Every device the editor asked the shell for, in order. */
+const deviceRequests: Array<string | null> = [];
+/** Whether the shell draws its Settings dialog open. */
+let settingsOpen = false;
+/** What the Site tab's read answers with; nothing until a case sets it. */
+let siteSettingsRead: Record<string, unknown> | undefined;
+/** What the stored site style's read answers with for the test in hand. */
+let storedRead: {
+  data: unknown;
+  isPending: boolean;
+  error: Error | null;
+  /** Whether the answer is the site as it is now, as the real read reports. */
+  current: boolean;
+} = { data: undefined, isPending: false, error: null, current: true };
+/** A current answer from the route, holding `data`. */
+const answered = (data: unknown): typeof storedRead => ({
+  data,
+  isPending: false,
+  error: null,
+  current: true,
+});
+/** The stored set without Mobile, as a removal elsewhere leaves it. */
+const TABLET_ONLY = {
+  breakpoints: {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  },
+};
+
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   /*
@@ -75,32 +114,82 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     ...real,
     BuilderShell: ({
       inspector,
+      title,
       topBar,
+      topBarCenter,
+      topBarEnd,
       children,
       renderPanel,
+      editingBreakpointRequest,
+      onEditingBreakpointChange,
+      renderSettings,
     }: {
       inspector: React.ReactNode;
+      title?: string;
       topBar?: React.ReactNode;
+      topBarCenter?: React.ReactNode;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
       renderPanel?: (panel: string) => React.ReactNode;
-    }): React.JSX.Element => (
-      <div>
-        {topBar}
-        {inspector}
-        {/*
+      editingBreakpointRequest?: { breakpoint: string | null; count: number };
+      onEditingBreakpointChange?: (breakpoint: string | null) => void;
+      renderSettings?: (dialog: {
+        open: boolean;
+        onOpenChange: (open: boolean) => void;
+        returnFocus: () => HTMLElement | null;
+      }) => React.ReactNode;
+    }): React.JSX.Element => {
+      /*
+       * The device half of the real shell: it holds what a request asks for
+       * and reports it back, starting from the stored device. Without it the
+       * editor's choice would go nowhere, and every case below would be
+       * reading the base breakpoint whatever was chosen.
+       */
+      React.useEffect(() => {
+        onEditingBreakpointChange?.(storedDevice);
+      }, [onEditingBreakpointChange]);
+      React.useEffect(() => {
+        if (editingBreakpointRequest === undefined) return;
+        deviceRequests.push(editingBreakpointRequest.breakpoint);
+        onEditingBreakpointChange?.(editingBreakpointRequest.breakpoint);
+      }, [editingBreakpointRequest, onEditingBreakpointChange]);
+      return (
+        <div>
+          <span data-testid="shell-title">{title}</span>
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+          {inspector}
+          {/*
           The panel region, drawn as a SIBLING of the children — which is what
           the real shell does, and the whole reason a panel cannot read what the
           children provide. A mock that dropped `renderPanel` could not see a
           panel wired wrongly, or wired not at all.
         */}
-        {renderPanel?.("layers")}
-        {children}
-      </div>
+          {renderPanel?.("layers")}
+          {/* Asked for on every pass, open or not, as the real shell asks. */}
+          {renderSettings?.({
+            open: settingsOpen,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
+          {children}
+        </div>
+      );
+    },
+    // Drawn as a marker, so where the editor mounts it can be found.
+    BreakpointManager: (): React.JSX.Element => (
+      <div data-recorder="breakpoint-manager" />
     ),
-    BreakpointManager: nothing,
     BreakpointSwitcher: record("switcher"),
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
+    // Recorded and passed through: the canvas renders inside the frame, which
+    // is what is sized to the device.
+    CanvasFrame: (props: Record<string, unknown>): React.JSX.Element => {
+      seen.frame = props;
+      return <>{props.children as React.ReactNode}</>;
+    },
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -113,6 +202,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: record("layers"),
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
@@ -149,13 +239,42 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("./site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    error: null,
+    ...storedRead,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The editor mount asks for the variant-use writer; no case here opens a
+  // component, so it is never called.
+  usePluginRouteMutation: () => ({
+    write: async () => undefined,
+    pending: false,
+    error: null,
+  }),
   /*
    * Never awaited by these cases: the loader is reached only when an author
    * double-clicks a passage, and none of them do. Present because the mock
    * REPLACES the module wholesale, so an export the subject imports and this
    * omits is a missing-export error rather than an unused stub.
    */
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   // No document around the field: the state every case here was written
@@ -172,9 +291,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
    * nothing, which is the site with an empty library — the state every one of
    * these cases was written against.
    */
-  usePluginRoute: () => ({
-    data: undefined,
+  usePluginRoute: ({ path }: { path: string }) => ({
+    data: path === "/site/settings" ? siteSettingsRead : undefined,
     pending: false,
+    fetching: false,
     error: null,
     refetch: () => {},
   }),
@@ -182,13 +302,23 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
+  // No preview here: the top bar's Preview draws nothing.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   useDocumentStatus: () => null,
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully — so the merged style is the host's
   // config alone and `status` is "ready". A pending read would disable the
   // switcher, which is a different test's subject.
-  useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
@@ -224,7 +354,7 @@ const SITE = {
 /** The builder's document view, open on the form's `body` field. */
 function Host(): React.JSX.Element {
   const { control } = useForm<FieldValues>({
-    defaultValues: { body: undefined },
+    defaultValues: { body: undefined, title: "About us" },
   });
   return (
     <PageBuilderView
@@ -247,66 +377,50 @@ function openEditor(): { rerender: () => void } {
   };
 }
 
-/** The box inputs the canvas was handed. */
-function box(): {
-  container?: string;
-  width?: number;
-  onMeasured?: (width: number | undefined) => void;
-} {
-  return (seen.canvas?.preview ?? {}) as {
-    container?: string;
-    width?: number;
-    onMeasured?: (width: number | undefined) => void;
-  };
-}
-
-/** What the canvas reports its box actually measured. */
-function measure(width: number | undefined): void {
-  const report = box().onMeasured;
-  if (report === undefined) throw new Error("the canvas was given no reporter");
-  React.act(() => {
-    report(width);
-  });
+/** The size the canvas's frame was handed. */
+function box(): { width?: number } {
+  return (seen.frame ?? {}) as { width?: number };
 }
 
 /** What the author asks the switcher for. */
-function choose(width: number | undefined): void {
+function choose(breakpoint: string): void {
   const select = seen.switcher?.onSelect as
-    | ((width: number | undefined) => void)
+    | ((breakpoint: string) => void)
     | undefined;
   if (select === undefined)
     throw new Error("the switcher was given no handler");
   React.act(() => {
-    select(width);
+    select(breakpoint);
   });
 }
 
 beforeEach(() => {
   seen.inspector = undefined;
   seen.canvas = undefined;
+  seen.frame = undefined;
   seen.switcher = undefined;
   clientConfig = { siteStyle: SITE };
+  storedDevice = null;
+  deviceRequests.length = 0;
+  storedRead = answered(undefined);
+  settingsOpen = false;
+  siteSettingsRead = undefined;
 });
 
 afterEach(() => {
   cleanup();
 });
 
-describe("the container the canvas is compiled against", () => {
-  it("gives the canvas the reporter the zoom control reads", () => {
+describe("the sheet the canvas is compiled with", () => {
+  it("gives the canvas's frame the reporter the zoom control reads", () => {
     /*
-     * The scale the canvas paints at is reported back so the control can name
+     * The scale the frame paints at is reported back so the control can name
      * it — including while FITTING, where it is derived from a region only the
-     * canvas measures.
-     *
-     * Asserted on the CANVAS's own props rather than inside `preview`, because
-     * that is exactly where it was wrong: an extra key on an inferred object is
-     * accepted and ignored rather than refused, so the reporter never ran and
-     * the control sat at 100% while the canvas zoomed.
+     * frame measures.
      */
     openEditor();
 
-    expect(seen.canvas?.onScale).toBeTypeOf("function");
+    expect(seen.frame?.onScale).toBeTypeOf("function");
   });
 
   it("tells the layers panel that the move keystrokes are bound", () => {
@@ -328,237 +442,395 @@ describe("the container the canvas is compiled against", () => {
     expect(seen.layers?.moveHints).toBe(true);
   });
 
-  it("tells the inspector about the SAME one it compiled with", () => {
+  it("compiles the page as published, with no preview container", () => {
     /*
-     * The panel decides whether the window may answer for which tiers are live.
-     * Given a name the canvas did not compile with — or given none while the
-     * canvas compiled with one — it evaluates `@media` rules a container-query
-     * compile never wrote, and a wide admin window around a narrow canvas then
-     * reports the desktop tier live while the box is painting tablet.
+     * The canvas is a frame at the device's own size, so `@media` and the
+     * site's container queries answer for the device exactly as on the
+     * published page. A preview compile would rewrite them for a box the
+     * frame no longer establishes, and every container rule would match
+     * nothing.
      *
-     * Asserted as equality AND as present, because two `undefined`s are equal
-     * and would pass a comparison alone while nothing was previewing at all.
+     * Asserted with the control that the context is there at all, so an
+     * absent one does not pass for a published compile.
      */
     openEditor();
 
     const context = (
       seen.canvas?.render as {
-        styleContext?: { previewContainer?: string };
+        styleContext?: { previewContainer?: string; breakpoints?: unknown };
       }
     )?.styleContext;
-    expect(context?.previewContainer).toBeTypeOf("string");
-    expect(seen.inspector?.previewContainer).toBe(context?.previewContainer);
-    /*
-     * And the BOX establishes that same container. The sheet's rules name it;
-     * an element establishing a different one — or none — leaves every preview
-     * rule matching nothing, with the sheet valid and the canvas resizing.
-     */
-    expect(box().container).toBe(context?.previewContainer);
+    expect(context?.breakpoints).toBeDefined();
+    expect(context?.previewContainer).toBeUndefined();
+    expect(seen.inspector?.previewContainer).toBeUndefined();
   });
 });
 
-describe("what one width drives", () => {
-  it("sizes the canvas to the tier the author chooses", () => {
+describe("the top bar's title", () => {
+  it("shows the document's title as the form holds it, as the page switcher", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+    expect(
+      screen.getByRole("button", { name: "About us: switch page" }).textContent
+    ).toBe("About us");
+    // The shell's own read-only title is not drawn beside it.
+    expect(screen.getByTestId("shell-title").textContent).toBe("");
+  });
+});
+
+describe("the top bar's history", () => {
+  it("draws undo and redo, unavailable on a fresh document", async () => {
+    const { screen } = await import("@testing-library/react");
+    openEditor();
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    expect((undo as HTMLButtonElement).disabled).toBe(true);
+    expect((redo as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("where the breakpoints are edited", () => {
+  /** The breakpoint editors mounted anywhere in the editor. */
+  const managers = (): Element[] => [
+    ...document.querySelectorAll('[data-recorder="breakpoint-manager"]'),
+  ];
+
+  it("offers no breakpoint editor in the top bar", async () => {
+    const { screen } = await import("@testing-library/react");
     openEditor();
 
-    choose(991);
+    // The top bar is drawn: its device buttons are there.
+    expect(seen.switcher).toBeDefined();
+    expect(managers()).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: /edit breakpoints/i })
+    ).toBeNull();
+  });
+
+  it("edits them in Settings, on the Site tab", async () => {
+    /*
+     * The control on the case above: the marker is found where the editor
+     * does mount the manager, so its absence there is not a marker that
+     * cannot be found.
+     */
+    const { screen } = await import("@testing-library/react");
+    settingsOpen = true;
+    siteSettingsRead = {
+      mayManageSite: true,
+      mayChooseDefaultLayout: false,
+      defaultLayout: null,
+      breakpoints: null,
+      layouts: [],
+    };
+    openEditor();
+    expect(managers()).toHaveLength(0);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Site" }));
+
+    expect(managers()).toHaveLength(1);
+    expect(screen.getByRole("dialog").contains(managers()[0] ?? null)).toBe(
+      true
+    );
+  });
+});
+
+describe("the device being edited", () => {
+  it("lays the canvas out at the device the author chooses", () => {
+    openEditor();
+
+    choose("tablet");
 
     expect(box().width).toBe(991);
+    expect(seen.switcher?.selected).toBe("tablet");
   });
 
-  it("releases the canvas back to the region at the widest tier", () => {
+  it("lays Desktop out at 1280, not at whatever the region allows", () => {
+    // The region narrows as panels open; a fixed width keeps the device's
+    // layout the same, and the zoom fits it into the room there is.
+    openEditor();
+
+    choose("tablet");
+    choose("base");
+
+    expect(box().width).toBe(1280);
+    expect(seen.switcher?.selected).toBe("base");
+  });
+
+  it("edits the device the author chose, whatever width the box measured", () => {
     /*
-     * The control on the case above: a mount that pinned a number here would
-     * satisfy it while making the widest option narrower than the space
-     * available, which is a permanent gutter around a canvas that was already
-     * the right size.
+     * The defect this replaces: the edited breakpoint was read off the width
+     * the canvas measured, so at the 1280px minimum (a region of about 912px)
+     * or with a panel open, an author on Desktop was silently styling the
+     * 991px tablet breakpoint.
      */
     openEditor();
 
-    choose(991);
-    choose(undefined);
+    choose("base");
 
-    expect(box().width).toBeUndefined();
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
-  it("edits the tier the box was MEASURED in, not the one requested", () => {
-    /*
-     * The property this whole mount exists for. The request is a ceiling: an
-     * editor region narrower than the widest tier hands the box less, and the
-     * narrower tier is then what the browser paints.
-     *
-     * Deriving the edited tier from the request instead would tell an author at
-     * the full width that they are editing the base tier while every value they
-     * type lands in tablet — invisible, because the canvas looks correct.
-     */
+  it("edits a narrower device only once it is chosen", () => {
+    // The control on the case above: the inspector does follow a choice.
     openEditor();
 
-    choose(undefined);
-    measure(900);
+    choose("tablet");
 
     expect(seen.inspector?.breakpoint).toBe("tablet");
     expect(seen.inspector?.liveBreakpoints).toContain("tablet");
   });
 
-  it("names no narrower tier before the box has been measured", () => {
-    /*
-     * The control on the case above, and an honest state rather than a default:
-     * nothing has been observed on the first render, and a panel that named a
-     * tier there would be describing a box nobody has looked at.
-     */
+  it("starts on the device the author left", () => {
+    storedDevice = "mobile";
+
     openEditor();
 
-    expect(seen.inspector?.breakpoint).toBe("base");
-    expect(seen.inspector?.liveBreakpoints).not.toContain("tablet");
-  });
-
-  it("keeps the requested and the measured width APART at the switcher", () => {
-    /*
-     * The two are different facts and the control needs both. Fed the measured
-     * width as its selection, it would unselect the option the author just
-     * clicked whenever the region could not honour it — the tier would look
-     * unchosen while the canvas was showing it. Fed only the request, its tier
-     * indicator could never report the narrow-region case, which is the one
-     * case it exists for.
-     */
-    openEditor();
-
-    choose(991);
-    measure(900);
-
-    expect(seen.switcher?.width).toBe(991);
-    expect(seen.switcher?.appliedWidth).toBe(900);
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+    expect(box().width).toBe(575);
   });
 });
 
-describe("a width the site stops offering", () => {
-  it("releases the canvas when the selected tier is deleted", () => {
+describe("a device the site stops offering", () => {
+  it("goes back to Desktop when no breakpoint wider than the removed one remains", () => {
     /*
-     * The switcher renders nothing once a site defines no viewport tiers, and
-     * it cannot clear state it does not own. So an author who selects a tier
-     * and then deletes it is left with a canvas pinned to a bound the
-     * stylesheet no longer has, and no control on screen to release it — the
-     * only way out is to close the editor and reopen it.
-     *
-     * Driven through the CONFIG the editor reads its breakpoints from, rather
-     * than by calling the release directly, because what is under test is that
-     * the width is reconciled against the site as it now stands.
+     * Deterministic, and never a breakpoint nothing draws: an edit stored
+     * under an id the site no longer defines would never reach the page.
+     * Mobile remains, and is narrower, so the edit goes to the base rather
+     * than to it.
      */
     const view = openEditor();
-    choose(991);
-    expect(box().width).toBe(991);
+    choose("tablet");
+    expect(seen.inspector?.breakpoint).toBe("tablet");
 
-    clientConfig = {
-      siteStyle: { breakpoints: { viewport: [], container: [] } },
-    };
-    view.rerender();
-
-    expect(box().width).toBeUndefined();
-  });
-
-  it("FOLLOWS the base width when the widest bound is edited", () => {
-    /*
-     * A width identifies an option only until the site's bounds move. Editing
-     * the widest breakpoint changes the width the unconditional tier applies
-     * FROM, so the number the author's choice produced is suddenly nobody's.
-     *
-     * Reconciled by number, that reads as a deleted tier and releases the
-     * canvas — which, in a region narrower than the new bound, drops the editor
-     * straight back into the bounded tier while the option they chose still
-     * exists and still reads as selected. Every edit after that lands in a tier
-     * they did not pick.
-     *
-     * Stored as the TIER, the width simply follows.
-     */
-    const view = openEditor();
-    choose(992);
-    expect(box().width).toBe(992);
-
-    // The site's widest tier widens: base now applies from 1201 rather than 992.
     clientConfig = {
       siteStyle: {
         breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1200 }],
+          viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
           container: [],
         },
       },
     };
     view.rerender();
 
-    expect(box().width).toBe(1201);
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(seen.switcher?.selected).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
-  it("KEEPS the unconditional tier's width, which is no tier's BOUND", () => {
+  it("moves to the next wider breakpoint when one remains, and shows it chosen", () => {
     /*
-     * The width that reaches the base tier is one PAST the widest bound, so it
-     * is not among the bounded tiers — and a reconciliation that compares
-     * against those alone clears it on the very next render.
-     *
-     * Measured before this case existed: choosing the unconditional tier set
-     * the width, the effect below cleared it, and the canvas returned to
-     * filling the region. Nothing failed. The one option that reaches the tier
-     * an author most often edits responded to the press and did nothing, which
-     * is indistinguishable from the option not working at all.
-     *
-     * The rerender is what makes it a test of the RECONCILIATION rather than of
-     * the setter: the clearing happens in an effect, so a case asserting
-     * immediately after the press passes whether or not it exists.
+     * Mobile removed while it is being edited: Tablet, the next one up, is
+     * where the edits go, and the device buttons show it as the device chosen.
+     * The base would also be a defined breakpoint, so only the next wider one
+     * separates this from going back to Desktop.
      */
     const view = openEditor();
+    choose("mobile");
+    expect(seen.inspector?.breakpoint).toBe("mobile");
 
-    choose(992);
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
     view.rerender();
 
-    expect(box().width).toBe(992);
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(seen.switcher?.selected).toBe("tablet");
+    expect(box().width).toBe(991);
+    // Chosen through the shell, so it is stored as the author's device.
+    expect(deviceRequests.at(-1)).toBe("tablet");
   });
 
-  it("EDITS the base tier at that width, which is the point of offering it", () => {
+  it("keeps a device that was restored on load for a breakpoint already gone at the base", () => {
     /*
-     * The width surviving is necessary and not sufficient: a number that
-     * survived but resolved to a bounded tier would satisfy the case above
-     * while leaving base exactly as unreachable as it was.
-     *
-     * Measured through the box, because the canvas is scaled rather than capped
-     * — the layout width is the requested one, so what the container queries
-     * resolve against is 992 even where the region is narrower.
+     * The fallback answers a removal seen in this session. A device stored
+     * for a breakpoint the site had already removed has no width to compare
+     * against, so it is edited at the base, and a later change to the set
+     * does not move it to some other breakpoint.
      */
-    openEditor();
+    storedDevice = "watch";
+    const view = openEditor();
+    expect(seen.inspector?.breakpoint).toBe("base");
 
-    choose(992);
-    measure(992);
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
 
     expect(seen.inspector?.breakpoint).toBe("base");
+    expect(seen.switcher?.selected).toBe("base");
+    // Nothing was asked of the shell: the stored choice is left as it was.
+    expect(deviceRequests).toEqual([]);
   });
 
-  it("KEEPS a width the site still offers", () => {
+  it("does not take the stored set's arrival for a removal", () => {
     /*
-     * The control. Without it, a version that released on every breakpoint
-     * change — or on every render — would satisfy the case above while making
-     * the switcher unusable: every selection would be undone by the next
-     * render.
+     * Until the stored style answers, the set in hand is the host's config
+     * defaults. A device restored on load that the stored set does not have
+     * was removed before this session, so it goes to the base, and the
+     * arrival of the read is not a removal to fall back from.
      */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: true,
+      error: null,
+      current: false,
+    };
     const view = openEditor();
-    choose(991);
 
+    storedRead = answered(TABLET_ONLY);
     view.rerender();
 
-    expect(box().width).toBe(991);
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a retried read's answer, after the first failed, for a removal", () => {
+    /*
+     * A failed first read leaves the host's config defaults in hand, as a
+     * pending one does. A device restored on load that the stored set does not
+     * have was removed before this session, so when a retry answers it goes to
+     * the base rather than to the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+      current: false,
+    };
+    const view = openEditor();
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("does not take a stale cached answer, shown while a new read runs, for the set before", () => {
+    /*
+     * Reopened after the cache went stale: the cached answer still has Mobile,
+     * which another author removed meanwhile. It is shown while the editor
+     * reads again, and is not current, so the read's answer is a removal made
+     * while this author was away: the base, not the next wider breakpoint.
+     */
+    storedDevice = "mobile";
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: null,
+      current: false,
+    };
+    const view = openEditor();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(deviceRequests).toEqual([]);
+  });
+
+  it("keeps the last current set across a read that fails, for the removal a retry confirms", () => {
+    /*
+     * Mobile chosen against a current answer; a later read fails, keeping that
+     * answer beside the failure; a retry then answers without Mobile. The
+     * removal is compared with the set before the failure, so it moves to
+     * Tablet rather than to the base.
+     */
+    const view = openEditor();
+    choose("mobile");
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("offline"),
+      current: false,
+    };
+    view.rerender();
+    expect(seen.inspector?.breakpoint).toBe("mobile");
+
+    storedRead = answered(TABLET_ONLY);
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(deviceRequests.at(-1)).toBe("tablet");
+  });
+
+  it("shows Desktop when the site removes its last breakpoint", () => {
+    const view = openEditor();
+    choose("tablet");
+
+    clientConfig = {
+      siteStyle: { breakpoints: { viewport: [], container: [] } },
+    };
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("base");
+    // Nothing to simulate, so the page is shown as a laptop would show it.
+    expect(box().width).toBe(1280);
+  });
+
+  it("follows a breakpoint whose bound is edited", () => {
+    // Stored as the breakpoint, not the width it was shown at, so moving its
+    // bound moves the canvas with it rather than losing the choice.
+    const view = openEditor();
+    choose("tablet");
+
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [
+            { id: "tablet", label: "Tablet", maxWidth: 1023 },
+            { id: "mobile", label: "Mobile", maxWidth: 575 },
+          ],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(seen.inspector?.breakpoint).toBe("tablet");
+    expect(box().width).toBe(1023);
+  });
+
+  it("keeps the base outside a breakpoint that grows past 1280", () => {
+    const view = openEditor();
+    choose("base");
+
+    clientConfig = {
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "laptop", label: "Laptop", maxWidth: 1439 }],
+          container: [],
+        },
+      },
+    };
+    view.rerender();
+
+    expect(box().width).toBe(1440);
+    expect(seen.inspector?.breakpoint).toBe("base");
   });
 });
 
-describe("a site with nothing to simulate", () => {
-  it("stays PUBLISHED when no viewport tier is emitted", () => {
+describe("a site whose only breakpoints are container ones", () => {
+  it("is compiled as published, so its container rules still answer", () => {
     /*
-     * A preview compile rewrites every CONTAINER-axis rule to
-     * `@container nx-not-previewable (width < 0px)`, which matches nothing.
-     * That is the engine refusing to answer a question a preview box cannot —
-     * a container query resolves against an element's own query container —
-     * and it is the right trade when there are viewport tiers to gain.
-     *
-     * With none, the same price is paid for nothing: a site whose only
-     * breakpoints are container ones would have every one of them silently
-     * stop matching on the canvas while they keep working on the published
-     * page.
+     * Its container queries resolve against the page's own containers in the
+     * frame, exactly as on the published page.
      */
     clientConfig = {
       siteStyle: {
@@ -572,112 +844,56 @@ describe("a site with nothing to simulate", () => {
     openEditor();
 
     const context = (
-      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
+      seen.canvas?.render as {
+        styleContext?: { previewContainer?: string; breakpoints?: unknown };
+      }
     )?.styleContext;
+    expect(context?.breakpoints).toBeDefined();
     expect(context?.previewContainer).toBeUndefined();
-    expect(seen.canvas?.preview).toBeUndefined();
-    expect(seen.inspector?.previewContainer).toBeUndefined();
-  });
-
-  it("PREVIEWS when the site emits a viewport tier alongside a container one", () => {
-    /*
-     * The control. Without it, a mount that never previewed would satisfy the
-     * case above — and the whole feature would be off with every assertion
-     * about it still green.
-     */
-    clientConfig = {
-      siteStyle: {
-        breakpoints: {
-          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
-          container: [{ id: "narrow", label: "Narrow", maxWidth: 400 }],
-        },
-      },
-    };
-
-    openEditor();
-
-    const context = (
-      seen.canvas?.render as { styleContext?: { previewContainer?: string } }
-    )?.styleContext;
-    expect(context?.previewContainer).toBeTypeOf("string");
-    expect(box().container).toBe(context?.previewContainer);
+    expect(box().width).toBe(1280);
   });
 });
 
-describe("going to the tier a value came from", () => {
-  it("SIZES THE CANVAS to that tier rather than storing a second answer", () => {
-    /*
-     * The whole architecture is one width with everything derived from it. A
-     * jump that wrote its own "which tier am I editing" would put the two back
-     * in the disagreement deriving them from one width exists to remove — the
-     * canvas would keep showing one tier while the inspector claimed another.
-     *
-     * Asserted on the BOX's requested width, which is the only thing a jump is
-     * allowed to change.
-     */
-    openEditor();
-
-    const jump = seen.inspector?.onJumpToBreakpoint as
+describe("going to the breakpoint a value came from", () => {
+  function jump(breakpoint: string): void {
+    const go = seen.inspector?.onJumpToBreakpoint as
       | ((breakpoint: string) => void)
       | undefined;
-    expect(jump).toBeTypeOf("function");
+    if (go === undefined) throw new Error("the inspector was given no jump");
     React.act(() => {
-      jump?.("tablet");
+      go(breakpoint);
     });
+  }
 
+  it("chooses that device, as the device buttons would", () => {
+    // A jump and a choice are the same act reached two ways, so both go
+    // through the shell's one device rather than a second answer here.
+    openEditor();
+
+    jump("tablet");
+
+    expect(seen.switcher?.selected).toBe("tablet");
+    expect(seen.inspector?.breakpoint).toBe("tablet");
     expect(box().width).toBe(991);
   });
 
-  it("SIZES the canvas for the unconditional tier too, not releases it", () => {
-    /*
-     * It used to release the canvas here, on the reasoning that no width puts
-     * the unconditional tier on screen. There is one: the width it applies
-     * FROM, one past the widest bound.
-     *
-     * Releasing sends the box back to the region — and wherever the region is
-     * narrower than the widest bound, which is the ordinary case, the tier that
-     * then applies is the one the author was jumping AWAY from. The control
-     * would look like it had worked and land on the wrong tier.
-     *
-     * A jump and a choice are the same act reached two ways, so this has to
-     * agree with what pressing the option in the switcher sets.
-     */
+  it("goes to Desktop for the base breakpoint", () => {
     openEditor();
-    const jump = seen.inspector?.onJumpToBreakpoint as
-      | ((breakpoint: string) => void)
-      | undefined;
-    React.act(() => {
-      jump?.("tablet");
-    });
-    expect(box().width).toBe(991);
+    jump("tablet");
 
-    React.act(() => {
-      jump?.("base");
-    });
+    jump("base");
 
-    expect(box().width).toBe(992);
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 
-  it("RELEASES the canvas for a tier that is genuinely unreachable", () => {
-    /*
-     * The control, and the case the old reasoning was right about. A tier the
-     * compiler emits no bound for — one the site does not define at all here —
-     * has no width that shows it, so the box goes back to the region rather
-     * than being pinned to a number nothing responds to.
-     */
+  it("edits Desktop for a breakpoint the site does not define", () => {
     openEditor();
-    const jump = seen.inspector?.onJumpToBreakpoint as
-      | ((breakpoint: string) => void)
-      | undefined;
-    React.act(() => {
-      jump?.("tablet");
-    });
-    expect(box().width).toBe(991);
+    jump("tablet");
 
-    React.act(() => {
-      jump?.("no-such-tier");
-    });
+    jump("no-such-breakpoint");
 
-    expect(box().width).toBeUndefined();
+    expect(seen.inspector?.breakpoint).toBe("base");
+    expect(box().width).toBe(1280);
   });
 });

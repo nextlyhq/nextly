@@ -122,7 +122,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { title: "T2" }
+      { title: "T2", _overwrite: true }
     );
 
     const envelope = await updatedEnvelope(t);
@@ -154,7 +154,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "after" }
+      { heading: "after", _overwrite: true }
     );
 
     const envelope = await updatedEnvelope(t);
@@ -183,7 +183,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "en",
         overrideAccess: true,
       },
-      { heading: "English" }
+      { heading: "English", _overwrite: true }
     );
 
     const rows = await t.adapter.select<EventRow>("nextly_events");
@@ -217,7 +217,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Deutsch" }
+      { heading: "Deutsch", _overwrite: true }
     );
 
     const entries = h.getEntryService() as CollectionEntryService;
@@ -225,6 +225,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 
@@ -282,6 +283,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 
@@ -327,6 +329,7 @@ describe("webhook outbox capture, localized (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(result.success).toBe(true);
 
@@ -362,7 +365,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Deutsch" }
+      { heading: "Deutsch", _overwrite: true }
     );
 
     const envelope = await updatedEnvelope(t);
@@ -391,7 +394,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Entwurf", status: "draft" }
+      { heading: "Entwurf", status: "draft", _overwrite: true }
     );
     await h.updateEntry(
       {
@@ -400,7 +403,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Entwurf 2" }
+      { heading: "Entwurf 2", _overwrite: true }
     );
 
     const rows = await t.adapter.select<EventRow>("nextly_events");
@@ -448,7 +451,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Deutsch" }
+      { heading: "Deutsch", _overwrite: true }
     );
 
     // The newest durable version, by number: the working draft (no number)
@@ -497,7 +500,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { title: "T2" }
+      { title: "T2", _overwrite: true }
     );
 
     const envelope = await updatedEnvelope(t);
@@ -618,7 +621,7 @@ describe("webhook outbox capture, localized (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     const envelope = await updatedEnvelope(t);

@@ -32,6 +32,9 @@ my-nextly-app/
 │   │   │   └── media/
 │   │   │       └── [[...path]]/
 │   │   │           └── route.ts      # Public media reads (no writes)
+│   │   ├── uploads/
+│   │   │   └── [...path]/
+│   │   │       └── route.ts          # Serves local uploads at /uploads/...
 │   │   ├── layout.tsx                # Root layout
 │   │   ├── globals.css               # Global styles
 │   │   └── favicon.ico
@@ -149,9 +152,13 @@ The admin panel lives here as a standard Next.js route. The catch-all `[[...para
 
 Public routes: a health check and media reads. A new project has no `/api` catch-all, so Nextly's endpoints are served under `/admin/api` by the admin route above. To serve the REST API under `/api` as well, add the catch-all described in [REST API](/docs/api-reference/rest-api).
 
+### `src/app/uploads/`
+
+Serves the files local storage keeps, at `/uploads/...`. A production server (`next start`) serves only the files `public/` held when it started, so this route serves the ones uploaded since, at the same URLs. With cloud storage it answers 404. See [How local uploads are served](/docs/guides/media-storage#how-local-uploads-are-served).
+
 ### `public/uploads/`
 
-Default media store when no storage adapter is configured in `nextly.config.ts`. Files uploaded through the admin's media library land here. Next.js serves the ones that were here when the server started; under `next start`, the ones uploaded since need the uploads route described in [How local uploads are served](/docs/guides/media-storage#how-local-uploads-are-served). To switch to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+Default media store when no storage adapter is configured in `nextly.config.ts`. Files uploaded through the admin's media library land here. Next.js serves the ones that were here when the server started, and the `src/app/uploads/` route serves the rest. To switch to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
 ### `src/types/generated/`
 

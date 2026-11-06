@@ -25,6 +25,7 @@ import type {
   RotateWebhookInput,
   UpdateWebhookInput,
   WebhookEndpointSummary,
+  WebhookEventTypeEntry,
   WebhookTestResult,
 } from "@admin/types/webhooks";
 
@@ -34,7 +35,27 @@ export const webhookKeys = {
     [...webhookKeys.all(), "list"] as const,
   detail: (id: string): readonly ["webhooks", "detail", string] =>
     [...webhookKeys.all(), "detail", id] as const,
+  eventTypes: (): readonly ["webhooks", "event-types"] =>
+    [...webhookKeys.all(), "event-types"] as const,
 };
+
+/**
+ * The event types an endpoint may subscribe to, as the server lists them:
+ * core's and every enabled plugin's. The list changes only when the server
+ * starts with other plugins, so it is held for five minutes rather than read
+ * on every screen, and read again after that, so a tab left open across a
+ * restart picks up the new list.
+ */
+export function useWebhookEventTypes(): UseQueryResult<
+  WebhookEventTypeEntry[],
+  Error
+> {
+  return useQuery<WebhookEventTypeEntry[], Error>({
+    queryKey: webhookKeys.eventTypes(),
+    queryFn: () => webhookApi.listWebhookEventTypes(),
+    staleTime: 5 * 60_000,
+  });
+}
 
 /**
  * All endpoints. 30s stale keeps the list fresh across a settings session.
@@ -52,14 +73,19 @@ export function useWebhooks(options?: {
   });
 }
 
-/** One endpoint, for the edit page. */
+/**
+ * One endpoint, for the edit page. `enabled: false` lets a caller read an
+ * endpoint another page already loaded without asking for it, as the browser
+ * tab's title does on a delivery's page.
+ */
 export function useWebhook(
-  id: string
+  id: string,
+  options?: { enabled?: boolean }
 ): UseQueryResult<WebhookEndpointSummary, Error> {
   return useQuery<WebhookEndpointSummary, Error>({
     queryKey: webhookKeys.detail(id),
     queryFn: () => webhookApi.getWebhook(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
 

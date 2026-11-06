@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
@@ -33,9 +34,22 @@ import {
   publishedCollectionDbOptions,
 } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../domains/dynamic-collections/services/removed-from-code";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
+import {
+  assertPerLanguageStorageUnchanged,
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
@@ -58,6 +72,7 @@ import type {
 } from "../domains/schema/pipeline/diff/types";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
+import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
   MigrationJournal,
@@ -80,6 +95,10 @@ import type {
 } from "../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import {
+  refusedConfiguredSiblingFields,
+  siblingClashMessage,
+} from "../domains/schema/sibling-fields";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
 import type { IdentifierCaseRules } from "../domains/schema/utils/resolve-catalog-name";
 import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
@@ -120,6 +139,7 @@ import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import { refusedConfiguredAddresses } from "../shared/address-rule";
 import { consoleLogger } from "../shared/types";
 import type { SingleHooks } from "../singles/config/types";
 
@@ -158,6 +178,17 @@ interface AdapterLike {
   // columns to it are both DDL, and the status backfill that accompanies a new `_status`
   // column is a write.
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+  // Whether the server can key the per-language unique index a translated unique field needs.
+  getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
+  // Holds one connection for a statement the companion reconcile builds from the catalog.
+  transaction: DrizzleAdapter["transaction"];
+}
+
+/** An entity the configuration names: one without a slug cannot be addressed. */
+function hasSlug<T extends { slug?: string }>(
+  entity: T
+): entity is T & { slug: string } {
+  return typeof entity.slug === "string";
 }
 
 type CollectionDef = {
@@ -228,8 +259,8 @@ type ComponentDef = {
  *
  * That row is not merely cosmetic. Anything deciding whether an entity's table
  * can be queried reads it -- the widget source refresh does -- so a field edit
- * under `next dev` silently withdrew that entity's generated cards from the
- * dashboard for the rest of the session.
+ * under `next dev` silently withdrew that entity's widget source, and with it
+ * every card set to it, from the dashboard for the rest of the session.
  *
  * The edited set is taken from the SYNC'S OWN REPORT rather than from the
  * snapshot, because the snapshot answers "did this table exist before the
@@ -362,6 +393,7 @@ interface CollectionRegistrySurface {
       fields?: unknown[];
       status?: boolean;
       localized?: boolean;
+      source?: string;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -389,6 +421,7 @@ interface SingleRegistrySurface {
       tableName?: string;
       fields?: unknown[];
       status?: boolean;
+      source?: string;
     }>
   >;
 }
@@ -970,6 +1003,33 @@ function stageConfigHooks(newConfig: {
   };
 }
 
+/** Whether the reload is a change before any entity's diff is judged (see its call). */
+function startsAsChange(
+  extensionSchemaChanged: boolean,
+  leaving: readonly unknown[]
+): boolean {
+  return extensionSchemaChanged || leaving.length > 0;
+}
+
+/**
+ * The companion pass before the apply (`ensureLocalizedCompanionsForReload`), unless a field leaving
+ * translation was refused: then nothing runs, and the refused entities stop the reload as a copy
+ * that could not complete does, before anything changes.
+ */
+async function unlessLeavingRefused(
+  refused: readonly string[],
+  pass: () => ReturnType<typeof ensureLocalizedCompanionsForReload>
+): ReturnType<typeof ensureLocalizedCompanionsForReload> {
+  if (refused.length > 0) {
+    return {
+      preservationFailed: [...refused],
+      restoreFailed: [],
+      schemaChanged: false,
+    };
+  }
+  return pass();
+}
+
 /**
  * Create, and bring into step, the `_locales` companion of every localized collection, single
  * and field group in the reloaded config.
@@ -1064,11 +1124,26 @@ async function ensureLocalizedCompanionsForReload(
     versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
+    survivingCompanionRefusal,
   } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
     "../domains/singles/services/resolve-single-table-name"
+  );
+  // Every entity as the registry records it before this reload's metadata sync rewrites it, which
+  // every pass of this function runs before. It tells an entity whose translation this reload
+  // starts, and a field it newly translates, from what was translated before.
+  const { readRecordedEntities, recordedBeforeOf } = await import(
+    "../domains/i18n/migration/recorded-before"
+  );
+  const recordedBefore = await readRecordedEntities(
+    adapter as unknown as DrizzleAdapter,
+    config,
+    error =>
+      consoleLogger.warn(
+        `[nextly] The registry could not be read, so no translations column is judged this reload: ${error instanceof Error ? error.message : String(error)}`
+      )
   );
 
   type Localizable = {
@@ -1106,21 +1181,28 @@ async function ensureLocalizedCompanionsForReload(
   // Where transitions are recorded. Resolved whether or not the app names a default locale: an app
   // that has just removed its `localization` block still has companions to unwind, and asking for a
   // locale first would hide exactly those entities.
-  const { bindTransitionRecorder, resolveTransitionStore } = await import(
-    "../domains/i18n/migration/transition-recorder"
-  );
+  const {
+    bindTransitionRecorder,
+    resolveTransitionStore,
+    transitionDefaultLocale,
+  } = await import("../domains/i18n/migration/transition-recorder");
   const { beginI18nTransition, settleI18nTransition } = await import(
     "../domains/i18n/migration/transition-state"
   );
   const transitionStore = await resolveTransitionStore(adapter);
   // The same store, plus the locale a newly created companion gets recorded with.
-  const transitions = bindTransitionRecorder(transitionStore, config);
+  const transitions = bindTransitionRecorder(
+    transitionStore,
+    await transitionDefaultLocale(adapter, config)
+  );
 
   for (const [kind, entities, resolveTableName] of groups) {
     for (const entity of entities) {
       if (!entity.slug) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
-      if (entity.localized !== true) {
+      // Restored only when its translatable values no longer belong in a companion: an entity that
+      // is not translatable, on a site that does not keep every translatable field per language.
+      if (!storesPerLanguage(entity)) {
         // Turning localization off is a transition too. Only the Schema Builder used to perform
         // it, so an entity localized from configuration and then un-localized kept its content in
         // a companion nothing reads any more, and fell back to whatever the main table held before
@@ -1162,6 +1244,25 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
+      // Before copying anything into a translations table that survived turning translation
+      // off: a column there that can no longer hold its field keeps the apply from running.
+      if (phase === "beforeApply") {
+        const refused = await survivingCompanionRefusal(adapter, {
+          builtBy: "codeFirst",
+          tableName,
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+        });
+        if (refused) {
+          preservationFailed.push(entity.slug);
+          consoleLogger.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Nothing was copied into it: ${refused.message}`
+          );
+          continue;
+        }
+      }
       const provisioned = await ensureCompanionTable(
         adapter,
         {
@@ -1171,7 +1272,7 @@ async function ensureLocalizedCompanionsForReload(
           tableName,
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Turns creation into a transition: content already on the main table is
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
@@ -1236,7 +1337,7 @@ async function ensureLocalizedCompanionsForReload(
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
       if (phase === "beforeApply") continue;
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter,
         {
           // Same config-edit path as the companion creation above.
@@ -1245,15 +1346,42 @@ async function ensureLocalizedCompanionsForReload(
           tableName: resolveTableName(entity),
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
-          status: entity.status === true,
+          status: publishesPerLanguage(entity),
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
           consoleLogger.warn(
             `[nextly] Could not update the translations table for "${entity.slug}". ` +
               `Newly translatable fields may fail to save until it is in step: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+        },
+        message => {
+          consoleLogger.warn(
+            `[nextly] The translations table for "${entity.slug}": ${message}`
+          );
+        }
+      );
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
+      // not after a column failure: a refused column is not the field's to index.
+      if (!columnsInStep) continue;
+      const { reconcileCompanionUniqueIndexes } = await import(
+        "../domains/i18n/runtime/companion-unique-reconcile"
+      );
+      await reconcileCompanionUniqueIndexes(
+        adapter,
+        {
+          builtBy: "codeFirst" as const,
+          tableName: resolveTableName(entity),
+          fields: entity.fields ?? [],
+        },
+        error => {
+          consoleLogger.warn(
+            `[nextly] Could not index the translations table for "${entity.slug}". ` +
+              `Unique translated fields are not enforced in each language until it is: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
         }
@@ -1442,10 +1570,25 @@ async function applyReload(opts?: {
     "../plugins/principals/registry"
   );
   const principalKinds = stagePrincipalKinds();
+  // The webhook event types the reloaded config declares, held the same way:
+  // subscriptions are judged against them only once the reload lands.
+  const { stageWebhookEventTypes } = await import(
+    "../domains/webhooks/event-type-registry"
+  );
+  const webhookEventTypes = stageWebhookEventTypes();
   try {
-    await applyReloadHolding(principalKinds, opts);
+    await applyReloadHolding(
+      {
+        commit: () => {
+          principalKinds.commit();
+          webhookEventTypes.commit();
+        },
+      },
+      opts
+    );
   } finally {
     principalKinds.abandon();
+    webhookEventTypes.abandon();
   }
 }
 
@@ -1473,6 +1616,8 @@ async function applyReloadHolding(
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        /** The per-language storage choice, which a reload may not change. */
+        perLanguageStorage?: boolean;
         auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
         /**
@@ -1483,6 +1628,8 @@ async function applyReloadHolding(
         plugins?: PluginDefinition[];
         /** Read for `db.schema` (app-level hooks) when recompiling below. */
         db?: unknown;
+        /** Read for the site dashboard the component-map check holds the map to. */
+        admin?: { dashboard?: unknown };
       }
     | undefined;
   /**
@@ -1575,11 +1722,17 @@ async function applyReloadHolding(
           singles?: SingleDef[];
           fieldGroups?: ComponentDef[];
           webhookAuditEnabled?: boolean;
+          perLanguageStorage?: boolean;
           plugins?: PluginDefinition[];
           db?: unknown;
+          admin?: { dashboard?: unknown };
         };
       }
     ).config;
+
+    // The tables the running site reads and writes were laid out for the per-language storage
+    // choice it started with, so a config that changes it is refused until the site restarts.
+    assertPerLanguageStorageUnchanged(newConfig?.perLanguageStorage);
 
     // The reload repopulates the field-type registry through `loadConfig` but
     // never goes back through `registerServices`, so the boot gate does not run
@@ -1677,6 +1830,14 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The declared collections and Singles the write guard judges by, likewise:
+  // published at commit, and the set in force put back when the reload does
+  // not land, so a refused reload neither refuses nor allows a write.
+  let previousDeclared: ReturnType<typeof publishDeclaredEntities>;
+  let declaredPublished = false;
+  reloadUndo.push(() => {
+    if (declaredPublished) restoreDeclaredEntities(previousDeclared);
+  });
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -1698,12 +1859,15 @@ async function applyReloadHolding(
       publishPluginDependencies(newConfig.plugins);
       // The plugins the admin's component check compares its map against, as
       // the reloaded config declares them, so a plugin added or changed in
-      // development is rewritten into the map without a restart.
-      setAdminComponentPlugins(newConfig.plugins);
+      // development is rewritten into the map without a restart. The site
+      // dashboard with them, as the loader carries it after every setup().
+      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
+    previousDeclared = publishDeclaredEntities(newConfig);
+    declaredPublished = true;
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows
@@ -1745,6 +1909,58 @@ async function applyReloadHolding(
   // Resolution can succeed and still hand back no adapter, which is the same
   // outcome as it throwing: nothing below runs, so the reload never lands.
   if (!adapter) {
+    undoOptimisticReloadWork();
+    return;
+  }
+
+  // The reloaded configuration's new addresses, judged as a start judges them and before this
+  // reload changes anything: a collection, Single or field group added while `next dev` runs is a
+  // new address like one added before a start. A refused reload keeps the previous configuration.
+  // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
+  const liveAdapter = adapter as unknown as DrizzleAdapter;
+  let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
+  // The reloaded configuration's new pairs of sibling fields, judged as a start judges them.
+  let refusedSiblings: Awaited<
+    ReturnType<typeof refusedConfiguredSiblingFields>
+  >;
+  try {
+    const reloaded = {
+      collections: (newConfig.collections ?? []).filter(hasSlug),
+      singles: (newConfig.singles ?? []).filter(hasSlug),
+      fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
+    };
+    const registered = await loadBuilderEntities(liveAdapter);
+    refusedAddresses = await refusedConfiguredAddresses(
+      reloaded,
+      registered,
+      table => liveAdapter.tableExists(table)
+    );
+    refusedSiblings = await refusedConfiguredSiblingFields(
+      reloaded,
+      registered,
+      table => liveAdapter.tableExists(table)
+    );
+  } catch (err) {
+    // A check that could not read the database cannot pass the reload: it gives up the way
+    // every refused reload does, putting back what it installed optimistically.
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not check the configuration's addresses: ${msg}. Keeping the previously-loaded config.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
+  if (refusedAddresses.length > 0 || refusedSiblings.length > 0) {
+    for (const { refusal } of refusedAddresses) {
+      logger?.error(
+        `[Nextly HMR] ${refusal.code}: ${refusal.message}. Keeping the previously-loaded config.`
+      );
+    }
+    for (const { entity, clash } of refusedSiblings) {
+      logger?.error(
+        `[Nextly HMR] FIELD_NAME_DUPLICATE: ${siblingClashMessage(entity, clash)} Keeping the previously-loaded config.`
+      );
+    }
     undoOptimisticReloadWork();
     return;
   }
@@ -1960,6 +2176,21 @@ async function applyReloadHolding(
   // wipe any stale entry from a previous apply before we start this one.
   clearLiveSnapshots();
 
+  // Fields this reload makes shared on an entity that stays translated, recorded translated before
+  // it (`prepareFieldsLeavingOnReload`). Found before the per-entity gate below, which judges their
+  // entities with the Required and Unique settings held back, the shape the apply pushes first, so a
+  // move an earlier reload stopped after adding the main column is finished rather than deferred.
+  // Read with the live schema below, so a read that fails abandons the reload as that one does.
+  const {
+    prepareFieldsLeavingOnReload,
+    stoppedBeforeApply,
+    heldFields,
+    withLeavingSettingsHeld,
+    moveFieldsLeavingOnReload,
+    translationStaysOn,
+  } = await import("../domains/i18n/runtime/fields-leaving-on-reload");
+  let leaving: Awaited<ReturnType<typeof prepareFieldsLeavingOnReload>>;
+
   // ONE batched introspect for every managed table the config knows about
   // (collections + singles). If the call fails, abort the reload entirely —
   // it's a connection-level failure, not a per-table problem.
@@ -1981,6 +2212,12 @@ async function applyReloadHolding(
   try {
     liveSnapshot = await introspectLiveSnapshot(db, dialect, managedTableNames);
     identifierCase = await readIdentifierCaseRules(adapter);
+    leaving = await prepareFieldsLeavingOnReload(
+      adapter as unknown as DrizzleAdapter,
+      newConfig,
+      fieldGroupTables,
+      message => logger?.error(message)
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
@@ -2009,10 +2246,13 @@ async function applyReloadHolding(
   // into the new (e.g. single_*) tables — the false-positive rename prompt
   // the user sees on a first-install where collections are synced before
   // singles.
+
   // An extension-only edit produces no entity diff, so it starts the reload
   // off as a change: the pipeline apply below is what merges the recompiled
-  // extension tables into the desired schema and creates or alters them.
-  let hasChanges = extensionSchemaChanged;
+  // extension tables into the desired schema and creates or alters them. So does
+  // a field leaving translation whose main column an earlier reload added
+  // before it stopped: the move below is what finishes it.
+  let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
   // True when a real schema diff existed but was NOT applied this cycle (an
   // unsafe change needing review, or a diff that threw). In that state the
   // registry's `fields` would disagree with the physical table, so the no-DDL
@@ -2051,7 +2291,18 @@ async function applyReloadHolding(
       // gate asks about exactly the table the apply will push. An entry
       // states no `builderOwned`, which reads as code-first: these branches
       // apply a CONFIG edit, so the table is the pipeline's.
-      const desiredTable = desiredCollectionTable(entry, dialect);
+      const desiredTable = desiredCollectionTable(
+        {
+          ...entry,
+          fields: heldFields(
+            leaving.entries,
+            "collection",
+            target.slug,
+            entry.fields
+          ),
+        },
+        dialect
+      );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
       if (operations.length === 0) {
@@ -2100,13 +2351,13 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        target.fields,
+        heldFields(leaving.entries, "single", target.slug, target.fields),
         dialect,
         {
           // These branches apply a CONFIG edit, so the table is the pipeline's.
           builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
-          localized: target.localized === true,
+          localized: storesPerLanguage(target),
         }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
@@ -2155,9 +2406,9 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        target.fields,
+        heldFields(leaving.entries, "fieldGroup", target.slug, target.fields),
         dialect,
-        { builtBy: "codeFirst" as const, localized: target.localized === true }
+        { builtBy: "codeFirst" as const, localized: storesPerLanguage(target) }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -2343,6 +2594,15 @@ async function applyReloadHolding(
   // Schema-Builder ones). HMR only knows nextly.config.ts; the shared helper
   // owns both the merge and the policy for an unreadable registry, so this
   // path and `db:sync` cannot drift apart again.
+  //
+  // A collection or Single removed from code is not preserved. Its row's
+  // stored fields would become desired schema, so this apply would create its
+  // dropped tables again or alter kept ones to match the row, and a table that
+  // had drifted from its row would hold up the whole apply on a confirmation.
+  // Left out, the apply never names it, and the drop guard keeps drizzle-kit
+  // from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(newConfig.collections);
+  const declaredSingles = declaredSlugsOf(newConfig.singles);
   Object.assign(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
@@ -2352,7 +2612,10 @@ async function applyReloadHolding(
           "collectionRegistryService"
         )) as CollectionRegistrySurface;
         return typeof collectionRegistry?.getAllCollections === "function"
-          ? await collectionRegistry.getAllCollections()
+          ? withoutRemovedFromCode(
+              await collectionRegistry.getAllCollections(),
+              declaredCollections
+            )
           : [];
       },
       logger
@@ -2367,7 +2630,12 @@ async function applyReloadHolding(
       "singleRegistryService"
     )) as SingleRegistrySurface;
     if (typeof singleRegistry?.getAllSingles === "function") {
-      const dbSingles = await singleRegistry.getAllSingles();
+      // Removed from code: left out, for the reason given above the
+      // collections merge.
+      const dbSingles = withoutRemovedFromCode(
+        await singleRegistry.getAllSingles(),
+        declaredSingles
+      );
       for (const s of dbSingles) {
         if (!s?.slug || !s?.tableName) continue;
         if (desiredSingles[s.slug]) continue; // code config wins
@@ -2376,10 +2644,10 @@ async function applyReloadHolding(
           tableName: s.tableName,
           fields: (s.fields ?? []) as DesiredSingle["fields"],
           status: s.status === true,
-          // Read from the row, not inferred from the row's presence. A code-first single dropped
-          // from the config keeps its registry row for optional orphan cleanup, so it reaches this
-          // loop while still owned by code; calling it the Builder's would widen its columns on the
-          // apply that follows, for a removal nobody requested.
+          // Read from the row, not inferred from the row's presence. A plugin's single whose
+          // plugin left the config keeps its row, so it reaches this loop while still owned by
+          // code; calling it the Builder's would widen its columns on the apply that follows,
+          // for a removal nobody requested.
           builderOwned: !isCodeOwned(s),
         };
       }
@@ -2481,12 +2749,21 @@ async function applyReloadHolding(
   // Before the apply, so an entity gaining localization has its existing content copied into the
   // companion while the main table still carries it. The apply's DROP of those columns is then a
   // cleanup rather than a loss, and it no longer matters whether the operator confirms it.
-  const preservation = await ensureLocalizedCompanionsForReload(
-    adapter,
-    newConfig,
-    fieldGroupTables,
-    deferredEntities,
-    "beforeApply"
+  //
+  // A field leaving translation that was refused stops the reload here too, before this pass
+  // changes anything (`unlessLeavingRefused`).
+  const preservation = await unlessLeavingRefused(
+    stoppedBeforeApply(leaving, deferredEntities, message =>
+      logger.error(message)
+    ),
+    () =>
+      ensureLocalizedCompanionsForReload(
+        adapter,
+        newConfig,
+        fieldGroupTables,
+        deferredEntities,
+        "beforeApply"
+      )
   );
 
   // The apply is what removes the translatable columns from the main table. Running it after a
@@ -2498,9 +2775,9 @@ async function applyReloadHolding(
   if (preservation.preservationFailed.length > 0) {
     const names = preservation.preservationFailed.join(", ");
     logger.error(
-      `[nextly] Schema changes were not applied: existing content could not be copied into the ` +
-        `translations table for ${names}. Applying now would drop the columns holding that ` +
-        `content. Fix the error above and save again.`
+      `[nextly] Schema changes were not applied: the content of ${names} could not be made ready ` +
+        `for this change (see above), and applying now could lose it. Fix the error above and ` +
+        `save again.`
     );
     // The schema and metadata never landed, so the previous config is still the
     // one describing the database, and the work applied ahead of the schema
@@ -2516,9 +2793,13 @@ async function applyReloadHolding(
   // and only in the cycle where a transition actually happened.
   if (preservation.schemaChanged) clearLiveSnapshots();
 
-  const applyResult = await apply(desired, "code", {
-    promptChannel: "terminal",
-  });
+  // A field leaving translation gets its main column without its Required or Unique setting, so the
+  // apply asks nothing about rows it has no value for yet; the setting follows the values below.
+  const applyResult = await apply(
+    withLeavingSettingsHeld(desired, leaving.entries),
+    "code",
+    { promptChannel: "terminal" }
+  );
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply
@@ -2542,12 +2823,28 @@ async function applyReloadHolding(
     // successful retry copy the companion's older values over those edits. The registry keeps
     // describing the entity as localized until the copy succeeds, so reads keep resolving through
     // the companion that still holds the content.
-    if (postApply.restoreFailed.length > 0) {
-      logger.error(
-        `[nextly] Localization stays on for ${postApply.restoreFailed.join(", ")}: their content ` +
-          `could not be copied back out of the translations table. Fix the error above and save ` +
-          `again — the content is intact where it is.`
-      );
+    //
+    // The same holds for a field leaving translation whose move did not finish
+    // (`moveFieldsLeavingOnReload`): its translations column keeps every language until a save
+    // finishes it, and the settings follow the values through a second apply of the whole config.
+    const stopped = [
+      ...postApply.restoreFailed,
+      ...(await moveFieldsLeavingOnReload({
+        adapter: adapter as unknown as DrizzleAdapter,
+        entries: leaving.entries,
+        deferred: deferredEntities,
+        config: newConfig,
+        blockedBy: postApply.restoreFailed,
+        // The live snapshot the pipeline reuses predates the first apply, so it is dropped first.
+        push: () => {
+          clearLiveSnapshots();
+          return apply(desired, "code", { promptChannel: "terminal" });
+        },
+        report: message => logger.error(message),
+      })),
+    ];
+    if (stopped.length > 0) {
+      logger.error(translationStaysOn(stopped));
       // Deliberately publishes NOTHING. The DDL landed, so the previous field
       // types are not restored either -- they describe tables that now exist.
       // But this returns ahead of the metadata sync and the runtime-schema
@@ -2763,7 +3060,7 @@ async function applyReloadHolding(
         // `localized` now travels on the DesiredCollection entry (set above from
         // the config target), so the main table is regenerated without the
         // translatable columns and the companion is registered.
-        const localized = c.localized === true;
+        const localized = storesPerLanguage(c);
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -2780,7 +3077,7 @@ async function applyReloadHolding(
             // companion carries a per-locale `_status` column when the
             // collection has Draft/Published (mirrors loadCompanionSchema). M9.
             localized: true,
-            status: c.status === true,
+            status: publishesPerLanguage(c),
           });
           if (companion) {
             companionFreshTables.set(
@@ -2794,7 +3091,7 @@ async function applyReloadHolding(
         // i18n: a localized single omits its translatable columns from the main
         // runtime table and registers the companion `single_<slug>_locales` table —
         // mirrors the collection branch above.
-        const localized = (s as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(s);
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -2809,7 +3106,7 @@ async function applyReloadHolding(
             fields: s.fields as { name: string; type: string }[],
             dialect,
             localized: true,
-            status: s.status === true,
+            status: publishesPerLanguage(s),
           });
           if (companion) {
             companionFreshTables.set(
@@ -2844,7 +3141,7 @@ async function applyReloadHolding(
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
-        const localized = (comp as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(comp);
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
@@ -2989,10 +3286,7 @@ async function applyReloadHolding(
       // pending. Surface a top-level, scannable instruction so the
       // user knows exactly what to do, rather than burying it in
       // a "FAILED" line that reads like a bug.
-      const detail = applyResult.error.message
-        .replace(/^TTY required for schema confirmation\.\s*/i, "")
-        .replace(/\s*Run from an interactive terminal,.*$/i, "")
-        .trim();
+      const detail = ttyRequiredDetail(applyResult.error.message);
       consoleLogger.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +
           `  ${detail}\n\n` +

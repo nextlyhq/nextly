@@ -37,11 +37,15 @@ import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
-import { documentOfReleaseEvent } from "../releases/release-events";
+import {
+  DOCUMENT_EVENT_KINDS,
+  documentOfReleaseEvent,
+} from "../releases/release-events";
 import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
 import { workingDraftKey } from "../versions/working-draft-key";
+import { reviewStateKey } from "../workflows/review-state-repository";
 
 /** What can be renamed: a collection or a Single. */
 export type RenamedEntityKind = "collection" | "single";
@@ -144,6 +148,11 @@ export interface JsonSlugColumn {
    * entity.
    */
   onlyWhereEqual?: Readonly<Record<string, string>>;
+  /**
+   * Columns that must hold one of these values for a row to be read at all,
+   * in the same statement, for the same reason.
+   */
+  onlyWhereIn?: Readonly<Record<string, readonly string[]>>;
   /** Further columns `names` and `rewrite` are handed, by SQL name. */
   reads?: readonly string[];
   /** The kinds whose slugs the value can name. */
@@ -388,6 +397,28 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     },
   },
   {
+    // A workflow's review state, per document and part. Its key is a digest over the slug, so it
+    // is derived again under the new one.
+    table: "nextly_review_states",
+    slugColumn: "scope_slug",
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
+    onRename: "follow",
+    derived: {
+      rowId: "id",
+      columns: ["part_key"],
+      sources: ["entry_id", "part"],
+      derive: (row, slug) => ({
+        part_key: reviewStateKey({
+          scopeKind:
+            textOf(row, "scope_kind") === "single" ? "single" : "collection",
+          scopeSlug: slug,
+          entryId: textOf(row, "entry_id"),
+          part: textOrNullOf(row, "part"),
+        }),
+      }),
+    },
+  },
+  {
     // The record of content events. Each event's parts are keyed by the
     // event's id, so they move with it.
     table: "nextly_content_events",
@@ -420,6 +451,29 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     table: "nextly_schema_events",
     slugColumn: "scope_slug",
     kind: { column: "scope_kind", values: SCOPE_KINDS },
+    onRename: "follow",
+  },
+  {
+    // Readers' pins of the entity on their dashboards. A pin follows its
+    // target, so every reader keeps what they pinned under the new name.
+    table: "nextly_dashboard_pins",
+    slugColumn: "target_slug",
+    kind: {
+      column: "target_type",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
+    // Which media items the entity's documents use. A row follows its
+    // document, so the item's "Used in" names the entity by its new slug.
+    // An email template's rows carry kind "email-template" and are not moved.
+    table: "nextly_media_usage",
+    slugColumn: "subject_slug",
+    kind: {
+      column: "subject_kind",
+      values: { collection: ["collection"], single: ["single"] },
+    },
     onRename: "follow",
   },
   {
@@ -518,11 +572,13 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     // document, so it follows the rename: release history keeps showing the
     // document under its new name and its own access, and an entity later
     // created under the old name is never judged in its place. Only release
-    // events are read.
+    // events about a document are read, by the kinds the history reads them
+    // by.
     table: "nextly_content_events",
     jsonColumn: "payload",
     rowId: "id",
     onlyWhereEqual: { subject_kind: "release" },
+    onlyWhereIn: { kind: [...DOCUMENT_EVENT_KINDS] },
     reads: ["kind"],
     renames: ["collection", "single"],
     onRename: "follow-json",

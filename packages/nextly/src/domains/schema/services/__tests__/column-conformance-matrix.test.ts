@@ -85,8 +85,9 @@ interface BuilderPath {
 const BUILDERS: BuilderPath[] = [
   { origin: "collection", path: "create", label: "collection" },
   { origin: "collection", path: "alter", label: "collection-alter" },
+  // A field group's columns are only ever created: its table gains columns through the pipeline's
+  // diff, not an ALTER generator of its own.
   { origin: "fieldGroup", path: "create", label: "fieldGroup" },
-  { origin: "fieldGroup", path: "alter", label: "fieldGroup-alter" },
 ];
 
 /**
@@ -136,6 +137,10 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
   email: [{ label: "plain", field: { type: "email" } }],
   password: [{ label: "plain", field: { type: "password" } }],
   code: [{ label: "plain", field: { type: "code" } }],
+  icon: [
+    { label: "plain", field: { type: "icon" } },
+    { label: "required", field: { type: "icon", required: true } },
+  ],
   number: [
     { label: "integer", field: { type: "number" } },
     // `dbType` is how a number states it wants exact fixed-point storage, which is what a money
@@ -492,11 +497,9 @@ function emittedColumns(
   const asConfigs = fields as unknown as Parameters<
     FieldGroupSchemaService["generateMigrationSQL"]
   >[1];
-  return builder.path === "create"
-    ? parseCreateTable(service.generateMigrationSQL(PROBE_TABLE, asConfigs, {}))
-    : parseAddColumns(
-        service.generateAlterTableMigration(PROBE_TABLE, [], asConfigs)
-      );
+  return parseCreateTable(
+    service.generateMigrationSQL(PROBE_TABLE, asConfigs, {})
+  );
 }
 
 /**
@@ -660,7 +663,7 @@ describe("column conformance: the generators against the descriptor", () => {
   it("measured every field type through both generators on every dialect", () => {
     const types = Object.keys(CASES).length;
     const variations = Object.values(CASES).reduce((n, c) => n + c.length, 0);
-    expect(types, "every DynamicFieldType has a row").toBe(19);
+    expect(types, "every DynamicFieldType has a row").toBe(20);
     // A Record satisfied by `newType: []` type-checks and measures nothing, and the aggregate below
     // would stay comfortably over its floor while the new type entered uncovered.
     expect(

@@ -105,7 +105,7 @@ export function BulkDeleteDialog({
           <AlertDialogAction
             onClick={onConfirm}
             disabled={isLoading}
-            className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+            variant="destructive"
           >
             {isLoading ? (
               <>

@@ -69,6 +69,28 @@ export const BLOCK_PART_CLASS_PREFIX = "nx-bp-";
 export const CONTENT_WIDTH_CLASS: `${typeof NODE_CLASS_PREFIX}contained` = `${NODE_CLASS_PREFIX}contained`;
 
 /**
+ * The class a container wears when it spaces the blocks it holds.
+ *
+ * Every rule the child gap decides is keyed on it as well as on the
+ * container's own class, so the gap is ONE switch on the element that holds
+ * it: an editor asking whether a child's margin is the container's gap takes
+ * this class off for one read and nothing else about the container changes —
+ * not its padding, its font size or any other default its block-type class
+ * carries. The compiler puts it in a gap container's class list; a block that
+ * repeats its slot inside wrappers of its own (a collection loop's entries)
+ * puts it on each wrapper too.
+ */
+export const CHILD_GAP_CLASS: `${typeof NODE_CLASS_PREFIX}gap` = `${NODE_CLASS_PREFIX}gap`;
+
+/**
+ * The icon an Accordion section draws in its title row, and the title beside
+ * it: marked by the section, styled by the Accordion's icon choices, which
+ * reach them through child selectors (see `style/disclosure`).
+ */
+export const DISCLOSURE_ICON_CLASS: `${typeof NODE_CLASS_PREFIX}disclosure-icon` = `${NODE_CLASS_PREFIX}disclosure-icon`;
+export const DISCLOSURE_TITLE_CLASS: `${typeof NODE_CLASS_PREFIX}disclosure-title` = `${NODE_CLASS_PREFIX}disclosure-title`;
+
+/**
  * A 53-bit hash of an id, in base 36.
  *
  * Two FNV-1a lanes with different multipliers, combined into one integer that a

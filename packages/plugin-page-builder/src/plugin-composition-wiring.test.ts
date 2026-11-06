@@ -49,6 +49,10 @@ function initContext(renameMap: Record<string, string> = {}) {
     },
     config: {},
     logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    // The plugin's own tables, holding no run: no component is being deleted,
+    // so the fence refuses nothing. Without a table the fence cannot be read,
+    // and every write placing a component is refused.
+    db: { select: () => ({ all: async () => [] }) },
   };
 }
 

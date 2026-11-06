@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MIGRATIONS_OUT_OF_ORDER
+description: "A plugin lists its migrations in an order other than the order of their names."
+---
+
+## Cause
+
+A plugin lists its migrations in an order other than the order of their names.
+
+A plugin's migrations run in the order of their names, and every reader of them uses that order. A list declared in another order would run in an order its author never wrote, so it is refused rather than sorted in silence. Nothing was applied.
+
+## Fix
+
+- As the plugin's author, list its migrations in the order of their names, the order `nextly migrate:create --plugin <entry>` writes them in.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" lists its migration "20261019_090000_add_index" after "20261020_120000_add_redirects", but its migrations run in the order of their names, so "20261019_090000_add_index" runs first.
+  Why:  Every reader of a plugin's migrations runs them by name, so a list in another order is refused rather than sorted in silence. Nothing was applied.
+  Next: List the plugin's migrations in the order of their names (the order `nextly migrate:create --plugin` writes them in).
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migrations-out-of-order  (PLUGIN_MIGRATIONS_OUT_OF_ORDER)
+```

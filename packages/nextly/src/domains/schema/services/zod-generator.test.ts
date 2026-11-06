@@ -1,4 +1,7 @@
+import { runInNewContext } from "node:vm";
+
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import type { FieldConfig } from "@nextly/collections";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -112,6 +115,14 @@ describe("ZodGenerator — Top-level vs Nested equivalence", () => {
       field: {
         name: "testField",
         type: "email",
+        required: true,
+      } as FieldConfig,
+    },
+    {
+      kind: "icon required",
+      field: {
+        name: "testField",
+        type: "icon",
         required: true,
       } as FieldConfig,
     },
@@ -422,6 +433,56 @@ describe("ZodGenerator — Individual Field Generation", () => {
     ]);
     const { code } = gen.generateSchema(col);
     expect(code).toContain("contactEmail: z.string().email(),");
+  });
+
+  it("generates an icon id shape check that parses ids and refuses other strings", () => {
+    const col = createCollection([
+      { name: "badge", type: "icon", required: true } as FieldConfig,
+    ]);
+    const { code } = gen.generateSchema(col);
+    const expression = extractFieldSchema(code, "badge");
+    expect(expression).toBeDefined();
+    // The generated source is evaluated against the same zod it imports, so
+    // what is asserted is the schema a consumer actually runs.
+    const schema = runInNewContext(String(expression), { z }) as z.ZodType;
+    expect(schema.safeParse("lucide:star").success).toBe(true);
+    // Only the shape is judged: an unregistered set still parses.
+    expect(schema.safeParse("acme:rocket-2").success).toBe(true);
+    expect(schema.safeParse("Star").success).toBe(false);
+    expect(schema.safeParse("lucide:").success).toBe(false);
+    expect(schema.safeParse("lucide:Star").success).toBe(false);
+    // No longer than the varchar(255) column the id is stored in.
+    const longest = `lucide:${"a".repeat(255 - "lucide:".length)}`;
+    expect(schema.safeParse(longest).success).toBe(true);
+    expect(schema.safeParse(`${longest}a`).success).toBe(false);
+  });
+
+  it('lets an optional icon field be cleared to "", and a required one not', () => {
+    const col = createCollection([
+      { name: "badge", type: "icon" } as FieldConfig,
+      { name: "mark", type: "icon", required: true } as FieldConfig,
+    ]);
+    const { code } = gen.generateSchema(col);
+    const parse = (name: string): z.ZodType =>
+      runInNewContext(String(extractFieldSchema(code, name)), {
+        z,
+      }) as z.ZodType;
+    const optional = parse("badge");
+    // "" is what the admin clears an optional icon to.
+    expect(optional.safeParse("").success).toBe(true);
+    expect(optional.safeParse(null).success).toBe(true);
+    expect(optional.safeParse(undefined).success).toBe(true);
+    expect(optional.safeParse("lucide:star").success).toBe(true);
+    // Any other string is still judged by its shape and length.
+    expect(optional.safeParse("Star").success).toBe(false);
+    expect(optional.safeParse(" ").success).toBe(false);
+    expect(
+      optional.safeParse(`lucide:${"a".repeat(255 - "lucide:".length)}a`)
+        .success
+    ).toBe(false);
+    const required = parse("mark");
+    expect(required.safeParse("").success).toBe(false);
+    expect(required.safeParse("lucide:star").success).toBe(true);
   });
 
   it("generates polymorphic schema for upload fields with array relationTo", () => {

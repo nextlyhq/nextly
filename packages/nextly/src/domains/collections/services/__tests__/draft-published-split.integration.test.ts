@@ -140,7 +140,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     // Edit with NO status -> non-destructive draft edit.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
     expect(res.success).toBe(true);
     // The response reflects the pending draft the caller just saved, not the
@@ -187,8 +187,14 @@ describe("draft/published split — updateEntry (integration)", () => {
     // Two SEPARATE status-less saves touching different fields. The second must
     // build on the pending draft, not re-derive from the live row (which would
     // revert the first edit).
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft-t" });
-    await entries.updateEntry({ ...ctx, entryId: id }, { body: "draft-b" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-t", _overwrite: true }
+    );
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { body: "draft-b", _overwrite: true }
+    );
 
     // One coalesced draft holding BOTH edits.
     expect(await workingDraftCount(id)).toBe(1);
@@ -217,7 +223,7 @@ describe("draft/published split — updateEntry (integration)", () => {
 
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
 
     // Draft view: the editor opts in to the working draft, so the overlay
@@ -268,7 +274,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     // A status-less save stores a working draft — its response carries the flag.
     const saveRes = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
     expect(
       (saveRes.data as { _isWorkingDraft?: boolean })._isWorkingDraft
@@ -298,7 +304,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     // NOT a working draft, so it must not be flagged.
     const publishRes = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(
       (publishRes.data as { _isWorkingDraft?: boolean })._isWorkingDraft
@@ -319,7 +325,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     // Stash a pending edit as the working draft (a trusted status-less save).
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
 
     // A plain findByID returns the live published row.
@@ -344,6 +350,9 @@ describe("draft/published split — updateEntry (integration)", () => {
     // A collection whose reads are access-enforced: only an authenticated caller
     // reads it, and everyone who reads it may also update it.
     handle = await createTestNextly({
+      // The boot's seeding: the anonymous read below is judged by the Public
+      // role, which boot grants the read because its rule answers `true`.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: COLLECTION,
@@ -365,7 +374,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     const id = row.id;
     await entries.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
 
     // An authenticated read with access enforced (no overrideAccess, no
@@ -432,7 +441,7 @@ describe("draft/published split — updateEntry (integration)", () => {
     const id = row.id;
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
 
     // The REST dispatcher sets routeAuthorized from the READ authorization, so a
@@ -481,7 +490,7 @@ describe("draft/published split — discard working draft (integration)", () => 
     // A status-less edit stores a working draft over the published row.
     await entries.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
@@ -493,6 +502,7 @@ describe("draft/published split — discard working draft (integration)", () => 
           slug: COLLECTION,
           entryId: id,
           user: { id: "editor-1" },
+          version: { _overwrite: true },
           params: {
             collectionName: COLLECTION,
             entryId: id,
@@ -540,7 +550,7 @@ describe("draft/published split — discard working draft (integration)", () => 
     const id = row.id;
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
@@ -551,6 +561,7 @@ describe("draft/published split — discard working draft (integration)", () => 
           slug: COLLECTION,
           entryId: id,
           user: { id: "reader-1" },
+          version: { _overwrite: true },
           params: {
             collectionName: COLLECTION,
             entryId: id,
@@ -587,13 +598,14 @@ describe("draft/published split — discard working draft (integration)", () => 
     const id = row.id;
     await entries.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited-in-draft" }
+      { title: "edited-in-draft", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
     await handler.discardWorkingDraft({
       collectionName: COLLECTION,
       entryId: id,
+      version: { _overwrite: true },
     });
 
     expect(await workingDraftCount(id)).toBe(0);
@@ -638,11 +650,11 @@ describe("draft/published split — discard working draft (integration)", () => 
     // which is the admin's ordinary path for the default language.
     await entries.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited-en" }
+      { title: "edited-en", _overwrite: true }
     );
     await entries.updateEntry(
       { ...trusted, entryId: id, locale: "es" },
-      { title: "edited-es" }
+      { title: "edited-es", _overwrite: true }
     );
     expect(await workingDraftLocales(id)).toEqual(["en", "es"]);
 
@@ -654,6 +666,7 @@ describe("draft/published split — discard working draft (integration)", () => 
         entryId: id,
         user: { id: "editor-1" },
         locale: "es",
+        version: { _overwrite: true },
         params: {
           collectionName: COLLECTION,
           entryId: id,
@@ -687,7 +700,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A status-less edit stores the pending title AND body as one working draft.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-t", body: "draft-b" }
+      { title: "draft-t", body: "draft-b", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
     const [mid] = await handle!.adapter.select<LiveRow>(TABLE);
@@ -698,7 +711,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // pending draft) must promote the draft's title and body to the live row.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -724,14 +737,14 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-t", body: "draft-b" }
+      { title: "draft-t", body: "draft-b", _overwrite: true }
     );
 
     // Publish re-titles in the same call: the payload's title wins, the draft
     // supplies the body the payload did not carry.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "final-t", status: "published" }
+      { title: "final-t", status: "published", _overwrite: true }
     );
 
     const [after] = await handle!.adapter.select<LiveRow>(TABLE);
@@ -753,11 +766,17 @@ describe("draft/published split — promote on publish (integration)", () => {
     const [before] = await handle!.adapter.select<LiveRow>(TABLE);
     const id = before.id;
 
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft-t" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft-t", _overwrite: true }
+    );
 
     // Unpublish names status:draft, so the accumulated draft content lands on
     // the live row and the row itself is retracted to draft.
-    await entries.updateEntry({ ...ctx, entryId: id }, { status: "draft" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { status: "draft", _overwrite: true }
+    );
 
     const [after] = await handle!.adapter.select<LiveRow>(TABLE);
     expect(after.title).toBe("draft-t");
@@ -782,7 +801,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // payload is written as-is.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "pub-t", status: "published" }
+      { title: "pub-t", status: "published", _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -814,7 +833,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { title: "draft-t" }
+      { title: "draft-t", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
@@ -829,10 +848,11 @@ describe("draft/published split — promote on publish (integration)", () => {
         userId: "user-no-publish",
         routeAuthorized: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // Refused read as well, so answered as a missing entry is.
+    expect(denied.statusCode).toBe(404);
 
     // Live content unchanged, the working draft still present.
     const [live] = await handle.adapter.select<LiveRow>(TABLE);
@@ -844,7 +864,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // permission, it does not blanket-block promotion.
     const allowed = await handler.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(allowed.success).toBe(true);
     const [promoted] = await handle.adapter.select<LiveRow>(TABLE);
@@ -885,7 +905,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A status-less edit of the single-component field.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { hero: { heading: "h2" } }
+      { hero: { heading: "h2" }, _overwrite: true }
     );
     const resHero = (res.data as { hero?: Record<string, unknown> }).hero;
     expect(resHero?.heading).toBe("h2");
@@ -933,7 +953,10 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = row.id;
 
     // A pending draft edit.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "drafted", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
 
     // A restore write names a status and carries sourceVersionNo. It must apply
@@ -941,7 +964,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // the live row, and must leave the draft in place rather than deleting it.
     const restore = await entries.updateEntry(
       { ...ctx, entryId: id, sourceVersionNo: 1 },
-      { title: "restored", body: "b", status: "published" }
+      { title: "restored", body: "b", status: "published", _overwrite: true }
     );
     expect(restore.success).toBe(true);
 
@@ -977,7 +1000,10 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = row.id;
 
     // A pending draft edit over the published row.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "drafted", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
 
     // A restore that lands a non-published status turns the live row into a draft,
@@ -987,7 +1013,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // the restored content. It must be dropped.
     const restore = await entries.updateEntry(
       { ...ctx, entryId: id, sourceVersionNo: 1 },
-      { title: "restored", body: "b", status: "draft" }
+      { title: "restored", body: "b", status: "draft", _overwrite: true }
     );
     expect(restore.success).toBe(true);
 
@@ -1038,7 +1064,10 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     // A status-less edit stores the component in the draft snapshot with its
     // relation captured as an id.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "drafted", _overwrite: true }
+    );
 
     // A draft read at depth 1 must expand the relation inside the component, like
     // a live read, rather than leaving it a bare id.
@@ -1083,7 +1112,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // directly rather than storing a draft.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -1128,11 +1157,11 @@ describe("draft/published split — promote on publish (integration)", () => {
     // Two draft saves each touching a DIFFERENT sub-field of the same component.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { metaTitle: "draft-title" } }
+      { seo: { metaTitle: "draft-title" }, _overwrite: true }
     );
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { metaDesc: "draft-desc" } }
+      { seo: { metaDesc: "draft-desc" }, _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
@@ -1190,7 +1219,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A trusted draft edit changes BOTH the title and the restricted secret.
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { title: "draft-title", secret: "draft-secret" }
+      { title: "draft-title", secret: "draft-secret", _overwrite: true }
     );
 
     // A non-admin editor publishes: field-level write access denies "secret".
@@ -1201,7 +1230,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         user: { id: "editor" },
         overrideAccess: false,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     // Refused, not stripped. A successful publish CONSUMES the pending change,
     // so promoting the rest and dropping `secret` would delete the draft and
@@ -1283,7 +1312,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A trusted draft edit changes both the allowed and the restricted nested field.
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { meta: { note: "draft-note", secret: "draft-secret" } }
+      { meta: { note: "draft-note", secret: "draft-secret" }, _overwrite: true }
     );
 
     // A non-admin editor publishes: field access denies the NESTED meta.secret.
@@ -1294,7 +1323,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         user: { id: "editor" },
         overrideAccess: false,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(res.success).toBe(false);
     const issues = (
@@ -1359,7 +1388,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A trusted draft sets approved=yes and the (then-writable) secret.
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { approved: "yes", secret: "draft-secret" }
+      { approved: "yes", secret: "draft-secret", _overwrite: true }
     );
 
     // A non-override editor publishes AND flips approved back to "no" in the same
@@ -1372,7 +1401,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         user: { id: "editor" },
         overrideAccess: false,
       },
-      { status: "published", approved: "no" }
+      { status: "published", approved: "no", _overwrite: true }
     );
     // The rule is answered against the document the write produces, where the
     // caller's own `approved: "no"` has already won, so the draft's `secret` is
@@ -1447,7 +1476,11 @@ describe("draft/published split — promote on publish (integration)", () => {
     // The pending change edits the TAGLINE, which the caller never mentions.
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { approved: "no", promo: { label: "draft", tagline: "draft-tagline" } }
+      {
+        approved: "no",
+        promo: { label: "draft", tagline: "draft-tagline" },
+        _overwrite: true,
+      }
     );
 
     const res = await entries.updateEntry(
@@ -1457,7 +1490,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         user: { id: "editor" },
         overrideAccess: false,
       },
-      { status: "published", promo: { label: "caller" } }
+      { status: "published", promo: { label: "caller" }, _overwrite: true }
     );
 
     expect(res.success).toBe(false);
@@ -1530,7 +1563,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A trusted draft sets approved="no" (which denies promo) and stages a promo.
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { approved: "no", promo: { label: "draft" } }
+      { approved: "no", promo: { label: "draft" }, _overwrite: true }
     );
 
     // A non-override editor publishes, carrying a new promo but NOT `approved`: the
@@ -1544,7 +1577,7 @@ describe("draft/published split — promote on publish (integration)", () => {
         user: { id: "editor" },
         overrideAccess: false,
       },
-      { status: "published", promo: { label: "caller" } }
+      { status: "published", promo: { label: "caller" }, _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -1586,7 +1619,10 @@ describe("draft/published split — promote on publish (integration)", () => {
     const [row] = await handle.adapter.select<{ id: string }>(TABLE);
     const id = row.id;
 
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "edited" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "edited", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
 
     const draftView = await entries.getEntry({
@@ -1636,7 +1672,7 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     expect(res.success).toBe(true);
     expect(await workingDraftCount(id)).toBe(1);
@@ -1684,7 +1720,7 @@ describe("draft/published split — promote on publish (integration)", () => {
     // the draft must still keep the live seo.metaDesc rather than dropping it.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { metaTitle: "draft-title" } }
+      { seo: { metaTitle: "draft-title" }, _overwrite: true }
     );
 
     const draftRead = await entries.getEntry({
@@ -1797,11 +1833,17 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = row.id;
 
     // The first status-less save stores the draft (title becomes draft1).
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft1" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft1", _overwrite: true }
+    );
     // The second save touches only body. The afterUpdate hook's originalData must
     // be the PRIOR draft (title=draft1), not the unchanged published row.
     seen.length = 0;
-    await entries.updateEntry({ ...ctx, entryId: id }, { body: "b2" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { body: "b2", _overwrite: true }
+    );
 
     expect(seen).toHaveLength(1);
     expect((seen[0] as { title?: string }).title).toBe("draft1");
@@ -1816,7 +1858,10 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = row.id;
 
     // A pending draft leaves a sidecar in nextly_versions.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "drafted", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
 
     // Deleting the entry must remove the sidecar too, not orphan it.
@@ -1904,7 +1949,7 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     const first = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { links: { social: { twitter: "draft-tw" } } } }
+      { seo: { links: { social: { twitter: "draft-tw" } } }, _overwrite: true }
     );
     expect(first.success).toBe(true);
     expect(await draftOf()).toEqual(
@@ -1913,7 +1958,7 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     const second = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { links: { social: { facebook: "draft-fb" } } } }
+      { seo: { links: { social: { facebook: "draft-fb" } } }, _overwrite: true }
     );
     expect(second.success).toBe(true);
     const social = await draftOf();
@@ -1932,6 +1977,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       {
         seo: { links: { social: { twitter: "live-tw" } } },
         status: "published",
+        _overwrite: true,
       }
     );
     expect(first.success).toBe(true);
@@ -1944,6 +1990,7 @@ describe("draft/published split — promote on publish (integration)", () => {
       {
         seo: { links: { social: { facebook: "live-fb" } } },
         status: "published",
+        _overwrite: true,
       }
     );
     expect(second.success).toBe(true);
@@ -1988,14 +2035,14 @@ describe("draft/published split — promote on publish (integration)", () => {
     // A draft edit changes one sub-field of the component.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { seo: { metaTitle: "draft-mt" } }
+      { seo: { metaTitle: "draft-mt" }, _overwrite: true }
     );
 
     // Publish sends a partial patch for a DIFFERENT sub-field. The pending edit
     // and the publish patch must both reach the live row.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { status: "published", seo: { metaDesc: "pub-md" } }
+      { status: "published", seo: { metaDesc: "pub-md" }, _overwrite: true }
     );
 
     const liveRead = await entries.getEntry({
@@ -2036,7 +2083,7 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { publishAt: new Date("2026-06-15T00:00:00.000Z") }
+      { publishAt: new Date("2026-06-15T00:00:00.000Z"), _overwrite: true }
     );
 
     const draftRead = await entries.getEntry({
@@ -2086,7 +2133,10 @@ describe("draft/published split — promote on publish (integration)", () => {
 
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { event: { startsAt: new Date("2026-09-09T00:00:00.000Z") } }
+      {
+        event: { startsAt: new Date("2026-09-09T00:00:00.000Z") },
+        _overwrite: true,
+      }
     );
 
     const draftRead = await entries.getEntry({
@@ -2125,13 +2175,16 @@ describe("draft/published split — promote on publish (integration)", () => {
     const id = row.id;
 
     // The first status-less save stores the working draft (the date becomes JSON).
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "draft one" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "draft one", _overwrite: true }
+    );
     // The second save reuses that draft. `publishAt` is untouched, so it is read
     // back from the JSON snapshot as a string; the response and the afterUpdate
     // hooks must still see a Date, matching an ordinary update.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft two" }
+      { title: "draft two", _overwrite: true }
     );
 
     const publishAt = (res.data as { publishAt?: unknown }).publishAt;
@@ -2221,7 +2274,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // promote without anyone noticing.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -2270,7 +2323,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // Store a draft that carries `subtitle`, then drop `subtitle` from the schema.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-title", subtitle: "pending" }
+      { title: "draft-title", subtitle: "pending", _overwrite: true }
     );
     await handle!.destroy();
     handle = undefined;
@@ -2319,7 +2372,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // The first status-less save writes `subtitle` into the working-draft snapshot.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-one", subtitle: "pending" }
+      { title: "draft-one", subtitle: "pending", _overwrite: true }
     );
     await handle!.destroy();
     handle = undefined;
@@ -2340,7 +2393,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // not reach the response or the afterUpdate hooks, matching the read overlay.
     const res = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-two" }
+      { title: "draft-two", _overwrite: true }
     );
     const data = res.data as Record<string, unknown>;
     expect(data.title).toBe("draft-two");
@@ -2367,7 +2420,10 @@ describe("draft/published split — schema and component eligibility (integratio
     // Store a working draft, then drop `status` from the schema (versioning stays
     // on). `collectionHasStatus` is now false, so the old status-scoped guard left
     // the sidecar behind; the next live write must drop it.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "pending" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "pending", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
     await handle!.destroy();
     handle = undefined;
@@ -2384,7 +2440,7 @@ describe("draft/published split — schema and component eligibility (integratio
 
     const res = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     expect(res.success).toBe(true);
     expect(await workingDraftCount(id)).toBe(0);
@@ -2407,7 +2463,10 @@ describe("draft/published split — schema and component eligibility (integratio
     const [row] = await handle!.adapter.select<LiveRow>(TABLE);
     const id = row.id;
 
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "pending" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "pending", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
     await handle!.destroy();
     handle = undefined;
@@ -2428,7 +2487,7 @@ describe("draft/published split — schema and component eligibility (integratio
 
     const res = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     expect(res.success).toBe(true);
     expect(await workingDraftCount(id)).toBe(0);
@@ -2445,7 +2504,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // Non-localized component: the split is on, so a status-less edit stores a draft.
     await entries.updateEntry(
       { ...ctx, entryId: id },
-      { title: "draft-title" }
+      { title: "draft-title", _overwrite: true }
     );
     expect(await workingDraftCount(id)).toBe(1);
 
@@ -2474,7 +2533,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // document. Either alone can be right while the two disagree.
     const published = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(published.success).toBe(true);
     const [afterPublish] = await handle!.adapter.select<LiveRow>(TABLE);
@@ -2507,7 +2566,10 @@ describe("draft/published split — schema and component eligibility (integratio
     const id = row.id;
 
     // Draft a short subtitle, then tighten the schema to require a longer one.
-    await entries.updateEntry({ ...ctx, entryId: id }, { subtitle: "ab" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { subtitle: "ab", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
     await handle!.destroy();
     handle = undefined;
@@ -2531,7 +2593,7 @@ describe("draft/published split — schema and component eligibility (integratio
     // an invalid document.
     const res = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(400);
@@ -2559,7 +2621,10 @@ describe("draft/published split — schema and component eligibility (integratio
     const id = row.id;
 
     // Store a working draft while the split is enabled.
-    await entries.updateEntry({ ...ctx, entryId: id }, { title: "drafted" });
+    await entries.updateEntry(
+      { ...ctx, entryId: id },
+      { title: "drafted", _overwrite: true }
+    );
     expect(await workingDraftCount(id)).toBe(1);
     await handle!.destroy();
     handle = undefined;
@@ -2580,7 +2645,7 @@ describe("draft/published split — schema and component eligibility (integratio
 
     const res = await reopened.updateEntry(
       { ...ctx, entryId: id },
-      { title: "live-edit" }
+      { title: "live-edit", _overwrite: true }
     );
     expect(res.success).toBe(true);
 

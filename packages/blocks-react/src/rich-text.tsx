@@ -8,6 +8,7 @@ import {
   isRichTextValue,
   TEXT_FORMAT,
   type RichTextNode,
+  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
@@ -231,9 +232,18 @@ function formatted(
   return out;
 }
 
+/**
+ * What a passage is drawn under: the host's policy for the media inside it,
+ * and the site's spacing model, which decides a media wrapper's margin.
+ */
+interface DrawSettings {
+  readonly host: BlockHostPolicy | undefined;
+  readonly spacingMode: SpacingMode | undefined;
+}
+
 function children(
   nodes: readonly RichTextNode[] | undefined,
-  policy: BlockHostPolicy | undefined
+  draw: DrawSettings
 ): ReactNode {
   // Array-checked, not undefined-checked. `children` is stored JSON like
   // everything else here, so it can arrive as `{}` or `"oops"`, and calling
@@ -245,7 +255,7 @@ function children(
     // node carries no identity, and a rich-text tree is replaced wholesale on
     // every edit rather than reordered in place, so React never has to match a
     // node across renders.
-    <RichTextNodeView key={i} node={node} policy={policy} />
+    <RichTextNodeView key={i} node={node} draw={draw} />
   ));
 }
 
@@ -333,6 +343,39 @@ export function holdsInteractive(
   nodes: readonly RichTextNode[] | undefined
 ): boolean {
   return anyDescendant(nodes, node => INTERACTIVE_NODES.has(node.type));
+}
+
+/**
+ * Whether this passage DRAWS an interactive element: a link whose destination
+ * survives `url()`, or a button the row would render. Asked with the same
+ * decisions the views below make, so a link the renderer turns back into text
+ * makes nothing interactive. What a block's content model reads; the anchor
+ * nesting guard above keeps the coarser type scan.
+ */
+export function drawsInteractive(
+  nodes: readonly RichTextNode[] | undefined
+): boolean {
+  return anyDescendant(nodes, node => {
+    switch (node.type) {
+      case "link":
+      case "autolink":
+        return url(node.url) !== undefined;
+      case "button-link":
+        return isRenderable(node);
+      case "button-group":
+        return (
+          Array.isArray(node.buttons) &&
+          node.buttons.some(
+            entry =>
+              entry !== null &&
+              typeof entry === "object" &&
+              isRenderable(entry as Readonly<Record<string, unknown>>)
+          )
+        );
+      default:
+        return false;
+    }
+  });
 }
 
 /**
@@ -608,32 +651,32 @@ export function partitionPhrasing(
 function PhrasingOnly({
   tag: Tag,
   node,
-  policy,
+  draw,
 }: {
   tag: "h1" | "summary";
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   const kids = Array.isArray(node.children) ? node.children : [];
-  if (!holdsBlockContent(kids)) return <Tag>{children(kids, policy)}</Tag>;
+  if (!holdsBlockContent(kids)) return <Tag>{children(kids, draw)}</Tag>;
   const { keeps, moves } = partitionPhrasing(
     kids,
     Tag === "summary" ? SUMMARY_PERMITS : PERMITS_NOTHING
   );
   return (
     <>
-      <Tag>{children(keeps, policy)}</Tag>
-      {children(moves, policy)}
+      <Tag>{children(keeps, draw)}</Tag>
+      {children(moves, draw)}
     </>
   );
 }
 
 function HeadingView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // `h2` rather than `h1` when the tag is unrecognised: guessing `h1` invents a
   // second top-level heading and breaks the page outline, which is worse than
@@ -643,15 +686,15 @@ function HeadingView({
       ? node.tag
       : "h2";
   const Heading = tag as "h1";
-  return <PhrasingOnly tag={Heading} node={node} policy={policy} />;
+  return <PhrasingOnly tag={Heading} node={node} draw={draw} />;
 }
 
 function LinkView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // Sanitized, not merely read: the destination is stored text that lands in an
   // `href`. `url()` is the same boundary the URL props cross, so a scheme
@@ -667,7 +710,7 @@ function LinkView({
   // not a tidy failure: it leaves a second, empty anchor in the middle of the
   // row, which is focusable and announced with no name.
   if (href === undefined || holdsInteractive(node.children))
-    return <>{children(node.children, policy)}</>;
+    return <>{children(node.children, draw)}</>;
 
   // Only `_blank` is honoured. It is the one target the editor writes, and it
   // is the one that needs the `rel` below; passing an arbitrary stored string
@@ -675,23 +718,23 @@ function LinkView({
   const target = node.target === "_blank" ? "_blank" : undefined;
   return (
     <a href={href} target={target} rel={relFor(target, node.rel)}>
-      {children(node.children, policy)}
+      {children(node.children, draw)}
     </a>
   );
 }
 
 function TableCellView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // Lexical marks a header cell with `headerState`, a bitfield where any set bit
   // means the cell heads its row or its column.
   const header = typeof node.headerState === "number" && node.headerState !== 0;
   const Cell = header ? "th" : "td";
-  return <Cell>{children(node.children, policy)}</Cell>;
+  return <Cell>{children(node.children, draw)}</Cell>;
 }
 
 /**
@@ -745,7 +788,7 @@ const MAX_IMAGE_EDGE = 20000;
  * images load while the standalone path above them does not.
  */
 /**
- * The margin a rich-media wrapper is owed, because the browser's is wrong.
+ * The inline margin a rich-media wrapper is owed, because the browser's is wrong.
  *
  * A `<figure>` carries `margin: 1em 40px` from the UA stylesheet, and 40px on
  * each side is an INDENT nobody asked for — it takes 80px out of the column and
@@ -753,11 +796,27 @@ const MAX_IMAGE_EDGE = 20000;
  * neutralise it, so the wrapper carries the reset itself, the same way the
  * gallery's list already resets the markers and padding a `<ul>` arrives with.
  *
- * Vertical-only, and the value is the editor's own `my-4`: the space between an
- * image and the prose around it is real, and the horizontal inset is the only
- * part that was never chosen.
+ * Horizontal only. The space between a figure and the prose around it belongs
+ * to the passage: the rich-text block spaces each element after the first by
+ * `space.paragraph`, and the element defaults zero a figure's block margins.
+ * An inline vertical margin here would outrank both, since nothing beats an
+ * inline style.
  */
-const MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
+const MEDIA_FIGURE_STYLE: CSSProperties = { marginInline: 0 };
+
+/**
+ * The same wrapper's margin under the classic spacing model, where nothing
+ * spaces a passage's elements but their own margins: the editor's own `my-4`
+ * above and below, and the inline reset.
+ */
+const CLASSIC_MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
+
+/** A rich-media wrapper's margin under the spacing model in force. */
+function mediaFigureStyle(draw: DrawSettings): CSSProperties {
+  return draw.spacingMode === "classic"
+    ? CLASSIC_MEDIA_FIGURE_STYLE
+    : MEDIA_FIGURE_STYLE;
+}
 
 function ImageElement({
   src,
@@ -844,15 +903,15 @@ function CaptionView({ value }: { value: unknown }): ReactNode {
  */
 function ImageView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
-  const src = fetchableUrl(node.src, policy?.remotePatterns);
+  const src = fetchableUrl(node.src, draw.host?.remotePatterns);
   if (src === undefined) return null;
   return (
-    <figure className="nextly-rich-text-image" style={MEDIA_FIGURE_STYLE}>
+    <figure className="nextly-rich-text-image" style={mediaFigureStyle(draw)}>
       <ImageElement src={src} node={node} />
       <CaptionView value={node.caption} />
     </figure>
@@ -904,17 +963,17 @@ const GALLERY_NARROW_CSS = `@media not all and (min-width: 40rem){.nextly-rich-t
  */
 function GalleryView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   if (!Array.isArray(node.images)) return null;
   const images = node.images
     .map(entry => {
       if (entry === null || typeof entry !== "object") return undefined;
       const item: Readonly<Record<string, unknown>> = entry;
-      const src = fetchableUrl(item.src, policy?.remotePatterns);
+      const src = fetchableUrl(item.src, draw.host?.remotePatterns);
       // The WHOLE entry travels on, not a `{ src, alt }` reduction of it. The
       // shared element below reads the title and the dimensions off it, and a
       // projection that kept two fields is what dropped them here before.
@@ -965,7 +1024,7 @@ function GalleryView({
     gap: "0.5rem",
   };
   return (
-    <figure className="nextly-rich-text-gallery" style={MEDIA_FIGURE_STYLE}>
+    <figure className="nextly-rich-text-gallery" style={mediaFigureStyle(draw)}>
       {/*
        * HOISTED and DEDUPED by React: `href` plus `precedence` lifts this out
        * of the figure and collapses every gallery on the page to one copy —
@@ -1235,30 +1294,25 @@ function ButtonGroupView({ node }: { node: RichTextNode }): ReactNode {
  * list, where a chain of `if`s hides it in control flow.
  */
 const NODE_VIEWS: Readonly<
-  Record<
-    string,
-    (node: RichTextNode, policy: BlockHostPolicy | undefined) => ReactNode
-  >
+  Record<string, (node: RichTextNode, draw: DrawSettings) => ReactNode>
 > = {
-  heading: (node, policy) => <HeadingView node={node} policy={policy} />,
+  heading: (node, draw) => <HeadingView node={node} draw={draw} />,
   // `open` is serialized by the editor, default included, so a section the
   // author left expanded publishes expanded.
-  "collapsible-container": (node, policy) => (
-    <details open={node.open === true}>
-      {children(node.children, policy)}
-    </details>
+  "collapsible-container": (node, draw) => (
+    <details open={node.open === true}>{children(node.children, draw)}</details>
   ),
   // A `summary` is phrasing-only and cannot be swapped for a `div` — it has to
   // be the first child of its `details` or the disclosure stops working — so it
   // takes the same treatment as a heading rather than the paragraph's.
-  "collapsible-title": (node, policy) => (
-    <PhrasingOnly tag="summary" node={node} policy={policy} />
+  "collapsible-title": (node, draw) => (
+    <PhrasingOnly tag="summary" node={node} draw={draw} />
   ),
-  link: (node, policy) => <LinkView node={node} policy={policy} />,
-  autolink: (node, policy) => <LinkView node={node} policy={policy} />,
-  list: (node, policy) => {
+  link: (node, draw) => <LinkView node={node} draw={draw} />,
+  autolink: (node, draw) => <LinkView node={node} draw={draw} />,
+  list: (node, draw) => {
     if (node.listType !== "number")
-      return <ul>{children(node.children, policy)}</ul>;
+      return <ul>{children(node.children, draw)}</ul>;
     // A list imported from `<ol start="5">` keeps its first number. Dropped,
     // the published list silently restarts at 1 and the prose around it —
     // "step 5" — stops matching. Only a positive integer is forwarded;
@@ -1269,31 +1323,31 @@ const NODE_VIEWS: Readonly<
       node.start > 0
         ? node.start
         : undefined;
-    return <ol start={start}>{children(node.children, policy)}</ol>;
+    return <ol start={start}>{children(node.children, draw)}</ol>;
   },
   linebreak: () => <br />,
   horizontalrule: () => <hr />,
-  code: (node, policy) => (
+  code: (node, draw) => (
     <pre>
-      <code>{children(node.children, policy)}</code>
+      <code>{children(node.children, draw)}</code>
     </pre>
   ),
   // `tbody` rather than bare rows: a browser inserts one anyway, and a React
   // tree that omits it does not match the DOM that results.
-  table: (node, policy) => (
+  table: (node, draw) => (
     <table>
-      <tbody>{children(node.children, policy)}</tbody>
+      <tbody>{children(node.children, draw)}</tbody>
     </table>
   ),
-  tablecell: (node, policy) => <TableCellView node={node} policy={policy} />,
+  tablecell: (node, draw) => <TableCellView node={node} draw={draw} />,
   "code-highlight": node => <CodeTokenView node={node} />,
   // The MEDIA leaves. Each keeps its content in its OWN fields rather than in
   // `children`, which is why the unknown-node fallback below cannot draw them:
   // it descends into children, finds none, and renders nothing at all. An
   // author who placed an image in their prose saw it in the editor and lost it
   // on the page, with nothing anywhere reporting the loss.
-  image: (node, policy) => <ImageView node={node} policy={policy} />,
-  gallery: (node, policy) => <GalleryView node={node} policy={policy} />,
+  image: (node, draw) => <ImageView node={node} draw={draw} />,
+  gallery: (node, draw) => <GalleryView node={node} draw={draw} />,
   "button-link": node => <ButtonLinkView node={node} />,
   "button-group": node => <ButtonGroupView node={node} />,
 };
@@ -1314,10 +1368,10 @@ function CodeTokenView({ node }: { node: RichTextNode }): ReactNode {
 
 function RichTextNodeView({
   node,
-  policy,
+  draw,
 }: {
   node: RichTextNode;
-  policy: BlockHostPolicy | undefined;
+  draw: DrawSettings;
 }): ReactNode {
   // A stored document can hold anything JSON can express, including a null in a
   // `children` array. Reading `.text` off that throws, and it would throw during
@@ -1353,19 +1407,19 @@ function RichTextNodeView({
     // {@link PhrasingOnly} instead of by this table.
     const Element =
       declared === "p" && holdsBlockContent(node.children) ? "div" : declared;
-    return <Element>{children(node.children, policy)}</Element>;
+    return <Element>{children(node.children, draw)}</Element>;
   }
 
   if (Object.hasOwn(NODE_VIEWS, node.type)) {
     const view = NODE_VIEWS[node.type];
-    if (view !== undefined) return view(node, policy);
+    if (view !== undefined) return view(node, draw);
   }
 
   if (typeof node.text === "string")
     return formatted(node.text, node.format, node.style);
 
   // Unknown node: keep the words, lose the wrapper. See the module docblock.
-  return <>{children(node.children, policy)}</>;
+  return <>{children(node.children, draw)}</>;
 }
 
 export interface RichTextProps {
@@ -1388,6 +1442,12 @@ export interface RichTextProps {
    * operator's decision to make.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * The site's spacing model. Under `classic` an image or gallery in the
+   * passage keeps the vertical margin it carried before container gaps.
+   * Absent is the engine's default, `gaps`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /**
@@ -1399,7 +1459,13 @@ export interface RichTextProps {
  * one place instead of one at every call site, and it means a prop holding the
  * wrong thing renders nothing rather than throwing on a live page.
  */
-export function RichText({ value, hostPolicy }: RichTextProps): ReactNode {
+export function RichText({
+  value,
+  hostPolicy,
+  spacingMode,
+}: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
-  return <>{children(value.root.children, hostPolicy)}</>;
+  return (
+    <>{children(value.root.children, { host: hostPolicy, spacingMode })}</>
+  );
 }

@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  NO_FIELD_GROUPS,
+  stripPasswordFieldValues,
+} from "../../../shared/lib/password-fields";
 import {
   expandComponentFields,
   stripPasswordsThroughComponents,
@@ -28,7 +31,11 @@ describe("expandComponentFields", () => {
     const entry: Record<string, unknown> = {
       creds: { secret: "plaintext-typed-by-the-author" },
     };
-    stripPasswordFieldValues(entry, expandComponentFields(schema, map));
+    stripPasswordFieldValues(
+      entry,
+      expandComponentFields(schema, map),
+      NO_FIELD_GROUPS
+    );
 
     expect(entry.creds).not.toMatchObject({
       secret: "plaintext-typed-by-the-author",
@@ -53,7 +60,11 @@ describe("expandComponentFields", () => {
     const entry: Record<string, unknown> = {
       creds: { secret: "s", label: "Primary" },
     };
-    stripPasswordFieldValues(entry, expandComponentFields(schema, map));
+    stripPasswordFieldValues(
+      entry,
+      expandComponentFields(schema, map),
+      NO_FIELD_GROUPS
+    );
 
     expect(entry.creds).toMatchObject({ label: "Primary" });
   });
@@ -70,7 +81,11 @@ describe("expandComponentFields", () => {
     const entry: Record<string, unknown> = {
       zone: [{ secret: "plaintext", heading: "Hi" }],
     };
-    stripPasswordFieldValues(entry, expandComponentFields(schema, map));
+    stripPasswordFieldValues(
+      entry,
+      expandComponentFields(schema, map),
+      NO_FIELD_GROUPS
+    );
 
     const rows = entry.zone as Record<string, unknown>[];
     expect(rows[0]).not.toMatchObject({ secret: "plaintext" });
@@ -95,7 +110,7 @@ describe("expandComponentFields", () => {
     const expanded = expandComponentFields(schema, map);
 
     const entry: Record<string, unknown> = { node: { secret: "plaintext" } };
-    stripPasswordFieldValues(entry, expanded);
+    stripPasswordFieldValues(entry, expanded, NO_FIELD_GROUPS);
     expect(entry.node).not.toMatchObject({ secret: "plaintext" });
   });
 
@@ -114,7 +129,11 @@ describe("expandComponentFields", () => {
     const entry: Record<string, unknown> = {
       outer: { creds: { secret: "plaintext" } },
     };
-    stripPasswordFieldValues(entry, expandComponentFields(schema, map));
+    stripPasswordFieldValues(
+      entry,
+      expandComponentFields(schema, map),
+      NO_FIELD_GROUPS
+    );
 
     const outer = entry.outer as Record<string, unknown>;
     expect(outer.creds).not.toMatchObject({ secret: "plaintext" });
@@ -122,8 +141,6 @@ describe("expandComponentFields", () => {
 });
 
 describe("stripPasswordsThroughComponents", () => {
-  const strip = stripPasswordFieldValues;
-
   it("terminates when an unnamed container's fields reach itself", () => {
     // The version-read path calls this after the resolver, so a schema whose
     // unnamed group holds itself reached here even once the resolver was safe.
@@ -139,8 +156,7 @@ describe("stripPasswordsThroughComponents", () => {
     stripPasswordsThroughComponents(
       entry,
       [group] as unknown as FieldConfig[],
-      new Map(),
-      strip
+      new Map()
     );
 
     // Terminated AND still did its job: the password beside the cycle is gone.
@@ -166,8 +182,7 @@ describe("stripPasswordsThroughComponents", () => {
     stripPasswordsThroughComponents(
       entry,
       [rows] as unknown as FieldConfig[],
-      new Map(),
-      strip
+      new Map()
     );
 
     const walked = entry.items as Record<string, unknown>[];
@@ -199,7 +214,7 @@ describe("stripPasswordsThroughComponents", () => {
         child: { secret: "level-2", child: { secret: "level-3" } },
       },
     };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     const node = entry.node as Record<string, unknown>;
     const child = node.child as Record<string, unknown>;
@@ -220,7 +235,7 @@ describe("stripPasswordsThroughComponents", () => {
     const entry: Record<string, unknown> = {
       zone: [{ secret: "a" }, { secret: "b" }],
     };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     const rows = entry.zone as Record<string, unknown>[];
     expect(rows[0]).not.toMatchObject({ secret: "a" });
@@ -242,7 +257,7 @@ describe("stripPasswordsThroughComponents", () => {
     const entry: Record<string, unknown> = {
       auth: { secret: "plaintext" },
     };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     expect(entry.auth).not.toMatchObject({ secret: "plaintext" });
   });
@@ -269,7 +284,7 @@ describe("stripPasswordsThroughComponents", () => {
         child: { secret: "s", label: "inner" },
       },
     };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     const node = entry.node as Record<string, unknown>;
     expect(node).toMatchObject({ label: "outer" });
@@ -289,8 +304,7 @@ describe("stripPasswordsThroughComponents", () => {
       stripPasswordsThroughComponents(
         entry,
         fields,
-        new Map<string, FieldConfig[]>(),
-        strip
+        new Map<string, FieldConfig[]>()
       )
     ).toThrow();
   });
@@ -307,8 +321,7 @@ describe("stripPasswordsThroughComponents", () => {
     stripPasswordsThroughComponents(
       entry,
       fields,
-      new Map<string, FieldConfig[]>(),
-      strip
+      new Map<string, FieldConfig[]>()
     );
 
     expect(entry).not.toMatchObject({ secret: "plaintext" });
@@ -326,7 +339,7 @@ describe("stripPasswordsThroughComponents", () => {
     ]);
     const entry: Record<string, unknown> = { creds: { secret: "plaintext" } };
 
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     expect(entry.creds).not.toMatchObject({ secret: "plaintext" });
   });
@@ -349,7 +362,7 @@ describe("stripPasswordsThroughComponents", () => {
         { _componentType: "embed", token: "public-value" },
       ],
     };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     const rows = entry.zone as Record<string, unknown>[];
     expect(rows[0]).not.toMatchObject({ token: "secret-value" });
@@ -368,7 +381,7 @@ describe("stripPasswordsThroughComponents", () => {
     ]);
 
     const entry: Record<string, unknown> = { zone: [{ token: "unknown" }] };
-    stripPasswordsThroughComponents(entry, fields, map, strip);
+    stripPasswordsThroughComponents(entry, fields, map);
 
     expect((entry.zone as Record<string, unknown>[])[0]).not.toMatchObject({
       token: "unknown",

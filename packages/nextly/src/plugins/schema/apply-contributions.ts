@@ -26,9 +26,10 @@ import type { NextlyServiceConfig } from "../../di/register";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
-  runEntityTransforms,
+  transformWithLedgers,
   type TransformContribution,
   type TransformableEntity,
+  type TransformedEntities,
 } from "../entity-transforms";
 import type { PluginDefinition } from "../plugin-context";
 import {
@@ -225,6 +226,8 @@ export interface FoldResult {
   config: NextlyServiceConfig;
   /** Extends whose target wasn't a code/plugin entity — resolved later. */
   deferredExtends: DeferredExtend[];
+  /** The fields plugins added to entities they do not own, by the transforms' ledgers. */
+  fieldsAddedByPlugins: FieldsAddedByPlugins;
 }
 
 /** Flatten every plugin's `contributes.extend` into one clause per (target, plugin). */
@@ -247,7 +250,13 @@ function applyTransforms(
   >,
   plugins: PluginDefinition[],
   owners: ReadonlyMap<string, string>
-): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
+): {
+  entities: Pick<
+    NextlyServiceConfig,
+    "collections" | "singles" | "fieldGroups"
+  >;
+  fieldsAdded: FieldsAddedByPlugins;
+} {
   const contributions: TransformContribution[] = plugins
     .filter(plugin => (plugin.contributes?.transforms?.length ?? 0) > 0)
     .map(plugin => ({
@@ -265,7 +274,7 @@ function applyTransforms(
     }));
   // Nothing to do, and nothing to rebuild: the arrays are returned untouched
   // so a config with no transforms is not re-created on every fold.
-  if (contributions.length === 0) return entities;
+  if (contributions.length === 0) return { entities, fieldsAdded: new Map() };
 
   const extendedBy = extendersBySlug(plugins);
   const transformable =
@@ -286,22 +295,63 @@ function applyTransforms(
     ...(entities.fieldGroups ?? []).map(transformable("component")),
   ];
 
-  const transformed = runEntityTransforms(flat, contributions);
+  const { entities: transformed, fieldContributors } = transformWithLedgers(
+    flat,
+    contributions
+  );
   const of = (kind: TransformableEntity["kind"]): unknown[] =>
     transformed.filter(entity => entity.kind === kind).map(e => e.definition);
 
   return {
-    collections: of("collection") as NextlyServiceConfig["collections"],
-    singles: of("single") as NextlyServiceConfig["singles"],
-    fieldGroups: of("component") as NextlyServiceConfig["fieldGroups"],
+    entities: {
+      collections: of("collection") as NextlyServiceConfig["collections"],
+      singles: of("single") as NextlyServiceConfig["singles"],
+      fieldGroups: of("component") as NextlyServiceConfig["fieldGroups"],
+    },
+    fieldsAdded: fieldsAddedFrom(transformed, fieldContributors),
   };
 }
 
 /**
- * Target slug → field name → the plugin whose `extend` added the field: who
- * declared each field the transforms are handed, beside the entity's owner.
+ * Entity slug → field name path → the plugin that added the field to an
+ * entity it does not own, by `extend` or by a transform: what goes with that
+ * plugin when it is uninstalled. A field nested in a group or repeater is
+ * keyed by its whole path (`settings.note`), as the ledgers name it, so one a
+ * transform put inside another owner's group is told apart from that owner's
+ * fields beside it. Read from the transforms' ownership ledgers, so empty
+ * when no plugin declares a transform; `extend`'s fields are then read from
+ * `extendersBySlug`.
  */
-function extendersBySlug(
+export type FieldsAddedByPlugins = ReadonlyMap<
+  string,
+  ReadonlyMap<string, string>
+>;
+
+/** The fields, at any depth, a plugin declared on an entity it does not own, by the ledgers. */
+function fieldsAddedFrom(
+  entities: readonly TransformableEntity[],
+  contributors: TransformedEntities["fieldContributors"]
+): FieldsAddedByPlugins {
+  const added = new Map<string, Map<string, string>>();
+  for (const entity of entities) {
+    const fields =
+      contributors.get(`${entity.kind}\u0000${entity.slug}`) ?? new Map();
+    for (const [path, by] of fields) {
+      if (by === undefined || by === entity.owner) continue;
+      const onEntity = added.get(entity.slug) ?? new Map<string, string>();
+      onEntity.set(path, by);
+      added.set(entity.slug, onEntity);
+    }
+  }
+  return added;
+}
+
+/**
+ * Target slug → field name → the plugin whose `extend` added the field: who
+ * declared each field the transforms are handed, beside the entity's owner,
+ * and which fields a full uninstall of that plugin takes with it.
+ */
+export function extendersBySlug(
   plugins: PluginDefinition[]
 ): Map<string, Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
@@ -424,13 +474,6 @@ function renameEntity<T extends Fielded>(
 }
 
 /**
- * Apply a plugin's `renameMap`: rename its contributed entity slugs and
- * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
- * not a renamed own slug is left untouched). Validates every rename key is a
- * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
- * the plugin's declared contributes unchanged when there is no rename map.
- */
-/**
  * Rejects a plugin still contributing under the pre-rename key.
  *
  * The key was renamed rather than aliased, so a plugin compiled against the old
@@ -462,7 +505,18 @@ function assertNoLegacyContributesKey(
   });
 }
 
-function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
+/**
+ * Apply a plugin's `renameMap`: rename its contributed entity slugs and
+ * rewrite its OWN internal `relationTo` to the renamed slugs (a target that is
+ * not a renamed own slug is left untouched). Validates every rename key is a
+ * contributed slug, else `NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET`. Pure; returns
+ * the plugin's declared contributes unchanged when there is no rename map.
+ * Exported so a full uninstall names the plugin's entities as the fold
+ * stored them.
+ */
+export function renamePluginContributes(
+  plugin: PluginDefinition
+): RenamedContributes {
   const contributes = plugin.contributes;
   assertNoLegacyContributesKey(plugin.name, contributes);
   const map = plugin.renameMap;
@@ -689,7 +743,7 @@ export function applyPluginSchemaContributions(
   // renamed slug. (No current plugin extends its own entity.)
   const extended = applyExtends(collections, singles, fieldGroups, plugins);
 
-  return { ...config, ...applyTransforms(extended, plugins, owners) };
+  return { ...config, ...applyTransforms(extended, plugins, owners).entities };
 }
 
 /**
@@ -719,20 +773,19 @@ export function applyPluginSchemaContributionsDeferred(
     flattenExtends(plugins),
     "collect"
   );
-  return {
-    config: {
-      ...config,
-      ...applyTransforms(
-        {
-          collections: r.collections,
-          singles: r.singles,
-          fieldGroups: r.fieldGroups,
-        },
-        plugins,
-        owners
-      ),
+  const transformed = applyTransforms(
+    {
+      collections: r.collections,
+      singles: r.singles,
+      fieldGroups: r.fieldGroups,
     },
+    plugins,
+    owners
+  );
+  return {
+    config: { ...config, ...transformed.entities },
     deferredExtends: r.deferred,
+    fieldsAddedByPlugins: transformed.fieldsAdded,
   };
 }
 

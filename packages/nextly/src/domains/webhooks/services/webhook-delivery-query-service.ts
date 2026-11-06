@@ -17,17 +17,18 @@
 
 import { and, count, desc, eq } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
-import {
+import type {
   nextlyEvents as eventsMysql,
   nextlyWebhookDeliveries as deliveriesMysql,
 } from "../../../schemas/webhooks/mysql";
-import {
+import type {
   nextlyEvents as eventsPg,
   nextlyWebhookDeliveries as deliveriesPg,
 } from "../../../schemas/webhooks/postgres";
-import {
+import type {
   nextlyEvents as eventsSqlite,
   nextlyWebhookDeliveries as deliveriesSqlite,
 } from "../../../schemas/webhooks/sqlite";
@@ -51,7 +52,10 @@ export type WebhookDeliveryStatus =
 /** The resource an event was about, surfaced from the joined event row. */
 export interface WebhookDeliveryResource {
   kind: string;
+  /** The collection an entry belongs to, or a slugged resource's slug; null for a plugin's event. */
   collection: string | null;
+  /** The admin slug of the plugin that recorded the event, for kind `plugin`. */
+  plugin?: string | null;
   id: string | null;
   /**
    * Which translation changed, for a localized resource. Two writes to the
@@ -131,6 +135,32 @@ interface DeliveryJoinRow {
 }
 
 /**
+ * The resource as the delivery log presents it.
+ *
+ * A plugin's event keeps the plugin's admin slug in the scope column, the
+ * column a collection's slug lives in for an entry. Presented as `plugin`,
+ * with `collection` null, so the log never shows a plugin's event as an
+ * entry of a collection that happens to share the plugin's slug.
+ */
+function deliveryResource(row: DeliveryJoinRow): WebhookDeliveryResource {
+  if (row.resourceKind === "plugin") {
+    return {
+      kind: "plugin",
+      plugin: row.resourceCollection,
+      collection: null,
+      id: row.resourceId,
+      locale: null,
+    };
+  }
+  return {
+    kind: row.resourceKind,
+    collection: row.resourceCollection,
+    id: row.resourceId,
+    locale: localeFromPayload(row.payload),
+  };
+}
+
+/**
  * Read `resource.locale` from a stored event envelope. `locale` lives only in
  * the JSON payload (there is no denormalized event column for it), so a
  * malformed or absent value reads as null rather than throwing.
@@ -152,20 +182,11 @@ export class WebhookDeliveryQueryService extends BaseService {
     logger: ConstructorParameters<typeof BaseService>[1]
   ) {
     super(adapter, logger);
-    switch (this.adapter.getCapabilities().dialect) {
-      case "postgresql":
-        this.deliveries = deliveriesPg;
-        this.events = eventsPg;
-        break;
-      case "mysql":
-        this.deliveries = deliveriesMysql;
-        this.events = eventsMysql;
-        break;
-      default:
-        this.deliveries = deliveriesSqlite;
-        this.events = eventsSqlite;
-        break;
-    }
+    // The loaded dialect's own tables, so only that dialect's files are
+    // imported; `createAdapter` loads them.
+    const tables = loadedDialect(this.adapter.getCapabilities().dialect).tables;
+    this.deliveries = tables.nextlyWebhookDeliveries;
+    this.events = tables.nextlyEvents;
   }
 
   /**
@@ -290,12 +311,7 @@ export class WebhookDeliveryQueryService extends BaseService {
       webhookId: row.webhookId,
       eventId: row.eventId,
       eventType: row.eventType,
-      resource: {
-        kind: row.resourceKind,
-        collection: row.resourceCollection,
-        id: row.resourceId,
-        locale: localeFromPayload(row.payload),
-      },
+      resource: deliveryResource(row),
       status: row.status as WebhookDeliveryStatus,
       attemptCount: row.attemptCount,
       lastStatusCode: row.lastStatusCode,

@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isFieldGroupFieldType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
@@ -44,6 +45,7 @@ export const UI_FIELD_TYPES = [
   "email",
   "password",
   "code",
+  "icon",
   "radio",
   "repeater",
   "group",
@@ -434,7 +436,19 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       const shapeToken = BUILT_IN_UI_FIELD_TYPES.has(f.type)
         ? f.type
         : pluginStorageFieldType({ type: f.type });
-      if (f.defaultValue !== undefined && shapeToken !== undefined) {
+      if (shapeToken === "icon" && f.defaultValue !== undefined) {
+        // An icon default must be an id the write path accepts. A string of
+        // any other shape would be stored as the default and then refused
+        // on every new entry that inherits it.
+        if (!isIconIdShape(f.defaultValue)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              'defaultValue of an icon field must be an icon id such as "lucide:star"',
+            path: ["defaultValue"],
+          });
+        }
+      } else if (f.defaultValue !== undefined && shapeToken !== undefined) {
         const dv = f.defaultValue;
         const okType =
           // Anything a manifest can carry is already JSON, so json storage
@@ -617,18 +631,11 @@ function entity(kind?: "collection" | "single" | "component") {
           }
         }
       }
-      // Duplicate field names.
-      const seen = new Set<string>();
-      for (const f of e.fields) {
-        if (seen.has(f.name)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `duplicate field name '${f.name}'`,
-            path: ["fields"],
-          });
-        }
-        seen.add(f.name);
-      }
+      // Two fields of one name are the sibling rule's question
+      // (`domains/schema/sibling-fields`), asked where the definition the
+      // entity last had is known: a save against its registry row, the
+      // migrate commands against the latest snapshot. A pair the entity
+      // already holds keeps working, so the manifest alone cannot refuse one.
       // Components have no entries of their own — they are embedded in a
       // collection or single, whose versioning covers them. Accepting the key
       // here would persist a setting nothing reads and the Builder never

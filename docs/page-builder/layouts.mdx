@@ -1,0 +1,313 @@
+---
+title: Layouts and the default Layout
+description: Choose which header and footer wrap your pages, set the site's default Layout, and switch them off for one page.
+---
+
+A Layout says which components fill the areas around a page, such as its header and
+footer. Layouts live under **Page Builder → Layouts** in the admin. A Layout is
+published like a component: its draft can change without the site seeing it until you
+publish.
+
+<Callout type="warn">
+  Layouts are experimental: the fields, the default's rules and the route option
+  may still change before they are marked stable. A page route draws Layouts
+  once it turns them on; see [Draw pages inside their
+  Layout](#draw-pages-inside-their-layout).
+</Callout>
+
+## Which Layout a page gets
+
+Each page has two settings:
+
+- **Layout**: the Layout the page asks for. Leave it empty to use the site's default
+  Layout, which is what most pages do.
+- **No header or footer**: asks for no Layout at all. It always wins, even when the
+  page also names a Layout, so a landing page you switched off stays switched off.
+
+The rule for which Layout a page gets is: the switch first, then the Layout the page
+names while it is published, then the site's default while it is published, and
+otherwise none. So a page naming a Layout that is not published (or was deleted) gets
+the site's default, and a page whose default is not usable gets no header or footer.
+`effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
+page; it is experimental.
+
+### Choose a page's Layout
+
+Both settings are one choice, made in one place. The **Layout** picker sits at the top
+of the editor's **Settings** and on the page's Page Builder card in the entry form. It
+offers:
+
+- **Site default**, with the default Layout's name beside it in grey, such as
+  "Main". It reads **Site default (none set)** when the site has no published default.
+- Each published Layout, by its title.
+- Each Layout that is not published yet, marked "(not published: the site default
+  shows until it is)".
+- **No header or footer**.
+
+The line under the picker says which Layout is in effect and why, for example "Follows
+the site default, Main, because this page doesn't choose its own Layout." or "Landing
+(not published, so the site default shows)". A page whose
+Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
+may not read Layouts sees the choice but cannot change it.
+
+### The Layout's regions in the editor
+
+The editor draws the header and footer of the Layout in effect around the page, as a
+visitor gets them: the published Layout and the published versions of its components.
+Changing the picker redraws them at once, before you save.
+
+The regions are locked. A click selects nothing and shows where the region comes
+from, such as "Header, from Layout Main". If you may edit Layouts, **Edit Layout ↗**
+opens it in a new tab, so your page and its undo history stay as they are. Press
+Enter on a focused region to show the same tag, and Escape to close it. When the
+Layout or one of its components has changes that are not published yet, the tag says
+"Draft changes not live" and names which. Layers lists the regions as locked rows
+above and below the page's blocks; selecting one shows it on the canvas.
+
+Publishing a page that names an unpublished Layout asks first: **Publish page only**
+leaves the Layout as it is, and the site default shows until it is published;
+**Publish both** publishes the Layout too, if you may update and publish Layouts. See
+[Publishing a page whose parts aren't published](/docs/page-builder/editor#publishing-a-page-whose-parts-arent-published).
+
+Publishing a Layout whose header or footer component isn't published tells you so
+afterwards, the same way a page is told.
+
+## The default Layout
+
+Your site always has exactly one default Layout. On a new site the plugin creates a
+published Layout called **Site layout**, with no areas filled in, and makes it the
+default. Fill in its areas, or make another Layout the default. A site set up on an
+earlier version keeps the name it was given then, **Default (site)**; the plugin never
+renames it.
+
+If you already have a Layout called "Site layout", or one at the address `site-layout`,
+the plugin never takes it over. It gives its own Layout the next free name or address
+instead, such as "Site layout 2" or `site-layout-2`.
+
+### Make another Layout the default
+
+Call the make-default route on a published Layout:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/make-default
+```
+
+Only a published Layout can be the default. The caller needs three permissions:
+
+- **Manage page builder site settings** (`manage-page-builder-site`),
+- **update** on Layouts, and
+- **publish** on Layouts.
+
+In the editor, choose it under **Settings**, **Site**, **Default Layout**. If the
+Layout's header or footer is a component that isn't published, you're asked first:
+**Make default anyway**, or publish it, then make the Layout the default.
+
+The default changes every page that names no Layout, so it is treated like publishing.
+Send `{ "dryRun": true }` to see what would change without changing it. The answer is
+the usual `{ message, item }` shape, where `item` holds `defaultLayout`,
+`previousDefaultLayout` and `by`, who made the change: `{ kind: "user", userId }`, or
+`{ kind: "api-key", userId, apiKeyId }` for a call made with an API key.
+
+### The default is protected
+
+You cannot delete or unpublish the default Layout. Make another Layout the default
+first. The setting is stored in the `page-builder-settings` Single, and only the
+make-default route can change it: a direct write to that Single is refused, even from
+the API with access checks turned off.
+
+If the default disappears another way, such as an import that skips hooks, the plugin
+repairs it. A background job checks the default every time the jobs runner runs, and
+points the default back at the Layout the plugin created (**Site layout**), creating it
+again if needed.
+
+### Components a Layout uses are protected
+
+You cannot delete or unpublish a component that a Layout uses in any of its areas. A
+Layout appears on every page assigned to it, so the component would leave a gap on all
+of them. The refusal is `409 CONFLICT` and names each Layout that uses the component, so
+remove it from those Layouts first. Draft Layouts count, and so does an unpublished edit
+of a published Layout.
+
+Inside a batch write the check can't run safely, so deleting or unpublishing a component
+there is refused. Delete or unpublish it on its own instead.
+
+## Removing a Layout
+
+Delete or unpublish a Layout with **Remove Layout…**, in the bar at the top of the Layout's
+edit screen, beside **History**. The Layout's own delete and unpublish are refused with
+"Use Remove Layout… on the Layout's screen to take it down safely.", from the admin's
+menu, the Layouts list and the API alike, and so is a scheduled release that would
+unpublish a Layout.
+
+Remove Layout first checks what stands in the way:
+
+- **The site's default** can't be removed. Make another Layout the default first.
+- **Pages that use the Layout**: published pages, unpublished pages, and unpublished edits
+  of published pages. The dialog lists them, each a link that opens the page, tagged
+  **Published**, **Unpublished** or **Published · unsaved edits**. Pages you can't view are
+  counted but not named. Either choose another Layout for each one yourself, or move them
+  all to the site default first (below).
+- **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
+  least" how many it found and refuses, rather than guessing that the rest are clear, and
+  offers no move.
+
+With nothing in the way, choose **Unpublish** or **Delete Layout**.
+
+### Moving the pages to the site default
+
+When pages use the Layout, the dialog offers **Move N pages, then delete** (and, for a
+published Layout, **Move N pages, then unpublish**). It moves every page to the site's
+default Layout, then removes the Layout:
+
+- An unpublished page, and the unsaved edits of a published page, have their choice of
+  Layout cleared, so they use the site default.
+- A published page's live version is not changed, since that would publish its unsaved
+  edits along with it. It switches to the site default's header and footer as soon as the
+  Layout is gone, and the dialog says how many pages this affects before you start. A
+  published page with no unsaved edits keeps naming the removed Layout in its live
+  version until it is next published, which clears the choice so it names the site
+  default. Until then it draws the site default, and nothing on the page breaks.
+
+Pages are moved as you: a page you can't edit is left on the Layout and named, with the
+reason ("You can't edit this page."), and the Layout is not removed while any unpublished
+page or unsaved edit still uses it. Ask someone who can edit it to choose another Layout,
+then choose **Try again**.
+
+The dialog moves the pages a batch at a time, with a progress bar, and needs to stay open.
+**Stop**, or closing the dialog, stops the move: the pages already moved stay on the site
+default, the rest stay on the Layout, and the Layout is kept. Open Remove Layout again to
+move the others. While the move runs, no page can be put on the Layout and it can't be made
+the default; the Layout itself can still be edited.
+
+While a removal runs, which takes moments:
+
+- the Layout can't be made the default;
+- the Layout can't be edited ("This Layout is being removed. Try again in a moment.");
+- no page can be put on it ("This Layout is being removed, so pages can't choose it.
+  Choose another Layout."). A page that already uses it can still be saved.
+
+A Layout unpublished with Remove Layout can't be made the default, or chosen for a page,
+until it is published again. A page's Layout picker shows such a Layout greyed out, with
+the reason beside its name. If a page save lands at the very moment its Layout is removed,
+the page's choice is cleared and it uses the site's default Layout; a published page's live
+version keeps its choice and draws the default until it is next published, which clears
+a choice of a deleted Layout.
+
+The same action is a route, for scripts and other tools. It runs as the caller: the route
+admits anyone who may read Layouts, and the delete or unpublish itself is judged by the
+caller's own rights over that Layout:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
+Content-Type: application/json
+
+{ "action": "delete", "dryRun": true }
+```
+
+`action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
+`isDefault`, `pages` (`{ id, title, state }`, where `state` is `published`,
+`unpublished` or `edited`), `unreadable`, `complete`, `liveRows` (how many of the pages
+have a published version naming the Layout) and `siteDefault` (the default Layout's
+title, or `null`), and every answer's `item.by` says who asked, as make-default's does.
+A real removal that something stops answers `409 CONFLICT`, with the
+reason in the message.
+
+A move runs as repeated calls with `"move": true`. The first starts it; each answer's
+`item.move` says where it stands, and while `state` is `moving` the next call sends back
+its `token` and `after`:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
+Content-Type: application/json
+
+{ "action": "delete", "move": true, "token": "…", "after": "…" }
+```
+
+Each call moves up to 25 pages and reports how many it `moved` and how many are `left`.
+The last answers `done` once the Layout is removed, or `refused` with the `pages` that
+could not be moved and why. Send `"stop": true` with the token to stop; a move whose calls
+stop for five minutes is stopped by the background check.
+
+If a Layout is made the default at the very moment it is being deleted, the delete loses:
+the Layout comes back from a copy taken just before, under a new id, and the default
+points at it. Unpublishing in that race leaves the default to the background repair,
+which points it back at the Layout the plugin created.
+
+Some writes skip collection hooks: a batch write with hooks turned off, and publishing or
+unpublishing every language at once (`POST
+/admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`). None of
+the checks above reach them, so unpublishing every language of a Layout takes it down
+without Remove Layout's checks. This is a known limit until core runs collection hooks
+there. Two things are repaired afterwards: the background repair points the site's default
+back at a published Layout if the default was taken down this way, and a Layout published
+again this way can be made the default once the next background check has run.
+
+## Existing sites: run a migration
+
+This release adds two columns to pages (`layout` and `noHeaderFooter`) and the
+`page-builder-settings` Single. A site that already has the page builder installed
+gets them only through a migration:
+
+```bash
+npx nextly migrate:create add_page_layouts
+npx nextly migrate
+```
+
+In development you can use `npx nextly db:sync` instead.
+
+Remove Layout keeps its records in a table of the plugin's own,
+`page_builder__layout_removals`. The plugin ships the migration that creates it, and
+`npx nextly migrate` applies it with your app's own migrations.
+
+## Draw pages inside their Layout
+
+<Callout type="info">
+  The `layouts` route option and `pageBuilderLayouts()` are **experimental**:
+  their names and shape may change before they are marked stable.
+</Callout>
+
+Your site's page route draws the header and footer only when you turn Layouts on for
+it. Pass the plugin's provider as the `layouts` option of `createBlocksPage` (or
+`createPublicBlocksPage`):
+
+```tsx title="app/(frontend)/[...slug]/page.tsx"
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderLayouts } from "@nextlyhq/plugin-page-builder";
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  layouts: pageBuilderLayouts(),
+});
+
+export { generateMetadata };
+export default ContentPage;
+```
+
+Each page is then served in three parts: the header, the page, then the footer. The
+header is wrapped in a `<header>` element and the footer in a `<footer>` element,
+each with a `data-nextly-region` attribute naming its area, so you can style or test
+them. Without the option, the route serves the page exactly as before.
+
+- **Which Layout:** the one the page names while it is published, otherwise the
+  site's default, or none when the page has **No header or footer** switched on.
+- **No JavaScript added:** the header and footer are drawn on the server, like the
+  rest of the page.
+- **Titles stay the page's own:** a heading in your header never becomes a page's
+  title or description.
+- **Updates reach only the pages they affect:** publishing a Layout, or a component
+  one uses, refreshes the pages drawn inside it. Changing the default refreshes the
+  pages that use the default, including pages whose own Layout is not published.
+- **No usable default:** pages that use the default are drawn without a header or
+  footer, and the server logs a warning. The plugin's background job repairs the
+  default, and those pages pick it up within a minute.
+
+A preview shows the page's own draft choice of Layout. A route that serves drafts
+outright (`draft: true`) also shows the Layout's and its components' drafts; a
+preview link shows their published versions.
+
+If your site renamed the Layouts collection or the `page-builder-settings` Single,
+pass the new names, or the route reads the old ones:
+`pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
+For a route that reads through its own Nextly instance, pass that reader as
+`nextly`. The option is not offered on a Single's route.

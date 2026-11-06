@@ -43,6 +43,7 @@ import { usageTarget, type UsageTarget } from "./class-usage-write";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
 import { componentUsageIndex } from "./component-usage";
 import { walkPages } from "./paged-walk";
+import { isSupersededRun } from "./usage-bookkeeping";
 
 /** How many documents one query asks for. */
 const PAGE_SIZE = 100;
@@ -98,6 +99,12 @@ export interface ClassUsageDocumentStore {
      * never asked.
      */
     variant: ClassUsageVariant;
+    /**
+     * Resume after this document id, on the first page of a walk an earlier
+     * tick stopped. A store that pages by id starts its window there; absent,
+     * the walk starts at the beginning.
+     */
+    after?: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
   /**
    * Whether one document still exists, asked by id.
@@ -202,6 +209,10 @@ interface PageTally {
   undetermined: number;
   unrepaired: number;
   failure?: unknown;
+  /** The id of the last document this page finished, if it finished any. */
+  last?: string;
+  /** Whether the budget stopped the page before its end. */
+  stopped?: boolean;
 }
 
 /**
@@ -257,6 +268,9 @@ async function repairOneDocument(
       if (report.undetermined) unread = true;
       if (report.inserted > 0 || report.removed > 0) changed = true;
     } catch (thrown) {
+      // A run that has been replaced stops here rather than walking on: every
+      // later write would be refused too, and the newer run redoes them all.
+      if (isSupersededRun(thrown)) throw thrown;
       failure ??= thrown;
     }
   }
@@ -283,35 +297,66 @@ async function rebuildOnePage(
     limits: DocumentLimits;
   },
   items: readonly unknown[],
-  visited: Set<string>
+  visited: Set<string>,
+  /** Asked after each document; true ends the page there. */
+  stop: () => boolean
 ): Promise<PageTally> {
-  let scanned = 0;
-  let repaired = 0;
-  let undetermined = 0;
-  let unrepaired = 0;
-  let failure: unknown;
+  const tally: PageTally = {
+    scanned: 0,
+    repaired: 0,
+    undetermined: 0,
+    unrepaired: 0,
+  };
 
   for (const item of items) {
     if (!isStoredDocument(item)) continue;
-    scanned += 1;
     visited.add(item.id);
-
-    const outcome = await repairOneDocument(args, item);
-
-    if (outcome.failure !== undefined) {
-      unrepaired += 1;
-      failure ??= outcome.failure;
+    count(tally, await repairOneDocument(args, item));
+    tally.last = item.id;
+    // After the document, never before it: a walk stopped before its first
+    // document would resume at the same place on every tick and never move.
+    if (stop()) {
+      tally.stopped = true;
+      break;
     }
-    if (outcome.unread) undetermined += 1;
-    // Repaired means the rows CHANGED, which is a different question from
-    // whether the document was read. A document already in agreement issues no
-    // writes and is scanned without being repaired.
-    if (outcome.changed) repaired += 1;
   }
 
-  return failure === undefined
-    ? { scanned, repaired, undetermined, unrepaired }
-    : { scanned, repaired, undetermined, unrepaired, failure };
+  return tally;
+}
+
+/** Add one document's outcome to a page's tally. */
+function count(
+  tally: PageTally,
+  outcome: { changed: boolean; unread: boolean; failure?: unknown }
+): void {
+  tally.scanned += 1;
+  if (outcome.failure !== undefined) {
+    tally.unrepaired += 1;
+    tally.failure ??= outcome.failure;
+  }
+  if (outcome.unread) tally.undetermined += 1;
+  // Repaired means the rows CHANGED, which is a different question from
+  // whether the document was read. A document already in agreement issues no
+  // writes and is scanned without being repaired.
+  if (outcome.changed) tally.repaired += 1;
+}
+
+/**
+ * How a walk resumes, and how it reports where it got to, when it is one tick
+ * of a backfill rather than a whole repair.
+ */
+export interface UsageWalkResume {
+  /** Start after this document id; absent, at the beginning. */
+  after?: string;
+  /**
+   * Record that every document up to and including `cursor` is done. Called
+   * at each page's end, and where the budget stopped the walk, but never past
+   * a document that could not be repaired: the next tick resumes at the last
+   * cursor recorded, so it retries that document rather than leaving it.
+   */
+  checkpoint(cursor: string): Promise<void>;
+  /** Whether the tick's budget is spent, asked after each document. */
+  stop(): boolean;
 }
 
 /**
@@ -329,7 +374,14 @@ async function rebuildOnePage(
  * or its next rebuild, and holding every document still would cost more than
  * the thing it prevents.
  */
-export async function rebuildUsageIndexes(args: {
+export async function rebuildUsageIndexes(
+  args: UsageRebuildArgs
+): Promise<ClassUsageRebuildReport> {
+  return (await walkUsageIndexes(args)).report;
+}
+
+/** What {@link rebuildUsageIndexes} is asked to repair. */
+export interface UsageRebuildArgs {
   documents: ClassUsageDocumentStore;
   /**
    * Every index to repair from this one walk.
@@ -402,7 +454,22 @@ export async function rebuildUsageIndexes(args: {
    * none.
    */
   limits: DocumentLimits;
-}): Promise<ClassUsageRebuildReport> {
+}
+
+/**
+ * Walk one scope, from where an earlier tick stopped when `resume` says so.
+ *
+ * A resumed walk SEES only the documents after its cursor, so the documents an
+ * earlier tick finished are missing from `visited`. The orphan sweep treats
+ * `visited` as a shortcut and nothing more: a row whose document the walk did
+ * not see is kept unless an existence check confirms the document is gone, so
+ * the earlier ticks' documents keep their rows. The sweep runs only once the
+ * walk reaches the scope's end, never on a tick the budget stopped.
+ */
+export async function walkUsageIndexes(
+  args: UsageRebuildArgs,
+  resume?: UsageWalkResume
+): Promise<{ report: ClassUsageRebuildReport; finished: boolean }> {
   let scanned = 0;
   let repaired = 0;
   let undetermined = 0;
@@ -415,8 +482,11 @@ export async function rebuildUsageIndexes(args: {
   // every page of the walk, and a caller's own list would be re-read as often.
   const resolvedTargets = args.targets;
   const visited = new Set<string>();
+  const stop = resume === undefined ? () => false : () => resume.stop();
+  // Moves only while every document so far was repaired; see `checkpoint`.
+  let checkpointing = resume !== undefined;
 
-  await walkPages({
+  const finished = await walkPages({
     maxPages: MAX_PAGES,
     describe: `${args.collection}.${args.field}`,
     fetchPage: page =>
@@ -431,20 +501,43 @@ export async function rebuildUsageIndexes(args: {
         // was asked for, so the query has to be what was asked for too.
         locale: args.locale,
         variant: args.variant,
+        // Only the first page resumes from the cursor; the store keeps its
+        // own position after that.
+        ...(page === 1 && resume?.after !== undefined
+          ? { after: resume.after }
+          : {}),
       }),
     onPage: async items => {
       const tally = await rebuildOnePage(
         { ...args, targets: resolvedTargets },
         items,
-        visited
+        visited,
+        stop
       );
       scanned += tally.scanned;
       repaired += tally.repaired;
       undetermined += tally.undetermined;
       unrepaired += tally.unrepaired;
       failure ??= tally.failure;
+      if (tally.failure !== undefined) checkpointing = false;
+      if (checkpointing && resume !== undefined && tally.last !== undefined) {
+        await resume.checkpoint(tally.last);
+      }
+      return tally.stopped === true ? "stop" : undefined;
     },
   });
+
+  if (!finished) {
+    const report: ClassUsageRebuildReport = {
+      scanned,
+      repaired,
+      undetermined,
+      unrepaired,
+      orphansRemoved: 0,
+    };
+    if (failure !== undefined) report.failure = failure;
+    return { report, finished: false };
+  }
 
   // AFTER the walk, and only after it completed: the sweep decides absence from
   // the set of documents actually seen, so running it against a partial walk
@@ -484,6 +577,7 @@ export async function rebuildUsageIndexes(args: {
       });
       removed += swept.removed;
     } catch (thrown) {
+      if (isSupersededRun(thrown)) throw thrown;
       // Not counted in `unrepaired`, which counts DOCUMENTS. A sweep failure
       // leaves orphan rows rather than a document unreconciled, which is why
       // `failure` and not the count is the field that says a rebuild was
@@ -492,16 +586,15 @@ export async function rebuildUsageIndexes(args: {
     }
   }
 
-  return failure === undefined
-    ? { scanned, repaired, undetermined, unrepaired, orphansRemoved: removed }
-    : {
-        scanned,
-        repaired,
-        undetermined,
-        unrepaired,
-        orphansRemoved: removed,
-        failure,
-      };
+  const report: ClassUsageRebuildReport = {
+    scanned,
+    repaired,
+    undetermined,
+    unrepaired,
+    orphansRemoved: removed,
+  };
+  if (failure !== undefined) report.failure = failure;
+  return { report, finished: true };
 }
 
 /**
@@ -522,7 +615,14 @@ export async function rebuildUsageIndexes(args: {
  * not the other is repairing half its derived state, and the half it skips is
  * indistinguishable afterwards from one that genuinely records nothing.
  */
-export async function rebuildPageBuilderUsageIndexes(args: {
+export async function rebuildPageBuilderUsageIndexes(
+  args: PageBuilderRebuildArgs
+): Promise<ClassUsageRebuildReport> {
+  return (await walkPageBuilderUsageIndexes(args)).report;
+}
+
+/** What {@link rebuildPageBuilderUsageIndexes} is asked to repair. */
+export interface PageBuilderRebuildArgs {
   documents: ClassUsageDocumentStore;
   /** Where the CLASS index's rows live. */
   classIndex: ClassUsageIndexStore;
@@ -538,15 +638,27 @@ export async function rebuildPageBuilderUsageIndexes(args: {
   variant: ClassUsageVariant;
   /** The bounds the documents are rendered under. */
   limits: DocumentLimits;
-}): Promise<ClassUsageRebuildReport> {
+}
+
+/**
+ * {@link rebuildPageBuilderUsageIndexes} as one tick of a backfill: resumed
+ * from a cursor and stopped by a budget (see {@link walkUsageIndexes}).
+ */
+export async function walkPageBuilderUsageIndexes(
+  args: PageBuilderRebuildArgs,
+  resume?: UsageWalkResume
+): Promise<{ report: ClassUsageRebuildReport; finished: boolean }> {
   const { classIndex, componentIndex, ...rest } = args;
-  return rebuildUsageIndexes({
-    ...rest,
-    targets: [
-      usageTarget(classUsageIndex, classIndex),
-      usageTarget(componentUsageIndex, componentIndex),
-    ],
-  });
+  return walkUsageIndexes(
+    {
+      ...rest,
+      targets: [
+        usageTarget(classUsageIndex, classIndex),
+        usageTarget(componentUsageIndex, componentIndex),
+      ],
+    },
+    resume
+  );
 }
 
 /**

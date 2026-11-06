@@ -26,6 +26,16 @@ afterEach(async () => {
 /** The live handles a service instance holds, by the names it holds them. */
 const LIVE = ["adapter", "db", "getDrizzle", "tables", "logger", "repo"];
 
+/** A grouped facade (`versions.pins`), as opposed to a method. */
+function isGroup(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !(value instanceof Date)
+  );
+}
+
 /** Every name reachable on `value`, own or inherited, short of `Object`. */
 function reachable(value: unknown): string[] {
   const names = new Set<string>();
@@ -39,6 +49,40 @@ function reachable(value: unknown): string[] {
     }
   }
   return [...names];
+}
+
+/** No live handle is reachable under `path`. */
+function expectNoLiveHandle(path: string, names: string[]): void {
+  for (const live of LIVE) {
+    expect({ path, live, present: names.includes(live) }).toEqual({
+      path,
+      live,
+      present: false,
+    });
+  }
+}
+
+/**
+ * A facade carries no live handle and exposes methods. A member that groups
+ * methods (`versions.pins`) is judged a facade in its own right, by the same
+ * two rules: a group is where a handle would hide if a service were handed
+ * through whole, so it is walked rather than trusted for being an object.
+ */
+function expectFacade(path: string, facade: unknown): void {
+  const names = reachable(facade);
+  expectNoLiveHandle(path, names);
+  for (const name of names) {
+    const value = (facade as Record<string, unknown>)[name];
+    if (isGroup(value)) {
+      expectFacade(`${path}.${name}`, value);
+      continue;
+    }
+    expect({ path, name, kind: typeof value }).toEqual({
+      path,
+      name,
+      kind: "function",
+    });
+  }
 }
 
 it("hands out no service carrying the adapter or a Drizzle handle", async () => {
@@ -60,22 +104,13 @@ it("hands out no service carrying the adapter or a Drizzle handle", async () => 
   );
   for (const member of members) {
     const service = (services as Record<string, unknown>)[member];
-    const names = reachable(service);
-    for (const live of LIVE) {
-      expect({ member, live, present: names.includes(live) }).toEqual({
-        member,
-        live,
-        present: false,
-      });
+    if (member === "plugins") {
+      // The installed list, not a facade of methods: what it carries is data,
+      // so only the handles rule applies to it.
+      expectNoLiveHandle(member, reachable(service));
+      continue;
     }
-    for (const name of names) {
-      const value = (service as Record<string, unknown>)[name];
-      expect({ member, name, kind: typeof value }).toEqual({
-        member,
-        name,
-        kind: member === "plugins" ? typeof value : "function",
-      });
-    }
+    expectFacade(member, service);
   }
 });
 

@@ -5,11 +5,18 @@
  * Payload's are app-only, so nothing has to decide who may change what. Ours
  * do, and a mistake means one plugin silently altering another's table.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { createOwnerDraft, SchemaDraftStore } from "../draft";
 import { col, defineTable } from "../dsl";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 function refusal(run: () => unknown): string {
   try {

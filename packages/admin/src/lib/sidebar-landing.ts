@@ -19,7 +19,13 @@ import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection, ApiSingle } from "@admin/types/entities";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
-interface CollectionsLandingDeps {
+/**
+ * What the sidebar's "Collections" section is drawn for. Exported so a view
+ * that groups types as the sidebar does (the dashboard's New menu) asks for
+ * the same three things and hands them here, rather than keeping its own copy
+ * of the placement and order.
+ */
+export interface CollectionsLandingDeps {
   /** From `useBranding()` — needed to resolve plugin placement overrides. */
   branding: AdminBranding | undefined;
   /** From `useCurrentUserPermissions().capabilities`. */
@@ -99,15 +105,44 @@ function makeSidebarComparator<T>(opts: {
   };
 }
 
-function collectionDisplayName(c: ApiCollection): string {
+/** The name the sidebar shows for a collection, and searches by. */
+export function collectionDisplayName(c: ApiCollection): string {
   return c.labels?.plural || c.label || c.name;
 }
 
-function singleDisplayName(s: ApiSingle): string {
-  // Capitalise the first letter to match `DynamicSingleNav.getDisplayName`.
+/** The name the sidebar shows for a Single, and searches by. */
+export function singleDisplayName(s: ApiSingle): string {
   const baseLabel = s.label || s.slug;
   if (!baseLabel) return baseLabel;
   return baseLabel.charAt(0).toUpperCase() + baseLabel.slice(1);
+}
+
+/**
+ * The collections the sidebar lists for a search: those whose shown name
+ * contains it, ignoring case. The list draws from this and the Content panel
+ * counts matches with it, so a count never disagrees with the list.
+ */
+export function searchSidebarCollections(
+  collections: ApiCollection[],
+  search: string
+): ApiCollection[] {
+  if (!search) return collections;
+  const needle = search.toLowerCase();
+  return collections.filter(c =>
+    collectionDisplayName(c).toLowerCase().includes(needle)
+  );
+}
+
+/** The Singles the sidebar lists for a search, as for collections. */
+export function searchSidebarSingles(
+  singles: ApiSingle[],
+  search: string
+): ApiSingle[] {
+  if (!search) return singles;
+  const needle = search.toLowerCase();
+  return singles.filter(s =>
+    singleDisplayName(s).toLowerCase().includes(needle)
+  );
 }
 
 /**
@@ -116,7 +151,7 @@ function singleDisplayName(s: ApiSingle): string {
  * the EXACT order the sidebar would render them.
  */
 export function getSidebarCollectionsForLanding(
-  items: ApiCollection[],
+  items: readonly ApiCollection[],
   deps: CollectionsLandingDeps
 ): ApiCollection[] {
   const visible = items.filter(c =>

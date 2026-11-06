@@ -41,6 +41,7 @@ import {
   isTextareaField,
   isRichTextField,
   isEmailField,
+  isIconField,
   isPasswordField,
   isCodeField,
   isNumberField,
@@ -65,11 +66,16 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
+import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  componentRelationIsSingleReference,
+  componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
+  getComponentRowColumnDescriptor,
   usesJunctionTable,
+  type ColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -82,12 +88,11 @@ import {
 } from "../../schema/services/plugin-codegen";
 import {
   addContributedDrizzleColumns,
+  buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
   sqliteTimestampColumns,
 } from "../../schema/services/runtime-schema-generator";
-import { backfillDefaultForType } from "../../schema/utils/backfill-default";
-import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { componentFieldHasColumn } from "./field-group-utils";
 
@@ -286,32 +291,59 @@ export class FieldGroupSchemaService {
       );
     }
 
-    // A plain index on every column that references another table, then on
-    // every other column a field asks to index — one per column either way.
-    // Localized fields live in the companion, not the main comp_ table, so
-    // they get no main index.
+    // A plain index on every column that references one entry, then on every
+    // other column a field asks to index — one per column either way, by the
+    // per-field rule the desired schema applies (`collectionIndexSpecs`), so
+    // the two agree on every user column's index. Localized fields live in the
+    // companion, not the main comp_ table, so they get no main index.
+    //
+    // A unique column the dialect can key carries its uniqueness as `uq_`
+    // below and gets no plain index besides. A relation holding a list of
+    // references gets none even when it asks
+    // (`componentRelationshipHoldsReferenceList` says why); a single
+    // polymorphic reference is one object and keeps one it asks for.
+    // Otherwise a plain index goes only where the dialect can index the
+    // column: MySQL cannot index a JSON column, and the index statement would
+    // fail after the table was already created.
+    const indexed = (field: DataFieldConfig, wanted: boolean): boolean => {
+      if (!wanted || componentRelationshipHoldsReferenceList(field)) {
+        return false;
+      }
+      const columnType = this.columnTypeFor(field) ?? "";
+      if (
+        "unique" in field &&
+        field.unique &&
+        uniquenessCanBeAnIndex(columnType, this.dialect)
+      ) {
+        return false;
+      }
+      return columnTypeIsIndexable(columnType, this.dialect);
+    };
     const mainColumns = this.columnFields(fields).filter(
       field => !localizedNames.has(field.name)
     );
     const referencing = mainColumns.filter(field =>
-      this.fieldHasForeignKey(field)
+      indexed(field, componentRelationIsSingleReference(field))
     );
-    // An index a field asks for only where the dialect can index its column: MySQL cannot index a
-    // JSON column, so a declared index on one would fail after the table was already created. The
-    // desired schema asks the same rule, so neither side declares an index the other lacks.
-    const declaredIndexed = mainColumns.filter(
-      field =>
-        !this.fieldHasForeignKey(field) &&
-        "index" in field &&
-        field.index &&
-        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
+    const declaredIndexed = mainColumns.filter(field =>
+      indexed(
+        field,
+        !componentRelationIsSingleReference(field) &&
+          "index" in field &&
+          field.index === true
+      )
     );
     for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
       const indexName = `idx_${tableName}_${columnName}`;
 
       indexStatements.push(
-        this.createIndexSql(indexName, tableName, columnName)
+        this.createIndexSql(
+          indexName,
+          tableName,
+          columnName,
+          this.columnTypeFor(field) ?? ""
+        )
       );
     }
 
@@ -346,132 +378,6 @@ export class FieldGroupSchemaService {
     }
 
     return sql;
-  }
-
-  /**
-   * Generate ALTER TABLE migration for updating a component data table.
-   */
-  generateAlterTableMigration(
-    tableName: string,
-    oldFields: FieldConfig[],
-    newFields: FieldConfig[]
-  ): string {
-    const statements: string[] = [
-      `-- Update component data table: ${tableName}`,
-    ];
-
-    const oldFieldMap = this.buildFieldMap(oldFields);
-    const newFieldMap = this.buildFieldMap(newFields);
-
-    for (const [name, field] of newFieldMap) {
-      if (oldFieldMap.has(name)) continue;
-
-      // Mapped once and reused: the default formatting and the type default
-      // both switch on `type`, so reading the raw plugin token there would
-      // produce a literal for a type the column does not have.
-      const mapped = this.asMappableField(field);
-      const columnType = this.getColumnType(mapped);
-      if (!columnType) continue;
-
-      const columnName = this.toSnakeCase(name);
-      const nullable = this.writesNotNull(field) ? "NOT NULL" : "";
-
-      // When adding NOT NULL columns to existing tables, provide a sensible default.
-      let defaultVal = "";
-      // A function default produces a different value per row, which a single
-      // DDL constant cannot express. Backfilling existing rows still needs
-      // something, so a required column falls back to its type default rather
-      // than trying to serialize the function itself.
-      const hasConstantDefault =
-        "defaultValue" in field &&
-        field.defaultValue !== undefined &&
-        typeof field.defaultValue !== "function";
-      if (hasConstantDefault) {
-        defaultVal = `DEFAULT ${this.formatDefaultValue(field.defaultValue, mapped.type)}`;
-      } else if ("required" in field && field.required) {
-        // The MAPPED type drives the switch and the ORIGINAL field carries the
-        // declared token: a contributed type states its own empty value under
-        // its own name, and `mapped` has already replaced that with the storage
-        // primitive.
-        defaultVal = `DEFAULT ${this.getDefaultValueForType(mapped.type, field)}`;
-      }
-
-      // Refused BEFORE the column statement, not after it. MySQL commits each DDL statement on
-      // its own, so adding the column and then failing on its constraint leaves the column in
-      // place without the guarantee — and a bare column is what the desired schema declares for
-      // an unkeyable type, so the next reconcile sees nothing to fix.
-      if ("unique" in field && field.unique) {
-        this.assertUniquenessEnforceable(field, tableName);
-      }
-
-      statements.push(
-        `ALTER TABLE ${this.q}${tableName}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType} ${nullable} ${defaultVal};`.trim()
-      );
-
-      if ("unique" in field && field.unique) {
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${this.q}uq_${tableName}_${columnName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.q}${tableName}${this.q} ADD CONSTRAINT ${this.q}uq_${tableName}_${columnName}${this.q} UNIQUE (${this.q}${columnName}${this.q});`
-          );
-        }
-      }
-    }
-
-    for (const [name] of oldFieldMap) {
-      if (newFieldMap.has(name)) continue;
-
-      const columnName = this.toSnakeCase(name);
-      if (this.dialect === "sqlite") {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN ${this.q}${columnName}${this.q};`
-        );
-      } else {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN IF EXISTS ${this.q}${columnName}${this.q};`
-        );
-      }
-    }
-
-    // SQLite doesn't support ALTER COLUMN, so skip modification detection there.
-    if (this.dialect !== "sqlite") {
-      for (const [name, newField] of newFieldMap) {
-        const oldField = oldFieldMap.get(name);
-        if (!oldField) continue;
-        if (!this.isFieldModified(oldField, newField)) continue;
-
-        const columnName = this.toSnakeCase(name);
-        // Mapped like the added-column path: a field changed to a plugin type
-        // would otherwise resolve no type here and the ALTER would be skipped,
-        // leaving the column as whatever it was.
-        const newType = this.getColumnType(this.asMappableField(newField));
-        if (!newType) continue;
-
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} TYPE ${newType};`
-        );
-
-        const oldRequired = "required" in oldField && oldField.required;
-        const newRequired = "required" in newField && newField.required;
-
-        if (oldRequired !== newRequired) {
-          if (newRequired) {
-            statements.push(
-              `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} SET NOT NULL;`
-            );
-          } else {
-            statements.push(
-              `ALTER TABLE ${this.q}${tableName}${this.q} ALTER COLUMN ${this.q}${columnName}${this.q} DROP NOT NULL;`
-            );
-          }
-        }
-      }
-    }
-
-    return statements.join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -590,13 +496,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "postgresql");
+    this.addFieldColumns(columns, fields, contributed);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -639,13 +539,7 @@ export class FieldGroupSchemaService {
       updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToMySQLColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "mysql");
+    this.addFieldColumns(columns, fields, contributed);
 
     return mysqlTable(
       tableName,
@@ -675,13 +569,7 @@ export class FieldGroupSchemaService {
       ...sqliteTimestampColumns(),
     };
 
-    for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToSQLiteColumn(this.asMappableField(field));
-      if (column) {
-        columns[field.name] = column;
-      }
-    }
-    addContributedDrizzleColumns(columns, contributed, "sqlite");
+    this.addFieldColumns(columns, fields, contributed);
 
     return sqliteTable(
       tableName,
@@ -902,9 +790,60 @@ export class FieldGroupSchemaService {
     };
   }
 
+  /**
+   * The canonical descriptor's column for a field type this service does not map itself, or null
+   * for a type it still maps below.
+   *
+   * An icon's column is read from the descriptor for the SQL and the Drizzle table alike, so a
+   * field group's icon column is the column the desired schema and the diff compare against on
+   * every dialect: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+   */
+  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
+    if (!isIconField(field) || !field.name) return null;
+    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+  }
+
+  /**
+   * Adds each field's runtime column to a table's columns, keyed by the field's name, and then the
+   * columns a schema hook contributed, the same way for every dialect.
+   */
+  private addFieldColumns(
+    columns: Record<string, unknown>,
+    fields: FieldConfig[],
+    contributed: readonly ExtensionColumn[]
+  ): void {
+    for (const field of this.columnFields(fields)) {
+      const column = this.drizzleColumnFor(field);
+      if (column) {
+        columns[field.name] = column;
+      }
+    }
+    addContributedDrizzleColumns(columns, contributed, this.dialect);
+  }
+
+  /**
+   * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
+   * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
+   */
+  private drizzleColumnFor(field: DataFieldConfig): unknown {
+    const mappable = this.asMappableField(field);
+    const canonical = this.canonicalColumn(mappable);
+    if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
+    switch (this.dialect) {
+      case "postgresql":
+        return this.mapFieldToPostgresColumn(mappable);
+      case "mysql":
+        return this.mapFieldToMySQLColumn(mappable);
+      case "sqlite":
+        return this.mapFieldToSQLiteColumn(mappable);
+    }
+  }
+
   private getColumnType(field: DataFieldConfig): string | null {
     const types = SQL_COLUMN_TYPES[this.dialect];
 
+    const canonical = this.canonicalColumn(field);
+    if (canonical) return canonical.dialectType;
     if (isTextField(field)) {
       return field.maxLength ? types.varchar(field.maxLength) : types.text;
     }
@@ -1134,64 +1073,6 @@ export class FieldGroupSchemaService {
     return [...found];
   }
 
-  private fieldHasForeignKey(field: DataFieldConfig): boolean {
-    if (!isRelationshipField(field) && !isUploadField(field)) return false;
-    return (
-      !Array.isArray(field.relationTo) &&
-      !field.hasMany &&
-      typeof field.relationTo === "string"
-    );
-  }
-
-  private isFieldModified(
-    oldField: DataFieldConfig,
-    newField: DataFieldConfig
-  ): boolean {
-    if (oldField.type !== newField.type) return true;
-
-    const oldRequired = "required" in oldField && oldField.required;
-    const newRequired = "required" in newField && newField.required;
-    if (oldRequired !== newRequired) return true;
-
-    const oldUnique = "unique" in oldField && oldField.unique;
-    const newUnique = "unique" in newField && newField.unique;
-    if (oldUnique !== newUnique) return true;
-
-    if (isTextField(oldField) && isTextField(newField)) {
-      if (oldField.maxLength !== newField.maxLength) return true;
-    }
-
-    if (
-      (isSelectField(oldField) && isSelectField(newField)) ||
-      (isRelationshipField(oldField) && isRelationshipField(newField)) ||
-      (isUploadField(oldField) && isUploadField(newField))
-    ) {
-      if (oldField.hasMany !== newField.hasMany) return true;
-    }
-
-    // A number field keeps `type: "number"` while `dbType`, `precision`,
-    // `scale` and `options.format` decide its physical column. Comparing only
-    // `type` would report "unmodified" for a switch from integer to decimal and
-    // leave the existing column at its old type forever.
-    if (isNumberField(oldField) && isNumberField(newField)) {
-      const oldKind = this.numberColumnKind(oldField);
-      const newKind = this.numberColumnKind(newField);
-      if (oldKind !== newKind) return true;
-      if (oldKind === "decimal") {
-        const oldDims = this.decimalDimensions(oldField);
-        const newDims = this.decimalDimensions(newField);
-        if (
-          oldDims.precision !== newDims.precision ||
-          oldDims.scale !== newDims.scale
-        ) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
   /**
    * The fields that own a column on the component's row: named data fields,
    * less those `componentFieldHasColumn` rules out. Every loop that builds the
@@ -1211,75 +1092,26 @@ export class FieldGroupSchemaService {
     );
   }
 
-  /** A plain index on one column, in this dialect's spelling. */
+  /**
+   * A plain index on one column, in this dialect's spelling. Rendered by the schema pipeline's own
+   * rule, so a MySQL TEXT/BLOB column, which MySQL refuses to index whole, is keyed by the same
+   * prefix a collection's column is.
+   */
   private createIndexSql(
     indexName: string,
     tableName: string,
-    columnName: string
+    columnName: string,
+    columnType: string
   ): string {
-    // MySQL has no IF NOT EXISTS for CREATE INDEX.
-    const ifNotExists = this.dialect === "mysql" ? "" : "IF NOT EXISTS ";
-    return `CREATE INDEX ${ifNotExists}${this.q}${indexName}${this.q} ON ${this.q}${tableName}${this.q}(${this.q}${columnName}${this.q});`;
-  }
-
-  private buildFieldMap(fields: FieldConfig[]): Map<string, DataFieldConfig> {
-    const map = new Map<string, DataFieldConfig>();
-    for (const field of this.columnFields(fields)) {
-      map.set(field.name, field);
-    }
-    return map;
-  }
-
-  // Used when adding NOT NULL columns to existing tables: the shared backfill
-  // decision, with no JSON-array types because this path stores none.
-  private getDefaultValueForType(type: string, field?: FieldConfig): string {
-    return backfillDefaultForType({
-      type,
-      field,
-      dialect: this.dialect,
-      formatDefaultValue: (value, storageToken) =>
-        this.formatDefaultValue(value, storageToken),
-    });
-  }
-
-  private formatDefaultValue(value: unknown, type: string): string {
-    if (
-      type === "text" ||
-      type === "textarea" ||
-      type === "email" ||
-      type === "password" ||
-      type === "richText" ||
-      type === "code" ||
-      type === "select" ||
-      type === "radio"
-    ) {
-      return `'${String(value)}'`;
-    }
-    if (type === "checkbox") {
-      if (this.dialect === "sqlite") return value ? "1" : "0";
-      return value ? "TRUE" : "FALSE";
-    }
-    if (
-      type === "json" ||
-      type === "repeater" ||
-      type === "group" ||
-      type === "blocks"
-    ) {
-      return quoteExpressionSqlDefault(
-        typeof value === "string" ? value : JSON.stringify(value),
-        this.dialect
-      );
-    }
-    if (type === "date") {
-      if (this.dialect === "sqlite" && typeof value === "string") {
-        return String(Math.floor(new Date(value).getTime() / 1000));
-      }
-      return `'${String(value)}'`;
-    }
-    if (type === "number") {
-      return String(value);
-    }
-    return String(value);
+    const sql = columnIndexSql(
+      tableName,
+      indexName,
+      columnName,
+      columnType,
+      this.dialect,
+      name => `${this.q}${name}${this.q}`
+    );
+    return `${sql};`;
   }
 
   private toSnakeCase(name: string): string {

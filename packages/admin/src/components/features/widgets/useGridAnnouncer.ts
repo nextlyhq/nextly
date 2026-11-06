@@ -19,6 +19,7 @@
  * @module components/features/widgets/useGridAnnouncer
  */
 
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface GridAnnouncer {
@@ -37,8 +38,8 @@ export interface GridAnnouncer {
     to: number,
     count: number
   ) => void;
-  /** Say the width a card was just set to, by its name ("Half width"). */
-  announceWidth: (title: string, widthName: string) => void;
+  /** Say the size a card was just set to, by its name ("6 columns by 4 rows"). */
+  announceSize: (title: string, sizeName: string) => void;
   /**
    * Say that a card was taken off the dashboard.
    *
@@ -93,6 +94,22 @@ export interface GridAnnouncer {
 }
 
 /**
+ * What a reader is told when one of a card's settings changed: that the card shows it, or that it
+ * was saved but the card still shows its earlier data. Said by the grid, or by the toast that
+ * offers a quick setting's Undo, never by both.
+ */
+export function settingChangedSentence(
+  title: string,
+  setting: string,
+  value: string,
+  shown: boolean
+): string {
+  return shown
+    ? `${title}: ${setting} set to ${value}.`
+    : `${title}: ${setting} saved as ${value}, but the card could not load it and still shows the earlier data.`;
+}
+
+/**
  * What the grid says once a batch settles, or `null` for a state not worth
  * interrupting a reader for.
  *
@@ -130,32 +147,69 @@ function alternate(current: string, next: string): string {
   return `${next}${current.endsWith("\u200b") ? "" : "\u200b"}`;
 }
 
+/**
+ * Says where the batch came to rest, once per outcome.
+ *
+ * Removing, restoring or resizing a card re-asks the batch, and it settles with a new count. The
+ * change's own sentence already said what happened (`acted` is set while it stands), so a batch
+ * that came to rest whole would only replace it ("2 of 2 widgets updated" over "Note restored").
+ * A failure is still said: it is news the change's sentence could not carry.
+ *
+ * `acted` belongs to ONE outcome: the batch's at the first render at rest after the change was
+ * said. A change that re-asks the batch is settling by then, so that render is where its load
+ * ends; a change that asks nothing, such as a drag, leaves the batch at rest, so it is the
+ * change's own render, whose outcome is the one already spoken. Consumed there whether or not
+ * the outcome is new, so a later outcome no change asked for, such as a card appearing, is said.
+ * Hence an effect after every render, not only those whose sentence changed: the change's own
+ * render changes nothing the sentence is made from.
+ */
+function useSettledAnnouncement(
+  settling: boolean,
+  next: string | null,
+  failed: number,
+  acted: RefObject<boolean>,
+  setAnnouncement: Dispatch<SetStateAction<string>>
+): void {
+  // What was last spoken, so an unchanged outcome does not re-fire. A ref
+  // rather than state because it must not itself cause a render.
+  const spoken = useRef("");
+  useEffect(() => {
+    if (settling) return;
+    const ownChange = acted.current;
+    acted.current = false;
+    if (!next || next === spoken.current) return;
+    spoken.current = next;
+    if (ownChange && failed === 0) return;
+    setAnnouncement(next);
+  });
+}
+
 export function useGridAnnouncer(
   settling: boolean,
   counted: number,
   failed: number
 ): GridAnnouncer {
   const [announcement, setAnnouncement] = useState("");
-  // What was last spoken, so an unchanged outcome does not re-fire. A ref
-  // rather than state because it must not itself cause a render.
-  const spoken = useRef("");
-  const next = settledAnnouncement(settling, counted, failed);
-
-  useEffect(() => {
-    if (!next || next === spoken.current) return;
-    spoken.current = next;
-    setAnnouncement(next);
-  }, [next]);
+  // Set when a reader's own change is said, until the batch is next at rest: the outcome of the
+  // load that change started, or none (see `useSettledAnnouncement`).
+  const acted = useRef(false);
+  useSettledAnnouncement(
+    settling,
+    settledAnnouncement(settling, counted, failed),
+    failed,
+    acted,
+    setAnnouncement
+  );
 
   /*
    * Every sentence goes through one setter, so the dedupe rule below is
-   * applied to all of them rather than restated per sentence.
+   * applied to all of them rather than restated per sentence. Each is said
+   * for something the reader did, which the batch's next outcome defers to.
    */
-  const say = useCallback(
-    (sentence: string) =>
-      setAnnouncement(current => alternate(current, sentence)),
-    []
-  );
+  const say = useCallback((sentence: string) => {
+    acted.current = true;
+    setAnnouncement(current => alternate(current, sentence));
+  }, []);
 
   const announceMoved = useCallback(
     (title: string, from: number, to: number, count: number) =>
@@ -163,8 +217,8 @@ export function useGridAnnouncer(
     [say]
   );
 
-  const announceWidth = useCallback(
-    (title: string, widthName: string) => say(`${title} set to ${widthName}.`),
+  const announceSize = useCallback(
+    (title: string, sizeName: string) => say(`${title} set to ${sizeName}.`),
     [say]
   );
 
@@ -206,11 +260,7 @@ export function useGridAnnouncer(
 
   const announceSettingChanged = useCallback(
     (title: string, setting: string, value: string, shown: boolean) =>
-      say(
-        shown
-          ? `${title}: ${setting} set to ${value}.`
-          : `${title}: ${setting} saved as ${value}, but the card could not load it and still shows the earlier data.`
-      ),
+      say(settingChangedSentence(title, setting, value, shown)),
     [say]
   );
 
@@ -218,7 +268,7 @@ export function useGridAnnouncer(
     announcement,
     announceSettingChanged,
     announceMoved,
-    announceWidth,
+    announceSize,
     announceRemoved,
     announceRestored,
     announceReset,

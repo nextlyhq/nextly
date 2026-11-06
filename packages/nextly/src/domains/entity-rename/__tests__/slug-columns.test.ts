@@ -9,12 +9,13 @@
  * part; all three spellings occur (`scope_slug`, `activity_log.collection`,
  * `permissions.resource`).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getCoreSchema } from "../../../schemas";
 import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
+import { reviewStateKey } from "../../workflows/review-state-repository";
 import {
   SLUG_COLUMNS,
   renamedSlugColumns,
@@ -22,6 +23,13 @@ import {
   type RenamedSlugColumn,
   type SlugColumn,
 } from "../slug-columns";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -115,6 +123,7 @@ describe.each(DIALECTS)("slug-keyed core tables (%s)", dialect => {
         "nextly_versions.scope_slug",
         "nextly_content_events.subject_slug",
         "nextly_release_members.scope_slug",
+        "nextly_review_states.scope_slug",
         "permissions.resource",
       ])
     );
@@ -212,5 +221,23 @@ describe("what a rename writes again from the new slug", () => {
     const other = { resource: { kind: "entry", collection: "posts" } };
     expect(renamed(other)).toBe(other);
     expect(renamed("{not json")).toBe("{not json");
+  });
+
+  it("keys a part's review state again under the new slug", () => {
+    const derive = following("nextly_review_states").derived?.derive;
+    for (const [kind, part] of [
+      ["collection", "en"],
+      ["single", null],
+    ] as const) {
+      const row = { id: "r1", scope_kind: kind, entry_id: "e1", part };
+      expect(derive?.(row, "articles", "blog-posts")).toEqual({
+        part_key: reviewStateKey({
+          scopeKind: kind,
+          scopeSlug: "articles",
+          entryId: "e1",
+          part,
+        }),
+      });
+    }
   });
 });

@@ -1,4 +1,15 @@
 /**
+ * RETIRED: where a backfill used to record the index scopes it had walked.
+ *
+ * Nothing reads or writes these rows any more. A super-admin passes every
+ * access rule below, so a row added here by hand marked a scope as walked and
+ * its documents were never indexed. Progress now lives in the plugin's own
+ * tables (`schema/tables.ts`), which no admin screen, REST route or Direct
+ * API call reaches, and a row here changes nothing. The collection stays
+ * declared so an existing site keeps its table and registry row as they are.
+ *
+ * What follows describes the design the tables kept.
+ *
  * Which index scopes a backfill has already walked.
  *
  * One row per completed (collection, field, locale, variant). The row's
@@ -80,8 +91,9 @@ export function usageBackfillStateCollection(): CollectionConfig {
       // the whole mechanism, which is why nothing outside may make it.
       //
       // These do NOT stop a session super-admin. The RBAC gate is ordered
-      // "super-admin bypass -> code-defined access -> DB permissions", so for
-      // such a caller these callbacks are never evaluated. Closing that needs a
+      // "super-admin bypass -> DB permissions -> code-defined access, which
+      // only narrows them", so for such a caller these callbacks are never
+      // evaluated. Closing that needs a
       // write boundary external collection operations cannot cross, which is a
       // core capability rather than an access rule a plugin can declare.
       //
@@ -108,7 +120,7 @@ export function usageBackfillStateCollection(): CollectionConfig {
     webhooks: false,
     admin: {
       description:
-        "Which parts of the component usage index have been built. Maintained automatically. Editing it changes nothing about what a page renders — but a row added here marks a scope as already walked, so its documents stay out of the index and usage counts for them read as zero.",
+        "No longer used. The page builder keeps its usage index progress elsewhere, and nothing reads these rows.",
     },
     // A row is a fact — this scope has been walked — rather than an event, and
     // WHEN it was walked answers nothing anyone asks: a scope is redone when it

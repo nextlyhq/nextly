@@ -277,7 +277,7 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 217;
+  const EXPECTED_ENTRIES = 215;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
@@ -294,7 +294,25 @@ describe("the allowlist", () => {
   // exists; its entry remains, so the count above does not move.
   // 482 -> 481: one recorded offence in `check-comment-convention.mjs` itself, in
   // the scanner it no longer has, no longer exists; its entry remains.
-  const EXPECTED_TOTAL = 480;
+  // 480 -> 479: one recorded offence in `collection-dispatcher.ts` no longer
+  // exists; its entry remains.
+  // 479 -> 477: the two recorded offences in `legacy-preview/translate.ts`, each
+  // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
+  // 477 -> 475: one recorded offence each in `register-collections.ts` and
+  // `collections-handler.ts` no longer exists; both entries remain.
+  // 475 -> 452: the 23 recorded offences in `collection-query-service.ts`,
+  // comments naming milestones in its localized reads, were rewritten to
+  // describe the code, and its entry emptied (216 -> 215).
+  // 452 -> 449: one recorded offence each in `migrate-create.ts`,
+  // `permission-seed-service.ts` and `prompt-renames.ts` no longer exists;
+  // all three entries remain.
+  // 449 -> 446: three recorded offences in `collection-mutation-service.ts`,
+  // each naming a roadmap milestone, no longer exist; its entry remains.
+  // 446 -> 445: one recorded offence in `route-parser.ts`, naming a roadmap
+  // milestone, no longer exists; its entry remains.
+  // 445 -> 443: one recorded offence each in `generate.ts` and
+  // `collection-file-manager.ts` no longer exists; both entries remain.
+  const EXPECTED_TOTAL = 443;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -85,6 +86,9 @@ const OPEN = { ...SINGLE_OPEN, delete: () => true };
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // Each case reads as a visitor, judged by the Public role a real boot
+    // makes, which reads every collection and the Single here by its rule.
+    seedPublic: true,
     collections: [
       // Pending work in another language stops a document-wide write.
       defineCollection({
@@ -437,7 +441,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE pending" }
+        { title: "DE pending", _overwrite: true }
       );
 
       expect(await visibleIds(t, "pages")).toContain(page);
@@ -454,7 +458,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.updateSingle({
           slug: "notice" as never,
           locale,
-          data: { headline, status: "published" } as never,
+          data: { headline, status: "published", _overwrite: true } as never,
         });
       }
       const row = await t.adapter.selectOne<{ id: string }>(
@@ -475,7 +479,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE pending" } as never,
+        data: { headline: "DE pending", _overwrite: true } as never,
       });
 
       expect(await singleVisible(t)).toBe(true);
@@ -747,7 +751,7 @@ describe.each(getConfiguredTestDialects())(
       const written = await handlerOf(t)
         .getEntryService()
         .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
-          { id: dossier, data: { guarded: "secret" } },
+          { id: dossier, data: { guarded: "secret", _overwrite: true } },
         ]);
       expect(written.successful).toBe(1);
 
@@ -771,6 +775,10 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await visibleIds(t, "articles")).toContain(kept);
 
+      // The bulk delete runs as a visitor, who needs the Public role to hold
+      // the delete as well as the rule answering \`true\`; granted as a site
+      // admin would, since who deletes is not what this case is about.
+      await grantPublic(t, ["delete-articles"]);
       const deleted = await handlerOf(t)
         .getEntryService()
         .deleteEntries({ collectionName: "articles" }, [gone]);
@@ -897,7 +905,7 @@ describe.each(getConfiguredTestDialects())(
 
       await handlerOf(t).updateEntry(
         { collectionName: "articles", entryId: article, overrideAccess: true },
-        { title: "Edited" }
+        { title: "Edited", _overwrite: true }
       );
 
       expect(await visibleIds(t, "articles")).toContain(article);

@@ -218,20 +218,24 @@ describe("the rows", () => {
     expect(rows.map(row => [row.type, row.supported])).toEqual([
       ["text", true],
       ["select", true],
-      ["image", false],
+      // Chosen from the media library, as the Content tab's image is.
+      ["image", true],
     ]);
     expect([...EDITABLE_EXPOSED_TYPES]).toEqual([
       "text",
       "select",
       "link",
       "visibility",
+      "image",
+      "richText",
     ]);
   });
 
-  it("carries a link and a visibility row as editable, and a rich text row as not", () => {
-    // A link exposure holds what its url prop holds, a string, and a
-    // visibility exposure a boolean the resolver reads as shown or hidden;
-    // both have a control. Rich text is edited on the canvas, not here.
+  it("carries a link, a visibility and a rich text row as editable", () => {
+    // A link exposure holds what its url prop holds, a string, a visibility
+    // exposure a boolean the resolver reads as shown or hidden, and a rich
+    // text exposure a passage the admin's rich-text editor opens; each has a
+    // control.
     const more = header({
       exposed: [
         {
@@ -268,7 +272,7 @@ describe("the rows", () => {
     expect(rows.map(row => [row.id, row.supported])).toEqual([
       ["cta", true],
       ["shown", true],
-      ["body", false],
+      ["body", true],
     ]);
   });
 

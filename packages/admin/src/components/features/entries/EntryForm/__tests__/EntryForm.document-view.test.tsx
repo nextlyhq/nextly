@@ -13,12 +13,14 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  Activity,
   useEffect,
+  useState,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from "react";
-import { useFormContext } from "react-hook-form";
+import { useFormContext, useFormState } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -28,6 +30,8 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import { RoutedPathnameContext } from "@admin/context/RoutedPathnameContext";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
   registerComponent,
@@ -38,15 +42,21 @@ import {
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 
-const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
+const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   update: vi.fn(),
+  // What the editor hands its update mutation, a refused publish's way out
+  // among it.
+  updateOptions: {
+    current: undefined as { refusedForm?: RefusedForm } | undefined,
+  },
   recovery: {
     current: {
       offer: null as { savedAt: Date; snapshot: unknown } | null,
       isResolved: true,
       dismiss: () => {},
       restore: () => {},
+      take: () => {},
     },
   },
 }));
@@ -54,7 +64,10 @@ const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The save is observed where it leaves the editor: the update mutation.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
-  useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
+  useUpdateEntry: (options: { refusedForm?: RefusedForm }) => {
+    updateOptions.current = options;
+    return { mutateAsync: update, isPending: false };
+  },
 }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => recovery.current,
@@ -75,9 +88,18 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
-import { useHostedDocumentActions } from "../DocumentActionsContext";
+import {
+  useHostedDocumentActions,
+  useHostedRecoveryPoint,
+} from "../DocumentActionsContext";
+import { useDocumentRestore } from "../DocumentRestoreContext";
+import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
+import {
+  useBeforeDocumentAction,
+  useTrackedWrite,
+} from "../useDocumentActionHooks";
 
 const VIEW = "@acme/pb/admin#Builder";
 const collection = {
@@ -86,6 +108,19 @@ const collection = {
   fields: [{ name: "title", type: "text", label: "Title" }],
 } as never;
 const entry = { id: "e1", title: "Hello" } as never;
+/**
+ * The same document with a lifecycle that keeps a published entry's change
+ * pending: where a refused publish happens, and its recovery's Save stays
+ * unpublished.
+ */
+const withDrafts = {
+  collection: {
+    ...(collection as object),
+    status: true,
+    draftsEnabled: true,
+  } as never,
+  entry: { id: "e1", title: "Hello", status: "published" } as never,
+};
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
@@ -137,6 +172,12 @@ function Providers({ children }: { children: ReactNode }): ReactElement {
 }
 
 const onExit = vi.fn();
+
+/** A page collection with one field a blocks view could edit. */
+const onePageField = {
+  name: "pages",
+  fields: [{ name: "layout", type: "blocks" }],
+} as never;
 
 const onCancel = vi.fn();
 
@@ -263,6 +304,191 @@ describe("EntryForm with a document view", () => {
     );
   });
 
+  it("holds the view read-only, and marks it busy, while a recovery takes the live values", async () => {
+    renderView(withDrafts);
+    const busyAround = () =>
+      screen.getByTestId("builder-view").closest("[aria-busy='true']");
+    expect(busyAround()).toBeNull();
+
+    // Made before the recovery starts, which runs its work a task later.
+    let done: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.recover(() => held);
+    });
+    expect(busyAround()).not.toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true })
+    );
+
+    await act(async () => {
+      done();
+      await running;
+    });
+    expect(busyAround()).toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: false })
+    );
+  });
+
+  it.each([
+    ["the recovery's Save", true, 0],
+    ["the view's own Save", true, 0],
+    // The control: with no move, the same Save writes.
+    ["the view's own Save", false, 1],
+  ] as const)(
+    "writes nothing into the language %s started in once the editor moved while it waited on the view (moved: %s)",
+    async (which, moves, writes) => {
+      let commit: () => void = () => {};
+      const saved: unknown[] = [];
+      /** A view whose open edit commits when the test says. */
+      function SlowView(): ReactElement {
+        const { run } = useHostedDocumentActions();
+        const { register } = useFormContext();
+        useBeforeDocumentAction(
+          () =>
+            new Promise<void>(resolve => {
+              commit = resolve;
+            })
+        );
+        return (
+          <div>
+            <input aria-label="Title in the view" {...register("title")} />
+            <button
+              type="button"
+              onClick={() => {
+                void run("save").then(outcome => saved.push(outcome));
+              }}
+            >
+              Save from the view
+            </button>
+          </div>
+        );
+      }
+      registerComponent(VIEW, SlowView);
+      const element = (locale?: string) => (
+        <EntryForm
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit }}
+          {...withDrafts}
+          {...(locale === undefined ? {} : { locale })}
+        />
+      );
+      const { rerender } = render(element(), { wrapper: Providers });
+      // An edit, so a published entry has a Save to offer.
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Title in the view" }),
+        {
+          target: { value: "Edited in the view" },
+        }
+      );
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running =
+          which === "the recovery's Save"
+            ? updateOptions.current?.refusedForm
+                ?.recover(take)
+                .catch((error: unknown) => error)
+            : undefined;
+      });
+      if (which === "the view's own Save") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Save from the view" })
+        );
+      }
+      // A switch to a language already cached, while the view's edit is still
+      // committing: the form starts afresh from that language's values.
+      if (moves) rerender(element("de"));
+      await act(async () => {
+        commit();
+        await running;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+
+      // Nothing is written into the language the store started in.
+      expect(update).toHaveBeenCalledTimes(writes);
+      if (moves) expect(take).not.toHaveBeenCalled();
+    }
+  );
+
+  it("waits for a view's before-action handler, and its Save stores what the view commits", async () => {
+    /** A view holding work outside the form, committed when asked. */
+    function HoldingView(): ReactElement {
+      const { setValue } = useFormContext();
+      useBeforeDocumentAction(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        setValue("title", "Committed by the view", { shouldDirty: true });
+      });
+      return <div data-testid="holding-view" />;
+    }
+    registerComponent(VIEW, HoldingView);
+    renderView(withDrafts);
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.recover(take);
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]?.[0]).toMatchObject({
+      title: "Committed by the view",
+    });
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["succeeds", true],
+    ["fails", false],
+  ] as const)(
+    "waits for a write the view tracks, and stores and takes only when it %s",
+    async (_outcome, ok) => {
+      let settle: () => void = () => {};
+      /** A view whose dependent write is still in flight. */
+      function TrackingView(): ReactElement {
+        const track = useTrackedWrite();
+        useEffect(() => {
+          track(
+            "Site colours",
+            new Promise((resolve, reject) => {
+              settle = () =>
+                ok ? resolve(undefined) : reject(new Error("offline"));
+            })
+          );
+        }, [track]);
+        return <div data-testid="tracking-view" />;
+      }
+      registerComponent(VIEW, TrackingView);
+      renderView(withDrafts);
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running = updateOptions.current?.refusedForm
+          ?.recover(take)
+          .catch(() => undefined);
+      });
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      // Nothing stored while the write it depends on is in flight.
+      expect(update).not.toHaveBeenCalled();
+
+      await act(async () => {
+        settle();
+        await running;
+      });
+
+      expect(update).toHaveBeenCalledTimes(ok ? 1 : 0);
+      expect(take).toHaveBeenCalledTimes(ok ? 1 : 0);
+    }
+  );
+
   it("offers recovered work above the view", () => {
     recovery.current = {
       ...recovery.current,
@@ -276,6 +502,34 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
+  it("changes nothing in the view until the offer is confirmed", async () => {
+    // The recovery asks about a current offer again before restoring it, and
+    // may refuse it; the view goes and comes back only once it is confirmed.
+    lifecycle.length = 0;
+    let confirm: () => void = () => undefined;
+    const restore = vi.fn((apply?: () => void) => {
+      confirm = () => act(() => (apply ?? (() => undefined))());
+    });
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+      take: vi.fn(() => {
+        lifecycle.push("restore");
+      }),
+    };
+    renderView();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(lifecycle).toEqual(["mount"]);
+
+    confirm();
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    expect(lifecycle).toEqual(["mount", "unmount", "restore", "mount"]);
+  });
+
   it("draws the view afresh when recovered work is restored", async () => {
     // A restore replaces the form's values from outside the view, and a view
     // may keep a working copy read once at mount, as the Page Builder does. So
@@ -286,13 +540,17 @@ describe("EntryForm with a document view", () => {
     // Page Builder does, for a takeover) would otherwise write its pre-restore
     // copy over the restored values, and the new mount would read those.
     lifecycle.length = 0;
-    const restore = vi.fn(() => {
+    // The recovery's take writes the values; its restore runs the view's
+    // steps in place of the take once the offer is confirmed.
+    const take = vi.fn(() => {
       lifecycle.push("restore");
     });
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
       restore,
+      take,
     };
     renderView();
     expect(mounted).toHaveBeenCalledTimes(1);
@@ -419,6 +677,182 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByTestId("status")).toHaveTextContent("published");
   });
 
+  it("makes the offer in the save chip of a view that draws one, and draws no banner", async () => {
+    // One save state: the chip says "Unsaved changes" and makes the offer,
+    // so a banner above the editor would say it a second time.
+    const CHIP_VIEW = "@acme/pb/admin#Chip";
+    function ChipView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      return <DocumentSaveIndicator />;
+    }
+    registerComponent(CHIP_VIEW, ChipView);
+    const take = vi.fn();
+    const restore = vi.fn((apply?: () => void) => (apply ?? take)());
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+      take,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    expect(screen.queryByRole("status", { name: /recovery/i })).toBeNull();
+    expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    expect(
+      await screen.findByText(/you have unsaved changes from/i)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    // The same restore the banner runs: the view goes, the values change,
+    // and a fresh view reads them.
+    expect(restore).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the offer when the chip says Not now, and offers nothing more this session", async () => {
+    const CHIP_VIEW = "@acme/pb/admin#ChipDismiss";
+    registerComponent(CHIP_VIEW, () => <DocumentSaveIndicator />);
+    const dismiss = vi.fn();
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      dismiss,
+      restore,
+    };
+    renderView({ documentView: { component: CHIP_VIEW, onExit } });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Not now" })
+    );
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  describe("a view that restores its own field", () => {
+    const titledLayout = {
+      name: "pages",
+      fields: [
+        { name: "title", type: "text", label: "Title" },
+        { name: "layout", type: "blocks" },
+      ],
+    } as never;
+    const stored = { id: "e1", title: "Hello", layout: { nodes: ["stored"] } };
+    const RESTORING_VIEW = "@acme/pb/admin#Restoring";
+    const applied = vi.fn<(value: unknown) => boolean>();
+    const snapshot = { title: "Recovered", layout: { nodes: ["recovered"] } };
+    /** The form, so the recovery's restore can do what the real one does. */
+    const formOf: { reset?: (values: unknown, options: object) => void } = {};
+
+    function RestoringView(): ReactElement {
+      useEffect(() => {
+        mounted();
+      }, []);
+      useDocumentRestore(value => applied(value));
+      const { watch, reset } = useFormContext();
+      formOf.reset = reset as never;
+      return (
+        <>
+          <p>title: {String(watch("title"))}</p>
+          <p>layout: {JSON.stringify(watch("layout"))}</p>
+        </>
+      );
+    }
+
+    function offerRecovery() {
+      // As the recovery's own take does: the snapshot into the form, kept
+      // dirty against the stored defaults. Its restore, the offer confirmed,
+      // runs the caller's steps in place of the take.
+      const take = vi.fn(() => {
+        formOf.reset?.(snapshot, { keepDefaultValues: true });
+      });
+      const restore = vi.fn((apply?: () => void) => (apply ?? take)());
+      recovery.current = {
+        ...recovery.current,
+        offer: { savedAt: new Date(), snapshot },
+        dismiss: vi.fn(),
+        restore,
+        take,
+      };
+      return { restore, take };
+    }
+
+    function open() {
+      registerComponent(RESTORING_VIEW, RestoringView);
+      return renderView({
+        collection: titledLayout,
+        entry: stored as never,
+        documentView: {
+          component: RESTORING_VIEW,
+          onExit,
+          fieldType: "blocks",
+        },
+      });
+    }
+
+    it("hands the view its field's recovered value and resets the others, with no fresh draw", async () => {
+      // The view applies its own field as an edit it can undo; drawing it
+      // afresh would start its history again.
+      applied.mockReturnValue(true);
+      const { restore } = offerRecovery();
+      open();
+      expect(mounted).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledWith({ nodes: ["recovered"] });
+      // The recovery's own restore, so the offer is accepted one way.
+      expect(restore).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("title: Recovered")).toBeInTheDocument();
+      // The view's field keeps what the view holds: its own edit writes it.
+      expect(
+        screen.getByText(`layout: ${JSON.stringify({ nodes: ["stored"] })}`)
+      ).toBeInTheDocument();
+      expect(mounted).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores the old way when the view declines", async () => {
+      applied.mockReturnValue(false);
+      const { restore } = offerRecovery();
+      open();
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+      expect(applied).toHaveBeenCalledTimes(1);
+      expect(restore).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  it("hands the view the document's recovery point, so its save state reads it as the header's does", () => {
+    // Edits held only in a recovery point are not stored, and a view that
+    // draws the save state without the header must know they are there.
+    const RECOVERY_VIEW = "@acme/pb/admin#Recovery";
+    const offeredAt = new Date("2026-11-02T18:00:00Z");
+    function RecoveryView(): ReactElement {
+      const point = useHostedRecoveryPoint();
+      return <p>{point.pendingOfferAt?.toISOString() ?? "none"}</p>;
+    }
+    registerComponent(RECOVERY_VIEW, RecoveryView);
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: offeredAt, snapshot: { title: "Recovered" } },
+    };
+    renderView({ documentView: { component: RECOVERY_VIEW, onExit } });
+
+    expect(screen.getByText(offeredAt.toISOString())).toBeInTheDocument();
+  });
+
   it("lets the view run the document's save, with no header drawn, and hear how it went", async () => {
     const ACTIONS_VIEW = "@acme/pb/admin#Actions";
     const heard = vi.fn();
@@ -451,6 +885,48 @@ describe("EntryForm with a document view", () => {
       })
     );
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the view the stored value as the field's saved copy after the view runs a save", async () => {
+    // The page builder holds edits inside locked areas against the field's
+    // saved copy, read as the form's default value. A save the server
+    // rewrites must move that copy to what was STORED, not what was sent, or
+    // the editor judges the next edit against a page that no longer exists.
+    const STORED_VIEW = "@acme/pb/admin#Stored";
+    function StoredView(): ReactElement {
+      const { run } = useHostedDocumentActions();
+      const { control, register } = useFormContext();
+      const { defaultValues } = useFormState({ control, name: "title" });
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <output aria-label="Saved copy">
+            {String(defaultValues?.title)}
+          </output>
+          <button type="button" onClick={() => void run("save")}>
+            Save from the view
+          </button>
+        </>
+      );
+    }
+    registerComponent(STORED_VIEW, StoredView);
+    update.mockResolvedValue({
+      item: { id: "e1", title: "Hello world, as stored" },
+    });
+    const user = userEvent.setup();
+    renderView({ documentView: { component: STORED_VIEW, onExit } });
+    expect(screen.getByLabelText("Saved copy").textContent).toBe("Hello");
+
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    await user.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Saved copy").textContent).toBe(
+        "Hello world, as stored"
+      )
+    );
   });
 
   it("keeps the ordinary editor when no view is routed", () => {
@@ -574,6 +1050,78 @@ describe("a field-type view on a document with two fields of its type", () => {
     }
   );
 
+  it("leaves an address that is no longer the view's alone when the view is shown again", () => {
+    // Next keeps a visited page mounted but hidden under Cache Components
+    // (React's Activity), and shows it again on Back with the effects it had,
+    // before the admin's router has drawn the page Back went to. The view's
+    // correction then sees the document's own address, with no field named,
+    // while the router still holds the view it drew.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <RoutedPathnameContext.Provider value="/admin/collections/pages/e1/builder">
+          <EntryForm
+            collection={onePageField}
+            entry={entry}
+            mode="edit"
+            onCancel={onCancel}
+            documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+          />
+        </RoutedPathnameContext.Provider>
+      </Activity>
+    );
+    const { rerender } = render(view("visible"), { wrapper: Providers });
+    rerender(view("hidden"));
+    // Back, to the document's form.
+    window.history.pushState(null, "", "/admin/collections/pages/e1");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("visible"));
+    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    expect(window.location.search).toBe("");
+  });
+
+  it("corrects the address of the view the router moves to, the same view body kept", () => {
+    // One view of the document giving way to another, as a plugin's
+    // `navigateTo` does: the page, and this body with it, stays mounted.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (routed: string) => (
+      <RoutedPathnameContext.Provider value={routed}>
+        <EntryForm
+          collection={onePageField}
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+        />
+      </RoutedPathnameContext.Provider>
+    );
+    const { rerender } = render(view("/admin/collections/pages/e1/builder"), {
+      wrapper: Providers,
+    });
+    // The other view, its address naming no field.
+    window.history.pushState(null, "", "/admin/collections/pages/e1/outline");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("/admin/collections/pages/e1/outline"));
+    expect(window.location.pathname).toBe(
+      "/admin/collections/pages/e1/outline"
+    );
+    expect(new URLSearchParams(window.location.search).get("field")).toBe(
+      "layout"
+    );
+  });
+
   it("opens the only field of its type without asking", () => {
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
     renderView({
@@ -586,6 +1134,36 @@ describe("a field-type view on a document with two fields of its type", () => {
     expect(received).toHaveBeenLastCalledWith(
       expect.objectContaining({
         field: expect.objectContaining({ name: "layout", type: "blocks" }),
+        fieldPath: "layout",
+      })
+    );
+  });
+
+  it("hands a field inside a named group its path from the document's root", () => {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=hero.body"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            type: "group",
+            fields: [{ name: "body", type: "blocks" }],
+          },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    // The declaration keeps its own name; the path is how the form reaches it.
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body", type: "blocks" }),
+        fieldPath: "hero.body",
       })
     );
   });
@@ -795,5 +1373,59 @@ describe("a field the form would not let the author edit", () => {
       },
     ]);
     refusedSaying(/read-only/);
+  });
+});
+
+describe("a document view that copies the form as it mounts, when the entry is gained", () => {
+  const COPYING = "@acme/copy/admin#Copying";
+
+  /** A view that keeps its own copy of the form, read once as it mounts. */
+  function CopyingView(): ReactElement {
+    const { getValues } = useFormContext();
+    const [copy] = useState(() => String(getValues("title")));
+    return <p data-testid="copied">{copy}</p>;
+  }
+
+  it("mounts again on the loaded copy, not the one from before", async () => {
+    // Unlocked over its own copy of what was read while the colleague held
+    // the entry, the view's next write would put that copy back.
+    registerComponent(COPYING, CopyingView);
+    const reload = vi.fn(() => Promise.resolve());
+    const view = (title: string, readAt: number) => (
+      <EntryForm
+        collection={collection}
+        entry={
+          { id: "e1", title, updatedAt: "2026-01-01T00:00:00.000Z" } as never
+        }
+        mode="edit"
+        onCancel={onCancel}
+        documentView={{ component: COPYING, onExit }}
+        latest={{ readAt, failed: false, reload }}
+      />
+    );
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      gains: 0,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    const { rerender } = render(view("Hello", 1), { wrapper: Providers });
+    expect(screen.getByTestId("copied")).toHaveTextContent("Hello");
+
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    rerender(view("Hello", 1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // Bob's save arrives with the same timestamp, as two saves inside one
+    // second do on a column kept to the second.
+    rerender(view("Bob's page", 2));
+    await waitFor(() =>
+      expect(screen.getByTestId("copied")).toHaveTextContent("Bob's page")
+    );
   });
 });

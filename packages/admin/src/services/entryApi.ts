@@ -22,8 +22,17 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
+import {
+  DOCUMENT_REVS_KEY,
+  DOCUMENT_VERSION_KEY,
+} from "../lib/document-version";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
+
+import type {
+  PublishAllLanguageOutcome,
+  PublishAllPreview,
+} from "./publishAllPreview";
 
 /** The canonical mutation envelope, exactly as the server sends it. */
 interface MutationResponse<T> {
@@ -373,6 +382,29 @@ export const buildFindQuery = (params: FindParams): string => {
   return query.toString();
 };
 
+/**
+ * What a caller knows about the slug it reads as a collection.
+ *
+ * The server answers 404 for a missing entry and, the same way, for one the
+ * caller may not read. Reading `/singles/<slug>` after such a 404 is right only
+ * for a slug that is a Single, so the read is made again there only when the
+ * caller says it knows the slug is one; otherwise the server's own 404 stands.
+ */
+interface CollectionReadOptions {
+  knownSingle?: boolean;
+}
+
+/** Whether a failed collection read is made again as `/singles/<slug>`. */
+function readsAsSingle(
+  error: unknown,
+  collectionSlug: string,
+  knownSingle: boolean
+): boolean {
+  // `users` is a system collection, never a Single.
+  const status = (error as Record<string, unknown> | undefined)?.status;
+  return status === 404 && knownSingle && collectionSlug !== "users";
+}
+
 // ============================================================================
 // API Functions
 // ============================================================================
@@ -431,7 +463,8 @@ export const entryApi = {
    */
   find: async (
     collectionSlug: string,
-    params: FindParams = {}
+    params: FindParams = {},
+    { knownSingle = false }: CollectionReadOptions = {}
   ): Promise<ListResponse<Entry>> => {
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Inject `status=all` so the server's
@@ -471,11 +504,10 @@ export const entryApi = {
         meta: buildListMeta({ total: result.items.length, page, limit }),
       };
     } catch (error: unknown) {
-      // Fallback for Singles: valid URL but might be a Single, not a Collection.
-      // If the Collection API returns 404, try the Singles API and project
-      // the bare doc into a single-item list.
-      const status = (error as Record<string, unknown> | undefined)?.status;
-      if (status === 404 && collectionSlug !== "users") {
+      // A slug the caller knows is a Single answers 404 as a collection, so
+      // it is read from the Singles API and its bare doc projected into a
+      // single-item list. Any other 404 is the server's answer and stands.
+      if (readsAsSingle(error, collectionSlug, knownSingle)) {
         try {
           const singleUrl = `/singles/${collectionSlug}`;
           const singleResult = await fetcher<Entry>(singleUrl, {}, true);
@@ -521,7 +553,8 @@ export const entryApi = {
     options?: Pick<
       FindParams,
       "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
-    >
+    >,
+    { knownSingle = false }: CollectionReadOptions = {}
   ): Promise<Entry> => {
     const query = new URLSearchParams();
     if (options?.depth !== undefined) query.set("depth", String(options.depth));
@@ -555,9 +588,9 @@ export const entryApi = {
     try {
       return await protectedApi.get<Entry>(url);
     } catch (error: unknown) {
-      // Fallback for Singles
-      const status = (error as Record<string, unknown> | undefined)?.status;
-      if (status === 404 && collectionSlug !== "users") {
+      // A slug the caller knows is a Single is read from the Singles API;
+      // any other 404 is the server's answer and stands.
+      if (readsAsSingle(error, collectionSlug, knownSingle)) {
         try {
           // Try fetching as a Single (id is ignored/redundant as slug defines it)
           const singleUrl = `/singles/${collectionSlug}`;
@@ -740,11 +773,14 @@ export const entryApi = {
     params: {
       ids: string[];
       data: UpdateEntryPayload;
+      /** Each document's version by id; see `BulkUpdateVariables`. */
+      revs?: Record<string, string>;
     }
   ): Promise<BulkResponse<Entry>> => {
+    const { revs, ...rest } = params;
     return protectedApi.post<BulkResponse<Entry>>(
       `/collections/${collectionSlug}/entries/bulk-update`,
-      params
+      revs ? { ...rest, [DOCUMENT_REVS_KEY]: revs } : rest
     );
   },
 
@@ -846,14 +882,45 @@ export const entryApi = {
    */
   publishAllLocales: async (
     collectionSlug: string,
-    id: string
-  ): Promise<{ id: string; status?: string }> => {
+    id: string,
+    /**
+     * The version of every language, as a read of every language gives it: a
+     * publish of every language is refused when any of them changed since.
+     */
+    version?: string
+  ): Promise<{
+    id: string;
+    status?: string;
+    languages?: PublishAllLanguageOutcome[];
+  }> => {
+    // The publish reports each language's outcome beside the entry, which
+    // the result message names language by language.
     const result = await protectedApi.post<{
       message: string;
-      item: { id: string; status?: string };
-    }>(`/collections/${collectionSlug}/entries/${id}/publish-all`, {});
+      item: {
+        id: string;
+        status?: string;
+        languages?: PublishAllLanguageOutcome[];
+      };
+    }>(
+      `/collections/${collectionSlug}/entries/${id}/publish-all`,
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
+    );
     return result.item;
   },
+
+  /**
+   * What publishing every language of an entry would do, language by
+   * language, without doing it: asked as the publish is, and writing nothing.
+   * Hits `GET /api/collections/{slug}/entries/{id}/publish-all`.
+   */
+  previewPublishAllLocales: async (
+    collectionSlug: string,
+    id: string
+  ): Promise<PublishAllPreview> =>
+    protectedApi.get<PublishAllPreview>(
+      `/collections/${collectionSlug}/entries/${id}/publish-all`
+    ),
 
   // ===========================================================================
   // Legacy Methods (for backwards compatibility with internal table components)

@@ -25,6 +25,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -79,7 +80,7 @@ describe("localized single without a companion table (integration)", () => {
     current = await boot(false);
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Original" },
+      data: { headline: "Original", _overwrite: true },
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
     // Re-open localized, then remove the companion to recreate the window.
@@ -91,7 +92,10 @@ describe("localized single without a companion table (integration)", () => {
 
     await current.nextly.updateSingle({
       slug: "swin_settings",
-      data: { headline: "Edited while the companion was missing" },
+      data: {
+        headline: "Edited while the companion was missing",
+        _overwrite: true,
+      },
       locale: "en",
     } as Parameters<typeof current.nextly.updateSingle>[0]);
 
@@ -99,6 +103,61 @@ describe("localized single without a companion table (integration)", () => {
       "SELECT headline FROM single_swin_settings"
     );
     expect(rows[0]?.headline).toBe("Edited while the companion was missing");
+  });
+
+  it("saves back the version a read gave while translations are not ready, and still refuses a stale one", async () => {
+    current = await boot(false);
+    await current.nextly.updateSingle({
+      slug: "swin_settings",
+      data: { headline: "Original", _overwrite: true },
+    } as Parameters<typeof current.nextly.updateSingle>[0]);
+    await current.destroy();
+    current = await boot(true);
+    await current.adapter.executeQuery(
+      "DROP TABLE IF EXISTS single_swin_settings_locales"
+    );
+    forgetCompanionReadiness(current.adapter, "single_swin_settings_locales");
+
+    // With no translation table, a read's version names no language.
+    const read = (await current.nextly.findSingle({
+      slug: "swin_settings",
+      locale: "en",
+    } as never)) as { _rev: string };
+    expect(read._rev).toMatch(/^\d+$/);
+
+    const saved = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Edited", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "en",
+      } as never);
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const rows = await current.adapter.executeQuery<{ headline: string }>(
+      "SELECT headline FROM single_swin_settings"
+    );
+    expect(rows[0]?.headline).toBe("Edited");
+
+    // A Spanish save with that version has nowhere to go: refused as a
+    // version naming no Spanish, before any hook runs.
+    const spanish = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Editado", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "es",
+      } as never);
+    expect(spanish).toMatchObject({ success: false, statusCode: 400 });
+
+    const stale = await current
+      .getService<SingleEntryService>("singleEntryService")
+      .update("swin_settings", { headline: "Again", _rev: read._rev }, {
+        overrideAccess: true,
+        locale: "en",
+      } as never);
+    expect(stale).toMatchObject({
+      success: false,
+      statusCode: 409,
+      code: "STALE_VERSION",
+    });
   });
 
   it("refuses a default-language write when the main table never had the column", async () => {
@@ -114,7 +173,10 @@ describe("localized single without a companion table (integration)", () => {
     await expect(
       current.nextly.updateSingle({
         slug: "swin_settings",
-        data: { headline: "Edited while the companion was missing" },
+        data: {
+          headline: "Edited while the companion was missing",
+          _overwrite: true,
+        },
         locale: "en",
       } as Parameters<typeof current.nextly.updateSingle>[0])
     ).rejects.toThrow(/Translations are not ready/);
@@ -155,7 +217,10 @@ describe.each(getConfiguredTestDialects())(
         .getService<SingleEntryService>("singleEntryService")
         .update(
           "swin_settings",
-          { headline: "Edited while the companion was missing" },
+          {
+            headline: "Edited while the companion was missing",
+            _overwrite: true,
+          },
           { locale: "en", overrideAccess: true }
         );
 
@@ -179,7 +244,12 @@ describe.each(getConfiguredTestDialects())(
 
       // A successful read first, so the companion is established as present and the failure below
       // is a genuine read fault rather than a missing table.
-      await service.get("swin_settings", { locale: "en" });
+      // As trusted server code, so the read reaches the companion rather than
+      // stopping at the read gate.
+      await service.get("swin_settings", {
+        locale: "en",
+        overrideAccess: true,
+      });
 
       // Break the companion while leaving the table in place, which is what a schema drift or a
       // permission fault looks like from the read's point of view.
@@ -188,11 +258,19 @@ describe.each(getConfiguredTestDialects())(
         `ALTER TABLE ${q("single_swin_settings_locales")} DROP COLUMN ${q("headline")}`
       );
 
-      const result = await service.get("swin_settings", { locale: "en" });
+      const result = await service.get("swin_settings", {
+        locale: "en",
+        overrideAccess: true,
+      });
 
       expect(result.success).toBe(false);
-      // The canonical envelope, not the driver's text.
-      expect(result.message).not.toMatch(/headline|_locales|column|relation/i);
+      // A declared field's column is missing, so the answer names the field and what to run;
+      // the companion table, and the driver's wording around it, stay off the wire.
+      expect(result).toMatchObject({
+        code: "ENTITY_NOT_MIGRATED",
+        publicData: { reason: "column", field: "headline" },
+      });
+      expect(result.message).not.toMatch(/_locales|column|relation/i);
     });
   }
 );

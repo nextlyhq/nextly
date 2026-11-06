@@ -6,66 +6,69 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-editor-mount
  */
 import {
-  hasBlock,
-  registerBlocks,
+  blockLabelFrom,
+  getBlock,
+  placementRefusalMessage,
   type BlockDocument,
+  type DefinitionsById,
   type DocumentKind,
   type DocumentLimits,
+  type LocatedPlacementBreak,
 } from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { deepActiveElement, isHTMLElement } from "@nextlyhq/builder";
 import {
+  type ComponentFieldsHost,
+  type ComponentVariantsHost,
   type NoticeQueue,
   type EditorState,
   type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
-  useEditorState,
+  useCanvasFrame,
+  inspectInstance,
+  lockViewOf,
+  partOfComponentSentence,
+  createOpenPassages,
   useInlineEditing,
+  type OpenPassages,
   useNoticeQueue,
+  userPreferenceStore,
+  type BuilderShellProps,
+  type ComponentVerbsHost,
+  type TurnIntoChoice,
   type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
+  useCurrentUserId,
+  useDocumentLocale,
   usePluginClientConfig,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
 // and sonner keeps its queue in module state, so a toast published into another
 // bundled copy would never reach it.
 import { toast } from "@nextlyhq/ui";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 
+import type { ComponentFromSelectionAction } from "../../library-contract";
+import { useEditedComponentFacts } from "../component-facts-client";
 import {
   useComponentLibrary,
   type ComponentLibraryRead,
 } from "../component-library-client";
+import type { ComponentActionRequest } from "../ComponentActionPrompt";
+import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
-import { useMayCreatePattern } from "../pattern-capability-client";
+import {
+  useMayCreateComponent,
+  useMayCreatePattern,
+  useMayUpdatePattern,
+} from "../pattern-capability-client";
+import { useEditedComponentVariants } from "../variant-use-client";
 
+import { useRestorableEditorState } from "./restore-as-edit";
+import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
-
-/**
- * Put the core blocks in the BROWSER's registry.
- *
- * The plugin registers them during its own setup, which runs in the server
- * process. The engine's registry is module state, so the copy loaded into the
- * admin's client bundle is a different one and starts empty — and everything
- * the editor asks flows through it: `allBlocks` fills the inserter,
- * `registryNestingSource` decides what a position accepts, and the renderer
- * resolves a node's type to something it can draw.
- *
- * Registering once, here, rather than handing each of those its own list is
- * what keeps them agreeing. Given separate lists, the palette could offer a
- * block the renderer cannot draw and the nesting rule has never heard of — and
- * an empty registry fails SILENTLY in the permissive direction, because a block
- * nobody has heard of declares no parent and is therefore allowed everywhere.
- *
- * Filtered by `hasBlock` because registration refuses a redefinition, and this
- * runs again on every hot reload and every remount of the editor.
- */
-function ensureCoreBlocksRegistered(): void {
-  const missing = coreBlocks.filter(block => !hasBlock(block.name));
-  if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
-}
 
 /**
  * What to tell the author when an inline edit did not save, or `null` when
@@ -87,6 +90,8 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
   if (outcome.status === "discarded")
     return "That block changed while you were editing it, so your text was not saved.";
   if (outcome.status !== "refused") return null;
+  if (outcome.reason === "no-longer-editable")
+    return "That block can't be edited any more, so your text was not saved. It is still on screen \u2014 copy what you need, then press Escape.";
   return outcome.reason === "moved-on"
     ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
     : "Your text could not be saved into this page. Shortening it may help.";
@@ -113,7 +118,7 @@ type SavePatternVerb = {
  * editor they would be three things to keep in step; here the order is the
  * function body.
  */
-function useSavePatternVerb(
+export function useSavePatternVerb(
   editor: { document: BlockDocument },
   inline: { commit: () => InlineEditOutcome }
 ): SavePatternVerb {
@@ -144,8 +149,11 @@ function useSavePatternVerb(
      */
     const finished = finishInlineEdit(inline, editor.document);
     if (!finished.mayClose) return;
-    const active = window.document.activeElement;
-    setOpenedFrom(active instanceof HTMLElement ? active : null);
+    // Read through any focused frame, and classified by node kind: a control
+    // inside a canvas mounted in an iframe is that window's element, and from
+    // here focus on it reads only as the iframe around it.
+    const active = deepActiveElement(window.document);
+    setOpenedFrom(isHTMLElement(active) ? active : null);
     setDocument(finished.document);
   }, [editor.document, inline]);
 
@@ -159,20 +167,227 @@ function useSavePatternVerb(
    * detached node does nothing and leaves the author on the body, at the top of
    * the page — so the fallback is the editor itself.
    *
-   * The canvas REGION rather than the canvas root: the root is a plain div with
-   * no tabindex, so focusing it does nothing, while the region the shell wraps
-   * it in is `tabIndex={0}` because a keyboard author has to be able to scroll
-   * the page. Found by walking up from the root rather than by its label, which
-   * is display copy.
+   * A canvas in a frame is found through the frame: its root is in the
+   * frame's document, where the editor's own holds no canvas, and the frame
+   * element is what takes focus into the page.
+   *
+   * A canvas sharing the editor's document is found by its REGION rather than
+   * its root: the root is a plain div with no tabindex, so focusing it does
+   * nothing, while the region the shell wraps it in is `tabIndex={0}` because
+   * a keyboard author has to be able to scroll the page. Found by walking up
+   * from the root rather than by its label, which is display copy.
    */
+  const { frame } = useCanvasFrame();
   const returnFocusTo = useCallback((): HTMLElement | null => {
     if (openedFrom?.isConnected === true) return openedFrom;
+    if (frame !== null) return frame;
     const root = window.document.querySelector(`.${CANVAS_ROOT_CLASS}`);
     const region = root?.closest<HTMLElement>("[tabindex]") ?? null;
     return region;
-  }, [openedFrom]);
+  }, [openedFrom, frame]);
 
   return { document, returnFocusTo, open, close };
+}
+
+/** What {@link useMakeComponentVerb} returns, handed on as `makeComponent`. */
+type MakeComponentVerb = {
+  /** What the author asked for, or `null` while no form is up. */
+  readonly request: {
+    readonly action: ComposeAction;
+    readonly document: BlockDocument;
+    /** For "Turn into component…": which ways are open. */
+    readonly choice?: TurnIntoChoice;
+  } | null;
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: (action: ComposeAction, choice?: TurnIntoChoice) => void;
+  readonly close: () => void;
+  /** The verbs as the shared verb chain takes them, with the author's grant. */
+  readonly verbs: ComponentVerbsHost;
+};
+
+/** Every composition verb whose form the editor raises. */
+type ComposeAction =
+  | ComponentFromSelectionAction
+  | ComponentActionRequest["action"];
+
+/**
+ * Raising a composition form: the same gesture as the pattern form's (the
+ * open passage committed first, the opener remembered), plus which verb was
+ * asked for.
+ */
+function useMakeComponentVerb(
+  editor: { document: BlockDocument },
+  inline: { commit: () => InlineEditOutcome },
+  definitions: DefinitionsById
+): MakeComponentVerb {
+  const gesture = useSavePatternVerb(editor, inline);
+  const [action, setAction] = useState<{
+    readonly verb: ComposeAction;
+    readonly choice?: TurnIntoChoice;
+  }>({ verb: "convert" });
+  const openGesture = gesture.open;
+  const open = useCallback(
+    (next: ComposeAction, choice?: TurnIntoChoice) => {
+      setAction(choice === undefined ? { verb: next } : { verb: next, choice });
+      openGesture();
+    },
+    [openGesture]
+  );
+  const request = useMemo(
+    () =>
+      gesture.document === null
+        ? null
+        : {
+            action: action.verb,
+            document: gesture.document,
+            ...(action.choice === undefined ? {} : { choice: action.choice }),
+          },
+    [action, gesture.document]
+  );
+  const mayCreate = useMayCreateComponent();
+  const mayUpdatePattern = useMayUpdatePattern();
+  const verbs = useMemo(
+    () => ({
+      mayCreate,
+      mayUpdatePattern,
+      definitions,
+      // One form for both ways, opening on replacing the blocks unless only
+      // keeping them is open.
+      onTurnIntoComponent: (choice: TurnIntoChoice) =>
+        open(
+          choice.replaceRefused === undefined ? "convert" : "save-as",
+          choice
+        ),
+      onDetachComponent: () => open("detach"),
+      onDuplicateComponent: () => open("duplicate"),
+      onUpdatePattern: () => open("update-pattern"),
+    }),
+    [mayCreate, mayUpdatePattern, definitions, open]
+  );
+  return {
+    request,
+    returnFocusTo: gesture.returnFocusTo,
+    open,
+    close: gesture.close,
+    verbs,
+  };
+}
+
+/** Open a component alone, from a placement when one is named. */
+type OpenComponent = (componentId: string, nodeId?: string) => void;
+
+/**
+ * The toast's options after a double-click on a placement's own content: an
+ * "Edit component" action opening that component from this placement, since
+ * the rest of its content is edited there. Nothing for an author who may not
+ * edit components, where `open` is undefined.
+ */
+export function partOfToastOptions(
+  inspection: { readonly componentId: string; readonly nodeId: string },
+  open: OpenComponent | undefined
+): { action?: { label: string; onClick: () => void } } {
+  if (open === undefined) return {};
+  return {
+    action: {
+      label: "Edit component",
+      onClick: () => open(inspection.componentId, inspection.nodeId),
+    },
+  };
+}
+
+/**
+ * The component opener the "Part of" toast offers. The view that builds it is
+ * made after the mount, from what the mount returns, so it is handed over by
+ * `offerEditComponent` rather than passed in.
+ */
+function useComponentOpener(): {
+  openComponent: RefObject<OpenComponent | undefined>;
+  offerEditComponent: (open: OpenComponent | undefined) => void;
+} {
+  const openComponent = useRef<OpenComponent | undefined>(undefined);
+  const offerEditComponent = useCallback((open: OpenComponent | undefined) => {
+    openComponent.current = open;
+  }, []);
+  return { openComponent, offerEditComponent };
+}
+
+/**
+ * What the canvas's inline editing tells the author: an edit that did not
+ * save, and the component a clicked part of a placement belongs to.
+ */
+function useInlineNotices(
+  editor: EditorState,
+  componentLibrary: ComponentLibraryRead
+): {
+  announce: (outcome: InlineEditOutcome) => void;
+  partOf: (placementId: string, heldExposureId?: string) => void;
+  offerEditComponent: (open: OpenComponent | undefined) => void;
+} {
+  const { openComponent, offerEditComponent } = useComponentOpener();
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  /*
+   * A double-click on text a component does not expose selects the placement
+   * (the hook does that) and says whose the text is, with the variant, so the
+   * gesture is never met with nothing. Read against the same library the
+   * canvas draws with. A toast rather than the builder's notice queue, which
+   * holds failures: this is information, and it fades.
+   */
+  const partOf = useCallback(
+    (placementId: string, heldExposureId?: string) => {
+      // With the editor's lock view, so a field a lock the component sets
+      // holds is said in the reason the panel shows for its row.
+      const inspection = inspectInstance(
+        editor.document,
+        placementId,
+        componentLibrary.definitions,
+        componentLibrary.components,
+        lockViewOf(editor)
+      );
+      if (inspection !== null) {
+        toast.info(
+          partOfComponentSentence(inspection, heldExposureId),
+          // Read when the toast is raised, so the opener the view gave last
+          // is the one offered.
+          partOfToastOptions(inspection, openComponent.current)
+        );
+      }
+    },
+    [editor, componentLibrary, openComponent]
+  );
+  return { announce, partOf, offerEditComponent };
+}
+
+/**
+ * What the editor asks the server about the author and the document as it
+ * mounts: whether the author may save a pattern, and, for a component, what
+ * its live definition holds and how many documents place it, and how many
+ * placements chose each of its variants, which its own document cannot say
+ * (nothing for a page).
+ */
+function useServerReads(initialDocument: BlockDocument): {
+  readonly mayCreatePattern: boolean;
+  readonly componentFacts: ComponentFieldsHost | undefined;
+  readonly componentVariants: ComponentVariantsHost | undefined;
+} {
+  return {
+    mayCreatePattern: useMayCreatePattern(),
+    componentFacts: useEditedComponentFacts(initialDocument),
+    componentVariants: useEditedComponentVariants(initialDocument),
+  };
 }
 
 /**
@@ -184,17 +399,28 @@ function useSavePatternVerb(
 export function useEditorMount(
   initialValue: unknown,
   /** The kinds the field accepts, so a seeded document is one it will take. */
-  kinds: readonly DocumentKind[] | undefined
+  kinds: readonly DocumentKind[] | undefined,
+  /**
+   * The field's value as last loaded or saved, which locks keep against;
+   * undefined for an entry never saved.
+   */
+  savedValue?: unknown
 ): EditorMount {
-  // Before anything reads the registry. Inside the component that mounts the
-  // editor rather than at module scope: this file is imported by the field
-  // control, which every entry form holding a blocks field renders whether or
-  // not the editor is ever opened.
-  ensureCoreBlocksRegistered();
+  // The core blocks and every block a plugin contributed, before anything
+  // reads the registry. Inside the component that mounts the editor rather
+  // than at module scope: this file is imported by the field control, which
+  // every entry form holding a blocks field renders whether or not the editor
+  // is ever opened.
+  ensureEditorBlocksRegistered();
 
   const initialDocument = useMemo(
     () => documentFrom(initialValue, kinds),
     [initialValue, kinds]
+  );
+  const stored = useMemo(
+    () =>
+      savedValue === undefined ? undefined : documentFrom(savedValue, kinds),
+    [savedValue, kinds]
   );
   const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
   /*
@@ -227,15 +453,36 @@ export function useEditorMount(
    * raises into it from here.
    */
   const notices = useNoticeQueue();
-  const editor = useEditorState({
-    initialDocument,
-    limits: documentLimits,
-    // The SAME map the canvas draws with, so an edit is refused when the page
-    // would no longer compose with it in — every surface reaches the page
-    // through this apply, and this is the one place the reason is known.
-    definitions: componentLibrary.definitions,
-    onRefused: refusal => notices.raise(refusal.sentence),
-  });
+  // With a recovery point's restore as one edit, so the author can undo it.
+  const editor = useRestorableEditorState(
+    {
+      initialDocument,
+      limits: documentLimits,
+      // The SAME map the canvas draws with, so an edit is refused when the page
+      // would no longer compose with it in — every surface reaches the page
+      // through this apply, and this is the one place the reason is known.
+      definitions: componentLibrary.definitions,
+      onRefused: refusal => notices.raise(refusal.sentence),
+      // A lock refusal, said the same way: the author reads why, in words.
+      onLockRefused: refusal => notices.raise(refusal.sentence),
+      // A block a component locks is refused naming the component, as the
+      // panel's held row names it, from the library the canvas draws with.
+      componentName: id =>
+        componentLibrary.components.find(component => component.id === id)
+          ?.title,
+      // What the next save judges locks against, so the editor refuses exactly
+      // what that save would.
+      stored,
+      // An edit that would put a block where it may not go is refused by the op
+      // store whichever surface asked for it, so the author is told why here
+      // rather than seeing the edit silently not happen.
+      onPlacementRefused: refusal => notices.raise(placementSentence(refusal)),
+    },
+    kinds
+  );
+  // A shared style change saved while this editor is open is a step of its
+  // history, so the editor connects the history to the style writers.
+  useConnectStyleHistory(editor.recordStep);
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
@@ -247,22 +494,15 @@ export function useEditorMount(
    * keeps its node classes recognisable, and this package is already on the
    * admin side of that line.
    */
-  /*
-   * ONE place the author is told about an inline edit that did not save.
-   *
-   * Passed to the hook rather than read from what `commit` returns here,
-   * because most edits do not end by this component calling `commit`. Leaving
-   * the passage ends one; so does opening another, and so does this canvas
-   * unmounting. The outcome that most needs saying — a passage whose block was
-   * deleted or locked while the author typed into it — is reached almost
-   * entirely by the first of those, so reporting from the return value alone
-   * said nothing on the common path.
-   */
-  const announce = useCallback((outcome: InlineEditOutcome) => {
-    const problem = inlineEditProblem(outcome);
-    if (problem !== null) toast.error(problem);
-  }, []);
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
+  const { announce, partOf, offerEditComponent } = useInlineNotices(
+    editor,
+    componentLibrary
+  );
+  const { inline, passages, locale } = useInlineAndInspector(
+    editor,
+    announce,
+    partOf
+  );
 
   // Whether the save-as-pattern form is up. A boolean here rather than the form
   // itself, because the verb that raises it belongs to the shared chain — the
@@ -277,7 +517,22 @@ export function useEditorMount(
    * list, so the answer has to exist before any of them draws — and asking in
    * three places would be three requests answering one question.
    */
-  const mayCreatePattern = useMayCreatePattern();
+  const { mayCreatePattern, componentFacts, componentVariants } =
+    useServerReads(initialDocument);
+  // The make-component verbs, and whether this author holds their grants.
+  const makeComponent = useMakeComponentVerb(
+    editor,
+    inline,
+    componentLibrary.definitions
+  );
+  /*
+   * Where the shell keeps this author's panel, device and zoom: under their
+   * own id, so two authors of one browser each get their own. While no one is
+   * known it keeps nothing; the shell moves to the author's store once their
+   * id arrives.
+   */
+  const userId = useCurrentUserId();
+  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
 
   return {
     initialDocument,
@@ -287,8 +542,17 @@ export function useEditorMount(
     notices,
     editor,
     inline,
+    passages,
+    locale,
     savePattern,
     mayCreatePattern,
+    makeComponent,
+    componentVerbs: makeComponent.verbs,
+    preferenceStore,
+    userId,
+    componentFacts,
+    componentVariants,
+    offerEditComponent,
   };
 }
 
@@ -300,7 +564,63 @@ export type EditorMount = {
   componentLibrary: ComponentLibraryRead;
   notices: NoticeQueue;
   editor: EditorState;
+  /** The inspector's open passages; see `createOpenPassages`. */
+  passages: OpenPassages;
+  /** The language being edited, by code, when the document has one. */
+  locale: string | undefined;
   inline: UseInlineEditingResult;
   savePattern: SavePatternVerb;
   mayCreatePattern: boolean;
+  makeComponent: MakeComponentVerb;
+  /** The make-component verbs as the shared verb chain takes them. */
+  componentVerbs: ComponentVerbsHost;
+  /** Where the shell keeps the signed-in author's preferences. */
+  preferenceStore: NonNullable<BuilderShellProps["store"]>;
+  /** The signed-in author, whose recent pages the title switcher shows. */
+  userId: string | null;
+  /** What the inspector is told about the component being edited, if any. */
+  componentFacts: ComponentFieldsHost | undefined;
+  /** What the variants section is told about the component, if any. */
+  componentVariants: ComponentVariantsHost | undefined;
+  /** Give the "Part of" toast the opener its Edit component action calls. */
+  offerEditComponent: (open: OpenComponent | undefined) => void;
 };
+
+/**
+ * A placement refusal as the author reads it: the engine's wording, which the
+ * server uses for the same refusal on a save, with the editor's block labels.
+ */
+function placementSentence(refusal: LocatedPlacementBreak): string {
+  return placementRefusalMessage(refusal.verdict, {
+    labelOf: type => blockLabelFrom(type, getBlock(type)),
+  });
+}
+
+/**
+ * What the canvas's inline editing and the inspector share:
+ * - the registry the inspector's rich-text fields hold an open passage in,
+ *   lent to the inline editing, whose commit finishes them before a save, and
+ *   to the inspector; one per mounted editor;
+ * - the language being edited, which the inspector's relation searches read
+ *   titles in.
+ */
+function useInlineAndInspector(
+  editor: EditorState,
+  announce: (outcome: InlineEditOutcome) => void,
+  partOf: (placementId: string, heldExposureId?: string) => void
+): {
+  inline: UseInlineEditingResult;
+  passages: OpenPassages;
+  locale: string | undefined;
+} {
+  const [passages] = useState(createOpenPassages);
+  const locale = useDocumentLocale()?.code ?? undefined;
+  const inline = useInlineEditing(
+    editor,
+    loadInlineRichTextEditor,
+    announce,
+    partOf,
+    passages
+  );
+  return { inline, passages, locale };
+}

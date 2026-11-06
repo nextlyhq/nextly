@@ -158,18 +158,73 @@ implied by the render context. A binding naming `single` without a key resolves
 to nothing at read time, so the format rejects it at the point where the slug
 can still be supplied.
 
-`fallback` is what renders when the path resolves to nothing, and it stays in
-`props` as the literal shown if the binding is removed.
+`fallback` is what renders when the bound value is empty or the binding cannot
+be used. It must be a valid value of the prop. It is separate from `props`: the
+prop keeps its own value there, which renders when the binding cannot be used
+and has no valid fallback, and which stays when the binding is removed.
 
-> **Bindings are reserved, not yet resolved.** The format accepts and validates
-> them, and the shape above is frozen. Nothing resolves them today: the renderer
-> passes `props` through unchanged, so a bound prop renders its literal `props`
-> value for every entry rather than the bound field.
->
-> That is safe in itself — the literal is the documented fallback, so a page
-> shows stale content rather than nothing — but a generator that writes `$bind`
-> expecting it to take effect will produce pages that never update. Write the
-> value you want into `props` until resolution ships.
+#### How a published page resolves bindings
+
+Before blocks render, one pass fills each bound prop with its source's value,
+so a block receives an ordinary prop and never sees the binding. Pass the
+sources to `PageRenderer` as `bindings`. A route made with `createBlocksPage`,
+`createPublicBlocksPage` or a Single's page factory reads them for you: the
+entry, each Single and the site settings the page binds, each through the
+route's public reader at one claim on the page's query budget, and the field
+shapes each binding is checked against. A collection list hands each item to
+its children. A binding to a source nobody read renders its fallback.
+
+- **Sources.** `entry` is the entry the page shows, `item` the entry a
+  collection list is drawing, `single` the Single named by `sourceKey`, and
+  `site` the public site settings (`applicationName`, `siteUrl`, `logoUrl`,
+  `timezone`).
+- **Public access.** Every source is read as an anonymous visitor reads it:
+  published content only, and only fields the public may read. The route reads
+  the entry again for this, rather than using the row it resolved, so a field
+  the public may not read renders the fallback, and a draft preview shows the
+  published values. The renderer never takes a value from `context.entry`.
+- **One hop.** A path follows at most one to-one relation (`author.name`). The
+  route reads the related entry by id through the public reader, at one more
+  claim. A path through a field that holds a list, or past a second relation,
+  renders the fallback. A relation on a list item's binding is not followed
+  yet: it renders the fallback.
+- **Empty values.** Absent, `null`, `""`, an empty list and rich text with
+  nothing in it render the fallback, or the prop's own value when there is no
+  fallback. `false` and `0` are values.
+- **Formats.** `date` (a preset such as `{ "dateStyle": "long" }`, or parts
+  such as `month` and `day`), `number` and `currency` (with an ISO 4217
+  `currency`) format in the page's language, or English when the page has
+  none; `options.locale` overrides it. A format turns a value into text, so it
+  applies to text props only. A date picked as a day keeps its day in every
+  time zone, and a month shows its month and year. A time of day picked
+  without a date shows only its time, in UTC, never its placeholder date. A
+  date-time is shown in the route's `timeZone`, else the site's time zone,
+  else UTC. `relativeTime` and `list` are not applied yet: the value shows as it
+  is when it fits the prop, and the fallback otherwise.
+- **Dates keep their machine value.** A block receives a `bound` argument
+  naming each bound prop. For a date, `bound.<prop>` is
+  `{ kind: "date", datetime }`, and the core text blocks wrap the text in
+  `<time datetime>`.
+
+#### Bindings that break a rule
+
+Every binding is checked before its value is used, whether or not it was
+checked when it was saved, and none fails the page:
+
+- a binding to a prop the block does not have fills nothing;
+- a path past one relation or through a list, a field the source does not
+  have, a field whose type does not fit the prop (a number reaching a text prop
+  without a format), and a format a formatter would refuse (an unknown currency,
+  an invalid locale or option) each render the fallback;
+- a fallback that is not a valid value of the prop is ignored, and the prop's
+  own value renders.
+
+Each one is reported to `onBindingIssues` with a code from
+`BINDING_ISSUE_CODES`, never with the value its source holds. The routes log
+one warning per report, naming the page.
+
+Image bindings are checked but not filled yet: a bound image keeps its own
+value.
 
 ### Visibility
 
@@ -244,11 +299,11 @@ The frozen surface is:
    locale overlays, the component-instance node shape, and the document limits.
 
    The freeze is over the **stored shape**, not over runtime behaviour. `Binding`
-   and `NodeVisibility.conditions` are frozen and reserved while the code that
-   acts on them is not written yet (see the notes in those sections). That is the
-   intended order: a document written against a frozen shape stays valid when
-   resolution arrives, whereas shipping a shape that later has to change would
-   invalidate everything already stored.
+   is resolved on published pages, and `NodeVisibility.conditions` is frozen and
+   reserved while the code that acts on it is not written yet (see the notes in
+   those sections). That is the intended order: a document written against a
+   frozen shape stays valid when resolution arrives, whereas shipping a shape
+   that later has to change would invalidate everything already stored.
 
 2. **The typed-style envelope** — the states × breakpoints structure and the
    token-reference convention. The style _property catalog_ inside it is

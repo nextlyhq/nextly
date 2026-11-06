@@ -160,6 +160,7 @@ describe.each(getConfiguredTestDialects())(
       const result = await update(t, named, {
         secret: "changed",
         note: "second",
+        _overwrite: true,
       });
 
       // MySQL finds the entry by the other case; the write goes through, and
@@ -178,11 +179,14 @@ describe.each(getConfiguredTestDialects())(
       protectedId = await make(t, "kept");
       await make(t, "free");
 
-      await update(t, protectedId, { secret: "changed" });
+      await update(t, protectedId, { secret: "changed", _overwrite: true });
       expect((await stored(t, "kept")).secret).toBe("original");
 
       const free = await stored(t, "free");
-      const result = await update(t, free.id, { secret: "changed" });
+      const result = await update(t, free.id, {
+        secret: "changed",
+        _overwrite: true,
+      });
       expect(result.success).toBe(true);
       expect((await stored(t, "free")).secret).toBe("changed");
     });
@@ -195,6 +199,7 @@ describe.each(getConfiguredTestDialects())(
         note: "second",
         id: "forged-id",
         createdAt: "2000-01-01T00:00:00.000Z",
+        _overwrite: true,
       });
 
       expect(result.success).toBe(true);

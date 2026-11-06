@@ -3,7 +3,14 @@
  * it: the API-key scope it hides, the hooks it reaches and the field rules it
  * reaches.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// A call made as no person and no user is a visitor, whose field rules are
+// handed what the Public role grants: nothing here, read with no database.
+vi.mock("../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../services/lib/permissions")>()),
+  listPublicGrants: async () => [],
+}));
 
 import { HookRegistry } from "../hooks/hook-registry";
 import { makePrincipal } from "../plugins/principals/principal";

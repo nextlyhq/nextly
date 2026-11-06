@@ -1,17 +1,14 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
+import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
-import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
 
 /**
- * `builder-chrome.css` keys the empty-container affordance off two markers —
+ * The canvas's stylesheet keys the empty-container affordance off markers —
  * `SLOTS_ATTRIBUTE` from `@nextlyhq/blocks-react` and this package's own
- * `EMPTY_ELEMENTS_ATTRIBUTE` — and a stylesheet has no module system, so it
- * cannot import either constant. Its selectors spell them out as literal
+ * chrome and canvas classes — and a stylesheet has no module system, so it
+ * cannot import those constants. Its selectors spell them out as literal
  * strings instead, which makes the CSS and the constants two independent
  * copies of one spelling: correct only for as long as nobody renames either
  * constant, and a rename is silent when it happens. TypeScript still compiles
@@ -26,6 +23,11 @@ import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
  * test's expectation with it, and only a stylesheet that actually fell out of
  * step fails.
  *
+ * The rules on the page itself are in the sheet the canvas frame carries
+ * (`canvas-frame-sheet.ts`), since the editor's own stylesheet does not reach
+ * a page drawn in a frame. That sheet is a string built from the constants,
+ * which makes the drift harder to write, and this still holds it to them.
+ *
  * Read from the SOURCE stylesheet rather than the built one, for the same
  * reason `breakpoint-action-styles.test.ts` beside this file does: `dist` is
  * gitignored, so a check against it answers differently before and after a
@@ -33,10 +35,8 @@ import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
  *
  * @module builder-chrome-attributes.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
-);
+/** The rules applying to the page, wherever the canvas is drawn. */
+const SHEET = CANVAS_FRAME_SHEET;
 
 /**
  * One selector, whatever a formatter did to its whitespace.
@@ -80,7 +80,7 @@ function ruleFor(selector: string): RegExp {
 
 describe("the empty-container affordance is keyed off the exported constants", () => {
   it("matches the slots marker by the constant, not a retyped copy", () => {
-    expect(CHROME).toContain(`[${SLOTS_ATTRIBUTE}]`);
+    expect(SHEET).toContain(`[${SLOTS_ATTRIBUTE}]`);
   });
 
   it("draws its box for exactly the elements the appender draws a control on", () => {
@@ -103,11 +103,7 @@ describe("the empty-container affordance is keyed off the exported constants", (
      * that dropped or added an ancestor scope fails here rather than leaving
      * the appender answering a narrower question than the box it stands in for.
      */
-    expect(collapsed(CHROME)).toMatch(ruleFor(EMPTY_CONTAINER_SELECTOR));
-  });
-
-  it("guards the affordance behind the hide-preference's attribute and value, by the constant", () => {
-    expect(CHROME).toContain(`[${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]`);
+    expect(collapsed(SHEET)).toMatch(ruleFor(EMPTY_CONTAINER_SELECTOR));
   });
 
   it("finds nothing for a marker that was never written", () => {
@@ -117,7 +113,34 @@ describe("the empty-container affordance is keyed off the exported constants", (
      * something else entirely — so one needle that MUST be absent establishes
      * that the search can come out empty at all.
      */
-    expect(CHROME).not.toContain("[data-nx-nonexistent-marker]");
+    expect(SHEET).not.toContain("[data-nx-nonexistent-marker]");
+  });
+});
+
+describe("an empty container's area yields to what the block sets", () => {
+  it("gives its clickable height at no specificity, so an authored min height wins", () => {
+    /*
+     * The area's selector outranks a block's own class, so a min height on
+     * the box rule would beat the author's: an empty Section set to Full
+     * screen would stay 2.75rem tall on the canvas while the page draws it
+     * the screen's height. Held apart, under `:where()`, it applies only
+     * where the block sets none.
+     */
+    const css = collapsed(SHEET);
+    const box = new RegExp(
+      `${ruleFor(EMPTY_CONTAINER_SELECTOR).source}[^}]*\\}`
+    ).exec(css)?.[0];
+    expect(box).toBeDefined();
+    expect(box).not.toContain("min-height");
+    expect(css).toContain(
+      `:where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }`
+    );
+    // Selected, the empty block matches the selection's safeguard too, which
+    // yields the same way: choosing Full screen selects the Section.
+    expect(css).toMatch(
+      /:where\(\.nx-canvas \[data-nx-selected\]:empty\) \{ min-height: 2px; \}/
+    );
+    expect(css).not.toMatch(/\*\/ \.nx-canvas \[data-nx-selected\]:empty \{/);
   });
 });
 
@@ -136,15 +159,13 @@ describe("the canvas keeps the platform's own callout for text", () => {
      * The stylesheet is the only place the override exists, so the stylesheet
      * is where it has to be checked.
      */
-    const restored = CHROME.match(
-      /\.nx-canvas \[contenteditable\]\s*\{[^}]*\}/
-    );
+    const restored = SHEET.match(/\.nx-canvas \[contenteditable\]\s*\{[^}]*\}/);
     expect(restored).not.toBeNull();
     expect(restored?.[0]).toContain("-webkit-touch-callout: default");
 
     // And still suppressed where the editor has marked a region uneditable
     // inside an editable one, which is a block again rather than text.
-    const suppressed = CHROME.match(
+    const suppressed = SHEET.match(
       /\.nx-canvas \[contenteditable="false"\]\s*\{[^}]*\}/
     );
     expect(suppressed).not.toBeNull();

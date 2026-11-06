@@ -5,8 +5,8 @@
  * arguments the executor builds and never what the read path does with them.
  * This boots a real Nextly on in-memory SQLite: the single's code-defined read
  * rule is real, the document is real, and the refusal is observed rather than
- * restated. The derived status card is checked the same way, through the
- * decision the layout endpoint offers cards with.
+ * restated. That no card is made per Single is checked the same way, through
+ * the decision the layout endpoint offers cards with.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,7 +20,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { readAccessCaller } from "../../../api/authenticated-read";
 import { allWidgets } from "../canonical";
-import { refreshCollectionWidgets } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
 import { CONTENT_SOURCE_ID } from "../system-source-ids";
@@ -65,15 +65,15 @@ async function boot(): Promise<TestNextly> {
   });
   await t.nextly.updateSingle({
     slug: SETTINGS,
-    data: { siteName: "Acme", tagline: "Hello" },
+    data: { siteName: "Acme", tagline: "Hello", _overwrite: true },
     overrideAccess: true,
   });
   // A code rule only narrows the permission, so the editor holds read on both
   // singles and each single's read rule decides.
   await userWhoMay(t, editor.user.id, "read", [SETTINGS, PRIVATE]);
   // What the layout and query endpoints do before resolving anything: publish
-  // the sources and the cards derived from them from the live registries.
-  await refreshCollectionWidgets();
+  // the sources from the live registries.
+  await refreshContentSources();
   return t;
 }
 
@@ -129,6 +129,9 @@ describe("a single: query against a real instance", () => {
   it("refuses a reader the single's code rule refuses", async () => {
     // The security property, observed rather than restated: the read path
     // evaluates the rule, and the executor adds nothing that could get past it.
+    // The read answers the refused reader as if the Single were missing; the
+    // card fails on that answer rather than drawing it as an empty list, and
+    // the failure is the gate's own refusal, its reason kept for the log.
     current = await boot();
 
     await expect(
@@ -140,24 +143,29 @@ describe("a single: query against a real instance", () => {
         }),
         editor
       )
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      logContext: {
+        reason: expect.stringContaining(
+          `the caller may not read single "${PRIVATE}"`
+        ),
+      },
+    });
   });
 
-  it("derives no card per single, whose Singles the Content card lists, and keeps their sources", async () => {
-    // 🔴 A per-Single card was generated for every Single. Content lists them
-    // now, and a saved per-Single card converts into it, so none is derived:
-    // not on the install, and not in what the workspace payload ships. The
-    // sources stay, since Content and queries naming a Single read them.
+  it("makes no card per single, whose Singles the Content card lists, and keeps their sources", async () => {
+    // 🔴 No widget is made for a Single: not on the install, and not in what
+    // the workspace payload ships. The sources stay, since Content and queries
+    // naming a Single read them.
     current = await boot();
 
-    const generated = allWidgets()
-      .filter(widget => widget.generated === true)
-      .map(widget => widget.id);
-    expect(generated.filter(id => id.startsWith("single/"))).toEqual([]);
+    expect(
+      allWidgets().filter(widget => widget.id.startsWith("single/"))
+    ).toEqual([]);
 
     const audience = await widgetAudience(readAccessCaller(editor));
     expect(
-      audience.generated.filter(widget => widget.id.startsWith("single/"))
+      audience.visible.filter(widget => widget.id.startsWith("single/"))
     ).toEqual([]);
 
     // Where a Single shows now: the Content card's source lists the one this

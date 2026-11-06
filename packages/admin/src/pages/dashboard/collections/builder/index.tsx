@@ -23,6 +23,7 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { toSnakeName } from "@admin/lib/builder";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { startingFields } from "@admin/lib/builder/starting-field";
@@ -47,6 +48,9 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
     const singular = values.singularName.trim();
     const plural = values.pluralName?.trim() || `${singular}s`;
     const slug = values.slug?.trim() || toSnakeName(singular);
+    // The field the "How is this edited?" answer starts the collection with,
+    // sent to the server and written to ui-schema.json alike, so the two agree.
+    const fields = startingFields(values.startingFieldType ?? null);
 
     createCollection(
       {
@@ -82,11 +86,11 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         // starting-field question, which exists so a capability like the page
         // builder is offered while the collection is being shaped rather than
         // having to be recognised by name in a picker afterwards.
-        fields: startingFields(values.startingFieldType ?? null),
+        fields,
       },
       {
         onSuccess: () => {
-          // Mirror the new (field-less) collection to ui-schema.json so the
+          // Mirror the new collection to ui-schema.json so the
           // committable manifest stays in sync with the dev DB. Best-effort:
           // a file-write failure warns but never blocks navigation (the DB
           // create already succeeded). Wrapped in a void IIFE so the mutation
@@ -99,7 +103,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
                   // The names the form collected, which are not yet on `values`
                   // at create time.
                   { ...values, singularName: singular, pluralName: plural },
-                  []
+                  fields
                 )
               );
             } catch (err) {
@@ -116,9 +120,13 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
           })();
         },
         onError: err => {
-          const error = err as { message?: string };
+          // A refused address names its reason per field; the envelope's own message is only
+          // "Validation failed.", which says neither what was refused nor why.
           toast.error(
-            error?.message || "Could not create collection. Please try again."
+            apiErrorMessage(
+              err,
+              "Could not create collection. Please try again."
+            )
           );
         },
       }

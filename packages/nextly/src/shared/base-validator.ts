@@ -21,9 +21,20 @@
  */
 
 import type { FieldAccess } from "../collections/fields/types/base";
+import { isIconIdShape } from "../collections/fields/types/icon";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
+import {
+  configuredSiblingClashes,
+  siblingClashMessage,
+  type SiblingEntityKind,
+} from "../domains/schema/sibling-fields";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
+import {
+  type AddressKind,
+  judgeConfiguredAddress,
+  MAX_SLUG_LENGTH,
+} from "./address-rule";
 import { MAX_DECIMAL_PRECISION, MAX_DECIMAL_SCALE } from "./decimal-bounds";
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { SLUG_PATTERN } from "./slug-pattern";
@@ -54,33 +65,6 @@ export interface BaseValidationError {
   code: string;
 }
 
-/**
- * Parameter bundle for {@link validateSlugShared}.
- *
- * `entityLabel` is injected into error messages (e.g., "Single", "Collection").
- * `reservedSlugsSet` and `sqlKeywordsSet` are the Sets of disallowed names.
- */
-export interface SlugValidationContext {
-  /** Human label for error messages — "Single", "Collection", "Component". */
-  entityLabel: string;
-
-  /** Reserved slugs (Set for O(1) lookup). */
-  reservedSlugsSet: Set<string>;
-
-  /** SQL keywords (Set for O(1) lookup). */
-  sqlKeywordsSet: Set<string>;
-
-  /**
-   * Extra guidance for particular reserved slugs, appended to the refusal.
-   *
-   * Optional because most reservations need none: a name that has always been
-   * reserved is only ever met by somebody naming something new. A name that
-   * became reserved is met by an upgrade, where the bare refusal describes a
-   * config that worked in the previous version and says nothing about why.
-   */
-  reservedSlugNotes?: ReadonlyMap<string, string>;
-}
-
 // ============================================================
 // Shared Constants
 // ============================================================
@@ -109,6 +93,7 @@ export const VALID_FIELD_TYPES = [
   "email",
   "password",
   "code",
+  "icon",
   // Numeric types
   "number",
   // Selection types
@@ -141,7 +126,7 @@ export const VALID_FIELD_TYPES_SET: Set<string> = new Set(VALID_FIELD_TYPES);
 export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
 
 /** Default Set of SQL keywords (lowercased) for O(1) lookup. */
-export const DEFAULT_SQL_KEYWORDS_SET: Set<string> = new Set<string>(
+const DEFAULT_SQL_KEYWORDS_SET: Set<string> = new Set<string>(
   SQL_RESERVED_KEYWORDS
 );
 
@@ -167,115 +152,29 @@ export function isSQLKeyword(
 // ============================================================
 
 /**
- * Longest slug the product accepts, for every resource that becomes a table.
- *
- * Bounded well below what the databases allow rather than at it. A slug is prefixed on its way to a
- * physical name (`dc_`, `single_`, `comp_`) and a companion suffix can be appended after that, so
- * the identifier that finally reaches the engine is longer than the slug by an amount the caller
- * never sees. PostgreSQL silently TRUNCATES identifiers past 63 bytes and MySQL rejects past 64,
- * and truncation is the worse of the two: the table is created under a name that no longer matches
- * the one the caller asked about.
- *
- * Exported so the value is stated once. A route that re-declares its own bound is how an input this
- * rejects reaches the DDL anyway.
+ * Longest slug the product accepts, stated by the one address rule and
+ * re-exported here for this module's existing importers.
  */
-export const MAX_SLUG_LENGTH = 50;
+export { MAX_SLUG_LENGTH };
 
 /**
- * Validate a slug against the standard Nextly rules: required, string,
- * length 1-50, pattern-conformant, not reserved, not a SQL keyword.
+ * Validate a configured slug by the one address rule, as configuration in code
+ * is judged at import (`judgeConfiguredAddress`): the refusals configuration
+ * made before the rule, with the rest left to the start and the migrate
+ * commands, which can tell a new address from one an entity already holds.
  *
- * Pushes errors onto `errors` using shared error codes. Domain validators
- * cast their typed error array to {@link BaseValidationError}[] at the
- * call site — every domain's error code union includes the codes pushed
- * here.
+ * Pushes the rule's refusal onto `errors` under its code. Domain validators
+ * cast their typed error array to {@link BaseValidationError}[] at the call
+ * site — every domain's error code union includes the codes pushed here.
  */
 export function validateSlugShared(
   slug: unknown,
   errors: BaseValidationError[],
-  ctx: SlugValidationContext
+  kind: AddressKind
 ): void {
-  const path = "slug";
-
-  if (!slug) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug is required`,
-      code: "SLUG_REQUIRED",
-    });
-    return;
-  }
-
-  if (typeof slug !== "string") {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be a string`,
-      code: "SLUG_INVALID_TYPE",
-    });
-    return;
-  }
-
-  if (slug.length < 1) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be at least 1 character`,
-      code: "SLUG_TOO_SHORT",
-    });
-  }
-
-  if (slug.length > MAX_SLUG_LENGTH) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be at most ${MAX_SLUG_LENGTH} characters`,
-      code: "SLUG_TOO_LONG",
-    });
-  }
-
-  if (!SLUG_PATTERN.test(slug)) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must start with a lowercase letter and contain only lowercase letters, numbers, hyphens, and underscores`,
-      code: "SLUG_INVALID_FORMAT",
-    });
-  }
-
-  if (ctx.reservedSlugsSet.has(slug.toLowerCase())) {
-    const note = ctx.reservedSlugNotes?.get(slug.toLowerCase());
-    errors.push({
-      path,
-      message:
-        `${ctx.entityLabel} slug '${slug}' is reserved and cannot be used` +
-        (note === undefined ? "" : `. ${note}`),
-      code: "SLUG_RESERVED",
-    });
-  }
-
-  // a slug ending in `_locales` produces a physical table name
-  // (`dc_<slug>_locales` / `single_<slug>_locales`) that collides with the localization
-  // companion-table naming, so the schema-diff pipeline would treat the user's table as
-  // migration-owned (excluded from diff, its DROP silently blocked). Reserve the suffix.
-  // Normalize non-alphanumerics to `_` first (matching table-name generation) so a
-  // hyphenated slug like `posts-locales` → `dc_posts_locales` is caught too.
-  if (
-    typeof slug === "string" &&
-    slug
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .endsWith("_locales")
-  ) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug '${slug}' cannot end with '_locales' (reserved for localization companion tables)`,
-      code: "SLUG_RESERVED",
-    });
-  }
-
-  if (isSQLKeyword(slug, ctx.sqlKeywordsSet)) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug '${slug}' is a SQL reserved keyword. Use a different name or set 'dbName' to customize the table name`,
-      code: "SLUG_SQL_KEYWORD",
-    });
+  const refusal = judgeConfiguredAddress(kind, slug);
+  if (refusal) {
+    errors.push({ path: "slug", message: refusal.message, code: refusal.code });
   }
 }
 
@@ -285,14 +184,14 @@ export function validateSlugShared(
 
 /**
  * Validate a single field name against the standard Nextly rules:
- * required, string, pattern-conformant, not a SQL keyword, unique within
- * its level (tracked via `seenNames`).
+ * required, string, pattern-conformant, not a SQL keyword. Whether it clashes
+ * with a sibling's is the sibling rule's question, asked once for the whole
+ * entity (`validateSiblingFieldsShared`).
  */
 export function validateFieldNameShared(
   name: unknown,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
   if (!name) {
@@ -328,16 +227,28 @@ export function validateFieldNameShared(
       code: "FIELD_NAME_SQL_KEYWORD",
     });
   }
+}
 
-  const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+/**
+ * Refuse, for a `define*` call, the pairs of sibling fields the one sibling
+ * rule refuses that configuration refused before it (`configuredSiblingClashes`):
+ * no entity configured in code can already hold one. The rest wait for the
+ * start and the migrate commands, which know the definition the entity last
+ * had, so an existing pair keeps working.
+ */
+export function validateSiblingFieldsShared(
+  kind: SiblingEntityKind,
+  slug: unknown,
+  fields: unknown,
+  errors: BaseValidationError[]
+): void {
+  const entity = { kind, slug: typeof slug === "string" ? slug : "" };
+  for (const clash of configuredSiblingClashes(kind, fields)) {
     errors.push({
-      path: `${path}.name`,
-      message: `Duplicate field name '${name}' at this level`,
+      path: "fields",
+      message: siblingClashMessage(entity, clash),
       code: "FIELD_NAME_DUPLICATE",
     });
-  } else {
-    seenNames.add(nameLower);
   }
 }
 
@@ -518,6 +429,29 @@ export function validateNumberDecimalDimensionsShared(
       path: `${path}.scale`,
       message: "Decimal 'scale' cannot exceed 'precision'",
       code: "DECIMAL_SCALE_EXCEEDS_PRECISION",
+    });
+  }
+}
+
+/**
+ * Validate an icon field's `defaultValue`. The default is written into the
+ * column's DDL and onto every new entry, so a value that is not an icon id
+ * (`<set>:<name>`, see {@link isIconIdShape}) is refused at config time.
+ * Only the shape is checked: whether the set and the icon exist is answered
+ * at runtime, once icon sets are registered. Non-icon fields are ignored.
+ */
+export function validateIconDefaultShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "icon" || field.defaultValue === undefined) return;
+  if (!isIconIdShape(field.defaultValue)) {
+    errors.push({
+      path: `${path}.defaultValue`,
+      message:
+        "Icon 'defaultValue' must be an icon id of the form '<set>:<name>', for example 'lucide:star'",
+      code: "ICON_DEFAULT_INVALID",
     });
   }
 }
@@ -802,7 +736,7 @@ export const FIELD_ACCESS_KEYS = [
 
 /**
  * What every field is checked for, whatever its type and whichever entity it
- * belongs to: a usable, unique name, and its own access rules, each a function
+ * belongs to: a usable name, and its own access rules, each a function
  * or a boolean with no key a field does not have.
  *
  * Checked before the type, because a contributed type defers its own checks
@@ -813,10 +747,9 @@ export function validateFieldBasicsShared(
   field: Record<string, unknown>,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
-  validateFieldNameShared(field.name, path, errors, seenNames, sqlKeywordsSet);
+  validateFieldNameShared(field.name, path, errors, sqlKeywordsSet);
   validateAccessShared(
     field.access,
     FIELD_ACCESS_KEYS,

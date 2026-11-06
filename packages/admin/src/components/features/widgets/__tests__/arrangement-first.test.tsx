@@ -4,7 +4,7 @@
  * The declared widgets are known from the workspace payload the moment the
  * page mounts; the person's arrangement arrives with the layout read after.
  * Drawing the declared cards in the meantime, and asking for their data, drew
- * a dashboard the person may not have -- in another order, at other widths,
+ * a dashboard the person may not have -- in another order, at other sizes,
  * with cards they removed -- and then redrew it, which is the jump a reader
  * sees and the layout shift that measures it.
  */
@@ -45,30 +45,23 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
 
 const api = vi.mocked(protectedApi);
 
-/** Two data widgets, each fetching its own count. */
+/** Two declared count widgets, each card asked for by its id. */
 const branding = {
   widgets: ["posts", "orders"]
     .map(name => ({
       id: `acme/${name}`,
       title: `${name} count`,
       archetype: "metric",
-      defaultSize: "sm",
-      query: { source: `collection:${name}`, op: "count" },
+      size: { default: { w: 3, h: 3 } },
     }))
     .concat([
       {
-        // Declared at half width, so a card sized from its declaration and one
-        // sized from an arrangement that widens it ask for different rows.
+        // Declared six columns wide, so a card sized from its declaration and one
+        // sized from an arrangement that widens it are asked at different sizes.
         id: "acme/recent",
         title: "recent list",
         archetype: "list",
-        defaultSize: "lg",
-        query: {
-          source: "collection:recent",
-          op: "list",
-          select: ["title"],
-          limit: 8,
-        },
+        size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
       } as never,
     ]),
 } as unknown as AdminBranding;
@@ -76,12 +69,10 @@ const branding = {
 /** This person's arrangement: only the orders card. */
 const arrangement: DashboardLayoutResponse = {
   placements: [
-    { id: "p-orders", widgetId: "acme/orders", width: "third", removed: false },
+    { id: "p-orders", widgetId: "acme/orders", w: 4, h: 3, removed: false },
   ],
   widgets: {
     "acme/orders": {
-      allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-      defaultWidth: "third",
       allowsSeveral: false,
     },
   },
@@ -89,15 +80,17 @@ const arrangement: DashboardLayoutResponse = {
   defaultPlacements: [],
   version: 2,
   source: "own",
+  // A row of dismissals at most: the reader still follows the default.
+  arranged: false,
   scope: "tok",
   audience: "aud",
 };
 
-/** The sources every widget query asked for so far, across every batch. */
-function askedSources(): string[] {
+/** The widgets every card asked for so far belongs to, across every batch. */
+function askedWidgets(): string[] {
   return api.post.mock.calls.flatMap(([, body]) =>
-    ((body as { queries?: { source: string }[] }).queries ?? []).map(
-      query => query.source
+    ((body as { queries?: { widget: string }[] }).queries ?? []).map(
+      query => query.widget
     )
   );
 }
@@ -161,7 +154,7 @@ describe("before the arrangement is known", () => {
     // The declared posts card is not in this arrangement: never drawn, never
     // asked about.
     expect(screen.queryByTestId("widget-cell-acme/posts")).toBeNull();
-    expect(askedSources()).toEqual(["collection:orders"]);
+    expect(askedWidgets()).toEqual(["acme/orders"]);
     expect(
       screen.queryByRole("status", { name: /loading your dashboard/i })
     ).toBeNull();
@@ -181,7 +174,7 @@ describe("a return visit in the same session", () => {
     expect(
       screen.queryByRole("status", { name: /loading your dashboard/i })
     ).toBeNull();
-    await waitFor(() => expect(askedSources()).toEqual(["collection:orders"]));
+    await waitFor(() => expect(askedWidgets()).toEqual(["acme/orders"]));
   });
 });
 
@@ -198,11 +191,11 @@ describe("when the arrangement cannot be read", () => {
 
 describe("the first request a card makes", () => {
   it("is sized for the width its arrangement gives it, not its declared one", async () => {
-    // On 680 px a half card is 328 px wide, small: three rows, asked as four. This person's
-    // arrangement draws the same card full width, 680 px, medium: eight rows, asked as nine.
+    // As declared, the card is six columns by three rows. This person's arrangement draws it
+    // twelve by six, and its widget's `load` is handed the size it is drawn at.
     // 🔴 A grid that sized from the declaration while the arrangement was on its way would ask
-    // four first. The declared fallback (a FAILED read) cannot tell the two apart, so this is
-    // the case that does.
+    // at six by three first. The declared fallback (a FAILED read) cannot tell the two apart, so
+    // this is the case that does.
     unstubDashboardWidth();
     stubDashboardWidth(680);
     api.get.mockResolvedValue({
@@ -211,14 +204,13 @@ describe("the first request a card makes", () => {
         {
           id: "p-recent",
           widgetId: "acme/recent",
-          width: "full",
+          w: 12,
+          h: 6,
           removed: false,
         },
       ],
       widgets: {
         "acme/recent": {
-          allowedWidths: ["third", "half", "twoThirds", "full"],
-          defaultWidth: "half",
           allowsSeveral: false,
         },
       },
@@ -236,8 +228,10 @@ describe("the first request a card makes", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     const [, firstBody] = api.post.mock.calls[0];
     const first = (
-      firstBody as { queries: { source: string; limit?: number }[] }
-    ).queries.find(query => query.source === "collection:recent");
-    expect(first?.limit).toBe(9);
+      firstBody as {
+        queries: { widget: string; size?: { w: number; h: number } }[];
+      }
+    ).queries.find(query => query.widget === "acme/recent");
+    expect(first?.size).toMatchObject({ w: 12, h: 6 });
   });
 });

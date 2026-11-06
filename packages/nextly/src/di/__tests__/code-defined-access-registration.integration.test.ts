@@ -2,8 +2,8 @@
  * Code-defined `access` blocks reach the RBAC registry whatever else the config
  * contains.
  *
- * `checkAccess` resolves them from an in-memory registry, and a slug missing
- * from it falls through to the caller's stored permissions. That is the
+ * An access check resolves them from an in-memory registry, and a slug
+ * missing from it falls through to the caller's stored permissions. That is the
  * dangerous direction: an unregistered rule does not fail closed, it stops
  * applying — so a `read: () => false` written to restrict a Single silently
  * stops restricting.
@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, defineSingle, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -55,8 +56,9 @@ describe("code-defined access registration (integration)", () => {
 
   it("applies that Single's rule rather than falling through to stored permissions", async () => {
     // Registration is the mechanism; this is the consequence, and it is the half
-    // worth pinning. A user with no stored grants is REFUSED by the rule, and a
-    // rule that never registered would let `hasPermission` answer instead.
+    // worth pinning. A user who holds the stored read grant is REFUSED by the
+    // rule, and a rule that never registered would let `hasPermission` answer
+    // instead, and allow.
     current = await createTestNextly({
       singles: [
         defineSingle({
@@ -71,14 +73,16 @@ describe("code-defined access registration (integration)", () => {
         }),
       ],
     });
-    const rbac = current.getService(
-      "rbacAccessControlService"
-    ) as RBACAccessControlService;
+    await userWhoMay(current, "user-1", "read", [
+      "preferences",
+      "public-notes",
+    ]);
+    const access = current.nextly.access;
 
     // The positive control: the permissive rule is reached and answers true for
     // the same user, so a blanket denial cannot explain the refusal below.
     await expect(
-      rbac.checkAccess({
+      access.check({
         userId: "user-1",
         operation: "read",
         resource: "public-notes",
@@ -86,7 +90,7 @@ describe("code-defined access registration (integration)", () => {
     ).resolves.toBe(true);
 
     await expect(
-      rbac.checkAccess({
+      access.check({
         userId: "user-1",
         operation: "read",
         resource: "preferences",

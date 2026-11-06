@@ -53,6 +53,39 @@ describe("buildMigrationStatuses", () => {
   });
 });
 
+describe("an applied file's checksum", () => {
+  const SUM = "a".repeat(64);
+  const file = {
+    name: "20260101_000000_000_init",
+    filePath: "/x/20260101_000000_000_init.sql",
+    checksum: SUM,
+    collections: [],
+    timestamp: "20260101_000000",
+  };
+  const applied = (sha256: string) => ({
+    id: "e1",
+    filename: "20260101_000000_000_init.sql",
+    sha256,
+    status: "applied" as const,
+    appliedBy: null,
+    durationMs: 5,
+    errorJson: null,
+    appliedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+
+  it.each([
+    ["a matching checksum", SUM, "applied"],
+    ["a different recorded checksum", "b".repeat(64), "applied (modified)"],
+    // `ledgerRecords` reads a missing checksum as "".
+    ["no checksum recorded", "", "applied"],
+    ["the text an older backfill wrote", "null", "applied"],
+  ] as const)("with %s reads %s", (_name, sha256, status) => {
+    const [only] = buildMigrationStatuses([file], [applied(sha256)]);
+    expect(only?.status).toBe(status);
+    expect(only?.checksumMismatch).toBe(status === "applied (modified)");
+  });
+});
+
 describe("the order statuses are listed in", () => {
   it("lists a plugin's modules in the order they run, after the app's files", () => {
     // `10_more` runs before `1_init`: modules run in `compareModuleNames`
@@ -197,7 +230,10 @@ describe("ledgerRecords", () => {
       durationMs: null,
       note: null,
       statementsExecuted: null,
-      supersededEventIds: null,
+      // A rollback retires the applied row it undoes, as every command that
+      // records one writes it; a `rolled_back` row retiring nothing is an
+      // attempt `--failed-cleanup` cleared.
+      supersededEventIds: status === "rolled_back" ? ["the-applied-row"] : null,
       supersededBy: null,
     };
   }
@@ -245,6 +281,50 @@ describe("ledgerRecords", () => {
       ["0001_a.sql", false],
       ["0002_b.sql", true],
     ]);
+  });
+
+  it("lists an applied app migration as applied when a later attempt failed or stopped", () => {
+    // Its state is its latest outcome, as `nextly migrate` reads it.
+    const records = ledgerRecords([
+      event("0001_a.sql", "applied", 1000),
+      event("0001_a.sql", "failed", 2000),
+      event("0002_b.sql", "applied", 3000),
+      event("0002_b.sql", "in_progress", 4000),
+    ]);
+    expect(records.map(r => [r.filename, r.status])).toEqual([
+      ["0001_a.sql", "applied"],
+      ["0002_b.sql", "applied"],
+    ]);
+  });
+
+  it("lists no failure for a rollback that ended with nothing applied", () => {
+    // Resolved: it changed nothing, and the migration is still applied. An
+    // older failure it came after is resolved too, so it is not reported
+    // either.
+    const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
+    const rollback = (status: SchemaEventRow["status"], at: number) => ({
+      ...event("0001_a.sql", status, at),
+      eventType: "file_rollback" as const,
+    });
+    expect(
+      failedRollbacksSinceApply(applied, [
+        rollback("failed", 2000),
+        rollback("nothing_applied", 3000),
+      ])
+    ).toEqual([]);
+  });
+
+  it("lists a rollback that recorded no outcome as stopped and possibly partial", () => {
+    const applied = ledgerRecords([event("0001_a.sql", "applied", 1000)]);
+    const failures = failedRollbacksSinceApply(applied, [
+      {
+        ...event("0001_a.sql", "in_progress", 2000),
+        eventType: "file_rollback" as const,
+      },
+    ]);
+    expect(
+      failures.map(f => [f.filename, f.stopped, f.possiblyPartial])
+    ).toEqual([["0001_a.sql", true, true]]);
   });
 
   it("flags a rollback that failed outside a transaction as partial", () => {

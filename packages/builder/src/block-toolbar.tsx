@@ -43,30 +43,172 @@
  */
 
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+import {
   ArrowDown,
   ArrowUp,
+  Component,
   Copy,
+  CopyPlus,
   CornerLeftUp,
+  Ellipsis,
   LayoutTemplate,
+  Lock,
+  Palette,
+  RefreshCw,
+  SquarePen,
   Trash2,
+  Unlink,
   type LucideIcon,
 } from "lucide-react";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
+  outermostElementsOf,
+} from "./canvas";
+import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
+import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
+import { watchScreenBand } from "./canvas-geometry-watch";
+import { isHTMLElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import type { Rect } from "./geometry";
-import { canvasContentRect } from "./geometry-dom";
-import { useBlockActionsContext } from "./keyboard-actions";
+import {
+  canvasContentRect,
+  canvasScroller,
+  drawnBoxes,
+  onScreenOf,
+  overlaySpaceOf,
+} from "./geometry-dom";
+import { useHoveredBlock } from "./hovered-block";
+import {
+  useBlockActionsContext,
+  useToolbarFocusSlot,
+} from "./keyboard-actions";
+import { layerLabel } from "./layers";
+import { lockBlockingEdit } from "./locking";
+import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
 import {
-  toolbarPlacement,
-  unionRect,
+  TOOLBAR_GAP_PX,
   type ToolbarAction,
   type ToolbarActionId,
+  toolbarPlacement,
   type ToolbarPlacement,
+  type ToolbarScreen,
+  unionRect,
 } from "./toolbar-actions";
+
+/** A rectangle on screen as the top and bottom a toolbar keeps to. */
+function screenBand(rect: Rect): ToolbarScreen {
+  return {
+    top: rect.y,
+    bottom: rect.y + rect.height,
+    left: rect.x,
+    right: rect.x + rect.width,
+  };
+}
+
+/**
+ * The bar's fade marker: present while the pointer is over a block that is
+ * not selected.
+ */
+function fadedAside(
+  hovered: string | null,
+  selectedIds: readonly string[]
+): { "data-faded"?: "" } {
+  return hovered !== null && !selectedIds.includes(hovered)
+    ? { "data-faded": "" }
+    : {};
+}
+
+/**
+ * `scroll-padding-top` on the canvas's scroller, the bar's height and gap,
+ * while the bar is drawn: a block scrolled or focused into view then stops
+ * below the bar rather than under it (WCAG 2.4.11), or the scroller's own
+ * clearance where that is larger. In the root's coordinates,
+ * the scroller's, the bar being drawn at its own size over a frame painted at
+ * another. The scroller's own value comes back after.
+ */
+/**
+ * The elements the bar is placed against for the selected blocks: every
+ * outermost element each one draws, not its first — a placement whose
+ * definition draws a headline and an intro is both, and a bar placed under the
+ * headline alone would sit over the intro's line. Only those that draw a box
+ * (`drawnBoxes`), so a part hidden on this device adds no zero rectangle at
+ * the canvas origin; a block none of whose elements draws one keeps its
+ * elements, as it had before. One list for the measurement and for what is
+ * watched for a change of size, so the two cannot disagree.
+ */
+function measuredPartsOf(
+  root: HTMLElement,
+  selectedIds: readonly string[]
+): Element[] {
+  const parts: Element[] = [];
+  for (const elements of outermostElementsOf(
+    root,
+    new Set(selectedIds)
+  ).values()) {
+    const drawn = elements.flatMap(drawnBoxes);
+    parts.push(...(drawn.length > 0 ? drawn : elements));
+  }
+  return parts;
+}
+
+function useScrollClearance(
+  bar: React.RefObject<HTMLDivElement | null>,
+  hidden: boolean,
+  placement: ToolbarPlacement | null,
+  canvasFrame: CanvasFrame
+): void {
+  const drawn = !hidden && placement !== null;
+  React.useEffect(() => {
+    const element = bar.current;
+    if (!drawn || element === null) return;
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    const scroller = canvasScroller(space.root, space.frame !== null);
+    if (!isHTMLElement(scroller)) return;
+    const height = space.sizeOf(element).height / space.scale + TOOLBAR_GAP_PX;
+    const before = scroller.style.scrollPaddingTop;
+    // The larger of the bar's and what the scroller already keeps clear: a
+    // site keeping focused blocks below its sticky header sets its own, and
+    // the bar must not shrink that to the bar alone.
+    scroller.style.scrollPaddingTop = clearanceWith(
+      scroller.ownerDocument.defaultView?.getComputedStyle(scroller)
+        .scrollPaddingTop ?? "",
+      height
+    );
+    return () => {
+      scroller.style.scrollPaddingTop = before;
+    };
+  }, [bar, drawn, canvasFrame]);
+}
+
+/**
+ * The selected block's Layers lock, its own or one around it, said on the bar
+ * itself: the canvas draws nothing else that tells a locked block from any
+ * other, and the dimmed buttons only say why one at a time. Nothing for a
+ * set of blocks, or a block no lock holds.
+ */
+function lockNoteOf(
+  document: EditorState["document"],
+  selectedId: string | null,
+  selectedIds: readonly string[]
+): string | undefined {
+  if (selectedId === null || selectedIds.length > 1) return undefined;
+  const holder = lockBlockingEdit(document, selectedId);
+  if (holder === undefined) return undefined;
+  return holder.id === selectedId
+    ? "Locked"
+    : `Locked by ${layerLabel(holder)}`;
+}
 
 const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "select-parent": CornerLeftUp,
@@ -76,6 +218,15 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   // A page outline rather than a bookmark or a star: what is stored is a piece
   // of layout, and the same glyph names the Patterns tier in the insert panel.
   "save-as-pattern": LayoutTemplate,
+  // A palette: what is saved is a look, which other blocks can wear.
+  "save-as-shared-style": Palette,
+  // A pen on a square, the editing glyph: the component opens to be edited.
+  "edit-component": SquarePen,
+  // The component mark: the selection becomes one.
+  "turn-into-component": Component,
+  "detach-component": Unlink,
+  "duplicate-component": CopyPlus,
+  "update-pattern": RefreshCw,
   delete: Trash2,
 };
 
@@ -99,6 +250,24 @@ export function BlockToolbar({
 }: BlockToolbarProps): React.JSX.Element | null {
   const verbs = useBlockActionsContext();
   const bar = React.useRef<HTMLDivElement | null>(null);
+
+  /*
+   * Alt+F10's way to the bar, put in this editor's slot while it is mounted:
+   * the bar's tab stop, the one button of its roving set that holds
+   * `tabindex="0"`, or `null` while no bar is drawn. Through the editor's own
+   * slot rather than a search of the document, which may hold another
+   * editor's bar first.
+   */
+  const focusSlot = useToolbarFocusSlot();
+  React.useEffect(() => {
+    if (focusSlot === null) return;
+    const stop = (): HTMLElement | null =>
+      bar.current?.querySelector<HTMLElement>('[tabindex="0"]') ?? null;
+    focusSlot.current = stop;
+    return () => {
+      if (focusSlot.current === stop) focusSlot.current = null;
+    };
+  }, [focusSlot]);
   const [placement, setPlacement] = React.useState<ToolbarPlacement | null>(
     null
   );
@@ -110,6 +279,17 @@ export function BlockToolbar({
   const { document, selectedId } = editor;
   const selectedIds = editor.selection.ids;
   const actions = useSelectionActions(editor);
+  // The verbs drawn as buttons, and those kept behind "More". One stop in the
+  // bar's roving order stands for the whole menu.
+  const buttons = React.useMemo(
+    () => actions.filter(action => action.inMenu !== true),
+    [actions]
+  );
+  const menu = React.useMemo(
+    () => actions.filter(action => action.inMenu === true),
+    [actions]
+  );
+  const stops = buttons.length + (menu.length > 0 ? 1 : 0);
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop
@@ -133,7 +313,13 @@ export function BlockToolbar({
      * already put the index where the caret is.
      */
     const element = bar.current;
-    if (element !== null && element.contains(window.document.activeElement)) {
+    // Asked of the bar's OWN document, which is the one whose focused element
+    // it can contain: the window's would report an iframe around the bar
+    // whenever the bar is drawn inside a frame.
+    if (
+      element !== null &&
+      element.contains(element.ownerDocument.activeElement)
+    ) {
       return;
     }
     setActiveIndex(0);
@@ -153,11 +339,18 @@ export function BlockToolbar({
       setPlacement(null);
       return;
     }
-    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) {
+    /*
+     * The canvas the bar is drawn over, and the space it is drawn in: inside
+     * the root when the canvas shares the editor's document, or in the layer
+     * over the canvas's frame, where the root's coordinates are scaled to the
+     * frame's zoom and the bar keeps its own size.
+     */
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) {
       setPlacement(null);
       return;
     }
+    const { root } = space;
     /*
      * Anchored to the UNION of everything selected, not to the primary.
      *
@@ -165,11 +358,9 @@ export function BlockToolbar({
      * of them describes an action about to happen to the other, which the
      * author cannot see. The union is the shape the selection occupies.
      */
-    const rects: Rect[] = [];
-    for (const id of selectedIds) {
-      const element = nodeElement(root, id);
-      if (element !== null) rects.push(canvasContentRect(element, root));
-    }
+    const rects = measuredPartsOf(root, selectedIds).map(part =>
+      space.place(canvasContentRect(part, root))
+    );
     const block = unionRect(rects);
     if (block === undefined) {
       setPlacement(null);
@@ -180,24 +371,38 @@ export function BlockToolbar({
     // second way of reading a rectangle is exactly what `geometry-dom` exists
     // to prevent, and a bar measured one way against a block measured another
     // is a disagreement that only shows up at a scroll offset.
-    const size = canvasContentRect(element, root);
+    const size = space.sizeOf(element);
     setPlacement(
       toolbarPlacement(
         block,
-        { width: size.width, height: size.height },
+        size,
         // The root's own box rather than its scroll extent. `scrollWidth` and
         // `scrollHeight` are the CONTENT's size, so a long page would report a
         // height of several thousand and the clamp would let the bar sit far
         // outside what the author can see.
-        canvasContentRect(root, root)
+        space.place(canvasContentRect(root, root)),
+        TOOLBAR_GAP_PX,
+        // Kept to what is on screen: room above is room above on screen, and
+        // a tall block scrolled past its top keeps its bar in view.
+        screenBand(onScreenOf(space)),
+        // Each selected block, so the bar is kept to the screen sideways only
+        // where one of them is on it.
+        rects
       )
     );
   }, [selectedId, selectedIds]);
 
+  /*
+   * The frame's reading as well — its scale, page and viewport: a zoom moves
+   * every block on screen while nothing inside the frame changes size, and a
+   * page that has just loaded into the frame is a root the bar has not
+   * measured against.
+   */
+  const canvasFrame = useCanvasFrame();
   React.useLayoutEffect(() => {
     if (hidden) return;
     measure();
-  }, [measure, hidden, document, actions]);
+  }, [measure, hidden, document, actions, canvasFrame]);
 
   /*
    * Re-measure when the block changes size for a reason no render reports — an
@@ -209,13 +414,19 @@ export function BlockToolbar({
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
     const element = bar.current;
-    const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
-    if (!(root instanceof HTMLElement)) return;
+    const root =
+      element === null
+        ? null
+        : (overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null);
+    if (root === null) return;
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
-    // path above still measures.
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
+    // path above still measures. Built from the canvas root's window, the
+    // realm of the blocks it observes, which is a frame's when the canvas is in
+    // one.
+    const Sizes = root.ownerDocument.defaultView?.ResizeObserver;
+    if (typeof Sizes !== "function") return;
+    const observer = new Sizes(() => measure());
 
     /*
      * EVERY selected block, not only the primary.
@@ -225,24 +436,48 @@ export function BlockToolbar({
      * bar stale whenever a secondary block reflowed — which is most of what
      * happens while an image loads or a webfont swaps.
      */
-    for (const id of selectedIds) {
-      const block = nodeElement(root, id);
-      if (block !== null) observer.observe(block);
+    // The very elements the bar is placed against, so a placement's later
+    // part resizing on its own (an image arriving, a font swapping) is heard.
+    for (const part of measuredPartsOf(root, selectedIds)) {
+      observer.observe(part);
     }
     observer.observe(root);
     return () => observer.disconnect();
-  }, [measure, hidden, selectedId, selectedIds, document]);
+  }, [measure, hidden, selectedId, selectedIds, document, canvasFrame]);
+
+  /*
+   * And when the canvas scrolls, or the part of it on screen resizes. The
+   * block does not move in the canvas's own coordinates, but what of it is on
+   * screen does, and the bar keeps to that: a tall block scrolled past its top
+   * takes its bar to the screen's top, and a window made too short for the
+   * bar under a block moves it there too. The scrolls heard are the ones the
+   * screen band is read from (`watchScreenBand`), the host's scroller
+   * around a zoomed frame among them, so what is heard and what is measured
+   * cannot be two different sets.
+   */
+  React.useEffect(() => {
+    if (hidden || selectedId === null) return;
+    const element = bar.current;
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) return;
+    return watchScreenBand(space.root, space.frame, measure);
+  }, [measure, hidden, selectedId, canvasFrame]);
+
+  const hovered = useHoveredBlock();
+
+  useScrollClearance(bar, hidden, placement, canvasFrame);
 
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);
     const buttons = bar.current?.querySelectorAll("button");
     const target = buttons?.[index];
-    if (target instanceof HTMLElement) target.focus();
+    if (isHTMLElement(target)) target.focus();
   }, []);
 
   const onKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const count = actions.length;
+      const count = stops;
       if (count === 0) return;
       // Wrapping, which the toolbar pattern lists as the common choice: the bar
       // is five buttons, and stopping at the ends makes reaching Delete from
@@ -262,7 +497,7 @@ export function BlockToolbar({
       // every shortcut the shell binds to reach their own handlers.
       event.preventDefault();
     },
-    [actions.length, activeIndex, focusAt]
+    [stops, activeIndex, focusAt]
   );
 
   /*
@@ -301,10 +536,19 @@ export function BlockToolbar({
 
   if (hidden || actions.length === 0) return null;
 
+  // Faded while the pointer is over another block: the bar sits over the
+  // block above the selection, which would otherwise be covered while the
+  // author points at it. Faded, not removed, so a pointer heading for the bar
+  // still reaches its buttons, and reaching them is pointing at chrome, which
+  // lets the hovered block go.
+  const faded = fadedAside(hovered, selectedIds);
+
+  const lockNote = lockNoteOf(document, selectedId, selectedIds);
+
   return (
     <div
       ref={bar}
-      className="nx-block-toolbar"
+      className={BLOCK_TOOLBAR_CLASS}
       // Marked as chrome so a press here is not read as a click on the page
       // background, which would clear the very selection this bar acts on.
       {...{ [CHROME_ATTRIBUTE]: "" }}
@@ -312,6 +556,7 @@ export function BlockToolbar({
       aria-orientation="horizontal"
       aria-label="Block actions"
       data-side={placement?.side}
+      {...faded}
       // Kept out of sight rather than unmounted until the first measurement.
       // The bar has to be in the DOM to be measured at all, and mounting it at
       // a default position would show it in the wrong place for one frame.
@@ -322,7 +567,15 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
-      {actions.map((action, index) => {
+      {lockNote === undefined ? null : (
+        // Text, not a control: it takes no tab stop in the bar's one roving
+        // stop, and a screen reader reads it with the bar.
+        <span className="nx-block-toolbar__lock" data-lock-note="">
+          <Lock size={12} aria-hidden="true" />
+          {lockNote}
+        </span>
+      )}
+      {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =
           action.reason === undefined
@@ -372,6 +625,81 @@ export function BlockToolbar({
           </button>
         );
       })}
+      {menu.length === 0 ? null : (
+        <MoreMenu
+          actions={menu}
+          index={buttons.length}
+          activeIndex={activeIndex}
+          onFocus={setActiveIndex}
+          run={run}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The bar's last stop: the verbs kept behind "More", each with its reason
+ * when it may not run. The reason is visible text, as in the context menu,
+ * since a disabled menu item takes no focus and a tooltip would reach nobody.
+ */
+function MoreMenu({
+  actions,
+  index,
+  activeIndex,
+  onFocus,
+  run,
+}: {
+  actions: readonly ToolbarAction[];
+  index: number;
+  activeIndex: number;
+  onFocus: (index: number) => void;
+  run: (action: ToolbarAction) => void;
+}): React.JSX.Element {
+  return (
+    // Not modal, as the block's other menus: a modal menu marks the editor
+    // around it aria-hidden while its controls stay focusable.
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="nx-block-toolbar__button"
+          aria-label="More actions"
+          title="More actions"
+          tabIndex={index === activeIndex ? 0 : -1}
+          onFocus={() => onFocus(index)}
+        >
+          <Ellipsis size={16} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="nx-block-toolbar__menu"
+        // Chrome, so a press inside is not read as a click on the page.
+        {...{ [CHROME_ATTRIBUTE]: "" }}
+      >
+        {actions.map(action => {
+          const Icon = ICONS[action.id];
+          return (
+            <DropdownMenuItem
+              key={action.id}
+              disabled={!action.enabled}
+              className="nx-block-toolbar__menu-item"
+              onSelect={() => run(action)}
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span className="nx-block-toolbar__menu-text">
+                <span>{action.label}</span>
+                {action.reason === undefined ? null : (
+                  <span className="nx-block-toolbar__menu-reason">
+                    {action.reason}
+                  </span>
+                )}
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

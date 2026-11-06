@@ -26,6 +26,7 @@ import {
   type DiscardWorkingDraftResponse,
 } from "@admin/services/versionApi";
 
+import { tellDiscardRefused } from "./useDiscardWorkingDraft";
 import { singleDocumentKeys } from "./useSingles";
 
 export interface UseDiscardSingleWorkingDraftOptions {
@@ -61,16 +62,18 @@ export function useDiscardSingleWorkingDraft({
 }: UseDiscardSingleWorkingDraftOptions): UseMutationResult<
   DiscardWorkingDraftResponse,
   Error,
-  void,
+  string | void,
   unknown
 > {
   const queryClient = useQueryClient();
 
-  return useMutation<DiscardWorkingDraftResponse, Error, void>({
-    mutationFn: () =>
+  return useMutation<DiscardWorkingDraftResponse, Error, string | void>({
+    // Called with the version the editor's copy started from.
+    mutationFn: version =>
       versionApi.discardWorkingDraft(
         { kind: "single", slug, documentId },
-        locale
+        locale,
+        version || undefined
       ),
 
     onSuccess: data => {
@@ -114,9 +117,12 @@ export function useDiscardSingleWorkingDraft({
     },
 
     onError: (error: Error) => {
-      if (showToast) {
-        toast.error(`Failed to discard working draft: ${error.message}`);
-      }
+      tellDiscardRefused(
+        queryClient,
+        error,
+        singleDocumentKeys.detail(slug),
+        showToast
+      );
       onError?.(error);
     },
   });

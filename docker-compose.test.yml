@@ -115,6 +115,11 @@ services:
   mysql-test:
     image: mysql:8.0
     container_name: nextly-mysql-test
+    # No binary log: test data is never replicated or recovered, and the data
+    # dir is tmpfs, so every binlog file counts against the container's memory.
+    # With it on (the 8.0 default, 1 GB files kept 30 days) a whole integration
+    # suite grew the binlog until the container ran out of memory.
+    command: ["--skip-log-bin"]
     environment:
       MYSQL_DATABASE: nextly_test
       MYSQL_ROOT_PASSWORD: root
@@ -123,7 +128,9 @@ services:
     tmpfs:
       - /var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # With the root password: a ping without it is refused, and every refusal
+      # is logged as "Access denied" every ten seconds.
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
       interval: 10s
       timeout: 5s
       retries: 5

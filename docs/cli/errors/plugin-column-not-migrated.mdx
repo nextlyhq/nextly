@@ -1,0 +1,28 @@
+---
+title: PLUGIN_COLUMN_NOT_MIGRATED
+description: "A column a plugin contributes to a table is not in the database, because the migration that adds it has not been applied."
+---
+
+## Cause
+
+A column a plugin contributes to a table is not in the database, because the migration that adds it has not been applied.
+
+A plugin can add columns to the app's tables. Those columns are created by the app's migrations, so until the migration that adds one runs, the column is not in the database.
+
+## Fix
+
+Write and apply the app's migration:
+
+```bash
+nextly migrate:create
+nextly migrate
+```
+
+## Example
+
+```text
+✗ The column "seo_title" contributed to "dc_posts" is not in the database yet.
+  Why:  The app's migrations add what a plugin contributes to the app's tables, and this one has not been applied here.
+  Next: Apply the app's migration that adds it (`nextly migrate:create`, then `nextly migrate`).
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-column-not-migrated  (PLUGIN_COLUMN_NOT_MIGRATED)
+```

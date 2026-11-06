@@ -5,7 +5,7 @@
  *   GET  /api/nextly/general-settings  → retrieve current settings
  *   PATCH /api/nextly/general-settings → update settings
  *
- * Requires `manage-settings` permission for both operations.
+ * Reading asks `read-settings` and updating `update-settings`.
  *
  * @module api/general-settings
  * @since 1.0.0
@@ -16,6 +16,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -76,12 +80,11 @@ const updateSettingsSchema = z.object({
  * GET /api/nextly/general-settings
  *
  * Returns the current general settings.
- * Auth: read-settings or manage-settings permission.
+ * Auth: read-settings permission.
  */
 export const getGeneralSettings = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "read", resource: "settings" },
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -99,12 +102,11 @@ export const getGeneralSettings = withErrorHandler(async (req: Request) => {
  * PATCH /api/nextly/general-settings
  *
  * Updates the general settings. All fields are optional.
- * Auth: update-settings or manage-settings permission.
+ * Auth: update-settings permission.
  */
 export const updateGeneralSettings = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "update", resource: "settings" },
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_WRITE_POLICY.settings.update.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 

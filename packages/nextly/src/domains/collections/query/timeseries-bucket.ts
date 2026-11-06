@@ -63,13 +63,23 @@ const MYSQL_TIMESTAMP_MAX_EPOCH = 2147483647;
  * constant expression, so an index over the date still serves the comparison --
  * confirmed with `EXPLAIN`, which keeps the key. Wrapping the COLUMN in
  * `unix_timestamp` would be equally correct and would lose the index.
+ *
+ * `edge` says which end of the window the bound is. `from_unixtime` takes
+ * whole seconds, and MySQL stores whole seconds, so an EXCLUSIVE end with a
+ * fraction of a second (a window ending at the whole second it is read in,
+ * one millisecond past it) is rounded UP: the stored seconds below the
+ * rounded-up second are exactly those below the instant, where rounding down
+ * would drop the second the window keeps. An interval boundary is a whole
+ * second, which either rounding leaves as it is.
  */
 export function timeseriesBoundOperand(
   instant: Date,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  edge: "start" | "end" = "start"
 ): Date | SQL | undefined {
   if (dialect !== "mysql") return instant;
-  const epochSeconds = Math.floor(instant.getTime() / 1000);
+  const toSeconds = edge === "end" ? Math.ceil : Math.floor;
+  const epochSeconds = toSeconds(instant.getTime() / 1000);
   if (!Number.isFinite(epochSeconds)) {
     throw NextlyError.validation({
       errors: [

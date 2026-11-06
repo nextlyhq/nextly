@@ -4,7 +4,8 @@
  * Two kinds are answered this way and they share everything except who may
  * publish them. A `system:` source is core's own — a release is not a row in a
  * collection table, so the releases service answers it. A `plugin:` source is a
- * third party's, contributed through `contributes.widgetSources`. Neither is a
+ * third party's, which nothing in core registers: a plugin reads its own data
+ * in its widget's `load`. Neither is a
  * table the Direct API can compile a query against, which is the whole reason a
  * resolver exists.
  *
@@ -74,17 +75,15 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "./query";
 import type { WidgetResult } from "./result";
 import { registerSource, type WidgetSource } from "./sources";
+import type { WidgetScope } from "./widget-scope";
 
 /**
  * What the host passes a resolver BESIDE the question it is answering.
  *
  * An options object rather than further positional parameters, and the shape is
- * the decision rather than a detail. A resolver already takes its query, its
- * caller and -- for a plugin -- its context, and `PluginSourceResolver` derives
- * its own parameters from this type; adding each new concern as another
- * argument makes the two resolver kinds disagree about which position means
- * what. Everything the host may hand over in future arrives in here instead,
- * where adding a field breaks nobody.
+ * the decision rather than a detail. A resolver already takes its query and its
+ * caller, and everything the host may hand over in future arrives in here
+ * instead, where adding a field breaks nobody.
  *
  * Optional as a whole, so a resolver that ignores it -- most will -- is written
  * exactly as before.
@@ -126,20 +125,9 @@ export interface ResolverOptions {
   now?: Date;
 }
 
-/**
- * Work shared within one batch, for one caller.
- *
- * `getOrCompute` runs `compute` the first time a key is asked for and hands every
- * later asker, concurrent ones included, the same in-flight promise: two cards
- * reading the same scan share one scan. A computation that rejects is not kept,
- * so a later asker runs it again rather than inheriting one failure for the
- * whole batch.
- *
- * @experimental
- */
-export interface WidgetScope {
-  getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T>;
-}
+// Declared in a module of its own, which imports nothing, so a widget's
+// declaration can name it without its readers compiling the source registry.
+export type { WidgetScope } from "./widget-scope";
 
 /**
  * Answers several of one source's queries in one call, for one caller.

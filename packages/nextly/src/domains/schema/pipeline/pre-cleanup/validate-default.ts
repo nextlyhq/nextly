@@ -10,7 +10,13 @@
 // fields don't block the apply — better to attempt the UPDATE and let
 // the database reject incompatible values than to refuse upfront.
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
+
+import {
+  ICON_ID_MAX_LENGTH,
+  ICON_ID_PATTERN,
+} from "../../../../collections/fields/types/icon";
 
 interface MinimalFieldDef {
   name: string;
@@ -30,12 +36,28 @@ const NUMBER_TYPES = new Set(["number", "int", "integer"]);
 const BOOL_TYPES = new Set(["checkbox", "boolean"]);
 const DATE_TYPES = new Set(["date", "datetime", "timestamp"]);
 
-function schemaForType(type: string): z.ZodTypeAny {
+function schemaForType(type: string, dialect: SupportedDialect): z.ZodTypeAny {
+  // SQLite has no boolean or date column: it stores a boolean as 0 or 1 and a date as its epoch
+  // seconds, and its driver binds neither a boolean nor a Date. So there a value already in the
+  // column's own encoding is the type's value too.
+  const sqlite = dialect === "sqlite";
   if (TEXT_TYPES.has(type)) return z.string();
+  // A backfilled icon id lands in every existing row, so it must have the
+  // shape and length the write path accepts ("lucide:star"); the set is not
+  // checked.
+  if (type === "icon") {
+    return z.string().max(ICON_ID_MAX_LENGTH).regex(ICON_ID_PATTERN);
+  }
   if (NUMBER_TYPES.has(type)) return z.number();
-  if (BOOL_TYPES.has(type)) return z.boolean();
+  if (BOOL_TYPES.has(type)) {
+    return sqlite
+      ? z.union([z.boolean(), z.literal(0), z.literal(1)])
+      : z.boolean();
+  }
   if (DATE_TYPES.has(type)) {
-    return z.union([z.string().datetime(), z.date()]);
+    return sqlite
+      ? z.union([z.string().datetime(), z.date(), z.number().int()])
+      : z.union([z.string().datetime(), z.date()]);
   }
   return z.unknown();
 }
@@ -47,9 +69,10 @@ export interface ValidateResult {
 
 export function validateDefaultValue(
   field: MinimalFieldDef,
-  value: unknown
+  value: unknown,
+  dialect: SupportedDialect
 ): ValidateResult {
-  const schema = schemaForType(field.type);
+  const schema = schemaForType(field.type, dialect);
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

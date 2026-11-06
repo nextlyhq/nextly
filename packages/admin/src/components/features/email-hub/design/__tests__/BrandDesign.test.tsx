@@ -164,11 +164,17 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useEmailTemplates: () => ({ data: TEMPLATES, isError: false, error: null }),
 }));
 
-vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({
-    hasPermission: (slug: string) => grants.has(slug),
-  }),
-}));
+vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
+  // Asked as the product asks it.
+  const { holdsPermission } = await import(
+    "@admin/lib/permissions/holds-permission"
+  );
+  return {
+    useCurrentUserPermissions: () => ({
+      hasPermission: (slug: string) => holdsPermission(grants, slug),
+    }),
+  };
+});
 
 vi.mock("@admin/services/singleApi", () => ({
   singleApi: { getDocument: (slug: string) => getDocument(slug) },
@@ -215,7 +221,13 @@ beforeEach(() => {
   getDocument.mockReset();
   getDocument.mockResolvedValue({ id: "s", updatedAt: "", tokens: SITE_STYLE });
   grants.clear();
-  grants.add("manage-email-templates");
+  for (const slug of [
+    "read-email-templates",
+    "create-email-templates",
+    "update-email-templates",
+    "delete-email-templates",
+  ])
+    grants.add(slug);
   overview.current = OVERVIEW;
 });
 

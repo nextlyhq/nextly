@@ -58,6 +58,16 @@ describe("a chart's range", () => {
     );
   });
 
+  // 🔴 February 29 has no day a year back: the year steps back to February 28,
+  // so the window still opens in February and keeps its first month.
+  it("starts 12m on February 28 when now is February 29", () => {
+    const now = new Date("2028-02-29T12:00:00.000Z");
+    expect(rangeWindow("12m", now).start.toISOString()).toBe(
+      "2027-02-28T12:00:00.000Z"
+    );
+    expect(rangeWindow("12m", now).intervals).toBe(13);
+  });
+
   it.each([
     // 🔴 At an interval's exact start, the interval opening then holds nothing
     // yet: counted, it would be an empty extra point.

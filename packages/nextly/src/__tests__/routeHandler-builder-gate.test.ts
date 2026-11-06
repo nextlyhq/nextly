@@ -193,9 +193,12 @@ describe("builder gate over HTTP", () => {
 
   it("leaves entry writes open where the builder is disabled", async () => {
     const handlers = handlersWith(false);
+    // A bulk delete, an entry write a visitor is refused before any
+    // connection is opened. A single entry's create is judged for a visitor
+    // by the Public role, which reads the database this test has none of.
     const response = await handlers.POST(
-      request("collections/posts/entries", "POST", { title: "hello" }),
-      ctx(["collections", "posts", "entries"])
+      request("collections/posts/entries/bulk-delete", "POST", { ids: ["1"] }),
+      ctx(["collections", "posts", "entries", "bulk-delete"])
     );
 
     expect(response.status).not.toBe(403);

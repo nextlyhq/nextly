@@ -17,10 +17,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, sql } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { isMissingNamedColumnError } from "../../../database/missing-column";
-import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
-import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
-import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { metaValueEquals } from "../../meta/services/meta-service";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
@@ -126,9 +124,9 @@ async function resolveCopyShape(args: CopyArgs): Promise<{
 
 /** The `nextly_meta` table for a dialect, so both guarded copies name the same one. */
 function metaTableFor(dialect: SupportedDialect) {
-  if (dialect === "postgresql") return nextlyMetaPg;
-  if (dialect === "mysql") return nextlyMetaMysql;
-  return nextlyMetaSqlite;
+  // The loaded dialect's own table, so only that dialect's file is
+  // imported; `createAdapter` loads it.
+  return loadedDialect(dialect).tables.nextlyMeta;
 }
 
 /**

@@ -31,6 +31,7 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -44,6 +45,7 @@ import {
 } from "../../domains/schema/services/postgres-schema";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
+import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
 import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
@@ -64,6 +66,7 @@ import {
   applyPluginSchemaContributionsDeferred,
   type BuilderEntities,
   type DeferredExtend,
+  type FieldsAddedByPlugins,
   assertRegisteredKeepTheirKind,
   resolveBuilderExtends,
 } from "../../plugins/schema/apply-contributions";
@@ -98,14 +101,23 @@ export function orderConfigPlugins(
   plugins: PluginDefinition[],
   consent: PluginConsent
 ): ReturnType<typeof resolveDeclaredPlugins> {
-  if (plugins.length === 0) return { plugins: [], preSetup: [] };
+  if (plugins.length === 0) {
+    // Resolution is skipped for an empty list, so nothing it would publish is
+    // published. The webhook event types are published empty here, so a config
+    // reloaded down to no plugins stops offering the last one's types.
+    publishWebhookEventTypes([]);
+    return { plugins: [], preSetup: [] };
+  }
   return resolveDeclaredPlugins(plugins, {
     coreVersion: getCoreVersion(),
     consent,
   });
 }
 
-/** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
+/**
+ * Merge the folded collections/singles/components + transformed plugins/storage/admin onto base.
+ * Pure.
+ */
 function applyFoldedToBase(
   base: SanitizedNextlyConfig,
   folded: NextlyServiceConfig,
@@ -118,6 +130,11 @@ function applyFoldedToBase(
     fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // The admin block as the boot registers it: a plugin's setup() may add or
+    // replace the site's dashboard widgets, and `generate:types` and its
+    // `--check` list their components from this config. Left at the base, the
+    // map lacked a widget the running server offers.
+    admin: transformed.admin ?? base.admin,
     // Carry a plugin setup transformer's audit decision through, so an audit
     // plugin that forces recording is not dropped back to the base value on a
     // reload. Always a resolved boolean on a sanitized config.
@@ -210,6 +227,13 @@ export interface LoadConfigResult {
   configPath?: string;
 
   /**
+   * The project the config was looked for in, as an absolute path: `cwd`
+   * when one was given, otherwise the process's own directory. The app whose
+   * installed packages a boot from this config judges.
+   */
+  projectRoot: string;
+
+  /**
    * List of files that the config depends on.
    * Useful for watch mode to know what files to watch.
    */
@@ -222,6 +246,13 @@ export interface LoadConfigResult {
    * materialize the extra columns onto the Builder tables without re-folding.
    */
   deferredExtends?: DeferredExtend[];
+
+  /**
+   * The fields plugins added to entities they do not own, by `extend` or a
+   * transform, as the fold's ownership ledgers recorded them: what a full
+   * uninstall of a plugin takes with it. Absent when no plugin is configured.
+   */
+  fieldsAddedByPlugins?: FieldsAddedByPlugins;
 
   /**
    * The plugin field types this config registered, captured at the end of its
@@ -466,10 +497,27 @@ function stopWatching(): void {
   watcherGeneration += 1;
 }
 
+/**
+ * The thrown value as the error's cause. An error raised in another realm, as Node's module
+ * loader raises a missing package, fails `instanceof Error` while being one, and dropping it
+ * would lose the code that says what failed.
+ */
+function asCause(error: unknown): Error | undefined {
+  if (error instanceof Error) return error;
+  return typeof error === "object" &&
+    error !== null &&
+    typeof (error as { message?: unknown }).message === "string"
+    ? (error as Error)
+    : undefined;
+}
+
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
-  const cwd = options.cwd ?? process.cwd();
+  // Resolved once, before the config's code runs: a config or a `setup`
+  // transformer that changes the process's directory must not move the
+  // project the config was found in.
+  const cwd = resolve(options.cwd ?? process.cwd());
 
   const configPath = options.configPath
     ? resolve(cwd, options.configPath)
@@ -487,6 +535,7 @@ async function loadConfigInternal(
       config: appConfig,
       appConfig,
       configPath: undefined,
+      projectRoot: cwd,
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
@@ -501,7 +550,12 @@ async function loadConfigInternal(
       publicMessage: "Failed to load Nextly configuration.",
       statusCode: 400,
       logMessage: "Config loader error",
-      logContext: { configPath, reason: "config-not-found" },
+      // `requested` is the path as given to `-c`, so the error can name it as the user typed it.
+      logContext: {
+        configPath,
+        requested: options.configPath,
+        reason: "config-not-found",
+      },
     });
   }
 
@@ -568,6 +622,7 @@ async function loadConfigInternal(
     const appConfig = defineConfig(rawConfig);
     let config = appConfig;
     let deferredExtends: DeferredExtend[] | undefined;
+    let fieldsAddedByPlugins: FieldsAddedByPlugins | undefined;
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
@@ -607,7 +662,7 @@ async function loadConfigInternal(
                 pluginName: plugin.name,
                 cause: describeError(error),
               },
-              cause: error instanceof Error ? error : undefined,
+              cause: asCause(error),
             });
           }
         }
@@ -645,6 +700,7 @@ async function loadConfigInternal(
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
+      fieldsAddedByPlugins = folded.fieldsAddedByPlugins;
 
       // Register plugin custom field types (C7/D16) so the CLI's column
       // classifier (getColumnDescriptor) resolves each plugin type to its
@@ -715,8 +771,10 @@ async function loadConfigInternal(
       config,
       appConfig,
       configPath,
+      projectRoot: cwd,
       dependencies,
       deferredExtends,
+      fieldsAddedByPlugins,
       pluginConsent,
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
@@ -741,7 +799,7 @@ async function loadConfigInternal(
         reason: "load-error",
         cause: describeError(error),
       },
-      cause: error instanceof Error ? error : undefined,
+      cause: asCause(error),
     });
   }
 }
@@ -840,6 +898,9 @@ export async function loadConfig(
     // pipeline both read the active value, so `migrate` cannot end up applying
     // DDL to `public` while the application it is migrating runs in `cms`.
     publishConfiguredPostgresSchema(loaded.config);
+    // Likewise its per-language storage choice, so a command's DDL lays tables out as the site
+    // does. A booted site already chose and keeps its choice.
+    adoptPerLanguageStorage(loaded.config.perLanguageStorage);
     return loaded;
   });
 

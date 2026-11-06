@@ -161,14 +161,11 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   // Get placeholder from admin config
   const placeholder = field.admin?.placeholder || "Select...";
 
-  // Why: `isClearable` was declared on `SelectFieldConfig` but never wired
-  // into the renderer, so the Builder UI's clearable toggle had no effect.
-  // When set and the field has a value (and isn't disabled/read-only), we
-  // render a small × button absolutely-positioned on top of the trigger
-  // that resets the value to an empty string. The chevron icon stays
-  // hidden behind the × so the trigger isn't crowded — radix's
-  // `data-[state=open]` doesn't apply here so we use the form value to
-  // decide whether to show the clear affordance.
+  // A clearable field with a value (and not disabled or read-only) offers a
+  // × button that resets it to an empty string. The button sits BESIDE the
+  // trigger, not on it: drawn over the trigger it crowded the chevron into
+  // "⌄×", and it could not be reached from the keyboard. The form value, not
+  // radix's open state, decides whether it shows.
   const isClearable = field.admin?.isClearable === true;
   const showClear =
     isClearable && !disabled && !readOnly && value !== "" && value != null;
@@ -184,8 +181,9 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
       id={elementId}
       aria-invalid={invalid || undefined}
       className={cn(
+        // The row's width, less the clear button's when it shows.
+        "min-w-0 flex-1",
         readOnly && "bg-primary/5 cursor-not-allowed",
-        showClear && "pr-9",
         className
       )}
     >
@@ -194,7 +192,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   );
 
   return (
-    <div className="relative">
+    <div className="flex items-center gap-1">
       <Select
         value={value || ""}
         onValueChange={onChange}
@@ -213,9 +211,8 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
         <button
           type="button"
           onClick={handleClear}
-          className="absolute right-7 top-1/2 -translate-y-1/2 p-0.5 rounded-md hover:bg-primary/5 text-muted-foreground hover:text-foreground transition-colors"
+          className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label="Clear selection"
-          tabIndex={-1}
         >
           <X className="h-3.5 w-3.5" />
         </button>

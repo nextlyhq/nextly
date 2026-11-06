@@ -28,6 +28,9 @@ import { currentPrincipal } from "./principal-scope";
 import type { RequestActor } from "./request-actor";
 
 const callerScope = new AsyncLocalStorage<AuthenticatedScope>();
+// See `RouteActor` below: attribution for a plugin route's request, and
+// nothing a gate reads.
+const routeActor = new AsyncLocalStorage<RouteActor>();
 
 /**
  * Who an authenticated REST request is, as the route handler resolved it.
@@ -52,6 +55,12 @@ export interface RequestCaller {
    * no role lookup; absent elsewhere.
    */
   readonly roles?: readonly string[];
+  /**
+   * The action the route admitted the caller on, where a write route accepts
+   * more than one: `update`, or `publish` or `unpublish` for a caller who may
+   * change only an entry's status. Absent where the route asked one action.
+   */
+  readonly routeAction?: string;
 }
 
 const requestCaller = new AsyncLocalStorage<RequestCaller | undefined>();
@@ -76,23 +85,68 @@ export function runWithCallerScope<T>(
  * Run `operation` with no caller scope pinned, as if no request were being
  * served. Internal: not part of any published entry point.
  *
- * DANGEROUS outside its two uses. Inside it, a call made for an API-key
+ * DANGEROUS outside its three uses. Inside it, a call made for an API-key
  * request no longer inherits the key's narrowing: an access check that names
  * no scope reads none, so the call is judged by the user it names alone, and
  * a key that may do less than its owner is no longer held to less. The only
- * two allowed uses are:
+ * allowed uses are:
  *
  *   (a) running work exactly as its scheduled job runs it — a job that never
  *       has a request scope, such as the releases drain run by Publish now;
  *   (b) evaluating a NAMED identity's grants, read-only — such as whether a
  *       release member's author may publish it — where the identity being
  *       judged is not the request's caller.
+ *   (c) a read made as NO ONE, read-only — the public reader a published
+ *       page's lists read through — which is the same for every visitor and
+ *       must never be judged by the key of a request it happens to run in.
  *
  * Never wrap a write made on the caller's behalf, or a check of the caller's
  * own authority, in it.
  */
 export function runDetachedFromRequest<T>(operation: () => T): T {
-  return callerScope.exit(() => requestCaller.exit(operation));
+  return callerScope.exit(() =>
+    requestCaller.exit(() => routeActor.exit(operation))
+  );
+}
+
+/**
+ * Who an authenticated plugin route's request is, for attribution only: the
+ * account it authenticated as, and the actor its writes are recorded under
+ * (the API key itself when one was used).
+ *
+ * Separate from {@link RequestCaller} on purpose. That record also VOUCHES:
+ * a service that finds one pinned skips its own access re-check, because the
+ * REST route already ran the gate for the operation. A plugin route's
+ * dispatcher ran no gate for the writes its handler goes on to make, so it
+ * pins this instead, which says who is acting and decides nothing.
+ */
+export interface RouteActor {
+  /** The account the request authenticated as: for an API key, its owner. */
+  readonly userId: string;
+  /** Who a write made as that account is recorded under. */
+  readonly actor: RequestActor;
+}
+
+/**
+ * Run `operation` with `actor` as the plugin route request's actor, or with
+ * none. Always a new context, so a request reached while another is being
+ * served never inherits the outer one's actor.
+ */
+export function runWithRouteActor<T>(
+  actor: RouteActor | undefined,
+  operation: () => T
+): T {
+  if (actor === undefined) return routeActor.exit(operation);
+  return routeActor.run(actor, operation);
+}
+
+/**
+ * The actor of the plugin route request being served, if any. Nothing but the
+ * plugin route dispatcher sets it, so a job, a script and the Direct API
+ * answer `undefined`.
+ */
+export function currentRouteActor(): RouteActor | undefined {
+  return routeActor.getStore();
 }
 
 /**

@@ -69,6 +69,8 @@ describe("FIELD_TYPE_VALIDATION_RULES", () => {
     expect(FIELD_TYPE_VALIDATION_RULES.number).not.toContain("minLength");
     expect(FIELD_TYPE_VALIDATION_RULES.text).not.toContain("min");
     expect(FIELD_TYPE_VALIDATION_RULES.checkbox).not.toContain("pattern");
+    // An icon is picked from a set, and its id shape is the type's own check.
+    expect(FIELD_TYPE_VALIDATION_RULES.icon).toEqual(["required", "message"]);
   });
 });
 

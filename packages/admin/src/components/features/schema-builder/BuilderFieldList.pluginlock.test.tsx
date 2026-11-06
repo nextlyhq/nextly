@@ -25,13 +25,13 @@ function renderList(fields: BuilderField[]) {
   return render(
     <DndContext>
       <BuilderFieldList
+        kind="collection"
         fields={fields}
         onAddAt={vi.fn()}
         onEditField={vi.fn()}
         onDeleteField={vi.fn()}
         onDuplicateField={vi.fn()}
         onReorder={vi.fn()}
-        onAddInsideParent={vi.fn()}
         readOnly={false}
       />
     </DndContext>

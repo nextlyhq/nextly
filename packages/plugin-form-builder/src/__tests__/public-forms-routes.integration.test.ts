@@ -45,7 +45,10 @@ async function bootWithForm(
       recaptcha: { enabled: false },
     },
   });
-  current = await createTestNextly({ plugins: [fb.plugin] });
+  // The boot's seeding, so the Public role a visitor is judged by holds what
+  // a real boot grants it: the read of a form, and the plugin's submission
+  // create.
+  current = await createTestNextly({ plugins: [fb.plugin], seedPublic: true });
   await current.nextly.create({ collection: "forms", data: form });
   return createDynamicHandlers();
 }
@@ -182,7 +185,11 @@ describe("GET /api/forms/:slug", () => {
     await current!.nextly.update({
       collection: "forms",
       id: (existing.items[0] as { id: string }).id,
-      data: { status: "closed", closedMessage: "Applications closed." },
+      data: {
+        status: "closed",
+        closedMessage: "Applications closed.",
+        _overwrite: true,
+      },
     });
 
     const res = await handlers.GET(
@@ -281,10 +288,14 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     });
     current = await createTestNextly({
       plugins: [fb.plugin],
+      // As above, and the read of `pages`, whose rule lets anyone read it.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
           localized: true,
+          // The redirect target is read as the visitor, so it is public.
+          access: { read: () => true },
           fields: [
             text({ name: "title" }),
             text({ name: "slug", localized: true }),
@@ -301,7 +312,7 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci" },
+      data: { slug: "merci", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({

@@ -13,6 +13,8 @@
  */
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { FieldConfig } from "nextly/config";
+import type * as React from "react";
+import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 
 /*
@@ -21,9 +23,20 @@ import { describe, expect, it, vi } from "vitest";
  * would make this a test of the field renderer, which has its own.
  */
 vi.mock("./EntryFormContent", () => ({
-  EntryFormContent: ({ fields }: { fields: FieldConfig[] }) => (
+  EntryFormContent: ({
+    fields,
+    readOnly,
+  }: {
+    fields: FieldConfig[];
+    readOnly?: boolean;
+  }) => (
     <>
       <span>{fields.map(f => f.name).join(",")}</span>
+      <span data-testid="labels">
+        {fields
+          .map(f => String((f as { label?: unknown }).label ?? ""))
+          .join(",")}
+      </span>
       {/*
         REAL controls, not a text summary. The Enter guard below is about what
         an implicit submission does, and that is a property of the elements —
@@ -32,7 +45,7 @@ vi.mock("./EntryFormContent", () => ({
       */}
       {fields.map(f => (
         <span key={f.name}>
-          <input aria-label={`${f.name} input`} />
+          <input aria-label={`${f.name} input`} readOnly={readOnly} />
           <textarea aria-label={`${f.name} textarea`} />
         </span>
       ))}
@@ -207,6 +220,15 @@ describe("the panel a takeover surface offers back", () => {
     ).toBeNull();
   });
 
+  it("hands its fields read-only, not disabled, when asked to hold them", () => {
+    // A refused publish's recovery holds them so, and a held field keeps focus.
+    render(<div>{fieldsBesidePanel(minimal, "body", { readOnly: true })}</div>);
+
+    const input = screen.getByLabelText("title input");
+    expect(input).toHaveAttribute("readonly");
+    expect(input).not.toBeDisabled();
+  });
+
   it("refuses Enter in a single-line field, which would submit the form behind it", () => {
     /*
      * These inputs sit inside the entry's own form, so Enter is an implicit
@@ -318,5 +340,52 @@ describe("the panel a takeover surface offers back", () => {
       </div>
     );
     expect(noticeProps).toEqual([]);
+  });
+
+  it("draws the fields flat for a dialog: no section cards, the slug read as the address", () => {
+    function Host(): React.JSX.Element {
+      const form = useForm({
+        defaultValues: { title: "About us", slug: "about-us" },
+      });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(minimal, "body", {
+            presentation: "dialog",
+          })}
+        </FormProvider>
+      );
+    }
+    render(<Host />);
+    expect(screen.getByRole("heading", { name: "Page" })).toBeTruthy();
+    // The panel's section framing is the form's, not the dialog's.
+    expect(
+      screen.queryByText("How this document is identified and addressed.")
+    ).toBeNull();
+    expect(screen.getAllByTestId("labels")[0]?.textContent).toBe(",Address");
+  });
+
+  it("warns about the address in a dialog only where it is already live", () => {
+    function Host({ live }: { live: boolean }): React.JSX.Element {
+      const form = useForm({ defaultValues: { slug: "about-us" } });
+      return (
+        <FormProvider {...form}>
+          {fieldsBesidePanel(minimal, "body", {
+            presentation: "dialog",
+            hasPublicAddress: live,
+          })}
+        </FormProvider>
+      );
+    }
+    noticeProps.length = 0;
+    const { unmount } = render(<Host live={false} />);
+    expect(noticeProps).toEqual([]);
+    unmount();
+    render(<Host live />);
+    // Rendered again as the address line follows the form; what it was handed
+    // is what matters.
+    expect(noticeProps.length).toBeGreaterThan(0);
+    expect(new Set(noticeProps.map(props => JSON.stringify(props)))).toEqual(
+      new Set([JSON.stringify({ slugName: "slug", active: true })])
+    );
   });
 });

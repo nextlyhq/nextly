@@ -112,9 +112,10 @@ describe("formatRetiredAccessRulesWarning", () => {
 
     expect(message).toContain("no longer enforces them");
     // The whole decision order, not only the code-defined half: an operator
-    // reading that only code rules decide would take their role grants for
-    // ignored, or add a code rule that overrides them.
-    expect(message).toContain("falls through to the roles and permissions");
+    // reading that code rules decide alone would translate a stored rule into
+    // code without granting the permission it narrows.
+    expect(message).toContain("needs the role permission for the operation");
+    expect(message).toContain("only narrows that permission");
     expect(message).toContain("Existing role grants still apply");
     expect(message).toContain("dynamic_collections: 2 rows carry");
     expect(message).toContain("dynamic_singles: 1 row carries");

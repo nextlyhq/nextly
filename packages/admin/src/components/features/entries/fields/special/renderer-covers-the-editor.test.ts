@@ -25,15 +25,18 @@
  * else, which is what decides the location.
  *
  * The renderer is read as SOURCE rather than imported, and that is deliberate
- * too: this package does not depend on `blocks-react` and must not start, so the
- * file is opened by path. A static read creates no dependency.
+ * too: this package reaches `blocks-react` for one thing only, the icon set,
+ * through one dynamic import, and importing the renderer would make it reach
+ * the rest. The file is opened by path; a static read creates no dependency.
+ * The last block below holds the admin to that one path.
  *
  * @module special/renderer-covers-the-editor.test
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { moduleSpecifierRefs } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/special/rich-text-kit";
@@ -469,5 +472,69 @@ describe("richTextInlineStyleVocabulariesAgree", () => {
     ]) {
       expect(allowed, property).toContain(property);
     }
+  });
+});
+
+/** The admin's own source, every file a bundler or a test could load. */
+const ADMIN_SRC = join(HERE, "../../../../..");
+
+/** Each reference an admin source file makes to `@nextlyhq/blocks-react`. */
+function blocksReactReferences(): {
+  readonly files: number;
+  readonly references: readonly {
+    file: string;
+    specifier: string;
+    dynamic: boolean;
+    typeOnly: boolean;
+  }[];
+} {
+  const sources = readdirSync(ADMIN_SRC, { recursive: true })
+    .map(String)
+    .filter(
+      file => /\.(?:[cm]?[jt]sx?)$/.test(file) && !file.endsWith(".d.ts")
+    );
+  const references = sources.flatMap(file =>
+    moduleSpecifierRefs(readFileSync(join(ADMIN_SRC, file), "utf8"), file)
+      .filter(
+        ref =>
+          ref.specifier === "@nextlyhq/blocks-react" ||
+          ref.specifier.startsWith("@nextlyhq/blocks-react/")
+      )
+      .map(ref => ({ file, ...ref }))
+  );
+  return { files: sources.length, references };
+}
+
+describe("the admin's one path to blocks-react", () => {
+  /*
+   * The admin depends on `@nextlyhq/blocks-react` for the icon set alone. The
+   * set is large and the rest of the package is the page renderer, so the
+   * dependency is held to one shape: a dynamic `import()` of the
+   * `icons/lucide` entry, which the bundler keeps in a lazy chunk. A static
+   * import of it would put the set in whatever chunk loads that module, and an
+   * import of any other entry would put the renderer in the admin.
+   */
+  const { files, references } = blocksReactReferences();
+
+  it("reads the admin's source and finds the icon set's import", () => {
+    // The population: a walk that read nothing, or a reader that no longer
+    // sees dynamic imports, would leave the check below nothing to refuse.
+    expect(files).toBeGreaterThan(500);
+    expect(references.map(ref => ref.file)).toContain(
+      join(
+        "components/features/entries/fields/special",
+        "lucide-icon-source.ts"
+      )
+    );
+  });
+
+  it("reaches it only through a dynamic import of the icon set", () => {
+    const strays = references.filter(
+      ref =>
+        ref.specifier !== "@nextlyhq/blocks-react/icons/lucide" ||
+        !ref.dynamic ||
+        ref.typeOnly
+    );
+    expect(strays).toEqual([]);
   });
 });

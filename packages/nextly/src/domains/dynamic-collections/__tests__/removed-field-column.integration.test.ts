@@ -106,10 +106,10 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
     expect(later.success, JSON.stringify(later)).toBe(true);
   });
 
-  it("leaves alone a column no field describes, as an install left it", async () => {
-    // A MySQL install keeps the columns of fields it removed before this was fixed, with their
-    // data. A save drops only the columns of the fields it removes, so those stay until someone
-    // removes them on purpose.
+  it("refuses a save while a column no field describes is there, and leaves it with its data", async () => {
+    // A MySQL install from before removed fields dropped their columns keeps those columns, with
+    // their data. A save applies the whole table, so it would drop such a column; it is refused
+    // instead, naming the column and how to go on, before anything is dropped.
     const created = await handler().createCollection({
       name: "notes",
       label: "Note",
@@ -119,25 +119,49 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
       ],
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "notes", overrideAccess: true },
+        { aside: "Also", views: 1 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
     const quote = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-    await (
-      current.adapter as unknown as {
-        executeQuery(sql: string): Promise<unknown>;
-      }
-    ).executeQuery(
+    const run = (sql: string) =>
+      (
+        current.adapter as unknown as {
+          executeQuery<R>(sql: string): Promise<R[]>;
+        }
+      ).executeQuery<{ legacy_note: string | null }>(sql);
+    await run(
       `ALTER TABLE ${quote("dc_notes")} ADD COLUMN ${quote("legacy_note")} TEXT`
+    );
+    await run(
+      `UPDATE ${quote("dc_notes")} SET ${quote("legacy_note")} = 'kept'`
     );
 
     const saved = await handler().updateCollection(
       { collectionName: "notes" },
       { fields: [{ name: "views", type: "number" }] }
     );
-    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    // The reason and the way on, so a refusal for anything else does not pass for this one.
+    expect(saved.message).toMatch(
+      /collection "notes" holds a column "legacy_note" that no field describes/
+    );
+    expect(saved.message).toMatch(
+      /Drop the column by hand, or add a field that describes it, then save again/
+    );
 
+    // Nothing was dropped: neither the column no field describes nor the removed field's.
     const columns = await columnsOf(current, dialect, "dc_notes");
-    expect(columns).not.toContain("aside");
     expect(columns).toContain("legacy_note");
+    expect(columns).toContain("aside");
+    const rows = await run(
+      `SELECT ${quote("legacy_note")} AS legacy_note FROM ${quote("dc_notes")}`
+    );
+    expect(rows.map(row => row.legacy_note)).toEqual(["kept"]);
   });
 
   it("takes its column from a Single, and later writes are accepted", async () => {
@@ -157,7 +181,7 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
       current.getService("singleEntryService");
     const first = await singles.update(
       "banner",
-      { headline: "Kept", views: 1 },
+      { headline: "Kept", views: 1, _overwrite: true },
       { overrideAccess: true }
     );
     expect(first.success, JSON.stringify(first)).toBe(true);
@@ -173,7 +197,7 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
     );
     const later = await singles.update(
       "banner",
-      { views: 2 },
+      { views: 2, _overwrite: true },
       { overrideAccess: true }
     );
     expect(later.success, JSON.stringify(later)).toBe(true);

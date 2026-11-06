@@ -18,11 +18,12 @@ import { getTableName, isTable } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
-import { getCoreSchema, getCoreTableNames } from "../../../schemas";
+import { getCoreSchema, getCoreTableNames } from "../../../schemas/core-schema";
 import {
   bindIssuedTokens,
   type BindIssuedTokensResult,
 } from "../../auth/services/token-account-binding";
+import { RETIRED_SIZES_COLUMN } from "../../media/retired-image-sizes-constants";
 import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -31,14 +32,20 @@ import {
   onlyElements,
   withoutElements,
 } from "../extension/entity-contributions";
+import type { ExtensionColumn } from "../extension/types";
 import {
-  classifyForMode,
+  isDestructive,
+  reasonFor,
   type ClassifierMode,
 } from "../pipeline/classifier/modes";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
-import { freshPushSchema, type FreshPushDialect } from "../pipeline/fresh-push";
+import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
+import {
+  freshPushSchema,
+  planFreshPush,
+  type FreshPushDialect,
+} from "../pipeline/fresh-push";
 import { coreTableWithLiveContributions } from "../services/core-table-contributions";
 
 import { resolveSafeNullabilityOps } from "./resolve-safe-nullability";
@@ -124,6 +131,16 @@ export interface ReconcileCoreDeps {
     schema: Record<string, unknown>
   ) => Promise<{ statementsExecuted: string[] }>;
   /**
+   * Injectable for tests. Default: `planFreshPush` over the same bundle: the
+   * statements the push would run and the destructive ones it strips, which
+   * decide what a confirmation asks about and what a dry run names.
+   */
+  planPush?: (
+    dialect: FreshPushDialect,
+    db: unknown,
+    schema: Record<string, unknown>
+  ) => Promise<{ runnable: string[]; blocked: string[]; degraded: boolean }>;
+  /**
    * Bootstrap the `nextly_schema_events` ledger (out-of-band, idempotent).
    * Called AFTER applyCore (so drizzle-kit pushSchema doesn't see the ledger
    * as an extraneous table) and BEFORE recording the core_apply event (so the
@@ -161,40 +178,8 @@ export async function reconcileCore(
   deps: ReconcileCoreDeps
 ): Promise<{ changed: boolean }> {
   const { db, dialect, logger } = deps;
-  const introspect = deps.introspect ?? introspectLiveSnapshot;
-  // The registry name travels with every one of the three: the shape to compare
-  // against, the list of tables to ask the database about, and the bundle the
-  // push creates from. A mismatch between them asks about a table that is not
-  // there, then diffs the answer against one that is, and creates it.
-  const coreOptions = {
-    fieldGroupRegistryTable: deps.fieldGroupRegistryTable,
-  };
+  const { ops, bundle } = await diffCore(deps);
   const applyCore = deps.applyCore ?? freshPushSchema;
-
-  const desired = getCoreSchema(dialect, coreOptions);
-  // The elements hooks contributed to core tables, from the same derivation
-  // the app's migration stream creates them with. This reconcile judges the
-  // core tables on Nextly's own elements only: a contributed column is not a
-  // column the core declaration lost, and reading it as one proposed dropping
-  // it on every run after the app's migration added it.
-  const contributed = coreContributions(
-    desired.tables,
-    deps.contributions,
-    dialect
-  );
-  const introspected = await introspect(
-    db,
-    dialect,
-    getCoreTableNames(coreOptions)
-  );
-  const live: NextlySchemaSnapshot = {
-    ...introspected,
-    tables: introspected.tables.map(table => {
-      const own = contributed.get(table.name);
-      return own === undefined ? table : withoutElements(table, own.names);
-    }),
-  };
-  const ops = diffSnapshots(live, desired);
 
   if (ops.length === 0) {
     // Rows are not schema, so "up to date" says nothing about them either: a
@@ -218,56 +203,8 @@ export async function reconcileCore(
     return { changed: filled || dropped.length > 0 };
   }
 
-  const mode: ClassifierMode = deps.mode ?? "production-strict";
-  // Always compute the destructive reasons via production-strict so both the
-  // strict-refuse path and the non-strict confirmation path share one source.
-  // Ask the data before judging DESTRUCTIVENESS only: requiring a column that
-  // holds no NULL cannot fail on an existing row. Without this every SQLite
-  // primary key reads as a pending NOT NULL addition and the whole reconcile
-  // is refused on an untouched database. `ops` stays whole for the apply — a
-  // safe op still has to be performed, or the constraint is never enforced.
-  const opsForClassification = await resolveSafeNullabilityOps(db, ops);
-  const strict = classifyForMode(
-    opsForClassification,
-    dialect,
-    "production-strict"
-  );
-  const destructiveReasons = strict.verdict === "refuse" ? strict.reasons : [];
-
-  if (destructiveReasons.length > 0) {
-    if (mode === "production-strict") {
-      if (!deps.allowDestructive) {
-        throw new NextlyError({
-          code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-          publicMessage:
-            "Core schema reconciliation requires destructive operations: " +
-            destructiveReasons.join("; ") +
-            ". This usually means a Nextly version mismatch. Set " +
-            "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
-        });
-      }
-      logger?.warn?.(
-        "Applying destructive core change due to NEXTLY_ALLOW_CORE_DESTRUCTIVE=1."
-      );
-    } else {
-      // dev-loose (and any future non-strict mode): require explicit operator
-      // confirmation for the destructive set.
-      const confirmed =
-        (await deps.confirmDestructive?.(destructiveReasons)) ?? false;
-      if (!confirmed) {
-        throw new NextlyError({
-          code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-          publicMessage:
-            "Core schema reconciliation aborted: destructive operations were not confirmed: " +
-            destructiveReasons.join("; ") +
-            ".",
-        });
-      }
-      logger?.warn?.(
-        "Applying confirmed destructive core change (reconcile-core)."
-      );
-    }
-  }
+  // Destructive changes are refused, or confirmed, before anything is applied.
+  await judgeDestructiveCore(deps, ops, bundle);
 
   const repo = new SchemaEventsRepository(db, dialect);
   try {
@@ -279,17 +216,7 @@ export async function reconcileCore(
     // plans nothing against them — no drop, and on SQLite a rebuild that
     // copies them. What is not yet live stays out; adding it is the app
     // migration stream's.
-    const result = await applyCore(
-      dialect,
-      db,
-      pushBundleWithLiveContributions(
-        getDialectTablesForPush(dialect, coreOptions),
-        contributed,
-        introspected,
-        deps.contributions,
-        dialect
-      )
-    );
+    const result = await applyCore(dialect, db, bundle);
 
     // 2. Bootstrap the ledger out-of-band, after applyCore and before
     //    recording, so recordStart has a table to write to.
@@ -331,6 +258,277 @@ export async function reconcileCore(
   // is kept rather than dropped on a stale count.
   await executeRetiredDrops(deps, await decideRetiredDrops(deps));
   return { changed: true };
+}
+
+/**
+ * Refuses or confirms the destructive changes among `ops` before anything is
+ * applied. A production run refuses them unless the operator allowed them. A
+ * development run (`dev-loose`, and any future non-strict mode) asks to
+ * confirm the destructive changes its push will make: a table or column drop
+ * the push strips is never made, so it is reported as left in place rather
+ * than asked about, and with nothing else destructive nobody is asked anything.
+ */
+async function judgeDestructiveCore(
+  deps: ReconcileCoreDeps,
+  ops: Operation[],
+  bundle: Record<string, unknown>
+): Promise<void> {
+  const { db, dialect, logger } = deps;
+  const mode: ClassifierMode = deps.mode ?? "production-strict";
+  const destructive = await destructiveOpsOf(db, ops);
+  const destructiveReasons = destructive.map(reasonFor);
+  if (destructiveReasons.length === 0) return;
+
+  if (mode === "production-strict") {
+    if (!deps.allowDestructive) {
+      throw new NextlyError({
+        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+        publicMessage:
+          "Core schema reconciliation requires destructive operations: " +
+          destructiveReasons.join("; ") +
+          ". This usually means a Nextly version mismatch. Set " +
+          "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
+      });
+    }
+    logger?.warn?.(
+      "Applying destructive core change due to NEXTLY_ALLOW_CORE_DESTRUCTIVE=1."
+    );
+  } else {
+    // dev-loose (and any future non-strict mode): require explicit operator
+    // confirmation for the destructive changes the push will make. A table
+    // or column drop the push strips is never made, so it is reported as
+    // left in place rather than asked about; with nothing else destructive,
+    // nobody is asked anything.
+    const push = await (deps.planPush ?? planFreshPush)(dialect, db, bundle);
+    const { asked, leftInPlace } = splitDestructive(destructive, push.blocked);
+    if (leftInPlace.length > 0) {
+      logger?.warn?.(leftInPlaceMessage(leftInPlace));
+    }
+    if (asked.length > 0) {
+      const reasons = asked.map(reasonFor);
+      const confirmed = (await deps.confirmDestructive?.(reasons)) ?? false;
+      if (!confirmed) {
+        throw new NextlyError({
+          code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+          publicMessage:
+            "Core schema reconciliation aborted: destructive operations were not confirmed: " +
+            reasons.join("; ") +
+            ".",
+        });
+      }
+      logger?.warn?.(
+        "Applying confirmed destructive core change (reconcile-core)."
+      );
+    }
+  }
+}
+
+/**
+ * The core tables as the database has them, set against the core schema this
+ * version declares, and the operations that bring the one to the other. Reads
+ * only; `reconcileCore` applies the operations and `planCoreReconcile` names
+ * them.
+ */
+async function diffCore(deps: ReconcileCoreDeps) {
+  const { db, dialect } = deps;
+  const introspect = deps.introspect ?? introspectLiveSnapshot;
+  // The registry name travels with every one of the three: the shape to compare
+  // against, the list of tables to ask the database about, and the bundle the
+  // push creates from. A mismatch between them asks about a table that is not
+  // there, then diffs the answer against one that is, and creates it.
+  const coreOptions = {
+    fieldGroupRegistryTable: deps.fieldGroupRegistryTable,
+  };
+  const desired = getCoreSchema(dialect, coreOptions);
+  // The elements hooks contributed to core tables, from the same derivation
+  // the app's migration stream creates them with. This reconcile judges the
+  // core tables on Nextly's own elements only: a contributed column is not a
+  // column the core declaration lost, and reading it as one proposed dropping
+  // it on every run after the app's migration added it.
+  const introspected = await introspect(
+    db,
+    dialect,
+    getCoreTableNames(coreOptions)
+  );
+  // The retired `sizes` column, while the database has it, is carried as if
+  // contributed to the media table: set aside from the comparison, so the
+  // diff never plans its drop, and composed into the state the push reaches,
+  // so drizzle-kit plans nothing against it either. On SQLite a rebuild of
+  // the media table would otherwise copy only the declared columns and lose
+  // every item's record of its size files. Neither this nor any migration
+  // drops it: `nextly media remove-sizes --apply --drop` does, once the
+  // release that no longer reads it is serving and nothing names a file in it.
+  const contributions = withRetainedSizesColumn(
+    deps.contributions,
+    introspected
+  );
+  const contributed = coreContributions(desired.tables, contributions, dialect);
+  const live: NextlySchemaSnapshot = {
+    ...introspected,
+    tables: introspected.tables.map(table => {
+      const own = contributed.get(table.name);
+      return own === undefined ? table : withoutElements(table, own.names);
+    }),
+  };
+  const ops = diffSnapshots(live, desired);
+  // The state the push reaches: Nextly's core tables, each with the
+  // contributions the database already holds composed in, so the kit plans
+  // nothing against them (no drop, and on SQLite a rebuild that copies them).
+  // What is not yet live stays out; adding it is the app migration stream's.
+  const bundle = pushBundleWithLiveContributions(
+    getDialectTablesForPush(dialect, coreOptions),
+    contributed,
+    introspected,
+    contributions,
+    dialect
+  );
+  return { ops, bundle };
+}
+
+/**
+ * The changes among `ops` that can lose data or fail on existing rows, as
+ * production-strict judges them (`isDestructive`): what a production run
+ * refuses and a development run asks to confirm, from this one source.
+ *
+ * The data is asked before DESTRUCTIVENESS is judged: requiring a column that
+ * holds no NULL cannot fail on an existing row. Without this every SQLite
+ * primary key reads as a pending NOT NULL addition and the whole reconcile is
+ * refused on an untouched database. The apply still takes `ops` whole: a safe
+ * op still has to be performed, or the constraint is never enforced.
+ */
+async function destructiveOpsOf(
+  db: unknown,
+  ops: Operation[]
+): Promise<Operation[]> {
+  if (ops.length === 0) return [];
+  return (await resolveSafeNullabilityOps(db, ops)).filter(isDestructive);
+}
+
+/**
+ * `destructive` split by what the push does with it: `leftInPlace`, a table
+ * or column drop among the statements the push strips (`blocked`), which
+ * never runs; and `asked`, the rest, which it makes.
+ */
+function splitDestructive(
+  destructive: readonly Operation[],
+  blocked: readonly string[]
+): { asked: Operation[]; leftInPlace: Operation[] } {
+  const leftInPlace = destructive.filter(op => strippedByPush(op, blocked));
+  return {
+    asked: destructive.filter(op => !leftInPlace.includes(op)),
+    leftInPlace,
+  };
+}
+
+/** Whether `op` drops a table or column that a statement in `blocked` drops. */
+function strippedByPush(op: Operation, blocked: readonly string[]): boolean {
+  const names =
+    op.type === "drop_table"
+      ? [op.tableName]
+      : op.type === "drop_column"
+        ? [op.tableName, op.columnName]
+        : undefined;
+  if (names === undefined) return false;
+  return blocked.some(statement =>
+    names.every(name =>
+      new RegExp(`\\b${name.replace(/[^A-Za-z0-9_]/g, "\\$&")}\\b`).test(
+        statement
+      )
+    )
+  );
+}
+
+/** What a reconcile reports of the drops its push leaves in place. */
+function leftInPlaceMessage(leftInPlace: readonly Operation[]): string {
+  return `Left in place: ${leftInPlace.map(reasonFor).join("; ")}. A core reconcile never drops a table or column.`;
+}
+
+/** What a core reconcile would do, worked out without changing anything. */
+export interface CoreReconcilePlan {
+  /** The statements its push would run, in order. */
+  statements: string[];
+  /**
+   * Whether the push would degrade and take a second pass once the first has
+   * run, whose statements are not planned here.
+   */
+  degraded: boolean;
+  /** The destructive changes a development run asks to confirm: those the push makes. */
+  destructiveReasons: string[];
+  /** The table and column drops the push strips, which a run leaves in place. */
+  leftInPlace: string[];
+  /** The retired auth tables the run would drop, when that was asked for. */
+  retiredDrops: readonly string[];
+}
+
+/**
+ * A core reconcile's plan, from the reconcile's own diff, classification,
+ * push plan (`planFreshPush`) and retired-table decision, read-only: no push,
+ * no ledger row, no fill and no drop. The core rows a reconcile fills in are
+ * not counted here; filling them is the reconcile's own write.
+ */
+export async function planCoreReconcile(
+  deps: ReconcileCoreDeps
+): Promise<CoreReconcilePlan> {
+  const { ops, bundle } = await diffCore(deps);
+  const retiredDrops = await decideRetiredDrops(deps);
+  if (ops.length === 0) {
+    return {
+      statements: [],
+      degraded: false,
+      destructiveReasons: [],
+      leftInPlace: [],
+      retiredDrops,
+    };
+  }
+  const push = await (deps.planPush ?? planFreshPush)(
+    deps.dialect,
+    deps.db,
+    bundle
+  );
+  const { asked, leftInPlace } = splitDestructive(
+    await destructiveOpsOf(deps.db, ops),
+    push.blocked
+  );
+  return {
+    statements: push.runnable,
+    degraded: push.degraded,
+    destructiveReasons: asked.map(reasonFor),
+    leftInPlace: leftInPlace.map(reasonFor),
+    retiredDrops,
+  };
+}
+
+/** The retired `sizes` column, as a contribution to the media table. */
+const RETAINED_SIZES_COLUMN: ExtensionColumn = {
+  key: RETIRED_SIZES_COLUMN,
+  name: RETIRED_SIZES_COLUMN,
+  // The kind the column was declared with: jsonb on PostgreSQL, json on
+  // MySQL, text on SQLite.
+  kind: "json",
+  nullable: true,
+};
+
+/**
+ * The contributions to set aside and compose in, with the retired `sizes`
+ * column added for the media table when the live table still has it.
+ */
+function withRetainedSizesColumn(
+  source: EntityContributionSource | undefined,
+  live: NextlySchemaSnapshot
+): EntityContributionSource | undefined {
+  const media = live.tables.find(table => table.name === "media");
+  if (!media?.columns.some(column => column.name === RETIRED_SIZES_COLUMN)) {
+    return source;
+  }
+  const entityColumns = new Map(source?.entityColumns ?? []);
+  entityColumns.set("media", [
+    ...(entityColumns.get("media") ?? []),
+    RETAINED_SIZES_COLUMN,
+  ]);
+  return {
+    entityColumns,
+    entityIndexes: source?.entityIndexes ?? new Map(),
+  };
 }
 
 /**

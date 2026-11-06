@@ -110,7 +110,15 @@ export function PermissionMatrixTable({
   return (
     <>
       {/* Desktop Table View (≥ 1024px) */}
-      <div className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-border relative">
+      {/* The table scrolls inside this region. Where every control is
+          disabled, a read-only role's, nothing in it can take the focus, so
+          the region takes it, and the keyboard can still scroll the table. */}
+      <div
+        role="region"
+        aria-label="Permissions table"
+        tabIndex={disabled ? 0 : undefined}
+        className="hidden lg:block w-full max-h-[600px] overflow-y-auto overflow-x-auto  border-t border-border relative"
+      >
         <table className="w-full border-collapse table-fixed">
           {/*
             Widths declared once, here, instead of letting the browser

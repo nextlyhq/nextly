@@ -94,7 +94,7 @@ describe("collection.<slug>.* post-commit events", () => {
     await current.nextly.update({
       collection: "widgets",
       id,
-      data: { title: "b" },
+      data: { title: "b", _overwrite: true },
     });
     await current.nextly.delete({ collection: "widgets", id });
     await current.events.settle();

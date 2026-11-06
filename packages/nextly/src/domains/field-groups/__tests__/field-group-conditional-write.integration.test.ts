@@ -107,9 +107,15 @@ for (const dialect of getConfiguredTestDialects()) {
       // never reaches the predicate under test. What this must model is the window between that
       // read and the UPDATE — the read saw an unlocked row, the database now holds a locked one.
       // Returning a stale unlocked snapshot from the read is exactly that window, and nothing else
-      // about the row is altered.
+      // about the row is altered. Staged on the read the guard runs, the row as stored past the
+      // registry row cache.
       const read = vi
-        .spyOn(registry, "getComponent")
+        .spyOn(
+          registry as unknown as {
+            getRecordForWrite(slug: string): Promise<unknown>;
+          },
+          "getRecordForWrite"
+        )
         .mockResolvedValueOnce({ ...afterClaim, locked: false });
 
       const outcome = await registry.updateComponentIfVersion(

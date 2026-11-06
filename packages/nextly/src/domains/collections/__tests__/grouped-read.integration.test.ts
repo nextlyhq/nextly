@@ -56,6 +56,9 @@ async function boot(
   rows: { region: string; secret: string }[]
 ): Promise<Handler> {
   const t = await createTestNextly({
+    // A grouped read naming no user is a visitor's, judged by the Public role
+    // a real boot makes, which reads `orders` by its `true` read rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: ORDERS,

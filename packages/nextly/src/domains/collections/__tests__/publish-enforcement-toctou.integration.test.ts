@@ -207,11 +207,13 @@ for (const leg of LEGS) {
 
         await bLocked.promise;
 
-        // Writer A: a batch update that keeps the row draft. It reads the
+        // Writer A: a batch edit that keeps the row draft. It reads the
         // committed `draft` (B is uncommitted), then blocks taking the row lock.
+        // It names a field: a row naming the status alone is an unpublish,
+        // judged by that gate before any lock, so it would never reach the race.
         const aResultP = entryService.updateEntries(
           { collectionName: SLUG, user: { id: RACE_EDITOR } },
-          [{ id, data: { status: "draft" } }]
+          [{ id, data: { title: "t2", status: "draft" } }]
         );
 
         // Wait until A is observably parked on B's row lock (not a fixed sleep),
@@ -286,9 +288,11 @@ for (const leg of LEGS) {
 
         // Writer A: a batch update to `published`. Its plain existence read sees
         // the still-committed row, then it blocks taking the row lock behind B.
+        // It names a field, as above: a row naming the status alone is a
+        // publish judged before any lock.
         const aResultP = entryService.updateEntries(
           { collectionName: SLUG, user: { id: VANISH_EDITOR } },
-          [{ id, data: { status: "published" } }]
+          [{ id, data: { title: "t2", status: "published" } }]
         );
 
         // Release the gate only once A is observably blocked on B's row lock, so

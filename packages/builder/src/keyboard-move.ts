@@ -71,7 +71,7 @@ import {
   type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
-import type { OpPosition, SlotAddress } from "./ops";
+import type { OpPosition, SlotAddress } from "./op-vocabulary";
 
 /**
  * What the author asked for.
@@ -201,6 +201,26 @@ function exposedSlots(
 }
 
 /**
+ * Whether `container` has anywhere to put a block: a slot its definition
+ * declares, or, with no definition to read, a slot it already holds.
+ *
+ * Read from the same declaration {@link indentSlot} reads, so a surface that
+ * offers nesting by this answer offers it exactly where an indent could name a
+ * slot. A block that declares none — a heading, a button — holds no blocks,
+ * which is what lets a drag stop offering "inside" for it rather than offering
+ * a place the placement rule would only refuse.
+ */
+export function holdsBlocks(
+  container: BlockNode,
+  components: ComponentLookup | undefined
+): boolean {
+  const declared = declaredSlots(container, components);
+  return declared === undefined
+    ? Object.keys(container.slots ?? {}).length > 0
+    : declared.length > 0;
+}
+
+/**
  * The slot a block indented into `container` enters, or `null` when no single
  * slot can be named.
  *
@@ -221,7 +241,7 @@ function exposedSlots(
  *   holds exactly one, since that is a slot something renders; otherwise the
  *   engine's default slot.
  */
-function indentSlot(
+export function indentSlot(
   container: BlockNode,
   components: ComponentLookup | undefined
 ): string | null {

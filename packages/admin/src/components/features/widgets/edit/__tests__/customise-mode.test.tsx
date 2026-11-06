@@ -7,7 +7,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -15,21 +23,32 @@ import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
-  WidgetWidthFacts,
+  WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
+import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
 
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
+
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
+// The header's New button reads collections and permissions of its own,
+// which this test does not set up; it is a marker here.
+vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
+  NewSplitButton: () => <div data-testid="dashboard-new" />,
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -45,6 +64,11 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
     isLoading: false,
     error: null,
   }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -91,6 +115,13 @@ registerCoreComponent("core#LinkedBody", LinkedBody);
 registerCoreComponent("core#LinkedSection", LinkedSection);
 registerCoreComponent("core#NotesBody", NotesBody);
 
+/** Full width three rows high by default, and resizable from 3 by 2 up to 12 by 6. */
+const RESIZABLE = {
+  default: { w: 12, h: 3 },
+  min: { w: 3, h: 2 },
+  max: { w: 12, h: 6 },
+};
+
 /**
  * Four widgets: a framed card, an unframed section, a card with a setting, and
  * one the reader has not placed.
@@ -102,22 +133,21 @@ function branding(): AdminBranding {
         id: "core/a",
         title: "Posts",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
       {
         id: "core/b",
         title: "Home page",
         archetype: "custom",
-        defaultSize: "full",
-        chrome: "none",
+        size: RESIZABLE,
         component: "core#LinkedSection",
       },
       {
         id: "core/c",
         title: "Notes",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#NotesBody",
         settings: [{ name: "heading", type: "text", label: "Heading" }],
       },
@@ -125,27 +155,22 @@ function branding(): AdminBranding {
         id: "core/d",
         title: "Team",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
     ],
   } as unknown as AdminBranding;
 }
 
-/** Every width, one card, listed in the add panel's Overview group as core lists it. */
-function facts(): WidgetWidthFacts {
-  return {
-    allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-    defaultWidth: "full",
-    allowsSeveral: false,
-    group: "overview",
-  };
+/** One card, which a dashboard holds once. */
+function facts(): WidgetLayoutFacts {
+  return { allowsSeveral: false };
 }
 
 const OPENED: WidgetPlacement[] = [
-  { id: "p1", widgetId: "core/a", width: "full", removed: false },
-  { id: "p2", widgetId: "core/b", width: "full", removed: false },
-  { id: "p3", widgetId: "core/c", width: "full", removed: false },
+  { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+  { id: "p2", widgetId: "core/b", w: 12, h: 3, removed: false },
+  { id: "p3", widgetId: "core/c", w: 12, h: 3, removed: false },
 ];
 
 function layout(
@@ -161,11 +186,13 @@ function layout(
     },
     available: ["core/d"],
     defaultPlacements: [
-      { id: "core/c", widgetId: "core/c", width: "half", removed: false },
-      { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+      { id: "core/c", widgetId: "core/c", w: 6, h: 3, removed: false },
+      { id: "core/a", widgetId: "core/a", w: 6, h: 3, removed: false },
     ],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -189,13 +216,21 @@ function renderDashboard() {
   );
   // The page's heading beside the grid, so the outline is the page's.
   return render(
-    <>
+    <DashboardChromeProvider>
       <WelcomeHeader />
       <WidgetGrid />
-    </>,
+    </DashboardChromeProvider>,
     { wrapper: Wrapper }
   );
 }
+
+// The settings sheet's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the sheet waits on the
+// sheet rather than on the first transform of the editor's field renderer behind it.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
@@ -203,9 +238,25 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
+  // Every card is asked for by its id; each is answered, so its component draws.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   // A history the reader can go Back through: they came to the dashboard
   // from another admin page.
   window.history.pushState(null, "", CAME_FROM);
@@ -238,9 +289,9 @@ function drawnOrder(): string[] {
     .filter((id): id is string => id !== undefined);
 }
 
-function widthLabels(): string[] {
+function sizeLabels(): string[] {
   return screen
-    .queryAllByTestId("card-width-label")
+    .queryAllByTestId("card-size-label")
     .map(label => label.textContent ?? "");
 }
 
@@ -248,11 +299,14 @@ function live(): HTMLElement {
   return screen.getByTestId("widget-grid-live");
 }
 
-/** Every write the dashboard can make. */
+/**
+ * Every write the dashboard can make. The cards' batch is a POST that only reads, so it is not
+ * one: every card asks it, and customising asks again with the settings each is drawn with.
+ */
 function writes(): number {
   return (
     api.put.mock.calls.length +
-    api.post.mock.calls.length +
+    api.post.mock.calls.filter(([path]) => path !== "/dashboard/query").length +
     api.delete.mock.calls.length
   );
 }
@@ -282,7 +336,7 @@ function saveButton(): HTMLElement {
 const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a move", user => choose(user, "Posts", "Move later")],
   [
-    "a width",
+    "a resize",
     async user => {
       await user.click(
         screen.getByRole("button", { name: "Card actions for Posts" })
@@ -296,7 +350,9 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       });
       // By keyboard: jsdom has no geometry, so a pointer crossing into the
       // submenu reads as leaving it.
-      within(widths).getByRole("menuitemradio", { name: "Half width" }).focus();
+      within(widths)
+        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
+        .focus();
       await user.keyboard("{Enter}");
     },
   ],
@@ -315,10 +371,38 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ],
   ["a reset", user => confirmReset(user)],
   [
+    "a size from the quick popover",
+    async user => {
+      // Settings opens the card's quick popover; its Size is staged with the rest.
+      await choose(user, "Notes", "Settings");
+      const popover = await screen.findByRole("dialog", {
+        name: "Quick settings for Notes",
+      });
+      await user.click(
+        within(popover).getByRole("combobox", { name: "Width" })
+      );
+      await user.click(
+        await screen.findByRole("option", { name: "Half width, 6 columns" })
+      );
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    },
+  ],
+  [
     "a setting",
     async user => {
+      // Settings opens the card's quick popover, and More settings the sheet.
       await choose(user, "Notes", "Settings");
-      const sheet = await screen.findByRole("dialog");
+      const popover = await screen.findByRole("dialog", {
+        name: "Quick settings for Notes",
+      });
+      await user.click(
+        within(popover).getByRole("button", { name: "More settings" })
+      );
+      // The sheet's panel opens at once and says it is loading until its code
+      // arrives, so wait for the form's field before reading the sheet.
+      await screen.findByLabelText(/Heading/);
+      const sheet = screen.getByRole("dialog", { name: "Notes settings" });
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
       await user.click(within(sheet).getByRole("button", { name: "Done" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -332,12 +416,16 @@ describe("customise mode writes nothing before Save", () => {
     async (_kind, change) => {
       renderDashboard();
       const user = await beginEditing();
-      const reads = api.get.mock.calls.length;
+      // The layout's reads: opening the add panel reads the gallery, which is no re-read.
+      const layoutReads = () =>
+        api.get.mock.calls.filter(([path]) => !isGalleryPath(String(path)))
+          .length;
+      const reads = layoutReads();
 
       await change(user);
 
       expect(writes()).toBe(0);
-      expect(api.get.mock.calls.length).toBe(reads);
+      expect(layoutReads()).toBe(reads);
       await user.click(saveButton());
       await waitFor(() => expect(writes()).toBe(1));
     }
@@ -349,18 +437,65 @@ describe("customise mode writes nothing before Save", () => {
       renderDashboard();
       const user = await beginEditing();
       const order = drawnOrder();
-      const widths = widthLabels();
+      const sizes = sizeLabels();
 
       await change(user);
       await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
 
       expect(drawnOrder()).toEqual(order);
       expect(writes()).toBe(0);
-      // Back in customise mode, the widths are the ones it opened with.
+      // Back in customise mode, the sizes are the ones it opened with.
       await beginEditing();
-      expect(widthLabels()).toEqual(widths);
+      expect(sizeLabels()).toEqual(sizes);
     }
   );
+});
+
+describe("the card menu and quick popover while customising", () => {
+  it("lists Settings, the size, the moves, then Remove", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(
+      screen.getByRole("button", { name: "Card actions for Notes" })
+    );
+    const menu = await screen.findByRole("menu");
+    const names = within(menu)
+      .getAllByRole("menuitem")
+      .map(item => item.textContent?.trim() ?? "");
+    expect(names[0]).toBe("Settings");
+    expect(names[1]).toMatch(/^Width/);
+    expect(names[2]).toMatch(/^Height/);
+    expect(names.slice(3, 7)).toEqual([
+      "Move to start",
+      "Move earlier",
+      "Move later",
+      "Move to end",
+    ]);
+    expect(names.at(-1)).toBe("Remove");
+  });
+
+  it("applies a size at once, with the popover still open, and keeps it for Save", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(within(popover).getByRole("combobox", { name: "Width" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Half width, 6 columns" })
+    );
+
+    // Drawn at once in the draft, the popover still open over the card, and nothing written.
+    await waitFor(() => expect(sizeLabels()).not.toEqual(before));
+    // The label's glyphs, then the name a screen reader hears.
+    expect(sizeLabels()).toContain("6×36 columns by 3 rows");
+    expect(
+      screen.getByRole("dialog", { name: "Quick settings for Notes" })
+    ).toBeInTheDocument();
+    expect(writes()).toBe(0);
+  });
 });
 
 describe("the bar", () => {
@@ -402,7 +537,7 @@ describe("the bar", () => {
     await beginEditing();
     const mains = screen.getAllByRole("heading", { level: 1 });
     expect(mains).toHaveLength(1);
-    expect(mains[0]).toHaveTextContent("Welcome, Dev");
+    expect(mains[0]).toHaveTextContent("Acme Site");
   });
 
   it("marks unsaved changes only while there are some", async () => {
@@ -504,32 +639,21 @@ describe("focus", () => {
 });
 
 describe("the cards' own content while customising", () => {
-  // How each kind dims: a framed card keeps its title and border, so the dim
-  // reaches its body and footer through the card's slots; an unframed
-  // section has no frame, so all of it dims.
-  for (const [kind, title, link, dims] of [
-    [
-      "a framed card",
-      "Posts",
-      "View posts",
-      "[&_[data-slot=card-content]]:opacity-60",
-    ],
-    ["an unframed section", "Home page", "Open the home page", "opacity-60"],
+  // Every card is framed: it keeps its title and border, and dims its body
+  // and footer, which are out of reach.
+  for (const [kind, title, link] of [
+    ["a framed card", "Posts", "View posts"],
   ] as const) {
     it(`puts ${kind}'s own links and controls out of reach, and dims them`, async () => {
       renderDashboard();
       await beginEditing();
 
       const content = screen.getByRole("link", { name: link, hidden: true });
-      const fence = content.closest("[inert]");
-      expect(fence).not.toBeNull();
-      expect(fence).toHaveClass(dims);
-      // And what the framed dim reaches for is there to reach.
-      if (kind === "a framed card") {
-        expect(
-          fence?.querySelector("[data-slot=card-content]")
-        ).toContainElement(content);
-      }
+      expect(content.closest("[inert]")).not.toBeNull();
+      // The card's own body dims, once: the fence adds no dim of its own.
+      const body = content.closest("[data-slot=card-content]");
+      expect(body).toHaveClass("opacity-55");
+      expect(body?.closest(".opacity-60")).toBeNull();
       // The edit controls are NOT fenced: they are what customising is for.
       expect(
         screen
@@ -606,6 +730,18 @@ describe("what customise mode says, through the grid's one live region", () => {
   });
 
   it("says a staged reset, and that it is not saved yet", async () => {
+    // The dashboard's first batch answers; a batch after it, for the reset's cards, stays on its
+    // way, so the region holds only what the reset said, never that batch's news beside it.
+    api.post.mockImplementation((_path: string, body: unknown) =>
+      api.post.mock.calls.length > 1
+        ? new Promise(() => undefined)
+        : Promise.resolve({
+            results: (body as { queries: unknown[] }).queries.map(() => ({
+              ok: true,
+              result: { op: "data", data: null },
+            })),
+          })
+    );
     renderDashboard();
     const user = await beginEditing();
     await confirmReset(user);
@@ -659,6 +795,208 @@ describe("leaving with unsaved changes", () => {
         .map(button => button.textContent)
     ).toEqual(["Discard Changes", "Keep Editing", "Save Changes"]);
     expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  /** Opens Notes' settings panel while customising and changes its Heading, keeping it open. */
+  async function panelChanged(user: User): Promise<void> {
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+  }
+
+  it("asks once, in the dashboard's own prompt, for a settings panel holding a change", async () => {
+    // Nothing else changed: the panel's change alone is what the prompt is for.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("asks once when the dashboard and a settings panel both hold changes, and Save leaves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    // The dashboard's prompt, whose Save keeps the arrangement and leaves. A panel asking for
+    // itself first would stage its change on Save and leave the dashboard's prompt to ask again.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  /** The placements the last layout write sent. */
+  function sentPlacements(): Array<{
+    widgetId: string;
+    config?: Record<string, unknown>;
+  }> {
+    const body = api.put.mock.calls.at(-1)?.[1] as
+      | {
+          placements?: Array<{
+            widgetId: string;
+            config?: Record<string, unknown>;
+          }>;
+        }
+      | undefined;
+    return body?.placements ?? [];
+  }
+
+  it("Save in the prompt keeps a settings panel's change in the arrangement it saves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("Save in the prompt stops, saying why in the panel, when the panel's change is refused", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    // Nothing written, still here, and the panel says what to fix, with focus on it.
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("the bar's Save keeps a settings panel's change too, as the prompt's does", async () => {
+    // One Save: the bar and the prompt treat a panel holding a change alike.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    await user.click(saveButton());
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("Discard in the prompt drops the dashboard's changes and the panel's alike", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Discard Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("freezes a settings panel while the dashboard's Save is on its way, so nothing is changed after it was staged", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    // The write is held, so the save is on its way while the panel is checked.
+    api.put.mockReturnValue(new Promise(() => {}));
+    await user.click(saveButton());
+    await waitFor(() =>
+      expect(within(panel).getByLabelText(/Heading/)).toBeDisabled()
+    );
+    // Done says the save is on its way, as it does for the panel's own.
+    expect(
+      within(panel).getByRole("button", { name: "Saving…" })
+    ).toBeDisabled();
+  });
+
+  it("the bar's Cancel discards a settings panel's change too: it closes, and nothing is left to keep", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    // "Changes discarded" is true of the panel too: it is closed, with no Done to press.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /settings$/ })).toBeNull()
+    );
+    expect(writes()).toBe(0);
+    // Opened again, it holds what is stored, not the discarded Heading.
+    await user.click(await screen.findByTestId("dashboard-edit-begin"));
+    await screen.findAllByTestId("card-actions");
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    expect(within(panel).getByLabelText(/Heading/)).toHaveValue("");
+    expect(writes()).toBe(0);
+  });
+
+  it("hands focus to the card's menu at rest when a panel opened while customising closes after the mode ended", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+    // Saved, the panel's change with it: customise mode ends, and the controls the popover was
+    // opened from go with it, while the panel stays open.
+    await user.click(saveButton());
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByRole("dialog", { name: /settings$/ })).toBe(panel);
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Notes" })
+      ).toHaveFocus()
+    );
   });
 
   it("lets the reader leave without asking when nothing changed", async () => {

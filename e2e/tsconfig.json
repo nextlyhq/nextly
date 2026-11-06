@@ -25,12 +25,18 @@
       // numbers the component actually ships rather than a second copy of them.
       // Its own subpath rather than the root barrel: that entry is a client
       // component pulling in React, and this module is plain arithmetic.
-      "@nextlyhq/builder/shell-state": ["../packages/builder/src/shell-state"]
+      "@nextlyhq/builder/shell-state": ["../packages/builder/src/shell-state"],
+      // The release calendar's day rule (`release-timezone.ts`), which the
+      // calendar spec imports from source so it opens the day the calendar
+      // places a release on, not a day worked out by a second copy of the
+      // rule. That module's one import is the admin's own alias for this
+      // file, mapped here as `packages/admin` maps it.
+      "@admin/lib/dates/format": ["../packages/admin/src/lib/dates/format"]
     }
   },
   // Everything, deliberately. The two page-builder specs that rotted did so
   // because their package's tsconfig only included `src/**/*`, so an import of
   // a package nobody had installed typechecked clean for months.
   "include": ["**/*.ts", "**/*.mjs"],
-  "exclude": ["node_modules", ".playwright"]
+  "exclude": ["node_modules", ".playwright", "multi-instance/.run"]
 }

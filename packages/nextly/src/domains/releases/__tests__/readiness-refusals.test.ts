@@ -120,7 +120,8 @@ const MISSING_TITLE: Partial<ReleaseDocumentChecks> = {
 
 /** An author who may publish but not unpublish. */
 const MAY_NOT_UNPUBLISH: Partial<ReleaseDocumentChecks> = {
-  mayPerform: async (_user, _scope, action) => action === "publish",
+  mayPerform: async (_user, _scope, action, entryIds) =>
+    new Set(action === "publish" ? entryIds : []),
 };
 
 describe("readiness", () => {

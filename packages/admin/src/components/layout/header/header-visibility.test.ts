@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginMetadata } from "@admin/types/branding";
 
-import { computeHiddenHeaderButtons } from "./header-visibility";
+import {
+  computeHiddenHeaderButtons,
+  headerControlsSettled,
+} from "./header-visibility";
 
 function plugin(
   name: string,
@@ -49,5 +52,31 @@ describe("computeHiddenHeaderButtons", () => {
       "github",
       "notifications",
     ]);
+  });
+});
+
+describe("headerControlsSettled", () => {
+  const ANSWERED = { workspace: false, permissions: false };
+
+  it("is unsettled while the workspace answer is pending, bell or not", () => {
+    expect(headerControlsSettled({ ...ANSWERED, workspace: true }, true)).toBe(
+      false
+    );
+    expect(headerControlsSettled({ ...ANSWERED, workspace: true }, false)).toBe(
+      false
+    );
+  });
+
+  it("waits on the permissions only where the bell may be offered", () => {
+    expect(
+      headerControlsSettled({ ...ANSWERED, permissions: true }, true)
+    ).toBe(false);
+    expect(
+      headerControlsSettled({ ...ANSWERED, permissions: true }, false)
+    ).toBe(true);
+  });
+
+  it("is settled once both answers are in", () => {
+    expect(headerControlsSettled(ANSWERED, true)).toBe(true);
   });
 });

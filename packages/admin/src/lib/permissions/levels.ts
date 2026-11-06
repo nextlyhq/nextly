@@ -19,6 +19,7 @@
  *
  * @module lib/permissions/levels
  */
+import { RETIRED_MANAGE_RESOURCES } from "../../../../nextly/src/auth/access/retired-manage-permissions";
 
 /** A level the roles screen offers. */
 export type AccessLevel = "none" | "view" | "edit" | "publish";
@@ -71,8 +72,9 @@ const LEVEL_ORDER: readonly AccessLevel[] = ["none", "view", "edit", "publish"];
 
 /**
  * The action a role still holds where `nextly upgrade` has not yet replaced it
- * with plain permissions. On a bridge resource it gave read, create, update
- * and delete, so it reads as Can edit rather than as nothing.
+ * with plain permissions. On a bridge resource it once gave read, create,
+ * update and delete; the server now counts it for nothing, so it reads as no
+ * level of its own.
  */
 const LEGACY_MANAGE = "manage";
 
@@ -82,15 +84,14 @@ const LEGACY_MANAGE = "manage";
  * each action had a plain permission. Anywhere else (`background-jobs`, say)
  * `manage` is a permission of its own and stays under the row's switch.
  *
- * A client-safe copy of core's list, which runs in the server; the parity
- * test holds the two together.
+ * The server counts a stored `manage` row there for nothing until `nextly
+ * upgrade`, or saving the role, has converted it into those four, so the
+ * roles screen reads it as no access too. Core's own list, so the two cannot
+ * name different resources.
  */
-export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-]);
+export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set(
+  RETIRED_MANAGE_RESOURCES
+);
 
 /** Whether `manage` on this row is the legacy bridge rather than its own action. */
 function bridgesManage(kind: LevelKind, resource: string | undefined): boolean {
@@ -110,10 +111,9 @@ export function levelsFor(kind: LevelKind): AccessLevel[] {
  * Every action the level of a row of `kind` on `resource` decides: the ones a
  * level is read over, and the ones a changed level replaces.
  *
- * A bridge resource's legacy `manage` is among them. It is read as the Can
- * edit it gave, so a row moved to another level must lose it with the rest,
- * or a row set to Can view would keep editing through it. It is never saved:
- * no level's permissions include it.
+ * A bridge resource's legacy `manage` is among them, so a row moved to
+ * another level loses it with the rest rather than keeping it under the
+ * switch. It is never saved: no level's permissions include it.
  */
 export function standardActions(
   kind: LevelKind,
@@ -130,9 +130,9 @@ export function standardActions(
  * The level a row reads, from the actions the role holds on it.
  *
  * Only the standard actions count; any other is under the switch. A bridge
- * resource's legacy `manage` counts as the Can edit it gave; on any other
- * resource `manage` is its own action, under the switch. Actions matching no
- * level read "custom".
+ * resource's legacy `manage` counts for nothing, as the server counts it; on
+ * any other resource `manage` is its own action, under the switch. Actions
+ * matching no level read "custom".
  */
 export function levelOf(
   kind: LevelKind,
@@ -142,9 +142,9 @@ export function levelOf(
   const standard = standardActions(kind, resource);
   const actions = new Set<string>();
   for (const action of held) {
-    if (action === LEGACY_MANAGE && bridgesManage(kind, resource)) {
-      for (const granted of CAN_EDIT) actions.add(granted);
-    } else if (standard.has(action)) {
+    // A retired `manage` gives no access until it is converted.
+    if (action === LEGACY_MANAGE && bridgesManage(kind, resource)) continue;
+    if (standard.has(action)) {
       actions.add(action);
     }
   }

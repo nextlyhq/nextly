@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -85,11 +86,11 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
         access: { read: () => true, update: () => true, create: () => true },
         fields: [
           text({ name: "title" }),
-          // Readable with the rule-facing `posts:read` permission only.
+          // Readable with the `read-posts` permission only.
           text({
             name: "keyed",
             access: {
-              read: ({ permissions }) => permissions.includes("posts:read"),
+              read: ({ permissions }) => permissions.includes("read-posts"),
             },
           }),
           fieldGroup({ name: "banner", component: "banner" }),
@@ -113,6 +114,7 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
       title: "T2",
       keyed: "K-2",
       banner: { heading: "H2", secret: "S-2", fragile: "F-2" },
+      _overwrite: true,
     }
   );
   return id;
@@ -204,11 +206,14 @@ describe.each(getConfiguredTestDialects())(
 
     it("does not restore a component field the restorer may not read", async () => {
       const id = await documentWithGuardedComponent(dialect);
+      // A restore is an update of the document, so the restorer holds update.
+      await userWhoMay(current!, CLERK.id, "update", ["posts"]);
 
       const result = await restoreVersion({
         ...at(id),
         user: CLERK,
         versionNo: 1,
+        version: { _overwrite: true },
       });
       expect(JSON.stringify(result)).toContain("banner");
       const live = await current!.getService("collectionsHandler").getEntry({

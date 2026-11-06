@@ -15,10 +15,12 @@ export interface CanProps {
 }
 
 /**
- * @experimental Renders `children` only if the current user holds `permission`
- * (D36); otherwise renders `fallback` (default: nothing). The fallback also
- * shows while permissions are loading. Client-side UX gating only — the server
- * still enforces access via `requirePermission`.
+ * @experimental Renders `children` only if the current user may do what
+ * `permission` names, as `useCan` answers it: an action on a collection or
+ * Single as the server decides it, any other slug from the user's permissions
+ * (D36). Otherwise renders `fallback` (default: nothing). The fallback also
+ * shows while access is loading. Client-side UX gating only — the server
+ * still enforces every request.
  */
 export function Can({
   permission,

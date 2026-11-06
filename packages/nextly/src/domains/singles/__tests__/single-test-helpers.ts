@@ -54,7 +54,17 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
       supportsOnConflict: true,
       supportsFts: true,
     }),
-    select: vi.fn().mockResolvedValue([]),
+    // Answered as inside a transaction, so a registry read goes to `selectOne` as these tests
+    // drive it rather than to the registry row cache, which has tests of its own.
+    transactionOpenInFlow: vi.fn(() => true),
+    // A write reads back the document's version counter on its transaction;
+    // the row these tests write is at version 1. Every other read is empty.
+    select: vi
+      .fn()
+      .mockImplementation(
+        async (_table: string, options?: { columns?: string[] }) =>
+          options?.columns?.includes("_revision") ? [{ _revision: 1 }] : []
+      ),
     selectOne: vi.fn().mockResolvedValue(null),
     insert: vi.fn().mockResolvedValue({ id: "new-id" }),
     update: vi.fn().mockResolvedValue([{ id: "updated-id" }]),
@@ -160,6 +170,19 @@ export function createMockComponentDataService(): MockRecord {
       .mockImplementation(
         async ({ entry }: { entry: Record<string, unknown> }) => entry
       ),
+    // The read of one entry's components in several languages, which every
+    // component read goes through: one copy of the entry per language asked.
+    populateComponentDataByLanguage: vi
+      .fn()
+      .mockImplementation(
+        async ({
+          entry,
+          languages,
+        }: {
+          entry: Record<string, unknown>;
+          languages: readonly unknown[];
+        }) => languages.map(() => ({ ...entry }))
+      ),
     saveComponentData: vi.fn().mockResolvedValue(undefined),
     saveComponentDataInTransaction: vi.fn().mockResolvedValue(undefined),
     // Asked before the caller opens its transaction, and its result is handed
@@ -178,10 +201,9 @@ export function createMockComponentDataService(): MockRecord {
 
 // ── Mock RBACAccessControlService ───────────────────────────────────────
 
-export function createMockRBACService(allowed: boolean = true): MockRecord {
+export function createMockRBACService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
-    checkAccess: vi.fn().mockResolvedValue(allowed),
     // Answers `undefined`: no code-defined rule governs the operation for an
     // anonymous caller, who then falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),

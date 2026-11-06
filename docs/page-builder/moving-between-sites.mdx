@@ -1,0 +1,95 @@
+---
+title: Move patterns, components and Layouts between sites
+description: Export an item with everything it depends on as one file, and import it into another site after a preview.
+---
+
+A pattern, a component or a Layout can be exported as one file and imported into
+another Nextly site. The file holds the item and everything it depends on, so it
+looks the same on the site it goes to, apart from the site-wide choices that belong to
+that site, such as its blocks' own looks.
+
+<Callout type="warn">
+  Export and import are experimental: the file format and the routes may still
+  change before they are marked stable. Each file states its format version, and
+  an import refuses a version it does not know.
+</Callout>
+
+## Export an item
+
+Open **Page Builder → Components**, **Patterns** or **Layouts**, open a row's actions
+and choose **Export**. The browser saves a file named after the item, such as
+`hero.pattern.nextly.json`.
+
+The file holds:
+
+- the item itself, in the form visitors get, or as its draft if it was never published;
+- the components it places, and the ones those place;
+- the shared styles its blocks wear and the variables their styles use;
+- the breakpoints its styles and per-device hide settings name;
+- the images and other uploads it shows, with their bytes;
+- the list of block types it uses.
+
+It never holds a block's code, and it never says which Layout is the site's default:
+that belongs to the site. Nor does it hold the site's edits to a block's own look, such
+as a button's Primary: those change every block of that type on a site, so they stay
+with the site they were made on. An imported item draws with the target site's own
+looks, and an import never changes them. Exporting needs read access to the item and to everything it
+depends on; an export that cannot read a part is refused, naming it, rather than
+written incomplete.
+
+## Import a file
+
+Above each of the three lists, choose **Import from file** and pick a file. Nothing is
+written until you have seen the preview and chosen **Import**. The preview shows:
+
+- **New on this site**: what the import adds.
+- **Already on this site**: an identical image, shared style or variable, used as it is
+  rather than added again.
+- **Same name as something on this site**: each clash, with a choice. By default the
+  file's item is added under a new name (for example "Hero (2)") and the file points at
+  it. You can instead use the existing item, and the file points at that. Nothing on
+  the site is ever changed or overwritten.
+- **Breakpoints this site does not have**: a breakpoint matches only one with exactly
+  the same width. For each one with no match, choose **Add to this site** or **Drop its
+  styles and hide settings**. Adding is offered only to someone who may manage the
+  site's settings, and only while the site has room for another breakpoint.
+
+The import cannot be confirmed when:
+
+- the file uses a block this site has not registered. Install the plugin that provides
+  it, then import again;
+- its components place each other in a loop;
+- a block in it breaks a lock;
+- you may not add one of the kinds of item it holds.
+
+When the site changes between the preview and the import (a breakpoint's width, say),
+the import is not applied: the preview is shown again for you to confirm.
+
+The import never makes a Layout the site's default.
+
+## Through the API
+
+Both are plugin routes under `/admin/api/plugins/@nextlyhq/plugin-page-builder`, run as
+the caller with the same checks as the admin.
+
+- `POST /transfer/components/:id/export`, `/transfer/patterns/:id/export` and
+  `/transfer/layouts/:id/export` answer with the file.
+- `POST /transfer/import` takes `{ file, choices, dryRun, expect }`:
+  - with `dryRun: true` it answers with the preview and writes nothing;
+  - `choices.conflicts` maps a clash's key (`component:<id>`, `class:<id>`,
+    `token:<name>`, `media:<id>`, …) to `"rename"` or `"existing"`;
+  - `choices.breakpoints` maps each unmatched breakpoint's id to `"add"` or `"drop"`;
+  - `expect` is the preview's `fingerprint`. An import whose site changed since that
+    preview answers `409`; preview again and confirm.
+
+A refused import answers `422`, with each reason in the error's `data.errors`.
+
+Before anything is kept, every write an import would make is made and rolled back, so
+the site's own checks (locks, component loops, field rules) answer in the preview. Hooks
+run for those writes too, with `context["pageBuilder.transferJudgement"]` set to `true`;
+a hook with an effect a rollback cannot undo, such as sending a message, should skip it
+then and act on the write that commits.
+
+Comparing with what the site holds needs read access: an item you may not read is
+renamed around without being named or offered, and a file carrying shared styles,
+variables or media needs you to read the site style or media.

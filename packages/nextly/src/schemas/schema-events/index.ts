@@ -10,28 +10,15 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
+import { loadedDialect } from "../../database/dialect-tables";
 
 /**
  * Returns the Drizzle table object for the schema-events feature group, for
  * the requested dialect.
  */
 export function schemaEventsTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return { nextlySchemaEvents: pg.nextlySchemaEventsPg };
-    case "mysql":
-      return { nextlySchemaEvents: my.nextlySchemaEventsMysql };
-    case "sqlite":
-      return { nextlySchemaEvents: sl.nextlySchemaEventsSqlite };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { nextlySchemaEvents } = loadedDialect(dialect).tables;
+  return { nextlySchemaEvents };
 }

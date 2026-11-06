@@ -32,6 +32,18 @@ export const NEXTLY_ERROR_STATUS = {
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
   NOT_FOUND: 404,
+  // A write to a collection or Single removed from code: its registry row
+  // says the app's code defines it, and the running configuration no longer
+  // declares it. 409 like the other states the database and the configuration
+  // disagree about: the caller's permissions are not the problem, retrying
+  // cannot change it, and declaring it again or retiring it does.
+  ENTITY_REMOVED_FROM_CODE: 409,
+  // A read or write of a collection or Single the database has not been
+  // migrated for: a declared field's column or the entity's table is missing,
+  // or this running instance never registered the entity. 409 for the reason
+  // ENTITY_REMOVED_FROM_CODE gives: retrying cannot change it, and
+  // `nextly migrate` does.
+  ENTITY_NOT_MIGRATED: 409,
   // The path exists and this verb is not one it serves. Distinct from NOT_FOUND, which would
   // tell the caller the address is wrong when only the method is; the response carries `Allow`.
   METHOD_NOT_ALLOWED: 405,
@@ -40,6 +52,17 @@ export const NEXTLY_ERROR_STATUS = {
   // size so the client can ask again for a span that exists.
   RANGE_NOT_SATISFIABLE: 416,
   CONFLICT: 409,
+  // An update made from a version of the document that is no longer its
+  // current one: someone else's save came in between. Its own code rather
+  // than CONFLICT, which the edit lock's claim and content history's version
+  // allocation already answer and which a retry keys on: this one must never
+  // be retried, since the same version stays out of date.
+  STALE_VERSION: 409,
+  // An update that must say which version of a document it was made from, or
+  // that it overwrites whatever is stored, and said neither: 428, Precondition
+  // Required. Its own code beside STALE_VERSION: nothing is out of date, the
+  // request is missing the condition it is judged by.
+  VERSION_REQUIRED: 428,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,
@@ -58,6 +81,10 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // The app nextly runs in is set up so nextly cannot work: its config, or the
+  // Next.js and React it installs. 500: nothing about the request is wrong,
+  // and only the operator can change it.
+  CONFIGURATION_ERROR: 500,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
   // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
   EXTERNAL_URL_BLOCKED: 400,
@@ -139,10 +166,11 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
-  // The admin is not served because a dashboard widget draws with a component
-  // the app's generated component map does not include. Refused when the
-  // admin's server layout renders, so the public site keeps serving.
-  NEXTLY_ADMIN_COMPONENT_MAP_STALE: 500,
+  // Plugin platform — a plugin that adds widgets or widget data sources through
+  // `contributes.admin.widgets` or `contributes.widgetSources`, keys Nextly no
+  // longer reads: a plugin declares its widgets with `defineWidget` under
+  // `contributes.dashboard`. Refused at boot, naming the plugin and the key.
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: 500,
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
@@ -153,6 +181,7 @@ export const NEXTLY_ERROR_STATUS = {
   // and an operator command resolves.
   PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
   PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: 409,
   PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
   // A full uninstall that would drop tables, run without `--yes`.
   PLUGIN_UNINSTALL_UNCONFIRMED: 409,
@@ -213,6 +242,16 @@ export const NEXTLY_ERROR_STATUS = {
   // refusals: no request caused it, and the fix is a change to the server's
   // own configuration.
   NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // A reloaded config turns `experimental.perLanguageStorage` on or off while the site runs. 500
+  // like the refusals beside it: no request caused it, and the remedy is restarting the site.
+  NEXTLY_PER_LANGUAGE_STORAGE_CHANGED: 500,
+  // `experimental.perLanguageStorage` is on over a database whose main tables still hold
+  // translatable values. 500 for the same reason: the remedy is the server's configuration or data.
+  NEXTLY_PER_LANGUAGE_STORAGE_MIXED: 500,
+  // `experimental.perLanguageStorage` is on, the site declares no languages, so it would serve the
+  // implicit English alone, and its translations in other languages would read as gone. 500 for the
+  // same reason: the remedy is the server's configuration.
+  NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
   // `db.postgres.schema` names a schema other than `public`, which the schema
   // push cannot yet create tables in. 500 for the same reason as the mismatch
   // above: a boot-time refusal of the server's own configuration.
@@ -248,6 +287,7 @@ const CANONICAL_CODE_FOR_STATUS = [
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "VERSION_REQUIRED",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
   "RATE_LIMITED",

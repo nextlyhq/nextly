@@ -1,0 +1,183 @@
+name: Newest minor
+
+# nextly accepts every Next.js and React minor within the supported majors
+# (the peer ranges `scripts/supported-peer-ranges.test.mjs` holds every package to), but the
+# repository builds and tests the versions in its lockfile. Each night this
+# installs the newest published release within those ranges instead, then runs
+# the scaffold build and the browser suite against it, so a minor that breaks
+# nextly is seen the day it ships rather than when someone upgrades. A failure
+# opens, or adds to, one issue, which the next green night closes.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: newest-minor
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Find the newest minors
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.newest.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Every published package's peer range for these is the same (the
+      # manifest test holds it), and the admin's names all three. The newest
+      # release that range admits is the one a user installing today gets.
+      - name: Resolve the newest release within each supported range
+        id: newest
+        shell: bash
+        run: |
+          specs=()
+          for pkg in next react react-dom; do
+            range=$(node -p "require('./packages/admin/package.json').peerDependencies['$pkg']")
+            version=$(npm view "$pkg@$range" version --json | node -e '
+              let s = "";
+              process.stdin.on("data", d => (s += d)).on("end", () => {
+                const parts = v => v.split(".").map(Number);
+                const newest = [].concat(JSON.parse(s))
+                  .filter(v => /^\d+\.\d+\.\d+$/.test(v))
+                  .sort((a, b) => { const [x, y] = [parts(a), parts(b)]; return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; })
+                  .at(-1);
+                console.log(newest ?? "");
+              });')
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no release of $pkg within $range"; exit 1; }
+            specs+=("$pkg@$version")
+            echo "$pkg: $version (range $range)" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "versions=${specs[*]}" >> "$GITHUB_OUTPUT"
+
+  scaffold:
+    name: Scaffold build
+    needs: resolve
+    uses: ./.github/workflows/scaffold-build.yml
+    with:
+      versions: ${{ needs.resolve.outputs.versions }}
+
+  browser:
+    name: Browser tests
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # No Turbo cache, local or remote: these builds use versions no lockfile
+    # holds, and must never be read back by a run of main or a pull request.
+    env:
+      VERSIONS: ${{ needs.resolve.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # An override reaches every package in the workspace, the playground the
+      # browser suite serves included. The install that follows re-resolves the
+      # lockfile for them, which is why this run never saves anything.
+      - name: Use the newest minors
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const yaml = require("js-yaml");
+            const workspace = yaml.load(fs.readFileSync("pnpm-workspace.yaml", "utf8"));
+            for (const spec of process.env.VERSIONS.split(" ")) {
+              const at = spec.lastIndexOf("@");
+              workspace.overrides = { ...workspace.overrides, [spec.slice(0, at)]: spec.slice(at + 1) };
+            }
+            fs.writeFileSync("pnpm-workspace.yaml", yaml.dump(workspace));
+          '
+          pnpm install --no-frozen-lockfile
+
+      # The suite below is evidence about these versions only if they are the
+      # ones installed.
+      - name: Check the newest minors are the ones installed
+        shell: bash
+        working-directory: apps/playground
+        run: |
+          for spec in $VERSIONS; do
+            name=${spec%@*}; want=${spec##*@}
+            have=$(node -p "require('$name/package.json').version")
+            echo "$name $have"
+            [ "$have" = "$want" ] || { echo "::error::$name is $have, not $want"; exit 1; }
+          done
+
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Run browser tests (production server)
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_SERVER: production
+
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-newest-minor
+          path: e2e/.playwright/report
+          retention-days: 7
+
+  report:
+    name: Report
+    needs: [resolve, scaffold, browser]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      # One open issue at a time, found by its title and author: a failing
+      # night opens it or adds to it, and the next green night closes it.
+      - name: Open, add to or close the issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VERSIONS: ${{ needs.resolve.outputs.versions }}
+          FAILED: ${{ contains(needs.*.result, 'failure') }}
+        with:
+          script: |
+            const title = "The newest Next.js or React minor fails nextly";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const open = await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: "open", per_page: 100 });
+            const issue = open.find(item => !item.pull_request && item.title === title && item.user?.login === "github-actions[bot]");
+            const versions = process.env.VERSIONS || "(not resolved)";
+            if (process.env.FAILED === "true") {
+              const body = `Failed with ${versions}: ${run}`;
+              if (issue) await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body });
+              else await github.rest.issues.create({ ...context.repo, title, body: `${body}\n\nThe nightly newest-minor run installs the newest release within nextly's supported Next.js and React ranges and runs the scaffold build and browser suite. This issue closes on the next green night.` });
+              core.setFailed(`newest minor failed: ${versions}`);
+            } else if (issue) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body: `Passes again with ${versions}: ${run}` });
+              await github.rest.issues.update({ ...context.repo, issue_number: issue.number, state: "closed" });
+            }

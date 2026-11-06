@@ -1,0 +1,24 @@
+---
+title: SCHEMA_LOCK_LOST
+description: "Another run took the schema lock while the command still held it, so the two may have changed the schema at once."
+---
+
+## Cause
+
+Another run took the schema lock while the command still held it, so the two may have changed the schema at once.
+
+A command that changes the schema holds the schema lock while it works and renews it as it goes. This one finished its work but found, at the end, that another run had taken the lock in the meantime, so the two may have changed the schema at the same time.
+
+## Fix
+
+- Check the database's tables against your configuration before running anything else that changes the schema.
+- Then run the command again; it is safe to repeat once nothing else is running.
+
+## Example
+
+```text
+✗ db:sync finished, but could not keep the schema lock to the end.
+  Why:  Another run took it while the work ran.
+  Next: Check the database before running it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-lost  (SCHEMA_LOCK_LOST)
+```

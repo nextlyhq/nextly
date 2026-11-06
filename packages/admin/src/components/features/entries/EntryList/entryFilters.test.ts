@@ -161,4 +161,20 @@ describe("buildEntryWhereFilter", () => {
     const where = buildEntryWhereFilter({ status: "all", translated: null });
     expect(where).toBeUndefined();
   });
+
+  it("sends no language filter, the list's own or a link's, for a user who may not read every language's state", () => {
+    // The server refuses the whole list for such a filter, so a filter chosen
+    // before access was lost, or carried by a link, is dropped instead.
+    const where = buildEntryWhereFilter({
+      whereParam:
+        '{"_translated":{"locale":"fr","state":"missing"},"title":{"equals":"A"}}',
+      status: "draft",
+      translated: { locale: "de", state: "missing" },
+      readsTranslationState: false,
+    });
+    expect(where).not.toHaveProperty("_translated");
+    expect(where).toEqual({
+      and: [{ title: { equals: "A" } }, { status: { equals: "draft" } }],
+    });
+  });
 });

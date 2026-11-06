@@ -38,6 +38,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -51,6 +52,7 @@ import {
 import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
+import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
@@ -99,7 +101,11 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
-import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
+import {
+  assertLiveCounts,
+  assertPreCleanupAccepted,
+  withAddedColumnsLeftToTighten,
+} from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
 import { executePreResolutionOps } from "./pre-resolution/executor";
@@ -115,12 +121,14 @@ import type {
   MigrationJournalSummary,
   Notifier,
   PreCleanupExecutor,
+  PreCleanupField,
   PreRenameExecutor,
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
 import { builtByFor } from "./registered-collections";
+import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import {
   sqliteRebuiltTables,
@@ -130,6 +138,7 @@ import {
 } from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
+import { uniqueColumnLookup } from "./unique-columns";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -344,6 +353,9 @@ function withoutSqliteDropsLeftToRebuild(
  */
 function preCleanupFailure(err: unknown): Error {
   if (err instanceof PromptCancelledError) return err;
+  // A refusal is not a failed statement: pre-cleanup's checks refuse before it runs any, and the
+  // refusal carries the column and the reason, which a DDL wrapper would replace with its message.
+  if (NextlyError.isValidation(err)) return err;
   return new DdlExecutionError(
     err instanceof Error ? err.message : String(err),
     err
@@ -784,10 +796,10 @@ export class PushSchemaPipeline {
       // The entities' tables with what hooks contributed to them, then the
       // extension's own tables: built by the one function the schema preview
       // also builds from, so the preview shows what this apply will do.
-      const { snapshot: desiredSnapshot, fieldGroupTypeColumns } =
+      const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
         buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
 
-      const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+      const allOperations = diffSnapshots(liveSnapshot, snapshotBeforeRenames);
 
       // A UI save owns only the entity being edited. An operation targeting a code-first or
       // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
@@ -834,6 +846,8 @@ export class PushSchemaPipeline {
         countRows: table => countRowsHelper(db, dialect, table),
         countLongerThan: (table, column, length) =>
           countLongerThanHelper(db, dialect, table, column, length),
+        // "Fill with one value" is not offered for a column the schema makes unique.
+        isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
         dialect,
       });
 
@@ -894,15 +908,47 @@ export class PushSchemaPipeline {
       // their SQL from these ops, so an unpatched add_column would still say
       // NOT NULL despite the admin's resolution — failing the apply on a
       // populated table or landing the column as required.
-      const allResolvedOps = applyMakeOptionalToOperations(
-        renameResolvedOps,
+      //
+      // A NEW required column answered with a value (or with deleting the rows
+      // it leaves empty) is added, nullable, by pre-cleanup ahead of its fill,
+      // so every later phase plans only its NOT NULL instead of adding it
+      // again — read once here so routing, rebuild approval and the emitted
+      // DDL all see the same operations.
+      const allResolvedOps = withAddedColumnsLeftToTighten(
+        applyMakeOptionalToOperations(
+          renameResolvedOps,
+          dispatchResult.resolutions,
+          classificationResult.events
+        ),
         dispatchResult.resolutions,
         classificationResult.events
       );
 
       // Already excluded above, before the operation set was read. Resolutions are keyed to the
       // candidates and events that set produced, so none of them can reintroduce a locked table.
-      const resolvedOps = allResolvedOps;
+      // A Schema Builder relationship this save renames keeps what its old column had: the keys
+      // were planned before the renames were answered, so one its old column never had is taken
+      // back from both the operations and the snapshot the rest of the apply builds from.
+      const { operations: resolvedOps, desired: desiredSnapshot } =
+        withoutKeysOnKeylessRenames(
+          allResolvedOps,
+          snapshotBeforeRenames,
+          liveSnapshot,
+          new Set(
+            Object.values(desired.collections)
+              .filter(c => c.builderOwned === true)
+              .map(c => c.tableName.toLowerCase())
+          )
+        );
+
+      // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
+      // every column the answered plan makes NOT NULL, not only those the classifier raised.
+      await refuseNotNullOverNulls(
+        args,
+        classificationResult,
+        dispatchResult,
+        resolvedOps
+      );
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //
@@ -1084,7 +1130,9 @@ export class PushSchemaPipeline {
         // patches collections + singles + components — keeping the two in
         // sync so a future classifier-on-singles event has field metadata
         // to validate provide_default values against.
-        const aggregatedFields: Array<{ name: string; type: string }> = [
+        // Each tagged with its entity's table, so a fill is judged by the field on the event's own
+        // table.
+        const aggregatedFields: PreCleanupField[] = [
           ...Object.values(desired.collections),
           ...Object.values(desired.singles),
           ...Object.values(desired.components),
@@ -1094,13 +1142,28 @@ export class PushSchemaPipeline {
               (f): f is typeof f & { name: string } =>
                 typeof f.name === "string"
             )
-            .map(f => ({ name: f.name, type: f.type }))
+            .map(f => ({
+              tableName: c.tableName,
+              name: f.name,
+              type: f.type,
+            }))
         );
         try {
           assertPreCleanupAccepted({
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
             fields: aggregatedFields,
+            desiredSnapshot,
+            dialect,
+          });
+          // Judged again on the rows as they stand after the prompt, inside this transaction and
+          // before Phase C: on MySQL its renames and drops commit as they run.
+          await assertLiveCounts({
+            tx,
+            resolutions: dispatchResult.resolutions,
+            events: classificationResult.events,
+            operations: resolvedOps,
+            dialect,
           });
         } catch (err) {
           throw preCleanupFailure(err);
@@ -1145,6 +1208,7 @@ export class PushSchemaPipeline {
             desiredSnapshot,
             resolutions: dispatchResult.resolutions,
             events: classificationResult.events,
+            operations: resolvedOps,
             fields: aggregatedFields,
             dialect,
           });
@@ -1406,7 +1470,13 @@ export class PushSchemaPipeline {
         // filterUnsafeStatements; the fast path bypasses that filter (its
         // statements come from approved operations), so it gets the same
         // refusal applied directly to its drops.
-        const pluginMigrated = await pluginMigratedTableSet(db, dialect);
+        //
+        // Read through `tx`, the handle this apply runs on. On PostgreSQL and
+        // MySQL that is the apply's own transaction, so the registry read
+        // stays on its connection instead of taking a second one from the
+        // pool while the transaction is open. On SQLite, which applies with
+        // no transaction, `tx` is the database handle itself.
+        const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
         const unlocked = useFastPath
           ? pluginMigrated
             ? emittedStatements.filter(
@@ -1715,7 +1785,8 @@ export class PushSchemaPipeline {
           // builder that made the table has to be named.
           builtBy: builtByFor("collection", c.builderOwned),
           status: c.status === true,
-          localized: (c as { localized?: boolean }).localized === true,
+          // Where its translatable columns live (`storesPerLanguage`), not only its own flag.
+          localized: storesPerLanguage(c),
           // The keys the diff compared, so a table drizzle-kit rebuilds on
           // SQLite keeps them and the kit sees no key it would drop. Read on
           // SQLite only; the other dialects add keys with statements.
@@ -1740,7 +1811,7 @@ export class PushSchemaPipeline {
           // Rendered as DDL by drizzle-kit, so the builder that made it is named here too.
           builtBy: builtByFor("single", s.builderOwned),
           status: s.status === true,
-          localized: (s as { localized?: boolean }).localized === true,
+          localized: storesPerLanguage(s),
           uniqueColumns: uniqueColumnsFor(s.tableName),
         }
       );
@@ -1760,7 +1831,7 @@ export class PushSchemaPipeline {
         c.tableName,
         c.fields,
         {
-          localized: (c as { localized?: boolean }).localized === true,
+          localized: storesPerLanguage(c),
           // 🔴 The discriminator is a SYSTEM column whose name no user ever
           // chooses: the only two spellings are the two storage generations,
           // and which one a table carries is a fact of that table rather than a

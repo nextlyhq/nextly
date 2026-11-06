@@ -33,6 +33,11 @@ import {
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
 import { refuseUnlessSuperAdminCaller } from "../../auth/services/role-change-caller";
+import {
+  rolesConferring,
+  walkRoleGraph,
+  type RoleEdge,
+} from "../../auth/services/role-graph";
 
 const SUPER_ADMIN_ROLE_SLUG = "super-admin";
 
@@ -173,8 +178,11 @@ export async function refuseRemovingLastSuperAdmin(
     child: key(String(row.childRoleId)),
   }));
 
-  const before = conferringFrom(edges, superAdminRoleId);
-  const after = conferringFrom(edgesAfter(edges, change), superAdminRoleId);
+  const before = await rolesConferring(edges, superAdminRoleId);
+  const after = await rolesConferring(
+    edgesAfter(edges, change),
+    superAdminRoleId
+  );
   if (change.kind === "deleteRole") after.delete(change.roleId);
   const roleIds = new Set([...before, ...after]);
 
@@ -287,37 +295,11 @@ function keyed(
   return held.map(a => ({ userId: key(a.userId), roleId: key(a.roleId) }));
 }
 
-/** One role inheriting another: `parent` holds everything `child` does. */
-interface Edge {
-  parent: string;
-  child: string;
-}
-
-/**
- * The roles that confer super-admin over `edges`: the role itself and every
- * role that inherits it, at any depth.
- */
-function conferringFrom(
-  edges: readonly Edge[],
-  superAdminRoleId: string
-): Set<string> {
-  const conferring = new Set([superAdminRoleId]);
-  let frontier = [superAdminRoleId];
-  while (frontier.length > 0) {
-    const next: string[] = [];
-    for (const { parent, child } of edges) {
-      if (frontier.includes(child) && !conferring.has(parent)) {
-        conferring.add(parent);
-        next.push(parent);
-      }
-    }
-    frontier = next;
-  }
-  return conferring;
-}
-
 /** The inheritance as the change would leave it. */
-function edgesAfter(edges: readonly Edge[], change: SuperAdminChange): Edge[] {
+function edgesAfter(
+  edges: readonly RoleEdge[],
+  change: SuperAdminChange
+): RoleEdge[] {
   switch (change.kind) {
     case "removeInheritance":
       return edges.filter(
@@ -552,24 +534,19 @@ async function rolesConferringSuperAdmin(
   superAdminRoleId: string
 ): Promise<string[]> {
   const { roleInherits } = tables;
-  const conferring = new Set([superAdminRoleId]);
-  let frontier = [superAdminRoleId];
-  while (frontier.length > 0) {
-    const parents = (await db
-      .select({ parentRoleId: roleInherits.parentRoleId })
-      .from(roleInherits)
-      .where(inArray(roleInherits.childRoleId, frontier))) as Array<{
-      parentRoleId: unknown;
-    }>;
-    frontier = [];
-    for (const { parentRoleId } of parents) {
-      const id = String(parentRoleId);
-      if (conferring.has(id)) continue;
-      conferring.add(id);
-      frontier.push(id);
-    }
-  }
-  return [...conferring];
+  // Up the inheritance, unbounded as it always was: the role table is the
+  // install's own, and a holder anywhere above counts.
+  const { ids } = await walkRoleGraph([superAdminRoleId], async batch =>
+    (
+      (await db
+        .select({ parentRoleId: roleInherits.parentRoleId })
+        .from(roleInherits)
+        .where(inArray(roleInherits.childRoleId, [...batch]))) as Array<{
+        parentRoleId: unknown;
+      }>
+    ).map(row => row.parentRoleId)
+  );
+  return [superAdminRoleId, ...ids];
 }
 
 const FIRST_ADMINISTRATOR_TAKEN = "first-administrator-taken";

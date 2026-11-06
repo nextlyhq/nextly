@@ -25,8 +25,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshCollectionWidgets } from "../collection-widgets";
 import { evaluateConditions } from "../conditions";
+import { refreshContentSources } from "../content-sources";
 import type { WidgetCondition } from "../lifecycle";
 import { listSources } from "../sources";
 
@@ -69,7 +69,7 @@ async function boot(options: {
   ]);
   // The same call the layout endpoint makes before resolving anything. Boot
   // does not publish the sources, and both halves read them.
-  await refreshCollectionWidgets();
+  await refreshContentSources();
   return t;
 }
 
@@ -119,7 +119,7 @@ describe("collections:present against a real instance", () => {
         updateMigrationStatus: (slug: string, status: string) => Promise<void>;
       }
     ).updateMigrationStatus("notes", "pending");
-    await refreshCollectionWidgets();
+    await refreshContentSources();
     expect(listSources().some(source => source.id === "collection:notes")).toBe(
       false
     );
@@ -191,7 +191,7 @@ describe("singles:present against a real instance", () => {
         updateMigrationStatus: (slug: string, status: string) => Promise<void>;
       }
     ).updateMigrationStatus("homepage", "pending");
-    await refreshCollectionWidgets();
+    await refreshContentSources();
     expect(listSources().some(source => source.id === "single:homepage")).toBe(
       false
     );

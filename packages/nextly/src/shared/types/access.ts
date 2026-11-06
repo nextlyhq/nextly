@@ -15,6 +15,8 @@
 import type { RequestContext } from "../../collections/fields/types/base";
 import type { Principal } from "../../plugins/principals/types";
 
+import type { UntypedRuleFilter } from "./rule-filter";
+
 // ============================================================
 // Minimal User Type
 // ============================================================
@@ -102,13 +104,9 @@ export interface AccessRuleContext {
   /**
    * The caller's permissions, spelled as the role screen and the database
    * spell them: `<action>-<resource>`, such as `read-posts`. Empty for a
-   * visitor and for a plugin-defined person, who hold none.
-   *
-   * For one release the list also carries each
-   * permission's earlier rule spelling, `<resource>:<action>` (`posts:read`),
-   * after the others, so an existing rule keeps its answer. A rule that
-   * checks that spelling is warned once; it stops being accepted in a later
-   * release.
+   * visitor and for a plugin-defined person, who hold none. The earlier
+   * rule spelling, `<resource>:<action>` (`posts:read`), is not in the list,
+   * so a rule checking it does not allow.
    */
   permissions: string[];
   /**
@@ -210,7 +208,8 @@ export type AccessControlFunction = (
  * - A **boolean** for simple allow/deny
  * - **Omitted** to fall back to database role/permission checks
  *
- * Code-defined access always takes precedence over database permissions.
+ * A signed-in user or an API key needs the database permission first;
+ * code-defined access only narrows it, allowing only on `true`.
  * Super-admin always bypasses all access checks.
  *
  * @example
@@ -220,7 +219,7 @@ export type AccessControlFunction = (
  *   access: {
  *     // Only admins and editors can create
  *     create: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
- *     // Any authenticated user can read
+ *     // Visitors can read, and signed-in callers holding read-posts
  *     read: true,
  *     // Only the user's own posts (checked via roles/permissions)
  *     update: ({ roles }) => roles.includes('admin') || roles.includes('editor'),
@@ -231,27 +230,49 @@ export type AccessControlFunction = (
  * });
  * ```
  */
+/**
+ * A collection rule as it is stored: one that may answer a filter, which
+ * allows only the entries it matches (see `CollectionFilterRule`), or `true`
+ * or `false`. `defineCollection` types that filter by the collection's fields.
+ *
+ * Spelled out rather than as `CollectionFilterRule`: a rule typed by a
+ * collection's fields is stored here, and the checker, comparing two uses of
+ * one generic alias by how its fields parameter varies, would refuse it.
+ * Compared as written, it holds every typed rule.
+ */
+export type StoredFilterRule =
+  | ((
+      ctx: AccessControlContext
+    ) => boolean | UntypedRuleFilter | Promise<boolean | UntypedRuleFilter>)
+  | boolean;
+
 export interface CollectionAccessControl {
   /** Access rule for creating new documents */
   create?: AccessControlFunction | boolean;
-  /** Access rule for reading/listing documents */
-  read?: AccessControlFunction | boolean;
-  /** Access rule for updating existing documents */
-  update?: AccessControlFunction | boolean;
-  /** Access rule for deleting documents */
-  delete?: AccessControlFunction | boolean;
+  /** Access rule for reading/listing documents; it may answer a filter. */
+  read?: StoredFilterRule;
   /**
-   * Access rule for moving a document INTO published (publishing). Evaluated on
-   * top of `update`, so a caller must satisfy both to publish. Absent means the
-   * publish permission is resolved from DB grants alone (`publish-<slug>`).
+   * Access rule for updating existing documents. A filter it answers allows
+   * an update only of the entries it matches, and the update may not move an
+   * entry out of it.
    */
-  publish?: AccessControlFunction | boolean;
+  update?: StoredFilterRule;
+  /** Access rule for deleting documents; it may answer a filter. */
+  delete?: StoredFilterRule;
   /**
-   * Access rule for moving a document OUT of published (unpublishing). Evaluated
-   * on top of `update`. Absent means it is resolved from DB grants alone
-   * (`unpublish-<slug>`).
+   * Access rule for moving a document INTO published (publishing). A write that
+   * changes only the status is judged by it alone; one that also edits fields
+   * needs `update` too. Absent means the publish permission is resolved from
+   * DB grants alone (`publish-<slug>`). It may answer a filter.
    */
-  unpublish?: AccessControlFunction | boolean;
+  publish?: StoredFilterRule;
+  /**
+   * Access rule for moving a document OUT of published (unpublishing). A write
+   * that changes only the status is judged by it alone; one that also edits
+   * fields needs `update` too. Absent means it is resolved from DB grants alone
+   * (`unpublish-<slug>`). It may answer a filter.
+   */
+  unpublish?: StoredFilterRule;
 }
 
 // ============================================================
@@ -282,14 +303,16 @@ export interface SingleAccessControl {
   /** Access rule for updating the single document */
   update?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving the single INTO published (publishing). Evaluated on
-   * top of `update`. Absent means it is resolved from DB grants alone
+   * Access rule for moving the single INTO published (publishing). A write that
+   * changes only the status is judged by it alone; one that also edits fields
+   * needs `update` too. Absent means it is resolved from DB grants alone
    * (`publish-<slug>`).
    */
   publish?: AccessControlFunction | boolean;
   /**
-   * Access rule for moving the single OUT of published (unpublishing). Evaluated
-   * on top of `update`. Absent means it is resolved from DB grants alone
+   * Access rule for moving the single OUT of published (unpublishing). A write
+   * that changes only the status is judged by it alone; one that also edits
+   * fields needs `update` too. Absent means it is resolved from DB grants alone
    * (`unpublish-<slug>`).
    */
   unpublish?: AccessControlFunction | boolean;
@@ -300,7 +323,8 @@ export interface SingleAccessControl {
 // ============================================================
 
 /**
- * Parameters for the `RBACAccessControlService.checkAccess()` method.
+ * Parameters for the `RBACAccessControlService.checkAccessApplyingFilter()`
+ * method.
  */
 export interface CheckAccessParams {
   /** The authenticated user's ID (null for unauthenticated requests) */

@@ -82,9 +82,15 @@ interface Fixture {
   refId: string;
   pageId: string;
   noteId: string;
+  memoId: string;
   /** The rule on `blobs`, which throws: called only if a caller reaches it. */
   blobRule: ReturnType<typeof vi.fn>;
-  /** Users by what they hold. */
+  /**
+   * Users by what they hold. Every person but `nobody` holds read on `memos`
+   * and `chains`, whose rules admit everyone: a rule only narrows the
+   * permission. `nobody` holds no role at all.
+   */
+  nobody: string;
   stranger: string;
   pageReader: string;
   noteReader: string;
@@ -107,14 +113,24 @@ interface Caller {
  * `pages`. `refs` relates to all of them, to `users` and to media, nested in a
  * group and a repeater too, and to a page that does not exist. `refs` admits
  * every reader itself, since the parent is not what is being judged.
+ *
+ * `seedPublic` runs the boot's seeding, for a case read as a visitor: a
+ * visitor holds what the Public role grants, which boot makes and grants the
+ * read of each collection whose rule admits everyone (`refs`, `memos`,
+ * `chains`) and media. Off otherwise, since seeding asks every rule, the
+ * throwing one on `blobs` included, which a case asserts is never reached.
  */
-async function boot(dialect: TestDialect): Promise<Fixture> {
+async function boot(
+  dialect: TestDialect,
+  options: { seedPublic?: boolean } = {}
+): Promise<Fixture> {
   const blobRule = vi.fn(() => {
     throw new Error("the blobs rule ran");
   });
   const title = text({ name: "title" });
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    seedPublic: options.seedPublic === true,
     // A component that relates to `users`, so a read holding several of its
     // instances asks about that target from inside each one.
     fieldGroups: [
@@ -253,15 +269,55 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     return userId;
   };
 
+  // Read on the collections whose rules admit everyone, held by every person
+  // but `nobody`, since a rule only narrows the permission.
+  const admittedRole = await t.nextly.roles.create({
+    data: {
+      name: "Admitted reader",
+      slug: "admitted-reader",
+      permissionIds: await Promise.all(
+        ["memos", "chains"].map(async resource => {
+          const permission = await t.nextly.permissions.create({
+            data: {
+              action: "read",
+              resource,
+              name: `Read ${resource}`,
+              slug: `read-${resource}`,
+            },
+          });
+          return permission.item.id;
+        })
+      ),
+    },
+  });
+  const admitted = async (userId: string): Promise<string> => {
+    await db.insert(tables.userRoles).values({
+      id: `user-role-admitted-${userId}`,
+      userId,
+      roleId: String(admittedRole.item.id),
+      createdAt: new Date(),
+    });
+    return userId;
+  };
+
   const fx = {
     t,
     handler: t.getService("collectionsHandler") as CollectionsHandler,
     blobRule,
-    stranger: await createUser("stranger@example.com"),
-    pageReader: await createUser("pages@example.com", await roleFor("pages")),
-    noteReader: await createUser("notes@example.com", await roleFor("notes")),
-    mediaReader: await createUser("media@example.com", await roleFor("media")),
-    userReader: await createUser("users@example.com", await roleFor("users")),
+    nobody: await createUser("nobody@example.com"),
+    stranger: await admitted(await createUser("stranger@example.com")),
+    pageReader: await admitted(
+      await createUser("pages@example.com", await roleFor("pages"))
+    ),
+    noteReader: await admitted(
+      await createUser("notes@example.com", await roleFor("notes"))
+    ),
+    mediaReader: await admitted(
+      await createUser("media@example.com", await roleFor("media"))
+    ),
+    userReader: await admitted(
+      await createUser("users@example.com", await roleFor("users"))
+    ),
     superAdmin: await createUser("admin@example.com", "role-super-admin"),
   };
   const author = await createUser(TITLE.user);
@@ -317,11 +373,11 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
     .getService("singleEntryService")
     .update(
       "homepage",
-      { featured: pageId, logo: "media-1" },
+      { featured: pageId, logo: "media-1", _overwrite: true },
       { overrideAccess: true }
     );
 
-  return { ...fx, refId, pageId, noteId };
+  return { ...fx, refId, pageId, noteId, memoId };
 }
 
 /** A user caller, as the route that served the parent authorized them. */
@@ -635,7 +691,7 @@ describe.each(getConfiguredTestDialects())(
               routeAuthorized: true,
               ...caller,
             },
-            { name: "rewritten" }
+            { name: "rewritten", _overwrite: true }
           );
           expect(updated.success).toBe(true);
           return [
@@ -707,12 +763,16 @@ describe.each(getConfiguredTestDialects())(
         ).toBe(true);
       });
 
-      it("lets a declared rule decide for people, and lets a super-admin past one that refuses", async () => {
+      it("needs the read permission and a rule that admits, and lets a super-admin past one that refuses", async () => {
         const fx = await boot(dialect);
-        // A rule that admits populates without any grant.
+        // A rule that admits populates for a person holding the grant.
         expect(
           shows((await readRef(fx, as(fx.stranger))).memo, TITLE.memo)
         ).toBe(true);
+        // Not for one without it: the rule only narrows the permission.
+        expect(shows((await readRef(fx, as(fx.nobody))).memo, TITLE.memo)).toBe(
+          false
+        );
         // A rule that refuses withholds from a person holding read-notes.
         expect(
           await readsDirectly(fx, as(fx.noteReader), "notes", fx.noteId)
@@ -727,12 +787,21 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("gives a visitor what their direct read gives, and keeps trusted reads trusted", async () => {
-        const fx = await boot(dialect);
+        const fx = await boot(dialect, { seedPublic: true });
         const visitor = await readRef(fx, VISITOR);
-        // A collection with no rule is public to a visitor's direct read.
-        expect(await readsDirectly(fx, VISITOR, "pages", fx.pageId)).toBe(true);
-        expect(shows(visitor.plain, TITLE.page)).toBe(true);
-        // One whose rule refuses is not.
+        // A collection whose rule admits everyone is read by the Public role's
+        // grant, directly and through the relationship: the pairing that
+        // fails an expansion withholding everything from a visitor.
+        expect(await readsDirectly(fx, VISITOR, "memos", fx.memoId)).toBe(true);
+        expect(shows(visitor.memo, TITLE.memo)).toBe(true);
+        // A collection with no rule is refused to a visitor's direct read,
+        // since boot grants Public no read where no rule admits everyone,
+        // and so withheld.
+        expect(await readsDirectly(fx, VISITOR, "pages", fx.pageId)).toBe(
+          false
+        );
+        expect(shows(visitor.plain, TITLE.page)).toBe(false);
+        // One whose rule refuses is not read either.
         expect(await readsDirectly(fx, VISITOR, "notes", fx.noteId)).toBe(
           false
         );
@@ -853,7 +922,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("populates a target for a visitor where its rule admits visitors", async () => {
-        const fx = await boot(dialect);
+        // A visitor reads by the Public role a real boot makes, which reads
+        // `refs` and `memos` by their rules.
+        const fx = await boot(dialect, { seedPublic: true });
         expect(shows((await readRef(fx, VISITOR)).memo, TITLE.memo)).toBe(true);
       });
 
@@ -872,8 +943,9 @@ describe.each(getConfiguredTestDialects())(
       it("leaves a visitor the related media, and withholds a related user", async () => {
         // Pages served to the public embed the images they reference, so a
         // visitor keeps media. No visitor reads a user row directly, and a
-        // user row carries a person's address, so it is withheld.
-        const fx = await boot(dialect);
+        // user row carries a person's address, so it is withheld. The visitor
+        // reads `refs` by the Public role a real boot makes.
+        const fx = await boot(dialect, { seedPublic: true });
         const visitor = await readRef(fx, VISITOR);
         expect(shows(visitor.image, TITLE.media)).toBe(true);
         expect(shows(visitor.author, TITLE.user)).toBe(false);

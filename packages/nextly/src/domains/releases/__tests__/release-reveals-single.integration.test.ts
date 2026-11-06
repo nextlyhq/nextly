@@ -44,6 +44,9 @@ const FUTURE = new Date("2099-01-01T00:00:00Z");
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The Single is read as a visitor, judged by the Public role a real boot
+    // makes, which reads it by its rule.
+    seedPublic: true,
     singles: [
       defineSingle({
         slug: SLUG,
@@ -67,7 +70,7 @@ async function draftedSingleInRelease(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "pending", status: "draft" },
+    { headline: "pending", status: "draft", _overwrite: true },
     { overrideAccess: true }
   );
 
@@ -103,7 +106,7 @@ async function publishedSingleInTakedown(
   const singles = singlesOf(t);
   await singles.update(
     SLUG,
-    { headline: "live", status: "published" },
+    { headline: "live", status: "published", _overwrite: true },
     { overrideAccess: true }
   );
 

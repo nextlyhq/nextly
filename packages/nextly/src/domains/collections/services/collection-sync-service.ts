@@ -59,13 +59,18 @@ import {
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
 import type { SupportedDialect } from "../../../types/database";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
+import { flushContentChange } from "../../flush-content-change";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
@@ -933,8 +938,23 @@ export class CollectionSyncService extends BaseService {
             // collection's autosaves and version pins go after it in the same
             // transaction, as the registry's own delete does: see
             // `deleteEntityRegistryRow`.
-            await this.adapter.transaction(tx =>
-              deleteEntityRegistryRow(tx, "collection", slug)
+            // Asked before the transaction opens: see `DashboardTables`.
+            const tables = {
+              dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+              mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
+            };
+            const { expire } = await this.adapter.transaction(tx =>
+              deleteEntityRegistryRow(tx, "collection", slug, tables)
+            );
+            // Its cached reads describe a collection that is gone from the
+            // registry: expired once that is durable, before the table drop,
+            // which can fail and would otherwise leave them live.
+            await this.afterCommit(() =>
+              flushContentChange(
+                expire,
+                this.logger,
+                "an orphaned collection was deleted"
+              )
             );
 
             const capabilities = this.adapter.getCapabilities();

@@ -35,7 +35,14 @@ const defined = (): BreakpointSet => ({
 const empty = (): BreakpointSet => ({ viewport: [], container: [] });
 
 const trigger = (): HTMLButtonElement =>
-  screen.getByRole("button", { name: /breakpoints/i }) as HTMLButtonElement;
+  screen.getByRole("button", { name: "Edit breakpoints" }) as HTMLButtonElement;
+
+/** How many breakpoints the section lists, the base (Desktop) not counted. */
+const listed = (): number => screen.getAllByRole("listitem").length - 1;
+
+/** Whether the editor, rather than the list, is on screen. */
+const editorShown = (): boolean =>
+  screen.queryByRole("button", { name: /save breakpoints|saving/i }) !== null;
 
 describe("the breakpoint trigger", () => {
   it("cannot be opened before the saved set has been read", () => {
@@ -55,7 +62,7 @@ describe("the breakpoint trigger", () => {
 
     expect(trigger().disabled).toBe(true);
     fireEvent.click(trigger());
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(editorShown()).toBe(false);
   });
 
   it("says UNAVAILABLE after a failed read, not still loading", () => {
@@ -77,12 +84,10 @@ describe("the breakpoint trigger", () => {
       />
     );
 
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: unavailable" })
-    ).toBeDefined();
-    expect(
-      screen.queryByRole("button", { name: "Breakpoints: still loading" })
-    ).toBeNull();
+    expect(trigger().title).toMatch(/could not be read/);
+    expect(trigger().title).not.toMatch(
+      /once the site's saved styles have loaded/
+    );
     // And it is still withheld, which is the property the wording qualifies.
     expect(trigger().disabled).toBe(true);
   });
@@ -115,11 +120,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={defined()} onSave={onSave} status="ready" />
     );
 
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Breakpoints: 1 defined" })
-      ).toBeDefined()
-    );
+    await waitFor(() => expect(listed()).toBe(1));
   });
 
   it("opens once it HAS been read, which is the control", () => {
@@ -131,7 +132,7 @@ describe("the breakpoint trigger", () => {
 
     expect(trigger().disabled).toBe(false);
     fireEvent.click(trigger());
-    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(editorShown()).toBe(true);
   });
 
   it("says how many the site defines, in the accessible name", () => {
@@ -144,9 +145,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
     );
 
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: 2 defined" })
-    ).toBeDefined();
+    expect(listed()).toBe(2);
   });
 
   it("reports ZERO for a site that has defined none", () => {
@@ -156,9 +155,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={empty()} onSave={vi.fn()} status="ready" />
     );
 
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: 0 defined" })
-    ).toBeDefined();
+    expect(listed()).toBe(0);
   });
 
   it("does not count a stored definition using the reserved base id", () => {
@@ -182,9 +179,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={withReserved} onSave={vi.fn()} status="ready" />
     );
 
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: 0 defined" })
-    ).toBeDefined();
+    expect(listed()).toBe(0);
   });
 
   it("hides a stored base row, which would otherwise deadlock Save", () => {
@@ -219,9 +214,7 @@ describe("the breakpoint trigger", () => {
     // The count follows the same rule, so the two cannot disagree. Asserted
     // BEFORE opening: the dialog takes the page out of the accessibility tree
     // behind it, so the trigger is unreachable while it is up.
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: 1 defined" })
-    ).toBeDefined();
+    expect(listed()).toBe(1);
 
     fireEvent.click(trigger());
 
@@ -259,9 +252,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={defined()} onSave={onSave} status="ready" />
     );
 
-    expect(
-      screen.getByRole("button", { name: "Breakpoints: 2 defined" })
-    ).toBeDefined();
+    expect(listed()).toBe(2);
 
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
@@ -277,11 +268,7 @@ describe("the breakpoint trigger", () => {
      * must answer from what was written. Reading 2 here is the defect: it means
      * the surface is still describing the set the write replaced.
      */
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Breakpoints: 1 defined" })
-      ).toBeDefined()
-    );
+    await waitFor(() => expect(listed()).toBe(1));
   });
 
   it("does not resurrect an old write when the read returns to its old value", async () => {
@@ -323,11 +310,7 @@ describe("the breakpoint trigger", () => {
       <BreakpointManager value={configObject} onSave={onSave} status="ready" />
     );
 
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Breakpoints: 2 defined" })
-      ).toBeDefined()
-    );
+    await waitFor(() => expect(listed()).toBe(2));
   });
 
   it("seeds the dialog from the set it is given WHEN OPENED", () => {
@@ -348,5 +331,125 @@ describe("the breakpoint trigger", () => {
     fireEvent.click(trigger());
 
     expect(screen.getByDisplayValue("991")).toBeDefined();
+  });
+});
+
+describe("the Site tab's breakpoints section", () => {
+  it("lists the site's devices in the device buttons' own words", () => {
+    render(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
+    const rows = screen.getAllByRole("listitem").map(row => row.textContent);
+    expect(rows[0]).toMatch(/^Desktop/);
+    expect(rows).toContain("Tabletup to 991 pixels");
+    expect(rows).toContain("Mobileup to 575 pixels");
+  });
+
+  it("edits in place, tells the host, and returns to the list on Cancel", () => {
+    const onEditingChange = vi.fn();
+    render(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        onEditingChange={onEditingChange}
+      />
+    );
+    fireEvent.click(trigger());
+    expect(editorShown()).toBe(true);
+    expect(onEditingChange).toHaveBeenLastCalledWith(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(editorShown()).toBe(false);
+    expect(onEditingChange).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("keeps editing, saying nothing, when the host kept the draft", async () => {
+    const onSave = vi
+      .fn<(next: BreakpointSet) => Promise<string | null | undefined>>()
+      .mockResolvedValueOnce(null);
+    render(
+      <BreakpointManager value={defined()} onSave={onSave} status="ready" />
+    );
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: /save breakpoints/i,
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false)
+    );
+    expect(editorShown()).toBe(true);
+    expect(screen.queryByText("Saved")).toBeNull();
+    // Mobile is still removed in the draft, which was kept as it was.
+    expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
+  });
+
+  it("holds an editor already open when the host's reason arrives", () => {
+    const { rerender } = render(
+      <BreakpointManager value={defined()} onSave={vi.fn()} status="ready" />
+    );
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    rerender(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        blocked="Breakpoints can be changed again once it has finished."
+      />
+    );
+    const save = screen.getByRole("button", {
+      name: /save breakpoints/i,
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(
+      screen.getByText("Breakpoints can be changed again once it has finished.")
+    ).toBeDefined();
+    // The draft is still the author's, Mobile still removed from it.
+    expect(screen.queryByRole("button", { name: "Remove Mobile" })).toBeNull();
+  });
+
+  it("cannot be edited while the host says why not, and says it", () => {
+    render(
+      <BreakpointManager
+        value={defined()}
+        onSave={vi.fn()}
+        status="ready"
+        blocked="Breakpoints can be changed again once the removal has finished."
+      />
+    );
+    expect(trigger().disabled).toBe(true);
+    expect(trigger().title).toBe(
+      "Breakpoints can be changed again once the removal has finished."
+    );
+    fireEvent.click(trigger());
+    expect(editorShown()).toBe(false);
+  });
+
+  it("says Saved once a save went through, and not after a refused one", async () => {
+    const onSave = vi
+      .fn<(next: BreakpointSet) => Promise<string | undefined>>()
+      .mockResolvedValueOnce("The server refused it.")
+      .mockResolvedValueOnce(undefined);
+    render(
+      <BreakpointManager value={defined()} onSave={onSave} status="ready" />
+    );
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByRole("button", { name: "Remove Mobile" }));
+    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    // Refused: still editing, with the reason, and no "Saved" anywhere.
+    await screen.findByText("The server refused it.");
+    expect(editorShown()).toBe(true);
+    expect(screen.queryByText("Saved")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /save breakpoints/i }));
+    await waitFor(() => expect(editorShown()).toBe(false));
+    expect(screen.getByRole("status").textContent).toBe("Saved");
   });
 });

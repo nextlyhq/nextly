@@ -86,7 +86,9 @@ export interface DatabaseCapabilities {
    * Case-insensitive ILIKE operator support (PostgreSQL only).
    *
    * @remarks
-   * Other databases must emulate with LOWER(column) LIKE LOWER(value).
+   * Other databases emulate it by folding both sides, then LIKE: `lower()` on MySQL, and
+   * Nextly's own `nextly_fold_case` on SQLite, whose `lower()` folds ASCII only (see
+   * `caseFolded` in text-match).
    */
   supportsIlike: boolean;
 
@@ -155,6 +157,19 @@ export interface DatabaseCapabilities {
    * @experimental
    */
   sharedRowLock?: boolean;
+
+  /**
+   * Whether the server can key a unique index on an expression, such as `NULLIF(col, '')`.
+   *
+   * @remarks
+   * Reported by the MySQL adapter once it has connected and read the server's version: MySQL
+   * 8.0.13 and later can (functional key parts), and the MySQL-compatible variants are reported
+   * as unable. PostgreSQL and SQLite always can, so their adapters leave it unset. On MySQL, unset
+   * means not known yet.
+   *
+   * @experimental
+   */
+  functionalIndexes?: boolean;
 }
 
 /**

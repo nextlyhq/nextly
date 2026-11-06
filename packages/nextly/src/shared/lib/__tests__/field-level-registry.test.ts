@@ -17,6 +17,9 @@ const listRoleSlugsForUser = vi.fn(async (_userId: string) => [] as string[]);
 vi.mock("../../../services/lib/permissions", () => ({
   listEffectiveGrants: (userId: string) => listEffectiveGrants(userId),
   listRoleSlugsForUser: (userId: string) => listRoleSlugsForUser(userId),
+  // A caller with no user is a visitor, handed what the Public role grants:
+  // nothing here, so an anonymous rule is judged on no permission, as before.
+  listPublicGrants: async () => [] as GrantedPermission[],
 }));
 
 /** One permission row, its slug spelled as the role screen spells it. */

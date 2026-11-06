@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "collections": {
+      "notes": {
+        "settings": {
+          "admin": {
+            "pagination": {
+              "defaultLimit": 10,
+              "limits": [10, 25, 50, 100]
+            }
+          },
+          "fields": [
+            {
+              "label": "Title",
+              "localized": false,
+              "name": "title",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "name": "slug",
+              "required": true,
+              "type": "text",
+              "unique": true
+            },
+            {
+              "name": "value",
+              "required": true,
+              "type": "text"
+            }
+          ],
+          "labels": {
+            "plural": "Notes",
+            "singular": "Notes"
+          },
+          "slug": "notes",
+          "timestamps": true
+        },
+        "source": "code"
+      }
+    },
+    "fieldGroups": {},
+    "singles": {}
+  },
+  "migrationHash": "c9c05806ebd3fb647555c1ac4234ce991684a844114ff01f3a5fd39612279b72",
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "default": "now()",
+            "name": "created_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "slug",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "value",
+            "nullable": false,
+            "type": "text"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": ["created_at"],
+            "name": "idx_dc_notes_created_at",
+            "unique": false
+          },
+          {
+            "columns": ["created_by"],
+            "name": "idx_dc_notes_created_by",
+            "unique": false
+          },
+          {
+            "columns": ["slug"],
+            "name": "idx_dc_notes_slug",
+            "unique": true
+          }
+        ],
+        "name": "dc_notes"
+      }
+    ]
+  },
+  "version": 1
+}

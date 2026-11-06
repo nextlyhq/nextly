@@ -12,6 +12,22 @@
  * and each consumer resolves names against its own icon set.
  */
 
+// The binding vocabulary is the page-builder engine's: which kind of value
+// each field type produces, and which kinds each prop type accepts. The engine
+// is the lower package (this one depends on it, never the reverse), and its
+// renderer and validator judge every binding with these tables, so the
+// catalog republishes them rather than keeping a copy that could disagree
+// with what a published page draws. `/format` is the engine's parser-free
+// entry: the tables cost the catalog no compiler.
+import {
+  BINDABLE_KINDS as ENGINE_BINDABLE_KINDS,
+  FIELD_TYPE_BINDING_KIND as ENGINE_FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE as ENGINE_STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  bindablePropTypeOf,
+  type BindingValueKind,
+  type FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine/format";
+
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 import type { FieldType } from "./types/base";
@@ -36,7 +52,11 @@ export type FieldTypeCategory =
 export interface FieldTypeCatalogEntry<T extends string = FieldType> {
   /** The type key field instances reference. */
   type: T;
-  /** Human label shown in pickers. */
+  /**
+   * The type's one plain name, in sentence case, shown wherever the type is
+   * named (pickers, outlines, settings, review). Never the internal type id:
+   * that is what stored data uses, not what a person reads.
+   */
   label: string;
   /** Picker grouping. */
   category: FieldTypeCategory;
@@ -65,7 +85,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   },
   {
     type: "richText",
-    label: "Editor",
+    label: "Rich text",
     category: "Basic",
     hint: "Lexical rich-text editor",
     icon: "Edit",
@@ -90,6 +110,13 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     category: "Basic",
     hint: "Integer or decimal",
     icon: "Hash",
+  },
+  {
+    type: "icon",
+    label: "Icon",
+    category: "Basic",
+    hint: "An icon from the site's icon sets",
+    icon: "Star",
   },
   // Advanced
   {
@@ -144,15 +171,15 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Media
   {
     type: "upload",
-    label: "Media",
+    label: "Image or file",
     category: "Media",
-    hint: "File or image upload",
+    hint: "An uploaded file or image",
     icon: "Upload",
   },
   // Relational
   {
     type: "relationship",
-    label: "Relationship",
+    label: "Link to entries",
     category: "Relational",
     hint: "Link to records in another collection",
     icon: "Link2",
@@ -160,7 +187,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Structured
   {
     type: "repeater",
-    label: "Repeater",
+    label: "Repeating rows",
     category: "Structured",
     hint: "Repeating group of fields",
     icon: "Layers",
@@ -177,7 +204,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     // picker shows. Renaming the type would make every existing `fields` JSON row unreadable, so
     // the two are pinned apart by a test rather than left to be kept in step by hand.
     type: STORAGE_FORMAT.fieldType,
-    label: "Field Group",
+    label: "Field group",
     category: "Structured",
     hint: "Embed a reusable field group",
     icon: "Puzzle",
@@ -385,13 +412,16 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
  * - `blocks` is excluded because a prop holding a whole nested document is
  *   what slots already express, and nesting documents inside documents would
  *   put two migration boundaries in one value.
+ * - `icon` is excluded for now: the icon block prop arrives with the Icon
+ *   block, together with its prop builder, and until then a block cannot
+ *   declare one.
  *
  * Link-shaped props keep using `text` until the dedicated link picker joins
  * the catalog with its admin component.
  */
 export type BlockFieldCatalogType = Exclude<
   FieldType,
-  "password" | "component" | "fieldGroup"
+  "password" | "component" | "fieldGroup" | "icon"
 >;
 
 /** Every block-prop field type, in catalog order. */
@@ -427,85 +457,63 @@ export function isBlockFieldType(type: string): type is BlockFieldCatalogType {
   return (BLOCK_FIELD_TYPES as readonly string[]).includes(type);
 }
 
-/**
- * The storage shapes a plugin-contributed field type can persist as. A plugin
- * type is not a member of the built-in union, so everything that needs to
- * reason about its values (validation, bindings) goes through the primitive it
- * declared.
- */
-export type FieldStoragePrimitive =
-  | "text"
-  | "longText"
-  | "boolean"
-  | "number"
-  | "timestamp"
-  | "json";
+// The engine's own functions, not wrappers: `bindingKindOf` answers the kind
+// a field produces, and `canBindFieldToProp` whether a field fits a prop, by
+// the one table the renderer and validator read. Each takes any
+// `BindingEndpoint` below.
+export {
+  bindingKindOf,
+  canBindFieldToProp,
+  type BindingValueKind,
+  type FieldStoragePrimitive,
+} from "@nextlyhq/blocks-engine/format";
 
 /**
  * The built-in field type each storage primitive behaves as. A plugin type
  * validates by its primitive's rules and binds by its primitive's value kind,
- * while its own admin component renders it.
+ * while its own admin component renders it. The engine's table, typed as the
+ * block-prop types its values all are.
  */
 export const STORAGE_PRIMITIVE_AS_FIELD_TYPE: Readonly<
   Record<FieldStoragePrimitive, BlockFieldCatalogType>
-> = {
-  text: "text",
-  longText: "textarea",
-  boolean: "checkbox",
-  number: "number",
-  timestamp: "date",
-  json: "json",
-};
-
-/**
- * The value shapes a binding can carry. A binding connects a data field to a
- * block prop, so both sides are described in this one vocabulary and
- * compatibility is a set membership test rather than a per-pair table.
- */
-export type BindingValueKind =
-  | "text"
-  | "richText"
-  | "number"
-  | "boolean"
-  | "date"
-  | "media"
-  | "option"
-  | "reference"
-  | "list"
-  | "json";
+> = ENGINE_STORAGE_PRIMITIVE_AS_FIELD_TYPE;
 
 /**
  * The kind of value a field of each type produces when it is a binding
- * SOURCE. `null` means the type cannot be bound from at all: `password` never
- * leaves the server, `component` and `group` are containers whose parts are
- * bound individually, and a `repeater` is a to-many collection that a loop
- * iterates rather than a binding flattens.
+ * SOURCE, for the canonical field types. `null` means the type cannot be
+ * bound from at all: `password` never leaves the server, `component`, a field
+ * group and `group` are containers whose parts are bound individually, and a
+ * `repeater` is a to-many collection that a loop iterates rather than a
+ * binding flattens.
+ *
+ * Each value is read from the engine's table; only the key set is this
+ * package's, so a canonical type the engine does not know fails to compile
+ * here rather than binding by a rule of its own.
  */
 export const FIELD_TYPE_BINDING_KIND: Readonly<
   Record<FieldType, BindingValueKind | null>
-> = {
-  text: "text",
-  textarea: "text",
-  richText: "richText",
-  email: "text",
-  password: null,
-  code: "text",
-  number: "number",
-  checkbox: "boolean",
-  date: "date",
-  select: "option",
-  radio: "option",
-  upload: "media",
-  relationship: "reference",
-  repeater: null,
-  group: null,
-  json: "json",
-  component: null,
-  // A field group binds like a component: its parts are bound individually,
-  // never the whole container.
-  fieldGroup: null,
-  chips: "list",
-};
+> = Object.freeze({
+  text: ENGINE_FIELD_TYPE_BINDING_KIND.text,
+  textarea: ENGINE_FIELD_TYPE_BINDING_KIND.textarea,
+  richText: ENGINE_FIELD_TYPE_BINDING_KIND.richText,
+  email: ENGINE_FIELD_TYPE_BINDING_KIND.email,
+  password: ENGINE_FIELD_TYPE_BINDING_KIND.password,
+  code: ENGINE_FIELD_TYPE_BINDING_KIND.code,
+  icon: ENGINE_FIELD_TYPE_BINDING_KIND.icon,
+  number: ENGINE_FIELD_TYPE_BINDING_KIND.number,
+  checkbox: ENGINE_FIELD_TYPE_BINDING_KIND.checkbox,
+  date: ENGINE_FIELD_TYPE_BINDING_KIND.date,
+  select: ENGINE_FIELD_TYPE_BINDING_KIND.select,
+  radio: ENGINE_FIELD_TYPE_BINDING_KIND.radio,
+  upload: ENGINE_FIELD_TYPE_BINDING_KIND.upload,
+  relationship: ENGINE_FIELD_TYPE_BINDING_KIND.relationship,
+  repeater: ENGINE_FIELD_TYPE_BINDING_KIND.repeater,
+  group: ENGINE_FIELD_TYPE_BINDING_KIND.group,
+  json: ENGINE_FIELD_TYPE_BINDING_KIND.json,
+  component: ENGINE_FIELD_TYPE_BINDING_KIND.component,
+  fieldGroup: ENGINE_FIELD_TYPE_BINDING_KIND.fieldGroup,
+  chips: ENGINE_FIELD_TYPE_BINDING_KIND.chips,
+});
 
 /**
  * The validation rules a field can carry, named as `FieldValidation` spells
@@ -566,6 +574,9 @@ export const FIELD_TYPE_VALIDATION_RULES: Readonly<
   email: ["required", "minLength", "maxLength", "pattern", "message"],
   password: ["required", "minLength", "maxLength", "pattern", "message"],
   code: ["required", "minLength", "maxLength", "pattern", "message"],
+  // An icon is picked, never typed, and its id shape is checked by the type
+  // itself, so length and pattern bounds say nothing a person could act on.
+  icon: ["required", "message"],
   number: ["required", "min", "max", "message"],
   // A date is ordered, so it bounds by value rather than by length.
   date: ["required", "min", "max", "message"],
@@ -629,27 +640,30 @@ export function validationRulesForFieldType(
  * text: its stored value is structured editor content, and a plain string
  * would not survive the round trip. Structured props (`repeater`, `group`) are
  * composed rather than bound, so they accept nothing.
+ *
+ * Each entry is the engine's own list for that prop type, so the picker and
+ * the renderer accept the same kinds.
  */
 export const BINDABLE_KINDS: Readonly<
   Record<BlockFieldCatalogType, readonly BindingValueKind[]>
-> = {
-  text: ["text", "option", "number", "date"],
-  textarea: ["text", "option", "number", "date"],
-  richText: ["richText"],
-  email: ["text"],
-  number: ["number"],
-  code: ["text"],
-  date: ["date"],
-  select: ["option", "text"],
-  radio: ["option", "text"],
-  checkbox: ["boolean"],
-  json: ["json"],
-  chips: ["list"],
-  upload: ["media"],
-  relationship: ["reference"],
-  repeater: [],
-  group: [],
-};
+> = Object.freeze({
+  text: ENGINE_BINDABLE_KINDS.text,
+  textarea: ENGINE_BINDABLE_KINDS.textarea,
+  richText: ENGINE_BINDABLE_KINDS.richText,
+  email: ENGINE_BINDABLE_KINDS.email,
+  number: ENGINE_BINDABLE_KINDS.number,
+  code: ENGINE_BINDABLE_KINDS.code,
+  date: ENGINE_BINDABLE_KINDS.date,
+  select: ENGINE_BINDABLE_KINDS.select,
+  radio: ENGINE_BINDABLE_KINDS.radio,
+  checkbox: ENGINE_BINDABLE_KINDS.checkbox,
+  json: ENGINE_BINDABLE_KINDS.json,
+  chips: ENGINE_BINDABLE_KINDS.chips,
+  upload: ENGINE_BINDABLE_KINDS.upload,
+  relationship: ENGINE_BINDABLE_KINDS.relationship,
+  repeater: ENGINE_BINDABLE_KINDS.repeater,
+  group: ENGINE_BINDABLE_KINDS.group,
+});
 
 /**
  * One end of a candidate binding: a field being bound from, or a block prop
@@ -662,6 +676,10 @@ export const BINDABLE_KINDS: Readonly<
  * in bindings on the same terms as a built-in. `relationTo` carries the
  * collection identity of a reference or media endpoint, which the value kind
  * alone does not express.
+ *
+ * Every endpoint of this shape is one the engine's `bindingKindOf` and
+ * `canBindFieldToProp` take, which `isBindablePropType` below holds at
+ * compile time by handing it to the engine.
  */
 export interface BindingEndpoint {
   type: string;
@@ -671,101 +689,13 @@ export interface BindingEndpoint {
 }
 
 /**
- * The built-in field type an endpoint resolves to, or `null` when the type is
- * neither a built-in nor a plugin type whose storage primitive was supplied.
+ * Whether a block prop can be bound to a data field at all: its type, or a
+ * plugin type's storage primitive, is one the engine accepts some kind of
+ * value into.
  */
-function resolveEndpointType(endpoint: BindingEndpoint): FieldType | null {
-  if (isFieldType(endpoint.type)) return endpoint.type;
-  return endpoint.storage
-    ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[endpoint.storage]
-    : null;
-}
-
-/**
- * The value kind an endpoint produces when it is a binding source, or `null`
- * when it cannot be bound from.
- */
-export function bindingKindOf(
-  endpoint: BindingEndpoint
-): BindingValueKind | null {
-  const resolved = resolveEndpointType(endpoint);
-  return resolved ? FIELD_TYPE_BINDING_KIND[resolved] : null;
-}
-
-/** Whether a block prop can be bound to a data field at all. */
 export function isBindablePropType(prop: BindingEndpoint): boolean {
-  const resolved = resolveEndpointType(prop);
-  return (
-    resolved !== null &&
-    isBlockFieldType(resolved) &&
-    BINDABLE_KINDS[resolved].length > 0
-  );
-}
-
-/**
- * Whether a field can be bound into a block prop. Pickers use this to filter
- * the field list they offer, so a user is never shown a binding that the
- * renderer would then have to coerce.
- *
- * Both the value kind and the cardinality must agree: a multi-valued source
- * produces an array, which a single-valued prop cannot render, and a
- * single-valued source cannot fill a prop that expects a list.
- *
- * Reference and media endpoints must also agree on the collections they point
- * at, and on how a reference to them is stored. Binding does not rewrite a
- * reference, so a source that can yield a document the prop does not relate
- * to would put an unresolvable value in the prop even though both ends are of
- * kind `reference`, and a source whose target arity differs stores a shape the
- * prop cannot read. The checks apply only when both ends name their targets,
- * since an endpoint that omits them is saying nothing about collection
- * identity rather than claiming to accept any.
- */
-export function canBindFieldToProp(
-  source: BindingEndpoint,
-  prop: BindingEndpoint
-): boolean {
-  const propType = resolveEndpointType(prop);
-  if (propType === null || !isBlockFieldType(propType)) return false;
-  if (Boolean(source.hasMany) !== Boolean(prop.hasMany)) return false;
-  const kind = bindingKindOf(source);
-  if (kind === null || !BINDABLE_KINDS[propType].includes(kind)) return false;
-  return targetsAreCompatible(source, prop);
-}
-
-/**
- * Whether every collection the source can yield is one the prop accepts, and
- * whether both ends store a reference the same way. An endpoint without
- * declared targets is not checked.
- *
- * Target arity decides the stored shape — a single target stores a bare id, a
- * list of targets stores a `{ relationTo, value }` pair — so two endpoints
- * that name the same collection still hold incompatible values when one
- * declares it as a string and the other as a one-element array.
- */
-function targetsAreCompatible(
-  source: BindingEndpoint,
-  prop: BindingEndpoint
-): boolean {
-  if (source.relationTo === undefined || prop.relationTo === undefined) {
-    return true;
-  }
-  if (Array.isArray(source.relationTo) !== Array.isArray(prop.relationTo)) {
-    return false;
-  }
-  const propTargets = targetList(prop.relationTo);
-  return targetList(source.relationTo).every(target =>
-    propTargets.includes(target)
-  );
-}
-
-function targetList(relationTo: string | string[] | undefined): string[] {
-  if (relationTo === undefined) return [];
-  return Array.isArray(relationTo) ? relationTo : [relationTo];
-}
-
-/** Narrowing guard for the built-in field-type union. */
-function isFieldType(type: string): type is FieldType {
-  return Object.prototype.hasOwnProperty.call(FIELD_TYPE_BINDING_KIND, type);
+  const propType = bindablePropTypeOf(prop);
+  return propType !== undefined && ENGINE_BINDABLE_KINDS[propType].length > 0;
 }
 
 /** Look up one catalog entry by its type key. */
@@ -788,4 +718,113 @@ export function narrowFieldTypeCatalog<T extends FieldType>(
     (entry): entry is FieldTypeCatalogEntry & { type: T } =>
       allowed.has(entry.type)
   );
+}
+
+/**
+ * The order the picker's categories appear in, as the category type's comment
+ * describes it. A category a plugin declares outside this list still shows,
+ * after these, so a mistyped category never hides a type.
+ */
+export const FIELD_TYPE_CATEGORY_ORDER: readonly FieldTypeCategory[] = [
+  "Basic",
+  "Advanced",
+  "Media",
+  "Relational",
+  "Structured",
+];
+
+/**
+ * The types the picker shows first, before the categories, in this order. A
+ * surface that offers none of them shows no most-used group.
+ */
+export const MOST_USED_FIELD_TYPES: readonly FieldType[] = [
+  "text",
+  "richText",
+  "upload",
+  "relationship",
+  "select",
+  "date",
+];
+
+/**
+ * A field type as the picker describes and searches it: the catalog row plus
+ * the other words a person may type for it.
+ *
+ * Kept a separate type rather than a new member of `FieldTypeCatalogEntry`,
+ * because that row is published in the shape plugins already consume and a
+ * new member would change it for every one of them.
+ */
+export interface FieldTypeDescription<T extends string = FieldType>
+  extends FieldTypeCatalogEntry<T> {
+  /**
+   * Words that find this type besides its name, description and category:
+   * the type id first (the name developers use), then the names earlier
+   * versions of Nextly showed, then everyday words for what it holds.
+   */
+  synonyms: readonly string[];
+}
+
+/**
+ * The extra search words for each type, besides its id. Keyed by every type a
+ * surface can offer, so a type added to the union does not compile until it
+ * says what else a person might call it.
+ */
+const FIELD_TYPE_SYNONYMS: Readonly<
+  Record<
+    FieldType | UserSurfaceFieldType | FormSurfaceFieldType,
+    readonly string[]
+  >
+> = {
+  text: ["string", "title", "name", "heading", "short text"],
+  textarea: ["paragraph", "multi-line", "excerpt", "summary", "plain text"],
+  // "Editor" is what the picker called this before it was named rich text.
+  richText: ["editor", "wysiwyg", "body", "content", "markdown", "html"],
+  email: ["mail", "e-mail", "contact"],
+  password: ["secret", "credential"],
+  number: ["integer", "decimal", "float", "price", "amount", "count"],
+  code: ["snippet", "script", "embed", "source"],
+  icon: ["symbol", "glyph", "emoji", "pictogram"],
+  date: ["time", "datetime", "calendar", "day", "timestamp"],
+  select: ["dropdown", "choice", "option", "enum"],
+  radio: ["radio buttons", "choice", "option", "one of"],
+  checkbox: ["boolean", "toggle", "switch", "yes or no", "true or false"],
+  json: ["raw", "object", "data"],
+  chips: ["tags", "keywords", "labels"],
+  // "Media" is this type's earlier name; image, photo and file are what
+  // people look for.
+  upload: ["media", "image", "photo", "picture", "file", "attachment", "pdf"],
+  // "Relationship" is this type's earlier name and its id.
+  relationship: ["relation", "reference", "link", "foreign key", "author"],
+  // "Repeater" is this type's earlier name and its id.
+  repeater: ["array", "list", "rows", "repeat"],
+  group: ["object", "section", "nested", "fieldset"],
+  // A field group is stored under two spellings; both, and the word the
+  // admin used before "field group", find it.
+  component: ["fieldGroup", "field group", "reusable"],
+  fieldGroup: ["component", "field group", "reusable"],
+  url: ["link", "website", "web address", "href"],
+  phone: ["telephone", "mobile", "cell"],
+  time: ["clock", "hour", "minute"],
+  file: ["upload", "attachment", "document"],
+  hidden: ["invisible", "tracking", "utm"],
+};
+
+/**
+ * Describe catalog rows for the picker: each row as it is, plus its search
+ * words. The one place a description is made, for built-in, surface-only and
+ * plugin rows alike; a type with no entry above (a plugin's) is found by its
+ * id as well as its name, description and category.
+ */
+export function describeFieldTypes<T extends string>(
+  entries: readonly FieldTypeCatalogEntry<T>[]
+): FieldTypeDescription<T>[] {
+  return entries.map(entry => {
+    const extra = Object.prototype.hasOwnProperty.call(
+      FIELD_TYPE_SYNONYMS,
+      entry.type
+    )
+      ? FIELD_TYPE_SYNONYMS[entry.type as keyof typeof FIELD_TYPE_SYNONYMS]
+      : [];
+    return { ...entry, synonyms: [entry.type, ...extra] };
+  });
 }

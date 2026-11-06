@@ -2,30 +2,39 @@ import {
   compileSiteSheet,
   compileSiteTokenSheet,
   DOCUMENT_FORMAT_VERSION,
+  isDefaultLook,
+  ownLooksRead,
   PAGE_ROOT_CLASS,
   resolveSiteTokens,
   type BlockDocument,
+  type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
   type SiteSheetInput,
   type StyleCompileContext,
   type BreakpointSet,
+  type BindingIssue,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
 
-import { BlockList } from "./block-boundary";
+import { BlockList, type BoundaryBindings } from "./block-boundary";
 import {
   createStandaloneContext,
+  type BindingIssuesHandler,
   type BlockHostPolicy,
+  type PageBindings,
   type PageContext,
 } from "./context";
 import { BlockPlaceholder } from "./placeholder";
 import {
-  prepareDocumentReadStages,
+  pageBindingRun,
+  readStagesFor,
   rendersOwnMarkup,
+  type PreparedDocument,
 } from "./prepare-document";
 import { registeredBlocks, type BlockResolver } from "./resolver";
 import {
+  blockPartsFor,
   drawlessTestFor,
   effectiveCompile,
   gatedEntriesCoverRemovedNodes,
@@ -145,6 +154,61 @@ export interface PageRendererProps {
    * compiled styles receives only the block-TYPE class.
    */
   nodeAttribute?: boolean;
+  /**
+   * What the page's bindings read, already read with the public's access.
+   *
+   * Absent, no binding is filled and every bound prop shows its own value,
+   * which is what an editor drawing a document without its data wants. Given,
+   * each binding is checked and filled before blocks render, from these
+   * sources only: never from `context.entry`, which a route may have read with
+   * more access than a visitor has.
+   *
+   * @experimental
+   */
+  bindings?: PageBindings;
+  /**
+   * Told about each binding this render could not use as stored. A throw from
+   * it is contained.
+   *
+   * @experimental
+   */
+  onBindingIssues?: BindingIssuesHandler;
+  /**
+   * The document as this package's route already prepared it, so a page is
+   * prepared once per render. Used only when it is one the package made, for
+   * this document object under these blocks, definitions and caps; anything
+   * else, a hand-built or copied value included, is ignored and the whole
+   * pipeline runs.
+   *
+   * @internal Set by this package's route.
+   * @experimental
+   */
+  prepared?: PreparedDocument;
+}
+
+/**
+ * A report of binding problems that tells its handler about each one once,
+ * however many list items meet it, and never lets the handler fail the page.
+ */
+function bindingIssueReport(
+  handler: BindingIssuesHandler | undefined
+): (issues: readonly BindingIssue[]) => void {
+  const seen = new Set<string>();
+  return issues => {
+    if (handler === undefined) return;
+    const fresh = issues.filter(issue => {
+      const key = `${issue.nodeId}\u0000${issue.prop}\u0000${issue.code}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (fresh.length === 0) return;
+    try {
+      handler(fresh);
+    } catch {
+      // A report is the host's code; a failing one costs the report, not the page.
+    }
+  };
 }
 
 /**
@@ -215,6 +279,7 @@ interface SiteInputRoles {
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
+  spacingMode: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -332,6 +397,7 @@ export function withoutStatedNulls(
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
+    spacingMode: shared.spacingMode ?? undefined,
   };
 }
 
@@ -396,7 +462,10 @@ export function sharedStyleInputs(
   const stored: Partial<SiteSheetInput> = site ?? {};
   return defined({
     breakpoints: firstStated(stored.breakpoints, route.breakpoints),
-    namedClasses: firstStated(route.namedClasses, stored.classes),
+    namedClasses: withSiteOwnLooks(
+      firstStated(route.namedClasses, stored.classes),
+      stored.classes
+    ),
     blockBases: firstStated(stored.blockBases, route.blockBases),
     tokenPrefix: firstStated(
       stored.tokenPrefix,
@@ -419,7 +488,97 @@ export function sharedStyleInputs(
     // stored tier describes the site. A site record has no business turning
     // forceable states on for a published page.
     previewStates: firstStated(route.previewStates, stored.previewStates),
+    // The site's spacing model is a fact about the site, so the stored tier
+    // wins, as it does for the block defaults the model decides.
+    spacingMode: firstStated(stored.spacingMode, route.spacingMode),
   });
+}
+
+/**
+ * The page context's classes with the site's own looks in place of any the
+ * context states: a block type's own look edits its base for every page on
+ * the site, so it is a fact about the site, as the stored bases are, and a
+ * route stating its own classes for attribution must not lose it. An own look
+ * is never written as a class, so this changes no class rule, only the bases.
+ */
+function withSiteOwnLooks(
+  classes: StyleCompileContext["namedClasses"],
+  site: SiteSheetInput["classes"]
+): StyleCompileContext["namedClasses"] {
+  if (classes === site || !Array.isArray(classes) || !Array.isArray(site)) {
+    return classes;
+  }
+  const siteOwn = ownLooksRead(site);
+  // Unchanged where neither tier holds one, so the stamp keeps its identity.
+  if (siteOwn.length === 0 && !classes.some(isDefaultLook)) return classes;
+  return [
+    ...classes.filter((entry: NamedClass) => !isDefaultLook(entry)),
+    ...siteOwn,
+  ];
+}
+
+/**
+ * The context a page's OWN sheet is compiled under, given the route's compile
+ * context and the site's style inputs.
+ *
+ * One derivation, shared by this renderer and by a route drawing several
+ * documents on one page (a page and the regions around it). Only one of those
+ * documents may emit the site sheet, and the others are rendered with
+ * `siteStyles={false}`; handing them THIS context keeps their node rules
+ * compiled exactly as they would be beside the sheet, rather than losing the
+ * site's breakpoints, classes, block bases and prefix along with it.
+ */
+export function pageCompileContext(
+  styleContext: StyleCompileContext | undefined,
+  siteInput: SiteSheetInput | undefined,
+  shared: ReconciledStyleInputs = sharedStyleInputs(styleContext, siteInput)
+): StyleCompileContext | undefined {
+  // Present whenever the render knows this site's breakpoints, whether they came
+  // from a compile context or from `siteStyles`. Taking only the context leaves
+  // the documented normal path — a route that supplies a stored artifact and the
+  // site's styles, and compiles nothing itself — with no identity to compare a
+  // stamp against and no inputs to recompile from, so a stored sheet is reused
+  // however far the site's classes, prefix or breakpoints have moved since.
+  //
+  // Breakpoints are the condition because they are the one field a compile
+  // cannot proceed without, and because it is already the condition this render
+  // uses to decide whether a site sheet can be built at all. A render that knows
+  // them can compile both sheets; one that does not can compile neither, and
+  // there the stored artifact is all there is.
+  const pageBreakpoints = statedBreakpoints(shared.breakpoints);
+  if (styleContext !== undefined) {
+    return {
+      ...styleContext,
+      ...withoutStatedNulls(shared),
+      // Resolved rather than spread, so the normalised set replaces the null
+      // the reconciler may legitimately have stated.
+      breakpoints: pageBreakpoints ?? styleContext.breakpoints,
+    };
+  }
+  if (pageBreakpoints === undefined) return undefined;
+  return {
+    ...withoutStatedNulls(shared),
+    breakpoints: pageBreakpoints,
+    // The site's own fetch predicate, handed to the reconciler rather than
+    // reconciled here. `effectiveCompile` derives ONE predicate and gives it to
+    // both compiles — but only from what the context it is passed carries, and
+    // a synthesized context that omitted this would leave the site sheet
+    // judging a `url(...)` by the site's rules while the page sheet beside it
+    // judged the same value by the host's alone. The site sheet is emitted
+    // FIRST, so a page sheet cannot retract what it published.
+    //
+    // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`, because
+    // the site artifact is addressed by the hash of its own bytes and needs
+    // none. So a page compiled under it is compiled under an ANONYMOUS
+    // predicate, and `effectiveCompile` already states what that means: no
+    // stored sheet can be judged against a predicate nothing can name, so every
+    // one of them is recompiled. That cost is the site opting into its own
+    // predicate, and it is the same answer a caller gets for passing one on the
+    // style context.
+    ...(siteInput?.mayFetchUrl === undefined
+      ? {}
+      : { mayFetchUrl: siteInput.mayFetchUrl }),
+  };
 }
 
 /** The first tier that stated this input, in the precedence its field has. */
@@ -473,6 +632,9 @@ export function PageRenderer({
   blockFallback,
   limits,
   hostPolicy,
+  bindings,
+  onBindingIssues,
+  prepared,
 }: PageRendererProps): ReactElement {
   const resolver = blocks ?? registeredBlocks();
   // Passed through untouched. The policy travels beside the context rather than
@@ -528,12 +690,23 @@ export function PageRenderer({
   // their order live in one place now; what stays here is the artifact question
   // this file alone can answer — whether a stored stylesheet still describes the
   // tree that renders — which reads those states rather than recomputing them.
-  const stages = prepareDocumentReadStages(document, {
-    resolver,
-    limits,
-    styleContext,
-    definitions,
-  });
+  // One pass for the whole render, shared by the page's bindings and every
+  // list item's, so each formatter is built once.
+  const bindingRun =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(bindings, pageContext.locale, resolver);
+  const stages = readStagesFor(
+    document,
+    {
+      resolver,
+      limits,
+      styleContext,
+      definitions,
+      ...(bindingRun === undefined ? {} : { bindings: bindingRun }),
+    },
+    prepared
+  );
   // `null` here means only an unreadable ENVELOPE, which the two guards above
   // already answered. Kept because unreachability is a property of the current
   // call graph rather than of the code, and this guard costs a comparison over a
@@ -551,7 +724,17 @@ export function PageRenderer({
     migrated: doc,
     gated: pruned,
     deduped: visible,
+    bound,
   } = stages;
+
+  // What the boundary needs to hand blocks their bound values and to fill the
+  // list items' bindings, with the page's own problems reported first.
+  const report = bindingIssueReport(onBindingIssues);
+  report(stages.bindingIssues);
+  const boundaryBindings: BoundaryBindings | undefined =
+    bindingRun === undefined
+      ? undefined
+      : { run: bindingRun, bound: stages.boundValues, report };
 
   // The scope comes from whichever input supplied the stylesheet, never from a
   // separate prop. Two inputs would have to agree, and when they did not the
@@ -632,22 +815,26 @@ export function PageRenderer({
   // `rendersNothing` over the whole tree to reach a conclusion already known.
   // That is the standalone compile path, where the compiler holds those rules
   // back at the source and nothing here needs to.
+  //
+  // Asked of the BOUND tree, because whether a block draws is a question about
+  // the props it renders with: an image waiting for its picture that a binding
+  // fills draws, and its rules must ship.
   const drawsNothing = drawlessTestFor(resolver);
   const drawlessDropped =
     gatedRules === undefined
-      ? visible
-      : pruneNodes(visible, node => !drawsNothing(node));
+      ? bound
+      : pruneNodes(bound, node => !drawsNothing(node));
   const drawlessCoveredByArtifact =
-    drawlessDropped !== visible &&
+    drawlessDropped !== bound &&
     gatedRules !== undefined &&
-    gatedEntriesCoverRemovedNodes(visible, drawlessDropped, gatedRules) &&
+    gatedEntriesCoverRemovedNodes(bound, drawlessDropped, gatedRules) &&
     !hasDuplicateNodeIds(doc);
-  const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : visible;
+  const drawlessInput = drawlessCoveredByArtifact ? drawlessDropped : bound;
   // Compiled from a tree with the knowable placeholders removed, while the
   // render keeps them so their placeholders still appear.
   const styleInput = pruneRenderedPlaceholders(drawlessInput, resolver);
 
-  // Whether a knowable placeholder was removed AT ALL, asked of `visible` rather
+  // Whether a knowable placeholder was removed AT ALL, asked of `bound` rather
   // than of what the drawless drop left. The two passes can reject the SAME node
   // — a migration-failed node whose last stored props also make its block declare
   // it draws nothing — and then the drawless drop takes it first, the placeholder
@@ -656,10 +843,10 @@ export function PageRenderer({
   // the drop is honest; what it cannot cover is the rest of what a placeholder
   // means for the sheet, and that answer must not depend on which pass reached
   // the node first.
-  const placeholderDropped = pruneRenderedPlaceholders(visible, resolver);
+  const placeholderDropped = pruneRenderedPlaceholders(bound, resolver);
 
   // Each pass contributes against the SAME base for the same reason. Folding
-  // them into one `styleInput !== visible` would let a covered drawless drop
+  // them into one `styleInput !== bound` would let a covered drawless drop
   // excuse a placeholder removal in the same step, and only a recompile can
   // answer for that one.
   const repairedDocument =
@@ -677,8 +864,12 @@ export function PageRenderer({
     resolved !== sanitized ||
     (pruned !== doc && !gatingCoveredByArtifact) ||
     visible !== pruned ||
-    (drawlessInput !== visible && !drawlessCoveredByArtifact) ||
-    placeholderDropped !== visible ||
+    // Filling bindings is deliberately NOT among them. It changes props only,
+    // never an id, a class or a style, so the stored sheet still describes
+    // every node; the two comparisons below are made against the bound tree
+    // for that reason, rather than against the tree before it.
+    (drawlessInput !== bound && !drawlessCoveredByArtifact) ||
+    placeholderDropped !== bound ||
     // Asked through the SAME function the exported read path uses. A migration
     // can turn a node that drew into one that draws nothing, and no comparison
     // above can see it: every pass returns what it was given, because nothing
@@ -696,55 +887,7 @@ export function PageRenderer({
   // Every site-level input BOTH compiles read, resolved once. See
   // `sharedStyleInputs` for why one resolution rather than one per consumer.
   const shared = sharedStyleInputs(styleContext, siteInput);
-  const pageShared = shared;
-  // Present whenever the render knows this site's breakpoints, whether they came
-  // from a compile context or from `siteStyles`. Taking only the context leaves
-  // the documented normal path — a route that supplies a stored artifact and the
-  // site's styles, and compiles nothing itself — with no identity to compare a
-  // stamp against and no inputs to recompile from, so a stored sheet is reused
-  // however far the site's classes, prefix or breakpoints have moved since.
-  //
-  // Breakpoints are the condition because they are the one field a compile
-  // cannot proceed without, and because it is already the condition this render
-  // uses to decide whether a site sheet can be built at all. A render that knows
-  // them can compile both sheets; one that does not can compile neither, and
-  // there the stored artifact is all there is.
-  const pageBreakpoints = statedBreakpoints(pageShared.breakpoints);
-  const pageStyleContext: StyleCompileContext | undefined =
-    styleContext !== undefined
-      ? {
-          ...styleContext,
-          ...withoutStatedNulls(pageShared),
-          // Resolved rather than spread, so the normalised set replaces the
-          // null the reconciler may legitimately have stated.
-          breakpoints: pageBreakpoints ?? styleContext.breakpoints,
-        }
-      : pageBreakpoints === undefined
-        ? undefined
-        : {
-            ...withoutStatedNulls(pageShared),
-            breakpoints: pageBreakpoints,
-            // The site's own fetch predicate, handed to the reconciler rather
-            // than reconciled here. `effectiveCompile` derives ONE predicate and
-            // gives it to both compiles — but only from what the context it is
-            // passed carries, and a synthesized context that omitted this would
-            // leave the site sheet judging a `url(...)` by the site's rules
-            // while the page sheet beside it judged the same value by the host's
-            // alone. The site sheet is emitted FIRST, so a page sheet cannot
-            // retract what it published.
-            //
-            // It carries no identity — `SiteSheetInput` has no `fetchPolicyId`,
-            // because the site artifact is addressed by the hash of its own
-            // bytes and needs none. So a page compiled under it is compiled
-            // under an ANONYMOUS predicate, and `effectiveCompile` already
-            // states what that means: no stored sheet can be judged against a
-            // predicate nothing can name, so every one of them is recompiled.
-            // That cost is the site opting into its own predicate, and it is the
-            // same answer a caller gets for passing one on the style context.
-            ...(siteInput?.mayFetchUrl === undefined
-              ? {}
-              : { mayFetchUrl: siteInput.mayFetchUrl }),
-          };
+  const pageStyleContext = pageCompileContext(styleContext, siteInput, shared);
 
   const {
     context: compileContext,
@@ -765,6 +908,7 @@ export function PageRenderer({
     repairedDocument,
     {
       fetchPolicyId,
+      ...(mayFetchUrl === undefined ? {} : { mayFetchUrl }),
       // The tree the stored artifact describes. This render prunes before it
       // resolves — a gated drop and a drawless drop are both covered by the
       // artifact and licensed to keep it — and both can remove the last node of
@@ -868,10 +1012,13 @@ export function PageRenderer({
         ? css === ""
           ? undefined
           : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet({
-            ...siteSheetInput,
-            breakpoints: siteBreakpoints,
-          });
+        : compileSiteSheet(
+            { ...siteSheetInput, breakpoints: siteBreakpoints },
+            // The parts of the types this page draws, over the composed tree
+            // the page sheet reads, so the classes in the shared sheet route a
+            // wrapped image's corners to its picture as the page sheet does.
+            blockPartsFor(doc, resolver, pageStyleContext?.blockParts)
+          );
 
   return (
     <div className={rootClassName}>
@@ -898,13 +1045,19 @@ export function PageRenderer({
         />
       ) : null}
       <BlockList
-        nodes={visible.nodes}
+        nodes={bound.nodes}
         context={pageContext}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(shared.spacingMode == null
+          ? {}
+          : { spacingMode: shared.spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(boundaryBindings === undefined
+          ? {}
+          : { bindings: boundaryBindings })}
       />
     </div>
   );

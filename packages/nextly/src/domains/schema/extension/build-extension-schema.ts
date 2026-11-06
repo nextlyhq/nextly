@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 
 import { getColumns, isTable, type Table } from "drizzle-orm";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import {
   type DynamicRelationEdge,
   staticRelationTables,
@@ -96,6 +97,12 @@ export interface ExtensionSchemaInput {
   refuseNondeterministicHooks?: boolean;
 }
 
+/** The collection, Single or field group an entity table stores. */
+export interface EntityOwner {
+  kind: SeedEntityTable["entityKind"];
+  slug: string;
+}
+
 export interface ExtensionSchema {
   /** Plugin and app tables. */
   tables: ExtensionTable[];
@@ -137,6 +144,13 @@ export interface ExtensionSchema {
    * foreign key to one is added once they exist.
    */
   codeFirstTables: ReadonlySet<string>;
+  /**
+   * Each of those tables' collection, Single or field group, by table name.
+   * A write that reaches an entity's table without going through its content
+   * service (a plugin's `ctx.db.contributed`) finds here whose cached reads
+   * it changed. `codeFirstTables` is this map's keys.
+   */
+  entityOwners: ReadonlyMap<string, EntityOwner>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -804,6 +818,10 @@ async function refuseNondeterministicHooks(
 export async function buildExtensionSchema(
   input: ExtensionSchemaInput
 ): Promise<ExtensionSchema> {
+  // The draft reads this dialect's static tables, and a compile can name a
+  // dialect no adapter in this process was created for: `migrate:create
+  // --plugin` compiles every dialect. Already loaded at boot, this is a no-op.
+  await loadDialectTables(input.dialect);
   const store = draftStoreFor(input);
 
   if (input.refuseNondeterministicHooks === true) {
@@ -932,6 +950,13 @@ export async function buildExtensionSchema(
     returned: drizzle,
   });
 
+  const entityOwners = new Map<string, EntityOwner>(
+    input.entities.map(entity => [
+      entity.name,
+      { kind: entity.entityKind, slug: entity.slug },
+    ])
+  );
+
   return {
     tables,
     entityIndexes,
@@ -945,7 +970,8 @@ export async function buildExtensionSchema(
     adopted,
     /** Adopted tables' relation edges, for registry registration. */
     adoptedRelations,
-    codeFirstTables: new Set(input.entities.map(entity => entity.name)),
+    codeFirstTables: new Set(entityOwners.keys()),
+    entityOwners,
     fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
   };
 }

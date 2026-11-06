@@ -14,12 +14,14 @@
 
 import type { FieldConfig } from "nextly/config";
 
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import type { SingleDocument } from "@admin/services/singleApi";
 
 import { singleDocumentKeys, useSingleDocument } from "./useSingles";
 import {
   useStoredSingleDocument,
   useWithStoredReferences,
+  type DocumentLatest,
 } from "./useStoredReferences";
 
 export interface UseSingleEditorDocumentArgs {
@@ -54,6 +56,8 @@ export interface UseSingleEditorDocumentResult {
   sourceDoc: SingleDocument | undefined;
   /** Whether the active language differs from the app default. */
   isNonDefaultLocale: boolean;
+  /** When the document was read, and how to read it again. */
+  latest: DocumentLatest;
 }
 
 export function useSingleEditorDocument({
@@ -69,10 +73,13 @@ export function useSingleEditorDocument({
   // shows empty rather than the default language's text, which would bleed the
   // source into the field and risk saving it as this language's translation.
   const fallbackLocale = localizationEnabled ? "none" : undefined;
+  // The overview reads every language's state, so it is asked only of a user
+  // the server lets read them all; otherwise the Single would be refused.
+  const mayReadTranslations = useCanRequest(slug ?? "", "readTranslations");
   const populated = useSingleDocument(slug, {
     locale,
     fallbackLocale,
-    translationStatus: localizationEnabled,
+    translationStatus: localizationEnabled && mayReadTranslations,
     draft: draftsEnabled,
   });
   // The same document as stored. The populated read leaves out a related item
@@ -84,7 +91,7 @@ export function useSingleEditorDocument({
     fallbackLocale,
     draft: draftsEnabled,
   });
-  const { document, isLoading, error } = useWithStoredReferences({
+  const { document, isLoading, error, latest } = useWithStoredReferences({
     fields,
     populated,
     stored,
@@ -110,5 +117,5 @@ export function useSingleEditorDocument({
     },
   });
 
-  return { document, isLoading, error, sourceDoc, isNonDefaultLocale };
+  return { document, isLoading, error, sourceDoc, isNonDefaultLocale, latest };
 }

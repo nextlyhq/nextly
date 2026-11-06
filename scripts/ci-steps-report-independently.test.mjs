@@ -92,6 +92,14 @@ const SETUP_STEPS = new Set([
   "Restore Turbo cache",
   "Save Turbo cache",
   "Install dependencies",
+  // The unit selection's dependency records: restored like the turbo cache,
+  // and stamped and saved only after a passing push to main, like its save.
+  "Restore unit test records",
+  "Stamp unit test records",
+  "Save unit test records",
+  // pnpm's package store: restored on every event, saved after a push only.
+  "Restore pnpm store",
+  "Save pnpm store",
 ]);
 
 /**
@@ -121,6 +129,9 @@ const BUILD_DEPENDENT = new Set([
   "publint",
   "arethetypeswrong",
   "Playground tests",
+  // Runs the `nextly` CLI from `packages/nextly/dist` to compare the playground's committed
+  // component map with its config: without a build there is no CLI to run.
+  "Component map agrees with the config",
 ]);
 
 /**

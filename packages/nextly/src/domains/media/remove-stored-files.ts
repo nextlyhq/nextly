@@ -1,9 +1,17 @@
 import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../database/missing-column";
+import { redactCredentialsInText } from "../../observability/mask-emails";
 import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
-import { canonicalStoredPath } from "./orphan-thumbnails";
+import {
+  canonicalStoredPath,
+  storedKeysOn,
+  type StoredKeys,
+} from "./orphan-thumbnails";
+import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
+import type { SizeLocator } from "./size-location";
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
 
 /**
@@ -11,9 +19,55 @@ import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
  * every delete does it, of one item or of a folder's.
  */
 
-/** The storage surface removal uses: a delete by stored path, per collection. */
+/**
+ * The storage surface removal uses: a delete by stored path, per collection,
+ * and where the storage serves a path and what kind it is, which locate an
+ * image size recorded by its URL alone (`sizeLocatorOf`). The media storage
+ * has all three; a storage without the last two removes no such size.
+ */
 export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
+  getPublicUrl?(filePath: string, collection?: string): string;
+  getStorageType?(collection?: string): string;
+}
+
+/**
+ * The media collection's place in `storage`, as locating a size asks it, or
+ * undefined when the storage cannot say where it serves a file.
+ */
+function sizeLocatorOf(
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+): SizeLocator | undefined {
+  const publicUrl = storage.getPublicUrl?.bind(storage);
+  const storageType = storage.getStorageType?.bind(storage);
+  if (!publicUrl || !storageType) return undefined;
+  return {
+    getPublicUrl: filePath => publicUrl(filePath, "media"),
+    getType: () => storageType("media"),
+  };
+}
+
+/**
+ * How media records are read against one storage, for the question both
+ * sides of a removal ask, "does this record name this file": where an image
+ * size recorded by URL alone is on it (`sizeLocatorOf`), and how its stored
+ * keys compare (`storedKeysOn`). The files a delete removes and the files
+ * another item keeps are read with the same one, so the two answer alike.
+ */
+export interface StorageReading {
+  locator: SizeLocator | undefined;
+  keys: StoredKeys;
+}
+
+/**
+ * The reading of `storage`. One that cannot say its kind compares keys
+ * canonically, as a storage whose spellings may be one file.
+ */
+export function storageReadingOf(
+  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+): StorageReading {
+  const locator = sizeLocatorOf(storage);
+  return { locator, keys: storedKeysOn(locator?.getType() ?? "") };
 }
 
 /**
@@ -42,7 +96,10 @@ export function storedPathForLog(pathOrUrl: string): string {
 export function errorForLog(error: unknown): string {
   if (!(error instanceof Error))
     return "a value that is not an error was thrown";
-  return (
+  // The whole message is judged as every log line is, so a credential's name
+  // stays joined to its value (`X-Api-Key: …`, `"token":"…"`) and a `Bearer`
+  // credential is found too.
+  return redactCredentialsInText(
     error.message
       // Every URL, with a scheme or without one (`//host/...`).
       .replace(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s"'<>]+/gi, url =>
@@ -50,17 +107,15 @@ export function errorForLog(error: unknown): string {
           ? storedPathForLog(`https:${url}`).slice(6)
           : storedPathForLog(url)
       )
-      // A query outside a URL: every parameter after a `?` or `&`, and a
-      // credential's own name anywhere (`X-Amz-Credential=...`, `token=...`).
+      // A query outside a URL: every parameter after a `?` or `&`.
       .replace(/[?&][^\s=&?#]+=[^\s&#]*/g, "")
-      .replace(
-        /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig))=[^\s&"'<>]*/gi,
-        "$1=[redacted]"
-      )
   );
 }
 
-/** A stored file that could not be removed, by its path, so it can be found. */
+/**
+ * A stored file that could not be removed, by its path, so it can be found.
+ * Exported for the media file replace, which removes the old files too.
+ */
 export function warnNotRemoved(
   filePath: string,
   mediaId: string,
@@ -82,20 +137,41 @@ export function warnUnlocated(url: string, mediaId: string): void {
   );
 }
 
+/**
+ * An image size whose record names it by URL alone, and which is not shown to
+ * be a file of the storage configured now: named, by that URL, the one record
+ * of it left once the item is gone, for it to be removed where it is stored.
+ * Nothing was removed in its place.
+ */
+export function warnSizeNotHere(url: string, mediaId: string): void {
+  consoleLogger.warn(
+    `[MediaService] Left an image size of media ${mediaId} at ${storedPathForLog(url)}: its record names it by URL alone, and that URL is not where the media storage configured now serves a file it holds. Remove it from the storage that serves it.`
+  );
+}
+
 /** The media columns a search for files another item refers to reads. */
 export interface StoredFileColumns {
   filename: AnyColumn;
   url: AnyColumn;
   thumbnailUrl: AnyColumn;
-  sizes: AnyColumn;
 }
 
 /** How a search for files another item refers to reads the media table. */
 export interface StoredFileSearch {
   columns: StoredFileColumns;
   dialect: "postgresql" | "mysql" | "sqlite";
-  /** The rows matching `where`, with the columns `storedFilesOf` reads. */
-  read: (where: SQL) => Promise<MediaFilesRecord[]>;
+  /**
+   * The retired `sizes` column, while the database still has it; undefined
+   * once it is gone. An item stored before image sizes were removed can name
+   * a file among its sizes until `nextly media remove-sizes` clears them, so
+   * the search reads them for as long as they can be there.
+   */
+  sizesColumn?: () => Promise<SQL | undefined>;
+  /**
+   * The rows matching `where`, with the columns `storedFilesOf` reads, the
+   * retired `sizes` among them when `sizes` names it.
+   */
+  read: (where: SQL, sizes: SQL | undefined) => Promise<MediaFilesRecord[]>;
 }
 
 /** Names searched per query, so a large folder's chunk stays one bounded statement each. */
@@ -120,16 +196,22 @@ function widenedForJson(char: string): string {
  * (`_` is a wildcard here, and a name can occur in another), never narrower,
  * which is what a search for what to keep needs; the caller decides by path.
  */
-function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
+function mayReferTo(
+  search: StoredFileSearch,
+  names: readonly string[],
+  sizes: SQL | undefined
+): SQL {
   const { columns, dialect } = search;
   // The sizes column is JSON on PostgreSQL and MySQL, which `like` cannot
-  // read as it is; it is read as its text.
+  // read as it is; it is read as its text. Absent once the column is gone.
   const sizesText =
-    dialect === "postgresql"
-      ? sql`${columns.sizes}::text`
-      : dialect === "mysql"
-        ? sql`cast(${columns.sizes} as char)`
-        : sql`${columns.sizes}`;
+    sizes === undefined
+      ? undefined
+      : dialect === "postgresql"
+        ? sql`${sizes}::text`
+        : dialect === "mysql"
+          ? sql`cast(${sizes} as char)`
+          : sizes;
   const conditions = names.flatMap(name => {
     // A character JSON escapes (a backslash, a double quote, a control
     // character) is written otherwise in the sizes text, and a backslash is
@@ -140,38 +222,44 @@ function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
       like(columns.filename, pattern),
       like(columns.url, pattern),
       like(columns.thumbnailUrl, pattern),
-      sql`${sizesText} like ${pattern}`,
+      ...(sizesText === undefined ? [] : [sql`${sizesText} like ${pattern}`]),
     ];
   });
   return or(...conditions) ?? sql`false`;
 }
 
 /**
- * Of `paths`, the ones `rows` refer to, compared as stored paths are
- * (`canonicalStoredPath`): the one answer to "does an item refer to this
- * file" that the search for left-behind thumbnails also gives.
+ * Of `paths`, the ones `rows` refer to, each row's files read as a delete of
+ * it would remove them and keys compared as `reading`'s storage tells its
+ * files apart (`StorageReading`).
  *
  * A row's thumbnail whose stored location its record does not show (an
  * original spelled otherwise than its URL, say) cannot be compared by path;
  * a file whose name it ends in is taken as referred to, since nothing shows
- * it is not.
+ * it is not. So is one a size recorded by URL alone ends in, where the
+ * storage cannot say where it serves a file; where it can, such a size it
+ * does not serve is another storage's file, and names none of this one's.
  */
 export function pathsReferencedAmong(
   paths: readonly string[],
-  rows: readonly MediaFilesRecord[]
+  rows: readonly MediaFilesRecord[],
+  reading: StorageReading
 ): Set<string> {
+  const { keys, locator } = reading;
   const referenced = new Set<string>();
   const unlocatedNames = new Set<string>();
   for (const row of rows) {
-    const files = storedFilesOf(row);
-    for (const path of files.paths) referenced.add(canonicalStoredPath(path));
-    for (const url of files.unlocated) unlocatedNames.add(lastSegment(url));
+    const files = storedFilesOf(row, locator);
+    for (const path of files.paths) referenced.add(keys.path(path));
+    const unknown = locator === undefined ? files.notHere : [];
+    for (const url of [...files.unlocated, ...unknown]) {
+      unlocatedNames.add(lastSegment(url));
+    }
   }
   return new Set(
     paths.filter(
       path =>
-        referenced.has(canonicalStoredPath(path)) ||
-        unlocatedNames.has(lastSegment(path))
+        referenced.has(keys.path(path)) || unlocatedNames.has(lastSegment(path))
     )
   );
 }
@@ -196,19 +284,46 @@ export function pathsReferencedAmong(
 export async function filesKeptByOthers(
   search: StoredFileSearch,
   paths: readonly string[],
-  mediaIds: readonly string[]
+  mediaIds: readonly string[],
+  /** The storage the files are removed from, read as the removal reads it. */
+  reading: StorageReading
 ): Promise<Set<string> | null> {
   const names = [...new Set(paths.map(lastSegment).filter(Boolean))];
-  try {
+  const readAll = async (sizes: SQL | undefined) => {
     const rows: MediaFilesRecord[] = [];
     for (let i = 0; i < names.length; i += NAMES_PER_QUERY) {
       rows.push(
         ...(await search.read(
-          mayReferTo(search, names.slice(i, i + NAMES_PER_QUERY))
+          mayReferTo(search, names.slice(i, i + NAMES_PER_QUERY), sizes),
+          sizes
         ))
       );
     }
-    return pathsReferencedAmong(paths, rows);
+    return rows;
+  };
+  try {
+    // Asked once per search, so every chunk reads the same columns.
+    const sizes = await search.sizesColumn?.();
+    let rows: MediaFilesRecord[];
+    try {
+      rows = await readAll(sizes);
+    } catch (error) {
+      // The retired column dropped between the ask and the read, as
+      // `nextly media remove-sizes --apply --drop` can while a delete runs.
+      // It is dropped only once no item names a size file in it, so the
+      // search read again without it misses nothing; answering null instead
+      // would leave every file of an item whose row is already gone. Told by
+      // the driver's code for a missing column, and by its name, so no other
+      // failure is read again.
+      if (
+        sizes === undefined ||
+        !isMissingNamedColumnError(error, RETIRED_SIZES_COLUMN)
+      ) {
+        throw error;
+      }
+      rows = await readAll(undefined);
+    }
+    return pathsReferencedAmong(paths, rows, reading);
   } catch (error) {
     consoleLogger.warn(
       mediaIds.length > 0
@@ -227,16 +342,25 @@ export async function filesKeptByOthers(
  * on a transient failure, so one that fails leaves the others to go, and is
  * named in the log with its item, so the leftover can be found. Never throws:
  * the record is already gone, and a storage failure must not fail its delete.
+ *
+ * Answers whether every file asked for is gone: `false` when any could not
+ * be removed, for a caller holding a record of them to keep it and try
+ * again. A file already missing counts as removed, since a storage's delete
+ * of one succeeds.
  */
 export async function removeStoredFiles(
   storage: StoredFileRemover,
   record: MediaFilesRecord,
   mediaId: string,
   kept: ReadonlySet<string> = new Set()
-): Promise<void> {
-  const { paths, unlocated } = storedFilesOf(record);
+): Promise<boolean> {
+  const { paths, unlocated, notHere } = storedFilesOf(
+    record,
+    storageReadingOf(storage).locator
+  );
   for (const url of unlocated) warnUnlocated(url, mediaId);
-  await Promise.all(
+  for (const url of notHere) warnSizeNotHere(url, mediaId);
+  const removed = await Promise.all(
     paths
       .filter(filePath => !kept.has(filePath))
       .map(async filePath => {
@@ -252,9 +376,12 @@ export async function removeStoredFiles(
               );
             },
           });
+          return true;
         } catch (error) {
           warnNotRemoved(filePath, mediaId, error);
+          return false;
         }
       })
   );
+  return removed.every(Boolean);
 }

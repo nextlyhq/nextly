@@ -39,9 +39,11 @@
  */
 
 import {
+  insertKeepingLocks,
   siblingRun,
   type BlockDocument,
   type BlockNode,
+  type Placed,
 } from "@nextlyhq/blocks-engine";
 
 import { blockDeletion } from "./delete-block";
@@ -49,8 +51,9 @@ import { blockDuplication } from "./duplicate-block";
 import { lockOp } from "./inspector";
 import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel } from "./layers";
+import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 import { normalizeSelection } from "./selection";
 
 /** A planned group, with what to say about it. */
@@ -149,13 +152,7 @@ function lockRefusal(
   for (const id of ids) {
     const blocked = lockBlockingDelete(document, id);
     if (blocked === undefined) continue;
-    const name = layerLabel(blocked);
-    return {
-      reason:
-        blocked.id === id
-          ? `${name} is locked. Unlock it to delete it.`
-          : `The selection contains ${name}, which is locked. Unlock it to delete.`,
-    };
+    return { reason: lockedBlockSentence(blocked, id, "delete") };
   }
   return null;
 }
@@ -242,7 +239,8 @@ export interface SelectionDuplication extends SelectionEdit {
  * A lock does NOT refuse this: duplicating neither moves nor removes the
  * original, and refusing would mean an author could not copy the blocks they
  * had most deliberately protected. The copies carry the lock, as they do for a
- * single block.
+ * single block. A lock AROUND the copy's place is another matter: putting a
+ * block into a locked one is refused, as any insert there is.
  */
 export function selectionDuplication(
   document: BlockDocument,
@@ -251,23 +249,26 @@ export function selectionDuplication(
   const ids = normalizeSelection(document, selectedIds);
   if (ids.length === 0) return null;
 
-  const ops: BuilderOp[] = [];
+  const placed: Placed[] = [];
   const newIds: string[] = [];
   // Reversed — see the module docblock. Forwards, the second copy's position is
   // computed against a document the first copy has already shifted.
   for (const id of [...ids].reverse()) {
     const duplication = blockDuplication(document, id);
     if (duplication === null) continue;
-    ops.push({ kind: "insert", node: duplication.node, at: duplication.at });
+    placed.push({ node: duplication.node, at: duplication.at });
     // Unshifted, so the ids come back in document order even though the ops go
     // out in reverse. A caller selecting the copies wants them the way a reader
     // meets them, not the way they were planned.
     newIds.unshift(duplication.node.id);
   }
 
-  if (ops.length === 0) return null;
+  if (placed.length === 0) return null;
   return {
-    ops,
+    // A copy keeps the locks its original carries: it arrives unlocked and is
+    // locked where it lands, the sequence every copy into a document uses, so
+    // the insert is accepted and its undo still works.
+    ops: insertKeepingLocks(placed),
     newIds,
     count: ids.length,
     descendants: 0,
@@ -348,9 +349,8 @@ const SPLIT_REFUSAL: SelectionRefusal = {
  *
  * Separate from the deletion refusal because the verb reaches the author: a
  * lock that forbids moving is not the same sentence as one that forbids
- * deleting, and `lockBlockingMove` and `lockBlockingDelete` do not answer alike
- * either — a locked child blocks a delete while the parent around it may still
- * be reordered.
+ * deleting, though `lockBlockingMove` and `lockBlockingDelete` find the same
+ * locked block.
  */
 function moveLockRefusal(
   document: BlockDocument,
@@ -359,13 +359,7 @@ function moveLockRefusal(
   for (const id of ids) {
     const blocked = lockBlockingMove(document, id);
     if (blocked === undefined) continue;
-    const name = layerLabel(blocked);
-    return {
-      reason:
-        blocked.id === id
-          ? `${name} is locked. Unlock it to move it.`
-          : `The selection contains ${name}, which is locked. Unlock it to move.`,
-    };
+    return { reason: lockedBlockSentence(blocked, id, "move") };
   }
   return null;
 }

@@ -76,7 +76,7 @@ Singles store one-of-a-kind content -- site settings, navigation menus, footer c
 
 Fields define the shape of your content. Nextly ships eighteen field types organised by category:
 
-- **Basic:** [`text`](/docs/configuration/fields#text), [`textarea`](/docs/configuration/fields#textarea), [`richText`](/docs/configuration/fields#rich-text), [`email`](/docs/configuration/fields#email), [`password`](/docs/configuration/fields#password), [`code`](/docs/configuration/fields#code), [`number`](/docs/configuration/fields#number), [`checkbox`](/docs/configuration/fields#checkbox), [`date`](/docs/configuration/fields#date)
+- **Basic:** [`text`](/docs/configuration/fields#text), [`textarea`](/docs/configuration/fields#textarea), [`richText`](/docs/configuration/fields#rich-text), [`email`](/docs/configuration/fields#email), [`icon`](/docs/configuration/fields#icon), [`password`](/docs/configuration/fields#password), [`code`](/docs/configuration/fields#code), [`number`](/docs/configuration/fields#number), [`checkbox`](/docs/configuration/fields#checkbox), [`date`](/docs/configuration/fields#date)
 - **Selection:** [`select`](/docs/configuration/fields#select), [`radio`](/docs/configuration/fields#radio), [`chips`](/docs/configuration/fields#chips)
 - **Media:** [`upload`](/docs/configuration/fields#upload)
 - **Relationship:** [`relationship`](/docs/configuration/fields#relationship)
@@ -97,8 +97,7 @@ Nextly includes a full admin interface at `/admin` with role-based access contro
 ## Prerequisites
 
 - **Node.js** `^22.12.0 || >=24.0.0` (Node 20 and Node 23 are not supported)
-- **Next.js 16.4.1+** (App Router required)
-- **React 19+**
+- **Next.js** with the App Router, and **React**, at the versions in [Requirements](/docs/getting-started/installation#requirements)
 - **TypeScript 5+**
 - A supported database: **PostgreSQL** (recommended for production), **MySQL**, or **SQLite** (local demo only — see the [SQLite caveats](/docs/database/sqlite))
 - Basic familiarity with Next.js and TypeScript

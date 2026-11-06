@@ -39,14 +39,17 @@
  * @module component-readiness-hook
  */
 import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
-import {
-  unsuppliedComponentIds,
-  type ComponentSource,
-} from "@nextlyhq/blocks-react";
+import { unsuppliedComponentIds } from "@nextlyhq/blocks-react";
 import type { HookContext } from "nextly";
 import { recordAdvisoryNotice } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import {
+  AS_THE_SYSTEM,
+  asDocument,
+  publishedStoreSource,
+} from "./component-store-source";
+import { areaComponentIds, layoutAreasDocument } from "./layout-areas-document";
 import {
   requestContextFor,
   writeTargetOf,
@@ -58,18 +61,6 @@ const PUBLISHING_PHASES = ["afterCreate", "afterUpdate"] as const;
 
 /** The canonical code a consumer branches on. */
 export const COMPONENTS_NOT_PUBLISHED_CODE = "COMPONENTS_NOT_PUBLISHED";
-
-/**
- * How many ids one readiness query may ask about.
- *
- * A collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit` (500) and
- * returns a subset silently, while a document may reference far more component
- * instances than that — the default node cap is 5,000. Asking for all of them
- * at once returns the first page, and every published component missing from it
- * is then reported as unpublished: a false warning, produced by the read rather
- * than by the data. Under the cap the answer is the whole answer.
- */
-const READINESS_BATCH_SIZE = 128;
 
 /** The reads this notice makes on its own behalf. */
 export interface ReadinessDirectApi {
@@ -147,6 +138,12 @@ export function registerComponentReadinessNotice(args: {
    * and report a page as holed when it draws correctly.
    */
   componentField: string;
+  /**
+   * The RESOLVED slug Layouts are stored under, when a host has them. A Layout
+   * names its area components in a repeater rather than a blocks field, so its
+   * writes are read through that repeater; unset, Layouts are not examined.
+   */
+  layoutCollection?: string;
   /** The bounds documents are read under, asked per call. */
   limits: () => DocumentLimits;
 }): void {
@@ -213,11 +210,15 @@ async function composeNotice(
   // components a visitor never meets — a gated instance, slot content the
   // chosen definition discards, an id an override replaced — and misses ones it
   // does.
-  const source = storeSource(
-    target.nextly,
-    args.componentCollection,
-    args.componentField
-  );
+  // `overrideAccess` because the question is about the document's lifecycle,
+  // not about what this caller may read: an author who cannot read a component
+  // still needs to know their page has a hole, and judging it by their
+  // permissions answers "missing" for one that is perfectly live.
+  const source = publishedStoreSource(target.nextly, {
+    collection: args.componentCollection,
+    field: args.componentField,
+    reading: AS_THE_SYSTEM,
+  });
   const missing = new Set<string>();
   for (const document of documents) {
     for (const id of await unsuppliedComponentIds(
@@ -238,10 +239,7 @@ async function composeNotice(
     // scope on purpose — the hole it leaves appears on every page embedding it
     // — and telling its author "this page embeds…" points them at a document
     // they were not editing.
-    message: describe(
-      missing.size,
-      target.slug === args.componentCollection ? "component" : "page"
-    ),
+    message: describe(missing.size, subjectNoun(args, target.slug)),
     entryId: target.documentId,
   };
 }
@@ -275,13 +273,16 @@ async function subjectOf(
   );
   if (!leavesDocumentPublished(context, collection)) return null;
 
-  const documents = writtenDocuments(
-    context,
-    renderedFields(
-      blocksFieldsOf(collection as never),
-      fieldFor(args, target.slug)
-    )
-  );
+  const documents =
+    target.slug === args.layoutCollection
+      ? layoutDocuments(context)
+      : writtenDocuments(
+          context,
+          renderedFields(
+            blocksFieldsOf(collection as never),
+            fieldFor(args, target.slug)
+          )
+        );
   return documents.length === 0 ? null : { target, documents };
 }
 
@@ -318,7 +319,9 @@ function withinRenderedScope(
 ): boolean {
   if (args.renderedCollections === undefined) return true;
   return (
-    args.renderedCollections.includes(slug) || slug === args.componentCollection
+    args.renderedCollections.includes(slug) ||
+    slug === args.componentCollection ||
+    slug === args.layoutCollection
   );
 }
 
@@ -347,7 +350,7 @@ function withinRenderedScope(
  * ordinary drafting of a live page, which is most of an author's day, and a
  * notice that cries wolf is one nobody reads by the time it is right.
  */
-function leavesDocumentPublished(
+export function leavesDocumentPublished(
   context: HookContext<unknown>,
   collection: unknown
 ): boolean {
@@ -404,132 +407,38 @@ function writtenDocuments(
 }
 
 /**
- * A stored block value as a document, or `null` when it is not one.
- *
- * Decodes a STRING first, and that is not defensiveness. A post-commit hook
- * receives the value as the adapter persisted it: JSON columns come back as
- * text on SQLite and on any adapter that stores them that way, and the write
- * path parses them AFTER the hooks have run. An object-only test therefore
- * finds no documents at all on those adapters, and the check reports nothing
- * for every page — silently, because finding nothing to look at and finding
- * nothing wrong are the same answer here.
- *
- * A string that does not parse is not a document, and neither is a parsed value
- * without a node list.
+ * A written Layout's areas, as the one document of placements they are.
+ * None when its areas name no component.
  */
-function asDocument(value: unknown): BlockDocument | null {
-  const decoded = typeof value === "string" ? parseJson(value) : value;
-  return typeof decoded === "object" &&
-    decoded !== null &&
-    Array.isArray((decoded as { nodes?: unknown }).nodes)
-    ? (decoded as BlockDocument)
-    : null;
+function layoutDocuments(context: HookContext<unknown>): BlockDocument[] {
+  const data = (context as unknown as Record<string, unknown>).data as
+    | Record<string, unknown>
+    | undefined;
+  const components = areaComponentIds(data?.areas);
+  return components.length === 0 ? [] : [layoutAreasDocument(components)];
 }
 
-/** `JSON.parse`, answering `null` rather than throwing on stored text. */
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The store, shaped as the source the render's discovery asks.
- *
- * One field, named the way the renderer names it, because that is the document
- * the renderer reads: a store with a second blocks field would otherwise have
- * references in a field nothing renders counted against the page.
- *
- * Chunked because a collection query is CLAMPED to `PAGINATION_DEFAULTS.maxLimit`
- * (500) and returns a subset silently, while a document may reference far more
- * instances than that. One unbounded query answers for the first page only, and
- * every published component missing from it reads as unpublished — a warning
- * manufactured by the read rather than by the data.
- *
- * Relationship DEPTH is left unstated, which is what the renderer's own
- * component read does. Forcing it to zero would hand an `afterRead` hook bare
- * ids where the render gives it expanded relationships, so a hook whose blocks
- * output depends on one produces a different component graph here than the page
- * actually draws — and this check would then miss an unpublished component, or
- * name one no visitor meets.
- *
- * `overrideAccess` because the question is about the document's lifecycle, not
- * about what this caller may read: an author who cannot read a component still
- * needs to know their page has a hole, and judging it by their permissions
- * answers "missing" for one that is perfectly live.
- */
-function storeSource(
-  nextly: ReadinessDirectApi,
-  collection: string,
-  field: string
-): ComponentSource {
-  return async (ids: readonly string[]) => {
-    const found = new Map<string, BlockDocument>();
-    for (const chunk of chunked(ids, READINESS_BATCH_SIZE)) {
-      const page = await nextly.find({
-        collection,
-        where: { id: { in: [...chunk] } },
-        limit: chunk.length,
-        status: "published",
-        overrideAccess: true,
-        // BOTH identity channels cleared, stated rather than omitted.
-        // `mergeConfig` spreads the pooled reader's defaults UNDER the call, so
-        // an omitted key restores whatever identity the instance was booted
-        // with — and an `afterRead` hook branching on the caller would then
-        // hand this read a definition the anonymous visitor never sees,
-        // suppressing a real notice or inventing one. The renderer's own
-        // component read states both for the same reason.
-        user: undefined,
-        req: undefined,
-      });
-      for (const item of page.items) {
-        const row = item as Record<string, unknown> | null;
-        const id = row?.id;
-        // Handed over WHOLE and unjudged, exactly as the renderer's own source
-        // hands it over. Whether the stored value is a readable document is the
-        // pipeline's question, and it answers it with reasons a store cannot:
-        // an id present with an unreadable value is a definition somebody
-        // published and cannot be read, and that is not the same as absent.
-        if (typeof id !== "string") continue;
-        // PRESENT even when the value will not read as a document. The row came
-        // back under a published scope, so somebody published it, and dropping
-        // it here would report the component as one nobody published — a
-        // diagnosis republishing cannot repair. The resolver keeps those apart
-        // by asking presence and readability separately, and reports the second
-        // as `unreadable`; handing the raw value over is what lets it.
-        //
-        // Decoded first all the same: an adapter storing JSON as text hands
-        // back a string, and a string is unreadable to the resolver for a
-        // reason that has nothing to do with the data.
-        const stored = row?.[field];
-        const decoded = asDocument(stored);
-        found.set(id, (decoded ?? stored) as BlockDocument);
-      }
-    }
-    return found;
-  };
-}
-
-/** Successive slices of at most `size`. */
-function chunked<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
+/** What the written document is, in the sentence's words. */
+function subjectNoun(
+  args: Parameters<typeof registerComponentReadinessNotice>[0],
+  slug: string
+): "page" | "component" | "Layout" {
+  if (slug === args.componentCollection) return "component";
+  if (slug === args.layoutCollection) return "Layout";
+  return "page";
 }
 
 /**
  * The sentence an author reads.
  *
- * States the fact and stops. It offers no action on purpose: publishing the
- * components alongside the page is a separate capability that does not exist
- * yet, and copy that promises an affordance nobody can reach is worse than copy
- * that promises nothing.
+ * States the fact and stops. The offer to publish the components too is made
+ * by the editor and the form BEFORE a publish; this is said after it, to every
+ * writer, the API's included, so it names no action only one of them has.
  */
-function describe(count: number, subject: "page" | "component"): string {
+function describe(
+  count: number,
+  subject: "page" | "component" | "Layout"
+): string {
   const noun = count === 1 ? "1 component" : `${String(count)} components`;
   const tail =
     count === 1

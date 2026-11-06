@@ -1,0 +1,24 @@
+---
+title: UI_SCHEMA_INVALID
+description: "The Schema Builder's `ui-schema.json` holds an entry the manifest's schema rejects."
+---
+
+## Cause
+
+The Schema Builder's `ui-schema.json` holds an entry the manifest's schema rejects.
+
+Every entry in `ui-schema.json` is checked against the manifest's schema before any of it is used, so one entry it rejects stops the command and nothing is applied. The Why line lists each entry at fault by its path in the file.
+
+## Fix
+
+- Fix each entry the Why line lists in `ui-schema.json`.
+- Or make the change again in the Schema Builder, which writes only entries the schema accepts.
+
+## Example
+
+```text
+✗ `ui-schema.json` failed validation.
+  Why:  collections.0.slug: slug must match ^[a-z][a-z0-9_-]*$
+  Next: Fix each entry listed in `ui-schema.json`, or make the change again in the Schema Builder, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-invalid  (UI_SCHEMA_INVALID)
+```

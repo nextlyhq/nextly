@@ -17,7 +17,12 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 - **20 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, list, quote,
   image, gallery, button, embed, form), and one that reads from your content
-  ([collection loop](#reading-content-into-a-page)).
+  ([Collection list](#reading-content-into-a-page)).
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
+  section's title as text or as a heading from level 2 to 6, and its **Icon** and
+  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
+  before or after the title. Some screen readers announce a section title as the button's
+  text rather than as a heading; the section still opens and closes as normal.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -30,11 +35,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## Availability
 
-| | |
-|---|---|
-| Package | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app |
-| Status | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
-| Permission | Editing a page requires update access to the collection holding it |
+|            |                                                                                                 |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| Package    | `@nextlyhq/plugin-page-builder`, plus `@nextlyhq/blocks-react` in your app                      |
+| Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
+| Permission | Editing a page requires update access to the collection holding it                              |
 
 ## Install
 
@@ -63,16 +68,21 @@ boot refuses to start:
 npx nextly plugins install @nextlyhq/plugin-page-builder
 ```
 
-Last, load the editor's styles in your admin page,
-`src/app/admin/[[...params]]/page.tsx`. Without them the builder opens unstyled:
+The plugin keeps the bookkeeping behind its usage counts (how far the background job
+has indexed existing pages, and whether an index write has failed) in two tables of
+its own, `page_builder__usage_runs` and `page_builder__usage_progress`. No admin
+screen or API reaches them. Installing creates them; a site upgrading from a version
+without them runs `npx nextly migrate` before it starts on the new version, since a
+production boot refuses a plugin whose tables are behind it.
 
-```tsx
-import "@nextlyhq/plugin-page-builder/styles/editor.css";
-```
+Last, run `npx nextly generate:types`. It writes the file that registers the builder's
+screen with the admin, and that file also loads the editor's styles, so there is nothing
+to import by hand. In a project created before that file existed, import the generated
+file in your admin page, `src/app/admin/[[...params]]/page.tsx`; see
+[Admin UI](/docs/plugins/admin-ui).
 
-Run `npx nextly generate:types` after adding the plugin, too. It writes the file that
-registers the builder's screen with the admin. A project created before that file existed
-also imports it in the same admin page; see [Admin UI](/docs/plugins/admin-ui).
+An admin page that still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand
+keeps working: it loads the same stylesheet, once. You can remove the import.
 
 ## Render the pages
 
@@ -130,9 +140,9 @@ export default ContentPage;
 ```
 
 <Callout type="warn">
-Without a breakpoint set the renderer emits class names with no CSS behind them, and
-pages come out structurally correct and visually bare. Declare at least a `base`
-breakpoint.
+  Without a breakpoint set the renderer emits class names with no CSS behind
+  them, and pages come out structurally correct and visually bare. Declare at
+  least a `base` breakpoint.
 </Callout>
 
 ### Public sites read differently
@@ -140,7 +150,50 @@ breakpoint.
 `createBlocksPage` reads **access-enforced** content, so it needs no database during
 `next build`. A wholly public site calls `createPublicBlocksPage` instead: it reads
 trusted, pre-renders, and returns a `generateStaticParams` to export alongside the other
-two. Which one you call *is* the security posture — there is no option to flip.
+two. Which one you call _is_ the security posture — there is no option to flip.
+
+## Draw the canvas in your site's layout
+
+The editor's canvas can draw the page inside your own site's layout, so your global
+stylesheet, fonts, header and footer are around it, as they are around the published page.
+Add one route, inside the same layouts your pages are published in, that renders the
+canvas's empty page:
+
+```tsx
+// src/app/(frontend)/page-builder-canvas/page.tsx
+export { PageBuilderCanvas as default } from "@nextlyhq/plugin-page-builder/canvas";
+```
+
+Then name the route's path in the plugin's options:
+
+```ts
+pageBuilder({ canvasPath: "/page-builder-canvas" });
+```
+
+The editor loads that page into the canvas and draws the page being edited in it. Your
+layout stays visible around the page, faded and inert: its links and forms do nothing in
+the editor. The route renders no content of its own and reads nothing, and it tells search
+engines not to index it.
+
+The path must be on the same site as the admin, since the editor draws into the page it
+loads. If your pages sit under their language, write `{locale}` where the code goes, as in
+`canvasPath: "/{locale}/page-builder-canvas"`. The editor then loads the route for the
+language being edited, and leaves the segment out for your default language. Without `canvasPath`, the canvas draws the page on a blank page of its own. It does
+the same when the route is set but not found or does not load, and then a note above the
+canvas says so, with a link to this section. On the blank page the page has its block
+styles and the site's shared styles, but not your app's own CSS files, such as a
+`globals.css` that styles `h2` or `body`.
+
+Pointing at your layout around the page shows that it is part of your site's layout, which
+is edited in your site's code rather than in the editor.
+
+The canvas wraps the page in an element of its own, which the editor needs. A layout rule
+that selects your page as a direct child, such as `main > .nx-pb-page`, doesn't match in
+the canvas.
+
+On the blank page, a block that blends over a translucent site background (a block with
+`mix-blend-mode` over a background colour that is partly transparent) can look different in
+the editor than when published. Over an opaque background it looks the same.
 
 ## Breakpoints
 
@@ -148,18 +201,39 @@ Breakpoints are desktop-first. The `base` breakpoint applies at every width. Eac
 breakpoint has a `maxWidth`, and the values a block is given for it apply at that width
 and below, as an `@media (max-width: …)` rule.
 
-In the editor, the breakpoint switcher sizes the canvas to a breakpoint's width, and the
-Style tab edits the values for the breakpoint the canvas is sized to. The breakpoint
-manager beside it adds, changes and removes the site's breakpoints.
+In the editor, the device buttons choose which breakpoint you are styling. The base
+breakpoint is named **Desktop**. The chosen device shows the width the canvas lays the
+page out at: Desktop at 1280px (or one pixel past your widest breakpoint, if that is
+wider), and every other breakpoint at its own `maxWidth`, so "Tablet · 1024px". The Style
+tab edits the values for that breakpoint. The breakpoint manager beside the buttons adds,
+changes and removes the site's breakpoints.
+
+The device is your choice alone. Opening or closing a panel, or a narrower window, changes
+only how far the canvas is zoomed to fit; the zoom menu reads "Fit · 72%" while it fits.
+Choose a fixed zoom from the menu, press <kbd>Ctrl</kbd>+<kbd>0</kbd> (<kbd>⌘</kbd>+<kbd>0</kbd>
+on a Mac) for actual size, or <kbd>Shift</kbd>+<kbd>1</kbd> to fit again. Choosing another
+device goes back to fitting. The editor remembers the device and the zoom you left, for you
+rather than for the browser. If you remove the breakpoint you are styling, the editor moves to
+the next wider breakpoint that remains, or to Desktop when none is wider. A breakpoint removed
+while you were away is replaced by Desktop when you come back. If someone else removes a
+breakpoint while you still have the editor open, a save that adds styles or hiding at it is
+refused with "That breakpoint was removed from the site. Reload to keep editing.", since the
+published page would never show them. Styles a page already held there still save.
 
 ### Limits
 
 - **Styles only.** What changes per breakpoint is what the Style tab sets. A block's
   content and settings are the same at every width.
-- **A width, not a device.** The switcher sizes the canvas; it does not show the page as a
-  phone or tablet would. The canvas is not an iframe, so sizes in `vw` or `vh`, `@media`
-  rules you write yourself and code that reads the window's width follow the admin
-  window, not the canvas.
+- **A width, not a device.** The device buttons choose a breakpoint and lay the canvas out
+  at its width; they do not show the page as a particular phone or tablet would. The canvas
+  is a frame of its own at that width, so sizes in `vw` or `vh`, `@media` rules you write
+  yourself and code that reads the window's width answer for the device, as they do on the
+  published page.
+- **Your site's global stylesheet reaches the canvas through its canvas route.** With
+  [the canvas route](#draw-the-canvas-in-your-sites-layout) mounted, the canvas is drawn in
+  your site's layout and takes your app's own CSS. Without it, rules from your app's CSS
+  files, such as a `globals.css` that styles `h2` or `body`, do not reach the canvas, and
+  boxes size as `border-box`, which most site resets set.
 - **Saved breakpoints reach a page only when its route reads them.** Breakpoints you save
   in the editor are stored in the plugin's `site-style` single. The route above compiles
   against the breakpoints it declares in `styleContext` and never reads that single, so a
@@ -253,8 +327,11 @@ loads:
 
 The editor's canvas draws your page with the same React renderer that serves it,
 `PageRenderer` from `@nextlyhq/blocks-react`. It is not pixel-identical to the published
-page: the canvas adds editing outlines and markers, and, not being an iframe, it answers
-viewport units and your own `@media` rules with the admin window's width.
+page: the editor draws its outlines and markers over the canvas, and your app's own global
+stylesheet reaches it only through [the canvas route](#draw-the-canvas-in-your-sites-layout).
+The page is drawn in a frame of its own at the device's width, so viewport units and your
+own `@media` rules answer as they do when published, and neither the admin's styles nor the
+page's reach the other.
 
 ## Use it as a field instead
 
@@ -273,55 +350,127 @@ export const Homepage = defineSingle({
 
 ## Reading content into a page
 
-The **collection loop** block queries one of your collections and repeats its child
-blocks once per entry — a post list, a team grid, a product row — without anyone writing
-a query. The developer decides which collections are available to it; the editor decides
-what each repeated item looks like.
+The **Collection list** block (stored as `core/collection-loop`) queries one of your
+collections and repeats its child blocks once per entry — a post list, a team grid, a
+product row — without anyone writing a query. The developer decides which collections are
+available to it; the editor decides which entries it shows and what each one looks like.
 
-The loop reads through a `data` provider you pass to `createBlocksPage`. Without one it
-renders nothing. The provider answers one call, `find({ collection, limit, sort, locale })`,
-with `{ items, total }`. It is also where you name the collections a loop may read:
+In the editor, the list's Content tab edits its query:
+
+- **Source**: a collection, or a to-many relation of the page's entry (on a collection's
+  entry) or of each item of the list around it, such as a post's categories.
+- **Filters**: rows an entry must all meet, each read as one sentence, for example
+  Title contains "build" or Published is on or after 1 Sept 2026. Only fields visitors can
+  see are offered, and none holding several values.
+- **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
+  first). Entries with the same values keep a fixed order, and entries with no value come
+  last.
+- **How many**: Number of items (1 to 100) and Skip the first. Under Number of items the
+  selected list says how many entries match and how many show, for example "4 entries
+  match, so 3 show.", counted as a visitor reads them.
+- **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
+  state, which visitors see when no entry matches.
+
+The canvas draws each list with the entries a visitor would see. When a stored sort falls
+back to id order or the read fails, the canvas says so in a note only the author sees; a
+fallen-back sort's note has a **Choose a field** button that takes the author to the sort.
+Near midnight the canvas may differ from the published page for a day filter: the canvas
+compares days in UTC, the published page in the site's time zone. The same query can be
+set through the API with [`set-list-query`](/docs/page-builder/compose-through-the-api).
+
+The loop reads through the route's **public reader**, which every blocks route binds to each
+render. With no `data` option the loop reads through it directly, so a published page lists
+published entries with no wiring. To name the collections a loop may read, pass `data`, a
+function from that reader to a provider:
 
 ```tsx
-// The collections an editor's loop may list. Anything else reads nothing.
-const loopCollections = ["posts"] as const;
-const isLoopCollection = (
-  name: string,
-): name is (typeof loopCollections)[number] =>
-  (loopCollections as readonly string[]).includes(name);
+import { createDefaultDataProvider } from "@nextlyhq/blocks-react";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   // ...and the rest of the options above...
-  data: {
-    find: async ({ collection, limit, sort, locale }) => {
-      if (!isLoopCollection(collection)) return { items: [], total: 0 };
-      const result = await (await instance()).find({
-        collection,
-        limit,
-        sort,
-        locale,
-        // Published entries only, judged by the collection's own read rule, as an
-        // anonymous visitor would read them.
-        status: "published",
-        overrideAccess: false,
-      });
-      return { items: result.items, total: result.meta.total };
-    },
-  },
+  // The collections an editor's loop may list. Anything else reads nothing.
+  data: reader => createDefaultDataProvider(reader, { collections: ["posts"] }),
 });
 ```
 
+`data` takes a function, never a provider object: a provider holding a reader of its own would
+decide by itself who sees what, so the route refuses one when it is built. Each list read is
+cached like the page and tagged with its collection, so publishing a post refreshes the pages
+that list it. A change to a collection's access rule is not a write, so a page cached before it
+shows the old answer until it revalidates.
+
+A list always sends a sort, so a list with none comes back in id order. If the reader refuses
+a loop's stored sort (a field since removed, or one the public may not read), the loop lists in
+id order instead of going empty.
+
+A provider you wrote yourself, for `PageRenderer` outside a route, now receives `sort` as one
+key or an array of keys, and an empty array for a loop with no sort. Read it as "no sort
+given": `[sort ?? []].flat()` gives the keys either way.
+
+The reader is `createPublicReader` (from `nextly/runtime`, `@experimental`), which you can also
+call yourself over a Nextly instance. It takes a list's query as data and fixes everything that decides who sees what:
+
+- published entries only, judged by each collection's read rule as an anonymous visitor;
+- fields the public may not read never come back, and filtering or sorting on one is refused;
+- a sort key that names no field is refused, not dropped, and ties come back in id order;
+- `limit` (1 to 100), `offset` and `page` are checked, and the read answers in the route's language.
+
+A query that tries to widen the read (`status`, `overrideAccess`, `user`, a raw `where`, and
+so on) is refused by name rather than ignored. This is a contract your provider relies on,
+not a sandbox: code holding the Direct API can still read whatever it is trusted to.
+
+Filter rows are typed `{ field, op, value }`, with `op` one of `equals`, `not_equals`, `gt`,
+`gte`, `lt`, `lte`, `contains`, `in`, `not_in` and `exists`. `contains` ignores case on every
+database, for letters outside ASCII too (the Turkish "İ" matches a plain "i").
+
+### Singles, site settings and field shapes
+
+The same reader also reads one Single, as an anonymous visitor would:
+
+```ts
+const banner = await reader.findSingle({
+  slug: "banner",
+  select: ["headline"],
+});
+```
+
+It answers the published document with the fields the public may read, or `null` when there is
+nothing a visitor may see: no document yet, one never published, or a Single the visitor may not
+read. It never creates the Single's document. `select` keeps the id and the fields named; the
+read takes no other option, and refuses `status`, `draft`, `depth`, `populate` and the rest by
+name, as a list's read does.
+
+Two more reads sit beside it in `nextly/runtime`, both `@experimental`:
+
+- `readPublicSiteSettings()` answers the site's `applicationName`, `siteUrl`, `logoUrl` and
+  `timezone` from the General Settings, each `null` until it is set. Nothing else in the settings
+  comes back: not the administrator's email, not the preview links' revocation counter, and not
+  a setting added later. Saving the settings expires the tag `nextlySiteSettingsTags()` names, so
+  tag a cached read with it and a page shows a new site name or time zone on its next request.
+- `bindingFieldShapes({ collection })` or `bindingFieldShapes({ single })` answers the fields a
+  visitor may read, each with its `type`, and where they apply `hasMany`, `relationTo`, the
+  select or radio `options`, and `dateOnly` or `monthOnly` for a date picked as a day or a month.
+  A field the visitor's field rules hide is left out, and so is one whose rule needs an entry to
+  decide. A source the visitor may not read, or one that does not exist, has no shapes
+  (`undefined`).
+
+The settings and the shapes read the process's running instance, as `requireNextly` does.
+
 <Callout type="warn">
-Field bindings inside a loop are stored but not resolved yet. Each repeated item shows
-the text its blocks were given in the editor, not the entry's own fields. See
-[Block document format](/docs/api-reference/block-document-format).
+  Field bindings inside a loop are stored but not resolved yet. Each repeated
+  item shows the text its blocks were given in the editor, not the entry's own
+  fields. See [Block document
+  format](/docs/api-reference/block-document-format).
 </Callout>
 
 ## Related
 
+- [Using the editor](/docs/page-builder/editor) — the rail, the panels and the keyboard shortcuts
 - [Block document format](/docs/api-reference/block-document-format) — how a page is stored
+- [Blocks from plugins](/docs/page-builder/contributed-blocks) — add blocks, and their own inspectors, from a plugin
 - [Plugins](/docs/plugins) — the SDK this plugin is built on
 - [Preview](/docs/preview) — see a page before it is published
 - [Routing and SEO](/docs/guides/routing-and-seo) — how paths resolve

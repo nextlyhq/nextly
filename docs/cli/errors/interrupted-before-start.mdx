@@ -1,0 +1,23 @@
+---
+title: INTERRUPTED_BEFORE_START
+description: "The command was interrupted while it waited to take a schema lock, before it changed anything."
+---
+
+## Cause
+
+The command was interrupted while it waited to take a schema lock, before it changed anything.
+
+The command was stopped, for example with Ctrl+C, while it waited for another run to release the schema lock. It released its place in the queue and nothing was changed.
+
+## Fix
+
+- Run the command again when you are ready.
+
+## Example
+
+```text
+✗ `nextly migrate` was interrupted before it started.
+  Why:  It was stopped while it waited for the schema lock, so it released its place and nothing was changed.
+  Next: Run it again when you are ready.
+  Docs: https://nextlyhq.com/docs/cli/errors/interrupted-before-start  (INTERRUPTED_BEFORE_START)
+```
