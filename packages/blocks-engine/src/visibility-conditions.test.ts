@@ -28,6 +28,7 @@ import {
   evaluateConditions,
   type ConditionRegistry,
   type ConditionSubject,
+  withConditions,
 } from "./visibility-conditions";
 
 const READABLE: readonly BindingFieldShape[] = [
@@ -627,6 +628,58 @@ describe("conditions stored before they were evaluated", () => {
     expect(
       codes([[{ field: "publishedAt", op: "eq", value: "2026-11-01" }]])
     ).toEqual(["condition-unsuited"]);
+  });
+});
+
+describe("setting a block's conditions", () => {
+  const vip = [[{ field: "tier", op: "equals", value: "vip" }]];
+
+  it("replaces the conditions and keeps the devices", () => {
+    expect(
+      withConditions(
+        {
+          conditions: [[{ field: "old", op: "exists" }]],
+          devices: { mobile: false },
+        },
+        vip
+      )
+    ).toEqual({ conditions: vip, devices: { mobile: false } });
+  });
+
+  it("stores nothing for a block shown everywhere to everyone", () => {
+    expect(withConditions({ conditions: vip }, undefined)).toBeUndefined();
+    expect(withConditions({ conditions: vip }, [])).toBeUndefined();
+    expect(withConditions(undefined, [])).toBeUndefined();
+    expect(
+      withConditions({ conditions: vip, devices: { mobile: false } }, [])
+    ).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("stores nothing for groups that let everyone through, an empty group among them", () => {
+    // An AND of nothing always holds, so a group with no conditions lets
+    // everyone through whatever the other groups say.
+    expect(withConditions({ conditions: vip }, [[]])).toBeUndefined();
+    expect(withConditions(undefined, [[], ...vip])).toBeUndefined();
+    expect(withConditions({ devices: { mobile: false } }, [[]])).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
+  it("replaces a visibility nothing can read, keeping none of it", () => {
+    const unreadable = "hidden" as unknown as Parameters<
+      typeof withConditions
+    >[0];
+    expect(withConditions(unreadable, undefined)).toBeUndefined();
+    expect(withConditions(unreadable, vip)).toEqual({ conditions: vip });
+  });
+
+  it("copies what it stores, so a later edit to the input changes nothing", () => {
+    const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
+    const stored = withConditions(undefined, groups);
+    groups[0]![0]!.value = "free";
+    expect(stored).toEqual({ conditions: vip });
   });
 });
 
