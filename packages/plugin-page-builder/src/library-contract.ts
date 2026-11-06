@@ -1283,6 +1283,15 @@ export interface VariableUseItem {
   readonly title: string;
   readonly collection: string;
   readonly kind: VariableUseKind;
+  /**
+   * For a shared style that is a block look, the block type it is bound to.
+   * Two block types' own looks may share an id, so a look is named by the
+   * pair: the panel opens the look `{ id, blockType }`. Absent for every
+   * other place.
+   *
+   * @experimental Settles when the Variables panel shows usage.
+   */
+  readonly blockType?: string;
 }
 
 /**

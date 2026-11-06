@@ -626,7 +626,7 @@ function counted(
 }
 
 /** "a", "a and b", "a, b and c". */
-function listed(parts: readonly string[]): string {
+export function listedWords(parts: readonly string[]): string {
   if (parts.length <= 1) return parts.join("");
   return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
 }
@@ -658,7 +658,9 @@ export function sharedStyleReachSentence(
       .filter(kind => reach.byKind[kind] > 0)
       .map(kind => counted(reach.byKind[kind], KIND_WORDS[kind]));
     if (kinds.length > 0) {
-      parts.push(`on ${reach.complete ? "" : "at least "}${listed(kinds)}`);
+      parts.push(
+        `on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`
+      );
     }
   }
   if (parts.length > 0) {

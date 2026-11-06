@@ -81,21 +81,38 @@ export function builderAddress(
     };
   }
   const query = `?field=${encodeURIComponent(fieldName)}`;
-  const slug = encodeURIComponent(identity.slug);
   if (identity.kind === "single") {
     return {
-      href: `/admin/singles/${slug}/${BUILDER_VIEW_PATH}${query}`,
+      href: `${singleBuilderPath(identity.slug)}${query}`,
       ...elsewhere,
     };
   }
   if (identity.documentId === undefined) {
     return { unavailable: "Save this page to open the Page Builder." };
   }
-  const id = encodeURIComponent(identity.documentId);
   return {
-    href: `/admin/collections/${slug}/${id}/${BUILDER_VIEW_PATH}${query}`,
+    href: `${documentBuilderPath(identity.slug, identity.documentId)}${query}`,
     ...elsewhere,
   };
+}
+
+/**
+ * The Page Builder view of a Single, naming no field, as
+ * {@link documentBuilderPath} is for a collection's document: a Single is
+ * addressed by its slug alone, having one document.
+ */
+export function singleBuilderPath(slug: string): string {
+  return `/admin/singles/${encodeURIComponent(slug)}/${BUILDER_VIEW_PATH}`;
+}
+
+/**
+ * The Page Builder view of a document in a collection, naming no field: the
+ * admin opens the document's one blocks field, or asks which where it has
+ * several. The path every address of a collection document's view starts
+ * from.
+ */
+export function documentBuilderPath(collection: string, id: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}/${BUILDER_VIEW_PATH}`;
 }
 
 /**
