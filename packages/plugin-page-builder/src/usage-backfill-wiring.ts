@@ -28,6 +28,7 @@ import {
 import { componentUsageIndex } from "./component-usage";
 import type { SingleToWalk } from "./host-rewrite/site";
 import { lastIdOf } from "./paged-walk";
+import { tokenUsageIndex } from "./token-usage";
 import type { BackfillStateStore } from "./usage-backfill";
 import type { GoneScopeRun, UsageBackfillDeps } from "./usage-backfill-job";
 import {
@@ -109,6 +110,7 @@ export function hostGeneration(host: BackfillHost): string {
     limits: host.limits(),
     classIndex: usageTableOf(classUsageIndex).name,
     componentIndex: usageTableOf(componentUsageIndex).name,
+    tokenIndex: usageTableOf(tokenUsageIndex).name,
   });
 }
 
@@ -300,6 +302,11 @@ export function usageBackfillDeps(host: BackfillHost): UsageBackfillDeps {
             usageTableOf(componentUsageIndex),
             write => walk.fenced(write)
           ),
+          tokenIndex: fencedUsageTableStore(
+            host.db,
+            usageTableOf(tokenUsageIndex),
+            write => walk.fenced(write)
+          ),
           scope: scope.scope,
           collection: scope.entity,
           field: scope.field,
@@ -366,6 +373,7 @@ export async function forgetGoneScopes(
   const tables = [
     usageTableOf(classUsageIndex),
     usageTableOf(componentUsageIndex),
+    usageTableOf(tokenUsageIndex),
   ];
   const gone = new Map<string, BackfillScope | null>();
   for (const key of recordedGone) {

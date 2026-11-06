@@ -689,17 +689,24 @@ export type {
  *   made as the system (`{ overrideAccess: true }`), judged as the Direct
  *   API's own `overrideAccess: true` call is, by no access rule or field
  *   read rule; the system may read any field stored as JSON, and its read
- *   also gives the live row's lifecycle (`PluginStoredLifecycle`).
+ *   also gives the live row's lifecycle (`PluginStoredLifecycle`). A
+ *   conditional write may also be made as a caller whose expectation the
+ *   system read (`PluginSystemCheckedWrite`): the update is the caller's,
+ *   under every rule their own update meets, and the expectation the
+ *   system's, so a job that reads as the system and writes as the person who
+ *   started it asks that person for no read access its write does not need.
  *   `storedValueHash` is the one hash both sides compare.
  */
 export { readStoredFields, storedValueHash, updateIfUnchanged } from "nextly";
 export type {
   PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
   PluginStoredDocument,
   PluginStoredFields,
   PluginStoredFieldsRequest,
   PluginStoredIdentity,
   PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
   PluginSystemIdentity,
   PluginWriteExpectation,
 } from "nextly";

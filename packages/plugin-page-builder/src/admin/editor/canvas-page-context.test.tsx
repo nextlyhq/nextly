@@ -18,6 +18,7 @@ const identity = vi.fn<() => unknown>(() => null);
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useMediaResolver: () => readMedia,
   useDocumentIdentity: () => identity(),
+  useCurrentUserId: () => "u1",
   writePluginRoute: vi.fn(),
 }));
 
@@ -137,7 +138,7 @@ describe("the canvas's page context", () => {
   it("reads its lists in the language being edited, through the reads its count shares", () => {
     const { result } = renderHook(() => useCanvasPageContext(undefined, "fr"));
     expect(result.current.locale).toBe("fr");
-    expect(result.current.data).toBe(canvasListReadsIn("fr").data);
+    expect(result.current.data).toBe(canvasListReadsIn("fr", "u1").data);
   });
 
   it("bounds each draw's reads, with a fresh allowance for the next draw", () => {
