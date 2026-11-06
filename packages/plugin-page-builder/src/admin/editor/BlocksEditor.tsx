@@ -23,6 +23,7 @@ import {
   BreakpointSwitcher,
   BuilderShell,
   Canvas,
+  useConditionsUnchecked,
   CanvasFrame,
   CanvasFrameProvider,
   CanvasMarks,
@@ -50,7 +51,13 @@ import {
   useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
-import { useEffect, useState, type ComponentProps, type JSX } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type JSX,
+} from "react";
 import {
   useFormState,
   useWatch,
@@ -145,6 +152,8 @@ type EditorView = EditorMount &
     layerVerbs: CardVerbs;
     /** What the canvas draws: the document, with selected hidden blocks shown. */
     reveal: Reveal;
+    /** The conditioned blocks the page can't check, which the canvas badges red. */
+    conditionsUnchecked: ReadonlySet<string>;
     /** A stored media id's name, picture and alt text, for the image fields. */
     readMedia: ReadMediaSummary;
     /** The variant open in a component's view, which the canvas previews. */
@@ -791,6 +800,9 @@ function editorCanvasRegion(view: EditorView): React.JSX.Element {
               // The regions of the page's Layout, drawn locked around it from
               // the published Layout, as a visitor gets them.
               regions={view.canvasRegions}
+              // The conditioned blocks visitors never see, because the page
+              // can't check their conditions: badged in red on the canvas.
+              conditionsUnchecked={view.conditionsUnchecked}
               // The same object those handlers came from, forwarded whole.
               // The canvas draws what the pointer currently means — which
               // block is in flight, which container is receiving it — and
@@ -1105,6 +1117,23 @@ function EditorBody<TFieldValues extends FieldValues>({
   // reads it.
   const readMedia = useMediaSummaryReader();
   const identity = useDocumentIdentity();
+  const entryCollection = listEntryCollectionOf(
+    identity,
+    mount.initialDocument
+  );
+  // The conditioned blocks the page can't check, badged in red on the canvas,
+  // judged with the collections the inspector lists, in this language.
+  const conditionServices = useMemo(
+    () => ({
+      listLoopCollections: () => listLoopCollections(mount.locale),
+      ...(entryCollection === undefined ? {} : { entryCollection }),
+    }),
+    [mount.locale, entryCollection]
+  );
+  const conditionsUnchecked = useConditionsUnchecked(
+    componentView.preview.document,
+    conditionServices
+  );
   const view: EditorView = {
     ...mount,
     ...style,
@@ -1120,7 +1149,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     preview: componentView.preview,
     // The stored document's kind too: a component's lists relate to the
     // entries of the pages placing it, as its save judges them.
-    entryCollection: listEntryCollectionOf(identity, mount.initialDocument),
+    entryCollection,
+    conditionsUnchecked,
   };
   useOpenAtSection({
     sectionId: openAt,

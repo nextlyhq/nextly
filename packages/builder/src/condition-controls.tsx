@@ -16,7 +16,6 @@
 import {
   CONDITION_MAX,
   conditionIssues,
-  isPlainRecord,
   conditionOp,
   findNode,
   outerListOf,
@@ -49,6 +48,7 @@ import {
   type ConditionField,
   type DraftCondition,
 } from "./condition-model";
+import { storedGroups } from "./condition-checks";
 import { conditionsOp } from "./condition-ops";
 import type {
   ContentServices,
@@ -131,44 +131,6 @@ function sourceOf(
     match: `this ${oneOf(found)}`,
     item: false,
   };
-}
-
-/** Whether a stored value is a condition a row can show: a field and an operator. */
-function isConditionRecord(value: unknown): value is Condition {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const { field, op } = value as { field?: unknown; op?: unknown };
-  return typeof field === "string" && typeof op === "string";
-}
-
-/**
- * The stored groups, an OR of AND groups of conditions; none when nothing is
- * stored, and `undefined` for a shape no row can show, such as a flat list of
- * conditions or a group holding something else. The engine hides a block
- * whose conditions it can't read, and says why.
- */
-function storedGroups(
-  node: BlockNode
-): readonly (readonly Condition[])[] | undefined {
-  const envelope: unknown = node.visibility;
-  if (envelope === undefined || envelope === null) return [];
-  // A visibility that is not a record, a string or a list, is one the engine
-  // reads as a restriction it can't check.
-  if (!isPlainRecord(envelope)) return undefined;
-  const groups: unknown = envelope.conditions;
-  if (groups === undefined || groups === null) return [];
-  if (!Array.isArray(groups)) return undefined;
-  const read: Condition[][] = [];
-  for (const group of groups as unknown[]) {
-    // Every position read, holes included: `every` skips a hole, which would
-    // reach the rows as a condition that isn't there.
-    if (!Array.isArray(group) || !Array.from(group).every(isConditionRecord)) {
-      return undefined;
-    }
-    read.push(group);
-  }
-  return read;
 }
 
 /** What the engine finds wrong with the block's conditions, as a save would. */

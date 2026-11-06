@@ -99,6 +99,13 @@ export {
 } from "./canvas";
 
 /**
+ * @experimental Which blocks' visibility conditions the page can't check, for
+ * a host to hand the canvas so it badges them in red: judged as the save
+ * judges them, with the collections the editor's services list.
+ */
+export { useConditionsUnchecked } from "./condition-checks";
+
+/**
  * @experimental The frame the canvas is drawn in, and how the code around the
  * canvas learns about it.
  *
