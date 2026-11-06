@@ -3,7 +3,7 @@
  * segments, its social image from a media field or a URL field, what a page
  * reads for it, and what a save refuses.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { BindingFieldShape, BindingSchemaSource } from "./binding-rules";
 import {
@@ -11,6 +11,7 @@ import {
   MAX_SEO_SEGMENTS,
   type BlockDocument,
   type DocumentSeo,
+  type SeoBinding,
 } from "./document";
 import { resolveDocumentSeo } from "./document-seo";
 import { DEFAULT_LIMITS } from "./limits";
@@ -256,6 +257,22 @@ describe("what a page reads for its metadata", () => {
   it("reads nothing for literal-only metadata", () => {
     const demand = bindingDemand([documentWith({ title: ["About us"] })]);
     expect(demand.any).toBe(false);
+  });
+});
+
+describe("the metadata's binding type", () => {
+  it("takes every source but a list item", () => {
+    expectTypeOf<{ $bind: string; source: "site" }>().toExtend<SeoBinding>();
+    expectTypeOf<{
+      $bind: string;
+      source: "single";
+      sourceKey: string;
+    }>().toExtend<SeoBinding>();
+    expectTypeOf<{ $bind: string }>().toExtend<SeoBinding>();
+    expectTypeOf<{
+      $bind: string;
+      source: "item";
+    }>().not.toExtend<SeoBinding>();
   });
 });
 

@@ -83,7 +83,15 @@ export interface DocumentSettings {
  * is joined in its place. Literal text is used as written: nothing in it is
  * read as a placeholder, so a value is never a template string.
  */
-export type SeoTextSegment = string | Binding;
+export type SeoTextSegment = string | SeoBinding;
+
+/**
+ * A binding in a document's own metadata: any binding but one to a list
+ * item, since the metadata is read once for the page, outside any list.
+ */
+export type SeoBinding = Binding & {
+  source?: Exclude<BindingSource, "item">;
+};
 
 /**
  * The metadata a document states for its page.
@@ -97,7 +105,7 @@ export type SeoTextSegment = string | Binding;
 export interface DocumentSeo {
   title?: SeoTextSegment[];
   description?: SeoTextSegment[];
-  image?: Binding;
+  image?: SeoBinding;
 }
 
 /** The most segments one metadata text value holds. */

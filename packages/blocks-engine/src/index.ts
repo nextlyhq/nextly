@@ -100,6 +100,7 @@ export type {
   BlockOrigin,
   DocumentSeo,
   DocumentSettings,
+  SeoBinding,
   SeoTextSegment,
   LocaleOverlay,
   LocaleOverlayValue,
