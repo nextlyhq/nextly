@@ -362,6 +362,24 @@ export const Homepage = defineSingle({
 });
 ```
 
+## A page's address
+
+A page's address is its slug, and it may sit beneath another page's: type
+`docs/getting-started/install` in the slug and the page is served at
+`/docs/getting-started/install`. Each part is normalised as a one-part address
+is (`Getting Started` becomes `getting-started`), and one leading or trailing `/`
+is dropped. An address with an empty part (`docs//install`), a `.` or `..` part, a
+part with no letters or numbers left, a reserved path (`admin`, `api/...`,
+`_next/...`, one part or several) or more than 255 characters is refused when the page is saved, with
+the reason under the slug, rather than rewritten into an address nobody chose. A
+copy of a nested page stays beside it (`docs/copy-of-install`).
+
+The Pages collection opts into this with `db: { slugPaths: true }`, which any
+collection may set. It is a rule about the stored value only: no schema change
+or migration follows, no stored address is rewritten, and a collection
+without it keeps stripping `/` from its slugs. Two pages at one address are kept
+apart by the slug's uniqueness, as before.
+
 ## Reading content into a page
 
 The **Collection list** block (stored as `core/collection-loop`) queries one of your

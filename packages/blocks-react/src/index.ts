@@ -31,6 +31,7 @@ export type {
   DefaultDataProviderOptions,
   PageBindings,
   PageContext,
+  PageIssue,
   QueryBudget,
   ReactBlockDefinition,
   ResolvedIcon,
@@ -38,6 +39,7 @@ export type {
 } from "./context";
 export {
   createDefaultDataProvider,
+  isBindingIssue,
   createQueryBudget,
   createStandaloneContext,
   DEFAULT_MAX_QUERIES,
@@ -157,6 +159,8 @@ export type {
   BindingFormatter,
   BindingIssue,
   BindingIssueCode,
+  ConditionIssue,
+  ConditionIssueCode,
   BindingRun,
   BindingSchemaRef,
   BindingSchemaSource,

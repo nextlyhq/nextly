@@ -33,6 +33,8 @@ import {
   listDayAfter,
   LIST_LIMIT_MAX,
   LIST_LIMIT_MIN,
+  type BindingFieldShape,
+  type ConditionDayStart,
   type ListFilter,
   type ListFilterOp,
   type ListQuery,
@@ -210,8 +212,34 @@ function dayZoneOf(
     ?.fieldsOf({ collection })
     ?.find(candidate => candidate.name === field);
   if (shape !== undefined && listFieldKind(shape) !== "date") return undefined;
+  return zoneOfDay(shape, ctx.timeZone);
+}
+
+/**
+ * The zone a day on a field is compared in: none for a field holding a
+ * calendar day, which is stored as that day, so UTC; the site's for an
+ * instant, and for a field whose shape is not known. The one rule, for a
+ * list's day filter and a block's day condition alike.
+ */
+function zoneOfDay(
+  shape: BindingFieldShape | undefined,
+  timeZone: string | undefined
+): string {
   if (shape?.dateOnly === true) return "UTC";
-  return safeTimeZone(ctx.timeZone).zone;
+  return safeTimeZone(timeZone).zone;
+}
+
+/**
+ * When a day starts for a block's visibility condition on a date field, in
+ * the zone a list's day filter would compare it in.
+ *
+ * @experimental
+ */
+export function conditionDayStart(
+  timeZone: string | undefined
+): ConditionDayStart {
+  return (day, field) =>
+    Date.parse(dayStartIn(day, zoneOfDay(field, timeZone)));
 }
 
 /** One stored filter row as the reader takes it. */

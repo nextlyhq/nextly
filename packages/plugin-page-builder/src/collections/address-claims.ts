@@ -38,7 +38,9 @@ export function addressClaimsCollection(): CollectionConfig {
         required: true,
         unique: true,
       }),
-      text({ name: "kind", label: "Kind", required: true }),
+      // Indexed: the waiting report pages and counts by kind alone, and the
+      // lock rows kept for every address ever claimed outgrow the waits.
+      text({ name: "kind", label: "Kind", required: true, index: true }),
       text({ name: "locale", label: "Locale" }),
       // The address as the key spells it, so a report reads it back without
       // parsing keys. Long text, so an address of any length fits.

@@ -275,6 +275,21 @@ function importedFromConfig(module: string, configImport?: string): string {
 }
 
 /**
+ * What a collection's document screen resolves by string beyond its views:
+ * the component a replaced document action opens, and each panel section's.
+ * A hidden action names none.
+ */
+function documentSurfacePaths(
+  view: NonNullable<PluginAdminContributions["views"]>[string]
+): string[] {
+  const replacements = Object.values(view.documentActions ?? {}).map(
+    override => (typeof override === "object" ? override.component : "")
+  );
+  const sections = (view.panelSections ?? []).map(section => section.component);
+  return [...replacements, ...sections].filter(Boolean);
+}
+
+/**
  * Every override and injection point a plugin declares per collection.
  *
  * Its own function rather than two nested loops inline, because the six slots
@@ -301,6 +316,7 @@ function collectCollectionViewPaths(
     for (const documentView of view.documentViews ?? []) {
       paths.push(documentView.component);
     }
+    paths.push(...documentSurfacePaths(view));
   }
   return paths;
 }

@@ -257,29 +257,27 @@ describe("the definitions a document reaches", () => {
     expect([...found.keys()]).toEqual(["a", "b"]);
   });
 
-  it("never asks for a component the resolver will not reach", async () => {
-    // A condition-gated instance is dropped with its whole subtree before a
-    // reader sees it, so the resolver never asks for its component. A walk of
-    // the stored nodes reports it anyway — which is both a read nobody needs
-    // and, on a page with many of them, an allowance spent before the visible
-    // component is reached.
+  it("reads the component of a conditioned instance, which shows wherever its conditions hold", async () => {
+    // A route decides each condition against the entry once it is read, so a
+    // conditioned instance is composed where its conditions hold, and its
+    // component is read with the others, in the same batch.
     const gate = { conditions: [[{ field: "tier", op: "eq", value: "vip" }]] };
     const { source, batches } = recording({
       shown: component([]),
-      hidden: component([]),
+      conditioned: component([]),
     });
 
     const found = await definitionsFor(
       page([
         instance("i1", "shown"),
-        { ...instance("i2", "hidden"), visibility: gate },
+        { ...instance("i2", "conditioned"), visibility: gate },
       ]),
       source,
       DEFAULT_LIMITS
     );
 
-    expect(batches).toEqual([["shown"]]);
-    expect(found.has("hidden")).toBe(false);
+    expect(batches.flat().sort()).toEqual(["conditioned", "shown"]);
+    expect(found.has("conditioned")).toBe(true);
   });
 
   it("keeps a definition answered under an id nobody asked for", async () => {
