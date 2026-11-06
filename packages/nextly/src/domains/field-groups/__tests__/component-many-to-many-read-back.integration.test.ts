@@ -85,7 +85,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService") as SingleEntryService;
       const saved = await singles.update(
         "preferences",
-        { seo: { heading: "Hello", related: ids } },
+        { seo: { heading: "Hello", related: ids }, _overwrite: true },
         { overrideAccess: true }
       );
       // The message is asserted with the flag so a refused save names its reason.
@@ -120,7 +120,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService") as SingleEntryService;
       const saved = await singles.update(
         "preferences",
-        { seo: { heading: "Hello", related: ids } },
+        { seo: { heading: "Hello", related: ids }, _overwrite: true },
         { overrideAccess: true }
       );
       expect(saved.success).toBe(true);
@@ -147,7 +147,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService") as SingleEntryService;
       const saved = await singles.update(
         "preferences",
-        { seo: { heading: "Hello", related: id } },
+        { seo: { heading: "Hello", related: id }, _overwrite: true },
         { overrideAccess: true }
       );
       expect(saved.success).toBe(true);

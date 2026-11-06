@@ -275,6 +275,22 @@ const outcome = (read: Promise<unknown>) =>
     () => "refused"
   );
 
+/** The version a read of this document in this language gives. */
+async function revIn(
+  t: TestNextly,
+  collection: string,
+  id: string,
+  locale?: string
+): Promise<string> {
+  const read = (await t.nextly.findByID({
+    collection: collection as never,
+    id,
+    ...(locale === undefined ? {} : { locale }),
+    overrideAccess: true,
+  } as never)) as { _rev?: unknown };
+  return String(read._rev);
+}
+
 /**
  * A regional document: created in English, saved twice in Spanish, its
  * shared field saved alone, then saved in English again. A save of the shared
@@ -292,20 +308,24 @@ async function regionalDocument(t: TestNextly): Promise<string> {
     await t.nextly.update({
       collection: "regional",
       id,
-      data: { title, region: "closed" },
+      data: {
+        title,
+        region: "closed",
+        _rev: await revIn(t, "regional", id, "es"),
+      },
       locale: "es",
     });
   }
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { code: "c2" },
+    data: { code: "c2", _rev: await revIn(t, "regional", id, "en") },
     locale: "en",
   });
   await t.nextly.update({
     collection: "regional",
     id,
-    data: { title: "hello again" },
+    data: { title: "hello again", _rev: await revIn(t, "regional", id, "en") },
     locale: "en",
   });
   return id;
@@ -488,7 +508,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id: plainId,
-        data: { title: "two" },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       // Its versions are of no language, which the readable languages do not
       // name.
@@ -516,7 +539,7 @@ describe.each(getConfiguredTestDialects())(
       const as = { overrideAccess: true };
       const written = await singles.update(
         "bulletin",
-        { headline: "hello", region: "open" },
+        { headline: "hello", region: "open", _overwrite: true },
         { ...as, locale: "en" }
       );
       expect(written.success).toBe(true);
@@ -525,14 +548,19 @@ describe.each(getConfiguredTestDialects())(
         (
           await singles.update(
             "bulletin",
-            { headline: "hola", region: "closed" },
+            { headline: "hola", region: "closed", _overwrite: true },
             { ...as, locale: "es" }
           )
         ).success
       ).toBe(true);
-      expect((await singles.publishAllLocales("bulletin", as)).success).toBe(
-        true
-      );
+      expect(
+        (
+          await singles.publishAllLocales("bulletin", {
+            ...as,
+            data: { _overwrite: true },
+          })
+        ).success
+      ).toBe(true);
       const subject = { kind: "single" as const, slug: "bulletin", id };
       const document = {
         scopeKind: "single" as const,
@@ -729,7 +757,9 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(es)], { label: "x" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(es), "restore"])
+          restWrite("POST", key, [...versions, String(es), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["refused", "refused"]);
       // The same caller names and restores a version of a language it reads.
@@ -738,7 +768,9 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(en)], { label: "y" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(en), "restore"])
+          restWrite("POST", key, [...versions, String(en), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["done", "done"]);
 
@@ -889,7 +921,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id,
-        data: { title: "two" },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       const subject = { kind: "collection" as const, slug: "plain", id };
       const repo = new VersionsRepository(
