@@ -240,6 +240,23 @@ function sourceOf(
   }
 }
 
+/**
+ * What a checked binding reads in a scope, before it is shaped for any prop:
+ * `read: false` when its source was not read for this page. For a reader
+ * whose target is not a block's prop, such as a document's social image,
+ * which takes a media object or an address rather than a prop's value.
+ */
+export function boundSourceValue(
+  binding: CheckedBinding,
+  run: BindingRun,
+  scope: BindingScope
+): { readonly read: false } | { readonly read: true; readonly value: unknown } {
+  const source = sourceOf(binding, run, scope);
+  return source === undefined
+    ? { read: false }
+    : { read: true, value: readPath(source, binding.segments) };
+}
+
 /** A value shaped for its prop, or why it cannot be. */
 type Shaped =
   | { readonly ok: true; readonly value: unknown; readonly bound: BoundValue }
@@ -633,7 +650,9 @@ export function bindingDemand(
     formatsDates: false,
   };
   for (const document of documents) {
-    if (isPlainRecord(document)) visitForest(document.nodes, limits, demand);
+    if (!isPlainRecord(document)) continue;
+    visitForest(document.nodes, limits, demand);
+    visitDocumentSeo(document, demand);
   }
   return {
     any: demand.any,
@@ -722,6 +741,31 @@ function addSingle(
   const key = ownEntry(binding, "sourceKey");
   if (typeof key !== "string" || key === "") return;
   demand.singles.set(key, addPath(demand.singles.get(key), segments));
+}
+
+/**
+ * Add the bindings of a document's own metadata: each bound segment of its
+ * title and description, and its social image. They are read for the page,
+ * as a node's page bindings are.
+ */
+function visitDocumentSeo(
+  document: Readonly<Record<string, unknown>>,
+  demand: DemandSoFar
+): void {
+  const settings = ownEntry(document, "settings");
+  const seo = isPlainRecord(settings) ? ownEntry(settings, "seo") : undefined;
+  if (!isPlainRecord(seo)) return;
+  const bindings: unknown[] = [];
+  for (const field of ["title", "description"]) {
+    const segments = ownEntry(seo, field);
+    if (Array.isArray(segments)) {
+      bindings.push(...segments.filter(segment => isPlainRecord(segment)));
+    }
+  }
+  const image = ownEntry(seo, "image");
+  if (isPlainRecord(image)) bindings.push(image);
+  if (bindings.length > 0) demand.any = true;
+  for (const binding of bindings) visitBinding(binding, demand);
 }
 
 /** Add every binding one node holds. */

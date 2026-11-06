@@ -24,6 +24,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   readListQuery,
   regionDocument,
+  resolveDocumentSeo,
   safeTimeZone,
   type BindingDemand,
   type BindingFieldShape,
@@ -735,6 +736,13 @@ async function derivePageSeo(
   const path = emitPath(slug);
   const canonical = path === null ? {} : { canonical: path };
 
+  // One binding pass for the blocks and the document's own metadata, so a
+  // bound title segment and a bound heading read the same value.
+  const run =
+    bindings === undefined
+      ? undefined
+      : pageBindingRun(bindings, locale, resolver);
+
   // One authoritative preparation, shared with the renderer rather than
   // restated here. Hand-copying the passes is what let metadata describe a
   // different page than the HTML: the copy drifted on the format guard, the
@@ -752,9 +760,7 @@ async function derivePageSeo(
       ...(definitions === undefined || definitions.size === 0
         ? {}
         : { definitions }),
-      ...(bindings === undefined
-        ? {}
-        : { bindings: pageBindingRun(bindings, locale, resolver) }),
+      ...(run === undefined ? {} : { bindings: run }),
     },
     preparation
   );
@@ -763,11 +769,22 @@ async function derivePageSeo(
   // and metadata claiming a title it does not show would be worse than silence.
   if (prepared === null) return canonical;
 
-  const { image: imageCandidates, ...text } = deriveSeoFromDocument(
+  const { image: blockImages, ...derived } = deriveSeoFromDocument(
     prepared,
     type => resolver.get(type),
     isUnconditional
   );
+  // What the document states for the page as a whole wins over what its
+  // blocks offer, field by field; its image is tried first, and a block's
+  // still answers when it yields no picture.
+  const own = resolveDocumentSeo(prepared, run);
+  const text = {
+    ...derived,
+    ...(own.title === undefined ? {} : { title: own.title }),
+    ...(own.description === undefined ? {} : { description: own.description }),
+  };
+  const imageCandidates =
+    own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];
   const image = await firstUsableImage(
     imageCandidates,
     resolveMedia,
