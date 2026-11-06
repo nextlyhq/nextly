@@ -502,6 +502,14 @@ function editorInspector(
       // The author's right, the style write and the reach reads, so a
       // shared style the block wears can become the Style tab's target.
       sharedStyles={sharedStyles}
+      {...(view.lookEditing.look === null
+        ? {}
+        : {
+            lookEditing: {
+              look: view.lookEditing.look,
+              onExit: view.lookEditing.exit,
+            },
+          })}
       policy={stylePolicy}
       cascade={styleCascade}
       breakpoints={canvasRender.styleContext.breakpoints}
@@ -1187,6 +1195,8 @@ function EditorBody<TFieldValues extends FieldValues>({
         */}
         <BlockKeyboardActions
           editor={editor}
+          // Esc with no block selected leaves a look edited on its own.
+          onEscapeWithoutSelection={panels.lookEditing.exit}
           onEditText={componentView.preview.onEditText}
           onSaveAsPattern={savePattern.open}
           /*
