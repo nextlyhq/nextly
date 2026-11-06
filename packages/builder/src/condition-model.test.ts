@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   completedCondition,
   conditionChoices,
+  conditionFieldsOf,
   conditionLine,
   conditionSentence,
   valueOpFor,
@@ -113,5 +114,49 @@ describe("a draft row as the condition it would store", () => {
     expect(
       completedCondition({ field: "rating", op: "less_than", value: 3 }, rating)
     ).toEqual({ condition: { field: "rating", op: "less_than", value: 3 } });
+  });
+});
+
+describe("the fields a condition can check", () => {
+  it("adds every readable field no list filters by, asked only whether it has a value", () => {
+    const fields = conditionFieldsOf({
+      slug: "posts",
+      label: "Posts",
+      fields: [{ name: "title", label: "Title", kind: "text" }],
+      readable: [
+        { name: "title", label: "Title", type: "text" },
+        {
+          name: "tags",
+          label: "Tags",
+          type: "relationship",
+          relationTo: "tags",
+          hasMany: true,
+        },
+        { name: "cover", type: "upload", relationTo: "media" },
+        { name: "opensAt", label: "Opens at", type: "date", timeOnly: true },
+      ],
+    });
+    expect(
+      fields.map(field => [field.name, field.kind, field.kindWords])
+    ).toEqual([
+      ["title", "text", undefined],
+      ["tags", "other", "Several entries"],
+      ["cover", "other", "Media"],
+      ["opensAt", "other", "Time of day"],
+    ]);
+    // Named by its name when no label came with it.
+    expect(fields[2]?.label).toBe("cover");
+    expect(conditionChoices("other").map(choice => choice.op)).toEqual([
+      "exists",
+      "not_exists",
+    ]);
+  });
+
+  it("lists a yes-or-no field's stored equals No as it stands, beside is", () => {
+    expect(
+      conditionChoices("boolean", "equals").map(choice => choice.label)
+    ).toEqual(["is", "is set to"]);
+    // CONTROL: nothing is added for the operators "is" stands for.
+    expect(conditionChoices("boolean", "is_false")).toHaveLength(1);
   });
 });

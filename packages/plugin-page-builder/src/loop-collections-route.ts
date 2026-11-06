@@ -292,6 +292,9 @@ async function collectionItem(
     // judgement of a time of day or a plugin's type is the save's.
     readable: (fields?.readable ?? []).map(shape => ({
       name: shape.name,
+      // Named as the offered fields are, so a condition on a field no list
+      // filters by reads as the admin calls it.
+      label: fieldWordsOf(shape.name, declared.get(shape.name)),
       type: shape.type,
       ...(shape.hasMany === true ? { hasMany: true as const } : {}),
       ...(shape.relationTo === undefined

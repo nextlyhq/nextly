@@ -14,6 +14,7 @@
  * @module condition-controls
  */
 import {
+  CONDITION_MAX,
   conditionIssues,
   conditionOp,
   findNode,
@@ -35,13 +36,16 @@ import * as React from "react";
 
 import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
 import {
+  asListField,
   booleanValueOf,
   choiceKey,
   completedCondition,
   conditionChoices,
+  conditionFieldsOf,
   conditionLine,
   conditionSentence,
   valueOpFor,
+  type ConditionField,
   type DraftCondition,
 } from "./condition-model";
 import { conditionsOp } from "./condition-ops";
@@ -55,6 +59,8 @@ import {
   fieldList,
   fieldSourceOf,
   FilterValue,
+  LimitNote,
+  listLimit,
   PUBLIC_ONLY,
   useEntryTitles,
 } from "./list-query-controls";
@@ -126,12 +132,35 @@ function sourceOf(
   };
 }
 
-/** The stored groups, when they are an OR of AND groups. */
-function storedGroups(node: BlockNode): readonly (readonly Condition[])[] {
-  const groups = node.visibility?.conditions;
-  return Array.isArray(groups)
-    ? groups.filter((group): group is Condition[] => Array.isArray(group))
-    : [];
+/** Whether a stored value is a condition a row can show: a field and an operator. */
+function isConditionRecord(value: unknown): value is Condition {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const { field, op } = value as { field?: unknown; op?: unknown };
+  return typeof field === "string" && typeof op === "string";
+}
+
+/**
+ * The stored groups, an OR of AND groups of conditions; none when nothing is
+ * stored, and `undefined` for a shape no row can show, such as a flat list of
+ * conditions or a group holding something else. The engine hides a block
+ * whose conditions it can't read, and says why.
+ */
+function storedGroups(
+  node: BlockNode
+): readonly (readonly Condition[])[] | undefined {
+  const groups: unknown = node.visibility?.conditions;
+  if (groups === undefined || groups === null) return [];
+  if (!Array.isArray(groups)) return undefined;
+  const read: Condition[][] = [];
+  for (const group of groups as unknown[]) {
+    if (!Array.isArray(group) || !group.every(isConditionRecord)) {
+      return undefined;
+    }
+    read.push(group);
+  }
+  return read;
 }
 
 /** What the engine finds wrong with the block's conditions, as a save would. */
@@ -165,6 +194,14 @@ function problemsOf(
  */
 function toDraft(condition: Condition): DraftCondition {
   const op = conditionOp(condition.op);
+  // `equals` Yes and `not_equals` Yes hold exactly where "is Yes" and "is No"
+  // do, so they read and edit as those; written only once the row changes.
+  if (condition.value === true && (op === "equals" || op === "not_equals")) {
+    return {
+      field: condition.field,
+      op: op === "equals" ? "is_true" : "is_false",
+    };
+  }
   return {
     field: condition.field,
     ...(op === undefined ? {} : { op }),
@@ -179,7 +216,7 @@ type ShownCondition = ShownRow<DraftCondition>;
 interface ConditionRowProps {
   readonly id: string;
   readonly row: ShownCondition;
-  readonly fields: readonly LoopListField[];
+  readonly fields: readonly ConditionField[];
   readonly open: boolean;
   readonly disabled: boolean;
   readonly storedProblem: string | undefined;
@@ -201,7 +238,7 @@ function ConditionFieldPicker({
   id: string;
   labelId: string;
   props: ConditionRowProps;
-  field: LoopListField | undefined;
+  field: ConditionField | undefined;
 }): React.JSX.Element {
   const { row, fields, disabled, onChange } = props;
   const name = row.draft.field;
@@ -238,12 +275,12 @@ function ConditionOperatorPicker({
   onChange,
 }: {
   id: string;
-  field: LoopListField;
+  field: ConditionField;
   draft: DraftCondition;
   disabled: boolean;
   onChange: (draft: DraftCondition) => void;
 }): React.JSX.Element {
-  const choices = conditionChoices(field.kind);
+  const choices = conditionChoices(field.kind, draft.op);
   return (
     <Select
       value={draft.op === undefined ? "" : choiceKey(draft.op)}
@@ -288,7 +325,7 @@ function ConditionValue({
   problem,
 }: {
   props: ConditionRowProps;
-  field: LoopListField;
+  field: ConditionField;
   labelId: string;
   errorId: string;
   problem: string | undefined;
@@ -296,12 +333,16 @@ function ConditionValue({
   const { id, row, disabled } = props;
   const op = row.draft.op;
   const valueOp = op === undefined ? undefined : valueOpFor(op);
-  if (op === undefined || valueOp === undefined) return null;
+  // A field no list filters by takes no value: it is only asked if it has one.
+  const listField = asListField(field);
+  if (op === undefined || valueOp === undefined || listField === undefined) {
+    return null;
+  }
   return (
     <FilterValue
       id={`${id}-value`}
       labelledBy={labelId}
-      field={field}
+      field={listField}
       draft={{
         field: field.name,
         op: valueOp,
@@ -314,7 +355,9 @@ function ConditionValue({
       entryTitle={props.entryTitle}
       onValue={value =>
         props.onChange(
-          field.kind === "boolean"
+          // "is" stores Yes or No as its operator; a stored `equals` or
+          // `not_equals` keeps its operator and takes the value.
+          field.kind === "boolean" && op !== "equals" && op !== "not_equals"
             ? {
                 field: field.name,
                 op: value === false ? "is_false" : "is_true",
@@ -389,7 +432,7 @@ function StoredGroups({
   onKeepFirst,
 }: {
   groups: readonly (readonly Condition[])[];
-  fields: readonly LoopListField[];
+  fields: readonly ConditionField[];
   disabled: boolean;
   onKeepFirst: () => void;
 }): React.JSX.Element {
@@ -478,7 +521,7 @@ function conditionWrites(
   nodeId: string,
   stored: readonly Condition[],
   state: SentenceRows<DraftCondition>,
-  fields: readonly LoopListField[]
+  fields: readonly ConditionField[]
 ): ConditionWrites {
   const write = (next: readonly Condition[]) => {
     // Stored in the operators' canonical spellings, as the API writes them.
@@ -511,6 +554,19 @@ function conditionWrites(
   return { write, change, remove };
 }
 
+/** What the one editable group is drawn with. */
+interface OneGroupProps {
+  readonly id: string;
+  readonly state: SentenceRows<DraftCondition>;
+  readonly writes: ConditionWrites;
+  readonly source: ConditionSource;
+  readonly fields: readonly ConditionField[];
+  readonly problems: ConditionProblems;
+  readonly disabled: boolean;
+  readonly services: ContentServices | undefined;
+  readonly entryTitle: (id: string) => string | undefined;
+}
+
 /** The one AND group, a sentence per condition, and the way to add one. */
 function OneGroup({
   id,
@@ -522,17 +578,9 @@ function OneGroup({
   disabled,
   services,
   entryTitle,
-}: {
-  id: string;
-  state: SentenceRows<DraftCondition>;
-  writes: ConditionWrites;
-  source: ConditionSource;
-  fields: readonly LoopListField[];
-  problems: ConditionProblems;
-  disabled: boolean;
-  services: ContentServices | undefined;
-  entryTitle: (id: string) => string | undefined;
-}): React.JSX.Element {
+}: OneGroupProps): React.JSX.Element {
+  // As many as the save takes, so a written row is never one too many.
+  const limit = listLimit(state.rows.length, CONDITION_MAX, id);
   return (
     <>
       <p className="nx-inspector__note nx-list-query__hint">
@@ -571,14 +619,82 @@ function OneGroup({
         size="sm"
         variant="ghost"
         className="nx-list-query__add"
-        disabled={disabled || source.collection === null || fields.length === 0}
+        disabled={
+          disabled ||
+          source.collection === null ||
+          fields.length === 0 ||
+          limit.full
+        }
+        aria-describedby={limit.describedBy}
         onClick={state.add}
       >
         <Plus aria-hidden="true" size={14} />
         Add condition
       </Button>
+      <LimitNote limit={limit}>Up to {CONDITION_MAX} conditions.</LimitNote>
     </>
   );
+}
+
+/**
+ * Conditions stored in a shape no row can show. The notice above says the
+ * page leaves the block out; removing them is the way back to editing.
+ */
+function UnreadableConditions({
+  disabled,
+  onRemove,
+}: {
+  disabled: boolean;
+  onRemove: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      <p className="nx-inspector__note nx-list-query__hint">
+        These conditions aren’t stored as groups of conditions, so they can’t be
+        shown here. Remove them to set new ones.
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="nx-show-when__keep"
+        disabled={disabled}
+        onClick={onRemove}
+      >
+        Remove conditions
+      </Button>
+    </>
+  );
+}
+
+/** The group's body, by what is stored: unreadable, several groups, or one. */
+function GroupBody({
+  groups,
+  stored,
+  ...one
+}: OneGroupProps & {
+  groups: readonly (readonly Condition[])[] | undefined;
+  stored: readonly Condition[];
+}): React.JSX.Element {
+  if (groups === undefined) {
+    return (
+      <UnreadableConditions
+        disabled={one.disabled}
+        onRemove={() => one.writes.write([])}
+      />
+    );
+  }
+  if (groups.length > 1) {
+    return (
+      <StoredGroups
+        groups={groups}
+        fields={one.fields}
+        disabled={one.disabled}
+        onKeepFirst={() => one.writes.write(stored)}
+      />
+    );
+  }
+  return <OneGroup {...one} />;
 }
 
 /** The collections the inspector knows, and where the block's conditions read. */
@@ -589,7 +705,8 @@ function useConditionSource(
 ): {
   collections: readonly LoopCollection[] | undefined;
   source: ConditionSource | undefined;
-  fields: readonly LoopListField[];
+  fields: readonly ConditionField[];
+  listFields: readonly LoopListField[];
 } {
   const listed = useLoopCollections(services?.listLoopCollections);
   const collections = listed?.kind === "ready" ? listed.collections : undefined;
@@ -602,9 +719,16 @@ function useConditionSource(
           services?.entryCollection,
           collections ?? []
         );
-  const fields =
-    collections?.find(each => each.slug === source?.collection)?.fields ?? [];
-  return { collections, source, fields };
+  const collection = collections?.find(
+    each => each.slug === source?.collection
+  );
+  // Every field the public may read, not only those a list filters by: a
+  // condition can ask whether any of them has a value.
+  const fields = React.useMemo(
+    () => (collection === undefined ? [] : conditionFieldsOf(collection)),
+    [collection]
+  );
+  return { collections, source, fields, listFields: collection?.fields ?? [] };
 }
 
 /** The "Show when" group of a block's Content tab. */
@@ -617,17 +741,17 @@ export function ShowWhen({
 }: ShowWhenProps): React.JSX.Element | null {
   const id = React.useId();
   const node = findNode(editor.document.nodes, nodeId);
-  const { collections, source, fields } = useConditionSource(
+  const { collections, source, fields, listFields } = useConditionSource(
     editor,
     node,
     services
   );
   const groups = node === undefined ? [] : storedGroups(node);
-  const stored = groups[0] ?? [];
+  const stored = groups?.[0] ?? [];
   const state = useSentenceRows<Condition, DraftCondition>(stored, toDraft, {});
   const entryTitle = useEntryTitles(
     services?.findEntries,
-    fields,
+    listFields,
     state.rows.map(row => ({ field: row.draft.field, value: row.draft.value }))
   );
   if (source === undefined) return null;
@@ -660,26 +784,19 @@ export function ShowWhen({
         </span>
       </div>
       <ShowWhenNotice problems={problems} />
-      {groups.length > 1 ? (
-        <StoredGroups
-          groups={groups}
-          fields={fields}
-          disabled={disabled}
-          onKeepFirst={() => writes.write(stored)}
-        />
-      ) : (
-        <OneGroup
-          id={id}
-          state={state}
-          writes={writes}
-          source={source}
-          fields={fields}
-          problems={problems}
-          disabled={disabled}
-          services={services}
-          entryTitle={entryTitle}
-        />
-      )}
+      <GroupBody
+        groups={groups}
+        stored={stored}
+        id={id}
+        state={state}
+        writes={writes}
+        source={source}
+        fields={fields}
+        problems={problems}
+        disabled={disabled}
+        services={services}
+        entryTitle={entryTitle}
+      />
     </section>
   );
 }

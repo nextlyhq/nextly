@@ -11,13 +11,83 @@
  */
 import {
   CONDITION_KIND_OPS,
+  conditionFieldKind,
   type Condition,
+  type ConditionFieldKind,
   type ConditionOp,
-  type ListFieldKind,
   type ListFilterOp,
 } from "@nextlyhq/blocks-engine";
 
+import type { LoopCollection, LoopListField } from "./content-controls";
 import { filterSentence, type QueryField } from "./list-query-model";
+
+/**
+ * A field a condition can check: one a list filters by, with its kind, or a
+ * field the public may read that no list filters by (several entries, media,
+ * rich text, a time of day), which a condition can only ask has a value.
+ */
+export interface ConditionField {
+  readonly name: string;
+  readonly label: string;
+  readonly kind: ConditionFieldKind;
+  readonly options?: QueryField["options"];
+  readonly relationTo?: string;
+  readonly dateOnly?: boolean;
+  /** What the field menu calls a field of kind `other`: "Several entries". */
+  readonly kindWords?: string;
+}
+
+/** One readable field, as a collection sends it. */
+type ReadableField = NonNullable<LoopCollection["readable"]>[number];
+
+/** What the field menu calls a field no list filters by, by what it holds. */
+function otherKindWords(shape: ReadableField): string {
+  // Before relations: an upload names the collection its files are in too.
+  if (shape.type === "upload") {
+    return shape.hasMany === true ? "Several files" : "Media";
+  }
+  if (shape.relationTo !== undefined) {
+    return shape.hasMany === true ? "Several entries" : "Entry";
+  }
+  if (shape.timeOnly === true) return "Time of day";
+  if (shape.type === "richText") return "Rich text";
+  if (shape.hasMany === true) return "Several values";
+  return "Other";
+}
+
+/**
+ * The fields a block's conditions can check in a collection: its list
+ * fields, then every other field the public may read, as the engine's kind
+ * for it says (`other`), in the collection's order. Derived from the readable
+ * schema the save judges by, so the editor offers what the save accepts.
+ */
+export function conditionFieldsOf(
+  collection: LoopCollection
+): readonly ConditionField[] {
+  const listed = new Set(collection.fields.map(field => field.name));
+  const others = (collection.readable ?? []).flatMap(
+    (shape): ConditionField[] =>
+      listed.has(shape.name) || conditionFieldKind(shape) !== "other"
+        ? []
+        : [
+            {
+              name: shape.name,
+              label: shape.label ?? shape.name,
+              kind: "other",
+              kindWords: otherKindWords(shape),
+            },
+          ]
+  );
+  return [...collection.fields, ...others];
+}
+
+/** A field as a list's filter controls take it, for one a list filters by. */
+export function asListField(
+  field: ConditionField | undefined
+): LoopListField | undefined {
+  if (field === undefined || field.kind === "other") return undefined;
+  return { ...field, kind: field.kind };
+}
 
 /** One operator an author picks, keyed for a menu. */
 export interface ConditionChoice {
@@ -47,15 +117,35 @@ const DATE_LABELS: Readonly<Partial<Record<ConditionOp, string>>> = {
 };
 
 /**
+ * A yes-or-no field's `equals` and `not_equals` against No, worded apart from
+ * "is": unlike `is_false`, `equals` No doesn't hold for a field with no value,
+ * and `not_equals` No holds for one.
+ */
+const BOOLEAN_EXACT: Readonly<Partial<Record<ConditionOp, string>>> = {
+  equals: "is set to",
+  not_equals: "isn’t set to",
+};
+
+/**
  * The operators offered for a field of each kind, in menu order. A yes-or-no
  * field offers one, "is", whose Yes or No is stored as `is_true` or
- * `is_false`; the engine's `equals` on such a field reads the same and is
- * not offered twice.
+ * `is_false`. The engine's `equals` and `not_equals` against Yes read as
+ * those (see `toDraft`); against No they differ on an empty value, so a
+ * stored one is listed as it is, `current`, and is otherwise not offered.
  */
 export function conditionChoices(
-  kind: ListFieldKind
+  kind: ConditionFieldKind,
+  current?: ConditionOp
 ): readonly ConditionChoice[] {
-  if (kind === "boolean") return [{ key: "is", op: "is_true", label: "is" }];
+  if (kind === "boolean") {
+    const exact = current === undefined ? undefined : BOOLEAN_EXACT[current];
+    return [
+      { key: "is", op: "is_true", label: "is" },
+      ...(exact === undefined || current === undefined
+        ? []
+        : [{ key: current, op: current, label: exact }]),
+    ];
+  }
   return CONDITION_KIND_OPS[kind].map(op => ({
     key: op,
     op,
@@ -123,10 +213,21 @@ export interface ConditionSentence {
   readonly value: string;
 }
 
+/** What an operator is called for a field of a kind. */
+function operatorWords(op: ConditionOp, kind: ConditionFieldKind): string {
+  const special =
+    kind === "date"
+      ? DATE_LABELS[op]
+      : kind === "boolean"
+        ? BOOLEAN_EXACT[op]
+        : undefined;
+  return special ?? LABELS[op];
+}
+
 /** A condition as the closed line reads it: "Reading time · is more than · 5". */
 export function conditionSentence(
   draft: DraftCondition,
-  field: QueryField | undefined,
+  field: ConditionField | undefined,
   entryTitle: (id: string) => string | undefined = () => undefined
 ): ConditionSentence {
   const fieldWords =
@@ -139,8 +240,7 @@ export function conditionSentence(
   const operator =
     field === undefined
       ? draft.op.replaceAll("_", " ")
-      : ((field.kind === "date" ? DATE_LABELS[draft.op] : undefined) ??
-        LABELS[draft.op]);
+      : operatorWords(draft.op, field.kind);
   const valueOp = valueOpFor(draft.op);
   if (valueOp === undefined) return { field: fieldWords, operator, value: "" };
   const value = booleanValueOf(draft.op) ?? draft.value;
@@ -150,7 +250,7 @@ export function conditionSentence(
     // Said as a list's filter says the same value, so one value reads one way.
     value: filterSentence(
       { field: draft.field, op: valueOp, value },
-      field,
+      asListField(field),
       entryTitle
     ).value,
   };
@@ -170,7 +270,7 @@ export function conditionLine(sentence: ConditionSentence): string {
  */
 export function completedCondition(
   draft: DraftCondition,
-  field: QueryField | undefined
+  field: Pick<ConditionField, "label"> | undefined
 ): { readonly condition: Condition } | { readonly missing: string } {
   if (draft.field === undefined || field === undefined) {
     return { missing: "Choose a field, or remove this condition." };

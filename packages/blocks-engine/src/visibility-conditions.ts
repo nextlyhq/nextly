@@ -1236,8 +1236,10 @@ export function conditionIssues(
 
 /**
  * A node's visibility with its conditions replaced: the groups given, or
- * none when `undefined` or empty. Everything else the visibility holds, such
- * as which devices show the block, is kept. `undefined` when nothing is left
+ * none when they restrict nobody, by the rule that gates a node: `undefined`,
+ * no groups, or a group with no conditions, which always holds and so lets
+ * everyone through. Everything else the visibility holds, such as which
+ * devices show the block, is kept. `undefined` when nothing is left
  * to store, so a block shown everywhere to everyone stores no visibility.
  * The one writer, for the editor and the API alike.
  *
@@ -1248,12 +1250,15 @@ export function withConditions(
   conditions: readonly (readonly Condition[])[] | undefined
 ): NodeVisibility | undefined {
   const { conditions: _old, ...rest } = visibility ?? {};
-  const kept =
-    conditions === undefined || conditions.length === 0
-      ? rest
-      : {
-          ...rest,
-          conditions: conditions.map(group => group.map(c => ({ ...c }))),
-        };
+  // Asked of the gate itself, so what is stored is what restricts.
+  const restricts =
+    conditions !== undefined &&
+    isConditionGated({ visibility: { conditions } });
+  const kept = !restricts
+    ? rest
+    : {
+        ...rest,
+        conditions: conditions.map(group => group.map(c => ({ ...c }))),
+      };
   return Object.keys(kept).length === 0 ? undefined : kept;
 }

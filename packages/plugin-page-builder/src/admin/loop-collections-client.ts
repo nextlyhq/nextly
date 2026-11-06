@@ -143,6 +143,7 @@ function readableOf(value: unknown): LoopReadableField | undefined {
   const { relationTo, storage } = record;
   return {
     name: record.name,
+    ...(typeof record.label === "string" ? { label: record.label } : {}),
     type: record.type,
     ...(record.hasMany === true ? { hasMany: true as const } : {}),
     ...(typeof relationTo === "string" ||

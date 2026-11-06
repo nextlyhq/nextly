@@ -655,6 +655,16 @@ describe("setting a block's conditions", () => {
     });
   });
 
+  it("stores nothing for groups that let everyone through, an empty group among them", () => {
+    // An AND of nothing always holds, so a group with no conditions lets
+    // everyone through whatever the other groups say.
+    expect(withConditions({ conditions: vip }, [[]])).toBeUndefined();
+    expect(withConditions(undefined, [[], ...vip])).toBeUndefined();
+    expect(withConditions({ devices: { mobile: false } }, [[]])).toEqual({
+      devices: { mobile: false },
+    });
+  });
+
   it("copies what it stores, so a later edit to the input changes nothing", () => {
     const groups = [[{ field: "tier", op: "equals", value: "vip" }]];
     const stored = withConditions(undefined, groups);

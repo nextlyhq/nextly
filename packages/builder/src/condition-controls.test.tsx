@@ -23,8 +23,23 @@ const POSTS: LoopCollection = {
   fields: [
     { name: "title", label: "Title", kind: "text" },
     { name: "rating", label: "Reading time", kind: "number" },
+    { name: "featured", label: "Featured", kind: "boolean" },
   ],
-  declared: ["id", "title", "rating", "secret"],
+  declared: ["id", "title", "rating", "featured", "tags", "secret"],
+  readable: [
+    { name: "title", label: "Title", type: "text" },
+    { name: "rating", label: "Reading time", type: "number" },
+    { name: "featured", label: "Featured", type: "checkbox" },
+    // Several entries: no list filters by it, and a condition may ask
+    // whether it has a value.
+    {
+      name: "tags",
+      label: "Tags",
+      type: "relationship",
+      relationTo: "tags",
+      hasMany: true,
+    },
+  ],
 };
 
 const services: ContentServices = {
@@ -127,5 +142,54 @@ describe("Show when", () => {
     expect(findNode(editorRef!.document.nodes, "a")?.visibility).toEqual({
       conditions: [[{ field: "title", op: "exists" }]],
     });
+  });
+
+  it("shows conditions it can't read as such, and removes them when asked", async () => {
+    // A group holding something other than a condition, and a flat list.
+    for (const unreadable of [[[null]], [{ field: "title", op: "exists" }]]) {
+      await shown(withConditions(unreadable));
+      expect(screen.queryByText("Always shown.")).toBeNull();
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Visitors never see this block."
+      );
+      act(() => {
+        screen.getByRole("button", { name: "Remove conditions" }).click();
+      });
+      expect(
+        findNode(editorRef!.document.nodes, "a")?.visibility
+      ).toBeUndefined();
+      cleanup();
+    }
+  });
+
+  it("stops adding at the most conditions a block may have", async () => {
+    const most = Array.from({ length: 20 }, () => ({
+      field: "title",
+      op: "exists",
+    }));
+    await shown(withConditions([most]));
+    const add = screen.getByRole("button", { name: "Add condition" });
+    expect((add as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Up to 20 conditions.")).toBeTruthy();
+  });
+
+  it("reads a yes-or-no field's equals Yes as is Yes, and equals No as it stands", async () => {
+    await shown(
+      withConditions([
+        [
+          { field: "featured", op: "equals", value: true },
+          { field: "featured", op: "equals", value: false },
+        ],
+      ])
+    );
+    expect(screen.getByTitle("Featured is Yes")).toBeTruthy();
+    // Unlike "is No", it doesn't hold for an entry with no value.
+    expect(screen.getByTitle("Featured is set to No")).toBeTruthy();
+  });
+
+  it("offers a field no list filters by, which a condition asks has a value", async () => {
+    await shown(withConditions([[{ field: "tags", op: "exists" }]]));
+    // CONTROL: named as the admin names it, not "not offered here".
+    expect(screen.getByTitle("Tags has a value")).toBeTruthy();
   });
 });

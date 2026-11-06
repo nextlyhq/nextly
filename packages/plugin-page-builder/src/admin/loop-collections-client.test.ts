@@ -151,7 +151,12 @@ describe("listLoopCollections", () => {
           label: "Events",
           fields: [],
           readable: [
-            { name: "opensAt", type: "date", timeOnly: true },
+            {
+              name: "opensAt",
+              label: "Opens at",
+              type: "date",
+              timeOnly: true,
+            },
             { name: "colour", type: "colour", storage: "text" },
             // Neither key, as sent, is one the engine knows.
             { name: "odd", type: "colour", storage: "pigment", timeOnly: 1 },
@@ -162,7 +167,7 @@ describe("listLoopCollections", () => {
     });
     const [events] = await listLoopCollections();
     expect(events?.readable).toEqual([
-      { name: "opensAt", type: "date", timeOnly: true },
+      { name: "opensAt", label: "Opens at", type: "date", timeOnly: true },
       { name: "colour", type: "colour", storage: "text" },
       { name: "odd", type: "colour" },
     ]);

@@ -68,13 +68,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import {
-  GripVertical,
-  Link2,
-  MoreHorizontal,
-  Plus,
-  X,
-} from "lucide-react";
+import { GripVertical, Link2, MoreHorizontal, Plus, X } from "lucide-react";
 import * as React from "react";
 
 import { ChoiceList, type ListedChoice } from "./choice-list";
@@ -1121,9 +1115,22 @@ export function FilterValue(props: ValueProps): React.JSX.Element | null {
   return <Control {...props} />;
 }
 
+/**
+ * A field a menu offers: one a list filters by, or one a condition can only
+ * ask has a value, which names its own kind.
+ */
+export interface OfferedField {
+  readonly name: string;
+  readonly label: string;
+  readonly kind: LoopListField["kind"] | "other";
+  /** What the menu calls its kind, for a field of kind `other`. */
+  readonly kindWords?: string;
+}
+
 /** One field of the field menu, with its kind on the right. */
-export interface FieldChoice extends ListedChoice {
-  readonly field: LoopListField;
+export interface FieldChoice<F extends OfferedField = LoopListField>
+  extends ListedChoice {
+  readonly field: F;
 }
 
 /** What a field's kind is called on the right of the menu. */
@@ -1137,23 +1144,24 @@ const KIND_WORDS: Readonly<Record<LoopListField["kind"], string>> = {
 };
 
 /** The field menu's row: the field, and the kind of value it holds. */
-function fieldRow(choice: FieldChoice): React.ReactNode {
+function fieldRow(choice: FieldChoice<OfferedField>): React.ReactNode {
+  const { kind, kindWords } = choice.field;
   return (
     <span className="nx-list-query__field-row">
       <span>{choice.label}</span>
       <span className="nx-list-query__field-kind">
-        {KIND_WORDS[choice.field.kind]}
+        {kindWords ?? (kind === "other" ? "" : KIND_WORDS[kind])}
       </span>
     </span>
   );
 }
 
 /** A field menu's list: the fields, each with its kind on the right. */
-export function fieldList(
-  fields: readonly LoopListField[],
+export function fieldList<F extends OfferedField>(
+  fields: readonly F[],
   currentKey: string,
   label: string
-): PickerList<FieldChoice> {
+): PickerList<FieldChoice<F>> {
   return {
     choices: fields.map(each => ({
       key: each.name,
@@ -1505,7 +1513,7 @@ function FiltersGroup({
 }
 
 /** Whether a list holds the most of something it takes, and the note saying so. */
-interface ListLimit {
+export interface ListLimit {
   full: boolean;
   /** The note's id while the limit is reached, for the Add button to name. */
   describedBy: string | undefined;
@@ -1513,14 +1521,14 @@ interface ListLimit {
 }
 
 /** The limit of `count` against `most`, its note under `${id}-limit`. */
-function listLimit(count: number, most: number, id: string): ListLimit {
+export function listLimit(count: number, most: number, id: string): ListLimit {
   const full = count >= most;
   const noteId = `${id}-limit`;
   return { full, describedBy: full ? noteId : undefined, id: noteId };
 }
 
 /** Why an Add button is off: shown only once the list holds the most it takes. */
-function LimitNote({
+export function LimitNote({
   limit,
   children,
 }: {
