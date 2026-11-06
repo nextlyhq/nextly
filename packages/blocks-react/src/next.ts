@@ -2927,6 +2927,7 @@ function blocksRouteConfig(
         config,
         documents: presented,
         bindings,
+        resolver,
         budget,
         window: listWindow,
         context,
