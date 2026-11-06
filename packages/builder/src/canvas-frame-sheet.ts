@@ -419,7 +419,7 @@ ${ROOT} [data-nx-list-empty-because="failed"]::before {
   color-scheme: var(--nx-builder-scheme, light);
   font-family: var(--font-sans, system-ui), sans-serif;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.25rem;
   margin: 0.375rem 0;
   pointer-events: auto;
