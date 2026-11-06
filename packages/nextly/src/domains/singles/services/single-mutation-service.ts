@@ -195,6 +195,15 @@ import {
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  partKeysOf,
+  SHARED_DRAFT_SLOT,
+  storePartDrafts,
+} from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -3460,16 +3469,32 @@ export class SingleMutationService extends BaseService {
               singleDraftsEligible &&
               (updatePayload as Record<string, unknown>).status === "published"
             ) {
-              const pendingDraft = await new VersionsRepository(
-                tx
-              ).findWorkingDraft(
-                {
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                },
-                singleDraftLocale
-              );
+              const promoteRef = {
+                scopeKind: "single" as const,
+                scopeSlug: slug,
+                entryId: existingDoc.id,
+              };
+              const promoteRepo = new VersionsRepository(tx);
+              // Kept by part, the change this publish carries is this
+              // language's draft with the shared draft: a language's publish
+              // puts the shared changes live with it, and writes no more than
+              // the keys they hold.
+              const promoteParts =
+                draftsKeptByPart() && typeof singleDraftLocale === "string"
+                  ? await findPartDrafts(
+                      promoteRepo,
+                      promoteRef,
+                      singleDraftLocale
+                    )
+                  : undefined;
+              const pendingDraft = promoteParts
+                ? holdsPendingChange(promoteParts)
+                  ? { snapshot: combinedDraft({}, promoteParts) }
+                  : undefined
+                : await promoteRepo.findWorkingDraft(
+                    promoteRef,
+                    singleDraftLocale
+                  );
               if (pendingDraft) {
                 // The component values this publish writes: the draft's, with
                 // the publish's own merged over them sub-field by sub-field,
@@ -3513,7 +3538,8 @@ export class SingleMutationService extends BaseService {
                 // A language's pending change carries every shared value; one
                 // someone else published since the change began would be put
                 // back by this write, so the publish is refused, naming it.
-                if (companion) {
+                // Kept by part, a language's draft carries no shared value.
+                if (companion && !promoteParts) {
                   const { live, shared, views } = await this.liveSharedDocument(
                     tx,
                     singleMeta,
@@ -4303,7 +4329,8 @@ export class SingleMutationService extends BaseService {
                 scopeSlug: slug,
                 entryId: existingDoc.id,
               };
-              await new VersionsRepository(tx).deleteWorkingDraft(
+              const promotedRepo = new VersionsRepository(tx);
+              await promotedRepo.deleteWorkingDraft(
                 promotedRef,
                 singleDraftLocale
               );
@@ -4313,6 +4340,14 @@ export class SingleMutationService extends BaseService {
                 promotedRef,
                 singleDraftLocale ?? null
               );
+              // Kept by part, a language's publish carried the shared draft
+              // with it, so the shared draft goes too.
+              if (draftsKeptByPart() && typeof singleDraftLocale === "string") {
+                await promotedRepo.deleteWorkingDraft(
+                  promotedRef,
+                  SHARED_DRAFT_SLOT
+                );
+              }
             }
 
             // Store the pending edit as this Single's working draft for the
@@ -4336,16 +4371,77 @@ export class SingleMutationService extends BaseService {
                 scopeSlug: slug,
                 entryId: existingDoc.id,
               };
-              const existingDraft = await draftRepo.findWorkingDraft(
-                draftRef,
-                singleDraftLocale
-              );
               // Component values live in tables of their own and are not on the
               // row, so the live document the first held save builds on reads
               // them in, tagged as every snapshot and a collection's draft hold
               // them. A later save builds on the draft, which already has them.
               const componentResolver = (componentSlug: string) =>
                 singleComponentSchemas?.get(componentSlug)?.fields;
+              // The live document a held save builds on, with the language's
+              // stored translations and its components read in.
+              const liveDocument = async (): Promise<
+                Record<string, unknown>
+              > => ({
+                ...convertTimestampsToCamelCase({
+                  ...(existingDoc as Record<string, unknown>),
+                }),
+                // The language's stored translations: the main row holds
+                // none, so without them the draft (and its version) would
+                // lack every translation this save did not touch.
+                ...(companion
+                  ? Object.fromEntries(
+                      companion.localizedFields.flatMap(f =>
+                        Object.prototype.hasOwnProperty.call(
+                          previousCompanionValues,
+                          f.column
+                        )
+                          ? [[f.name, previousCompanionValues[f.column]]]
+                          : []
+                      )
+                    )
+                  : {}),
+                ...tagComponentTypes(
+                  await readComponentSubtrees({
+                    fieldGroupDataService: this.fieldGroupDataService,
+                    tx,
+                    entryId: existingDoc.id,
+                    parentTable: singleMeta.tableName,
+                    fieldConfigs,
+                    locale: options.locale,
+                    reason: "working-draft-single-component-read",
+                    logContext: { slug },
+                    onReadFailure: err =>
+                      this.logger.error(
+                        "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
+                        {
+                          slug,
+                          error:
+                            err instanceof Error ? err.message : String(err),
+                        }
+                      ),
+                  }),
+                  fieldConfigs,
+                  componentResolver
+                ),
+              });
+              // Under per-language storage the pending change is kept by part:
+              // the shared draft and this language's, read as the one document
+              // they describe over the live one, so the save accumulates onto
+              // both and is split back into them when stored (`part-drafts`).
+              const singleParts =
+                draftsKeptByPart() && typeof singleDraftLocale === "string"
+                  ? await findPartDrafts(draftRepo, draftRef, singleDraftLocale)
+                  : undefined;
+              const existingDraft = singleParts
+                ? holdsPendingChange(singleParts)
+                  ? {
+                      snapshot: combinedDraft(
+                        await liveDocument(),
+                        singleParts
+                      ),
+                    }
+                  : undefined
+                : await draftRepo.findWorkingDraft(draftRef, singleDraftLocale);
               // In read shape whichever it comes from: the save is compared with
               // it, and a JSON-backed field read from the row (or held as text
               // by a draft stored before drafts held the read shape) would
@@ -4353,51 +4449,7 @@ export class SingleMutationService extends BaseService {
               const base = this.queryService.deserializeJsonFields(
                 (existingDraft
                   ? existingDraft.snapshot
-                  : {
-                      ...convertTimestampsToCamelCase({
-                        ...(existingDoc as Record<string, unknown>),
-                      }),
-                      // The language's stored translations: the main row holds
-                      // none, so without them the draft (and its version) would
-                      // lack every translation this save did not touch.
-                      ...(companion
-                        ? Object.fromEntries(
-                            companion.localizedFields.flatMap(f =>
-                              Object.prototype.hasOwnProperty.call(
-                                previousCompanionValues,
-                                f.column
-                              )
-                                ? [[f.name, previousCompanionValues[f.column]]]
-                                : []
-                            )
-                          )
-                        : {}),
-                      ...tagComponentTypes(
-                        await readComponentSubtrees({
-                          fieldGroupDataService: this.fieldGroupDataService,
-                          tx,
-                          entryId: existingDoc.id,
-                          parentTable: singleMeta.tableName,
-                          fieldConfigs,
-                          locale: options.locale,
-                          reason: "working-draft-single-component-read",
-                          logContext: { slug },
-                          onReadFailure: err =>
-                            this.logger.error(
-                              "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
-                              {
-                                slug,
-                                error:
-                                  err instanceof Error
-                                    ? err.message
-                                    : String(err),
-                              }
-                            ),
-                        }),
-                        fieldConfigs,
-                        componentResolver
-                      ),
-                    }) as SingleDocument,
+                  : await liveDocument()) as SingleDocument,
                 singleMeta.fields
               ) as Record<string, unknown>;
               // The base is the READ shape (field names); `mainPayload` is the
@@ -4567,7 +4619,9 @@ export class SingleMutationService extends BaseService {
               // later save keeps it, so saving again never makes an old shared
               // value current. Recorded before the save's own capture, whose
               // retention pass then keeps it.
-              if (!existingDraft && companion) {
+              // Kept by part, a language's draft holds no shared value a shared
+              // change published since could leave behind, so none is recorded.
+              if (!existingDraft && companion && !singleParts) {
                 // A held save has written nothing live, so the live document
                 // read here is the one the change began from.
                 const { live, shared, views } = await this.liveSharedDocument(
@@ -4609,6 +4663,23 @@ export class SingleMutationService extends BaseService {
                   createdBy: options.user?.id ?? null,
                   sourceVersionNo: options.sourceVersionNo ?? null,
                   maxPerDoc: singleMeta.versions?.maxPerDoc,
+                  ...(singleParts && typeof singleDraftLocale === "string"
+                    ? {
+                        storeWorkingDraft: async (repo: VersionsRepository) =>
+                          storePartDrafts(repo, {
+                            ref: draftRef,
+                            locale: singleDraftLocale,
+                            document: pending,
+                            touched: new Set([
+                              ...suppliedFieldNames,
+                              ...Object.keys(attemptComponentFields),
+                            ]),
+                            keys: await partKeysOf(fieldConfigs),
+                            existing: singleParts,
+                            createdBy: options.user?.id ?? null,
+                          }),
+                      }
+                    : {}),
                 }
               );
               await this.recordSingleSave(tx, slug, existingDoc.id, options, {

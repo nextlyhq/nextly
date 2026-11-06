@@ -54,6 +54,13 @@ export interface DraftSaveInput {
    * or omitted leaves history unbounded, as for every capture.
    */
   maxPerDoc?: number | false;
+  /**
+   * Stores the working draft in place of the one-row write, on the same
+   * handle: under per-language storage a held save keeps a shared draft and a
+   * language's draft (`part-drafts`) rather than one row of the whole
+   * document. The version below is recorded from `snapshot` either way.
+   */
+  storeWorkingDraft?: (repo: VersionsRepository) => Promise<void>;
 }
 
 /** The version a held save recorded, or null when it changed nothing. */
@@ -80,12 +87,17 @@ export async function storeDraftSave(
   capture: VersionCaptureService,
   input: DraftSaveInput
 ): Promise<DraftSaveResult> {
-  await new VersionsRepository(tx).upsertWorkingDraft({
-    ref: input.ref,
-    locale: input.locale,
-    snapshot: input.snapshot,
-    createdBy: input.createdBy,
-  });
+  const repo = new VersionsRepository(tx);
+  if (input.storeWorkingDraft) {
+    await input.storeWorkingDraft(repo);
+  } else {
+    await repo.upsertWorkingDraft({
+      ref: input.ref,
+      locale: input.locale,
+      snapshot: input.snapshot,
+      createdBy: input.createdBy,
+    });
+  }
   const entity = input.ref.scopeKind === "single" ? "single" : "collection";
   if (sameContent(input.snapshot, input.replaces, entity)) {
     return { versionNo: null };

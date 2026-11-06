@@ -78,6 +78,12 @@ export interface LanguagePanelProps {
    * here and may still read its other languages.
    */
   navigationDisabled?: boolean;
+  /**
+   * Whether the document's shared fields hold unpublished changes
+   * (`_sharedChangesPending` on the editor's read). The shared part is every
+   * language's, so the panel says so in whichever language is on screen.
+   */
+  sharedChangesPending?: boolean;
   className?: string;
 }
 
@@ -717,6 +723,7 @@ export function LanguagePanel({
   actionsDisabled = false,
   publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
+  sharedChangesPending = false,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -761,6 +768,17 @@ export function LanguagePanel({
         )}
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
+
+      {sharedChangesPending && (
+        <p
+          role="status"
+          aria-label="Shared changes pending"
+          className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+        >
+          Shared fields have unpublished changes. They go live with the next
+          publish, in every language.
+        </p>
+      )}
 
       <PublishAllConfirm
         open={confirmPublishAll}

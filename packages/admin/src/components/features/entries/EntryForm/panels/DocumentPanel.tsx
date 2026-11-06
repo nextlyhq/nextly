@@ -91,6 +91,7 @@ export function DocumentPanel({
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
           publishAllDisabled={publishAllDisabled}
+          sharedChangesPending={entry?._sharedChangesPending === true}
         />
       </LanguageSection>
       <PanelSection title="Details">

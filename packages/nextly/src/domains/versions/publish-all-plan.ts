@@ -23,6 +23,11 @@ import { resolveLocaleChain } from "../i18n/resolve-locale";
 import type { CompanionSchema } from "../i18n/runtime/companion-io";
 
 import {
+  combinedDraft,
+  draftsKeptByPart,
+  SHARED_DRAFT_SLOT,
+} from "./part-drafts";
+import {
   differingFields,
   editedSharedFields,
   outOfDateSharedFields,
@@ -50,7 +55,7 @@ export async function pendingChangesInSaveOrder(
   ref: VersionRef
 ): Promise<PendingChange[]> {
   const repo = new VersionsRepository(db);
-  const drafts = await repo.findAllWorkingDrafts(ref);
+  const drafts = withSharedPart(await repo.findAllWorkingDrafts(ref));
   if (drafts.length < 2) return drafts;
   const newest = await repo.newestVersionNoByLocale(
     ref,
@@ -58,6 +63,27 @@ export async function pendingChangesInSaveOrder(
   );
   const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
   return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+}
+
+/**
+ * Under per-language storage, each language's change as the document it puts
+ * live: its own values with the shared draft's (`part-drafts`), so every
+ * language publishes the shared changes with it and no language's change
+ * stands for them alone. The shared draft stays a change of its own, first,
+ * so a document whose only changes are shared still puts them live. Without
+ * per-language storage the drafts are returned as stored.
+ */
+function withSharedPart(drafts: PendingChange[]): PendingChange[] {
+  if (!draftsKeptByPart()) return drafts;
+  const shared = drafts.find(draft => draft.locale === SHARED_DRAFT_SLOT);
+  if (!shared) return drafts;
+  const languages = drafts
+    .filter(draft => draft.locale !== SHARED_DRAFT_SLOT)
+    .map(draft => ({
+      ...draft,
+      snapshot: combinedDraft({}, { shared, language: draft }),
+    }));
+  return [shared, ...languages];
 }
 
 /** How a document carries its languages' statuses. */
