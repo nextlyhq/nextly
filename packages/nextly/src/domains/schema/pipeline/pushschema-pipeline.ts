@@ -131,6 +131,10 @@ import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import {
+  refuseSeveralReferencesForOne,
+  refuseTargetSwitchesOverValues,
+} from "./several-references-refusal";
+import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
   untrackedConstraintRefusal,
@@ -949,6 +953,22 @@ export class PushSchemaPipeline {
         dispatchResult,
         resolvedOps
       );
+      // A relationship switched to or from naming several target collections, while a row holds a
+      // value no conversion can carry across; then one switched from many related entries to one,
+      // while a row holds several.
+      await refuseTargetSwitchesOverValues({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: liveSnapshot,
+        operations: resolvedOps,
+      });
+      await refuseSeveralReferencesForOne({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        operations: resolvedOps,
+      });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //

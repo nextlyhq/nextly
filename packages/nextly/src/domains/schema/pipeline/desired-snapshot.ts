@@ -27,6 +27,7 @@ import {
   buildDesiredTableFromFields,
 } from "./diff/build-from-fields";
 import type { NextlySchemaSnapshot, TableSpec } from "./diff/types";
+import { withReferenceStorageSwitches } from "./reference-storage-switch";
 import { builtByFor } from "./registered-collections";
 import type { DesiredSchema } from "./types";
 
@@ -117,31 +118,41 @@ export function buildDesiredSnapshot(args: {
       // A Schema Builder collection's table also carries its foreign keys:
       // the ones its live table holds and the key of a relationship this
       // push adds.
+      // A relation the save switches between one entry and many is marked too, where its column's
+      // type stays the same and only its values convert.
       ...Object.values(desired.collections).map(c =>
         withContributions(
-          withBuilderForeignKeys(
-            desiredCollectionTable(c, dialect),
+          withReferenceStorageSwitches(
+            withBuilderForeignKeys(
+              desiredCollectionTable(c, dialect),
+              c,
+              liveTablesByName.get(c.tableName),
+              dialect
+            ),
             c,
-            liveTablesByName.get(c.tableName),
             dialect
           )
         )
       ),
       ...Object.values(desired.singles).map(s =>
         withContributions(
-          buildDesiredTableFromFields(
-            s.tableName,
-            s.fields as unknown as Parameters<
-              typeof buildDesiredTableFromFields
-            >[1],
-            dialect,
-            {
-              builtBy: builtByFor("single", s.builderOwned),
-              hasStatus: s.status === true,
-              // A Single whose translatable columns live in its companion has them left off the
-              // main table (`storesPerLanguage`).
-              localized: storesPerLanguage(s),
-            }
+          withReferenceStorageSwitches(
+            buildDesiredTableFromFields(
+              s.tableName,
+              s.fields as unknown as Parameters<
+                typeof buildDesiredTableFromFields
+              >[1],
+              dialect,
+              {
+                builtBy: builtByFor("single", s.builderOwned),
+                hasStatus: s.status === true,
+                // A Single whose translatable columns live in its companion has them left off the
+                // main table (`storesPerLanguage`).
+                localized: storesPerLanguage(s),
+              }
+            ),
+            s,
+            dialect
           )
         )
       ),

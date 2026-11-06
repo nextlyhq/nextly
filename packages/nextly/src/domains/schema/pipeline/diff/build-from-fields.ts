@@ -42,6 +42,7 @@ import {
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationshipStoresJson,
 } from "../../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -486,6 +487,7 @@ export function buildDesiredTableFromFields(
       type: desc.dialectType,
       nullable: desc.nullable,
       default: undefined,
+      ...referenceMarkerOn(field, desc.kind, dialect),
     });
   }
 
@@ -533,14 +535,34 @@ export function buildDesiredTableFromFields(
 }
 
 /**
+ * The marker a collection or Single column of a relation carries for the conversion a switch
+ * between one related entry and many needs: a cast reads neither a bare id as a list nor a list's
+ * one id. SQLite keeps both as text, so its diff plans no type change to mark. A relation naming
+ * several targets is not marked as a list: it holds `{ relationTo, value }` references, which the
+ * list conversion does not make, and a switch to it over values is refused before anything runs.
+ */
+function referenceMarkerOn(
+  field: MinimalFieldDef,
+  kind: string,
+  dialect: SupportedDialect
+): Pick<ColumnSpec, "holdsReferenceList" | "holdsSingleReference"> {
+  if (dialect === "sqlite") return {};
+  if (kind === "fkSingle") return { holdsSingleReference: true };
+  const list =
+    kind === "json" &&
+    relationshipStoresJson(field) &&
+    !Array.isArray(field.relationTo);
+  return list ? { holdsReferenceList: true } : {};
+}
+
+/**
  * Whether a component column is marked as holding a list of references, which makes a type change
  * into it a reference-list conversion.
  *
  * A relation keeping a list on the component row (a many-to-many or a `hasMany` relation), which an
  * older table may hold in a scalar column. A single polymorphic reference is JSON but not a list, so
- * it keeps the ordinary conversion. Not on SQLite, which keeps the list as text and has no form of
- * the conversion: a type change into the column there (an integer field becoming a many-to-many)
- * stays with SQLite's own route.
+ * it keeps the ordinary conversion. Not on SQLite, which keeps the list as text, so no type changes
+ * into the column there (an integer field becoming a many-to-many stays with SQLite's own route).
  */
 function holdsReferenceListOn(
   field: Parameters<typeof componentRelationshipHoldsReferenceList>[0],

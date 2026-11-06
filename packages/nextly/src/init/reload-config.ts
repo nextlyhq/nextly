@@ -83,6 +83,11 @@ import {
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
+  recordFieldsOnto,
+  registryRowsOrNone,
+  takeRecordedAtStart,
+} from "../domains/schema/pipeline/recorded-fields";
+import {
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
 } from "../domains/schema/pipeline/registered-collections";
@@ -2697,6 +2702,32 @@ async function applyReloadHolding(
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
       : undefined;
 
+  // What each code-first entity's registry row records from before this apply, which the
+  // registry sync after it replaces: on SQLite a relationship switched between one related entry
+  // and many is told by nothing else. A development start has already synced the rows, so it held
+  // them from before that sync (`holdRecordedAtStart`), and its apply takes those.
+  const atStart = takeRecordedAtStart();
+  recordFieldsOnto(
+    desiredCollections,
+    atStart?.collections ??
+      (await registryRowsOrNone(async () =>
+        (
+          (await resolve(
+            "collectionRegistryService"
+          )) as CollectionRegistrySurface
+        )?.getAllCollections?.()
+      ))
+  );
+  recordFieldsOnto(
+    desiredSingles,
+    atStart?.singles ??
+      (await registryRowsOrNone(async () =>
+        (
+          (await resolve("singleRegistryService")) as SingleRegistrySurface
+        )?.getAllSingles?.()
+      ))
+  );
+
   const desired: DesiredSchema = {
     collections: desiredCollections,
     singles: desiredSingles,
@@ -3316,7 +3347,8 @@ async function applyReloadHolding(
 // resolution UX:
 //
 //   - drop_table: no destructive-confirm event exists for tables yet.
-//   - change_column_type: only emits a warning, no resolution.
+//   - change_column_type: only emits a warning, no resolution. A relation
+//     switched from one related entry to many is not held: it keeps every value.
 //   - change_column_nullable (NOT NULL adds on existing rows): pipeline
 //     classifier emits add_not_null_with_nulls + asks the user, BUT
 //     only when there are actually NULL rows. Tables with no NULLs flow
@@ -3336,7 +3368,12 @@ function classifyForCodeFirst(
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
-    } else if (op.type === "change_column_type") {
+    } else if (
+      op.type === "change_column_type" &&
+      op.conversion !== "referenceList"
+    ) {
+      // A relation switched from one related entry to many keeps every value, each id as a
+      // one-item list, so it is not held back for review as a plain retype is.
       reasons.push(
         `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
       );

@@ -59,6 +59,16 @@ export interface ColumnSpec {
   // ChangeColumnTypeOp.conversion), because a plain cast cannot read a bare id
   // or a PostgreSQL array literal as a list.
   holdsReferenceList?: boolean;
+  // `true` when the column holds ONE reference: a relationship to one row of one collection,
+  // backed by a foreign key. Recorded only on the desired side, and read only to mark a type change
+  // into this column FROM a JSON list (the field switched from many related entries to one) as a
+  // `referenceScalar` conversion, since no cast reads a list's one id out of it.
+  holdsSingleReference?: boolean;
+  // Set when the field behind this column switched between one related entry and many, as the
+  // registry's recorded fields tell, on a dialect where the column's type is the same either way
+  // (SQLite stores both as text). The type alone cannot show the switch there, so the diff reads
+  // this to plan the values' conversion in place. Recorded only on the desired side.
+  switchesReferenceStorage?: "toList" | "toScalar";
   // `true` when the live default is a `nextval()` over the sequence this
   // column OWNS — what PostgreSQL materialises for a `serial` declaration.
   // Recorded only when true, and only by PostgreSQL introspection: no other
@@ -292,9 +302,13 @@ export interface ChangeColumnTypeOp {
    * `pipeline/reference-list-conversion.ts`, and run by the pre-resolution executor before either
    * apply route, so neither the fast-path emitter nor drizzle-kit casts the column itself.
    *
-   * `referenceScalar`: the generated DOWN of that conversion, the list column back to the scalar type
-   * it was. A one-item list becomes its id; a longer list cannot fit in one id, so the DOWN refuses
-   * rather than drop references. Only ever written into a migration file: an apply converts forward.
+   * `referenceScalar`: the list column back to a single reference: the generated DOWN of that
+   * conversion, and a relation switched from many related entries to one. A one-item list becomes
+   * its id and an empty one no reference; a longer list cannot fit in one id, so it is refused
+   * rather than drop references (an apply counts those rows and refuses before anything runs).
+   *
+   * On SQLite the column is text either way, so the same two conversions are planned with the
+   * type unchanged (`switchesReferenceStorage`) and rewrite the stored values in place.
    *
    * Absent for every other type change.
    */
@@ -392,6 +406,12 @@ export interface DropForeignKeyOp {
   type: "drop_foreign_key";
   tableName: string;
   foreignKey: ForeignKeySpec;
+  /**
+   * `true` when a column it constrains is converted between one reference and a list in the same
+   * plan: the key has to go before the conversion, which no database runs over a key it would
+   * break, so it runs in the pre-resolution pass ahead of it (`isPreResolutionOp`).
+   */
+  beforeConversion?: true;
 }
 
 /**
@@ -465,12 +485,28 @@ export const PRE_RESOLUTION_OP_TYPES: ReadonlyArray<Operation["type"]> = [
 ] as const;
 
 export function isPreResolutionOp(op: Operation): boolean {
+  // A foreign key on a column converted in the same plan is dropped ahead of the conversion.
+  if (op.type === "drop_foreign_key" && op.beforeConversion === true) {
+    return true;
+  }
   // A reference-list conversion runs here too, before the apply chooses a route: drizzle-kit would
   // otherwise cast the column itself, and a plain cast refuses the values it holds.
   return (
     (PRE_RESOLUTION_OP_TYPES as readonly string[]).includes(op.type) ||
-    isReferenceListConversion(op)
+    isReferenceConversion(op)
   );
+}
+
+/**
+ * Whether `op` converts a relation's column between one reference and a list of them, either way:
+ * both are run by the pre-resolution executor as their statement list, before either apply route.
+ */
+export function isReferenceConversion(
+  op: Operation
+): op is ChangeColumnTypeOp & {
+  conversion: "referenceList" | "referenceScalar";
+} {
+  return op.type === "change_column_type" && op.conversion !== undefined;
 }
 
 /** Whether `op` converts a scalar column into the JSON list of references a relation keeps. */

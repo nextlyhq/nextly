@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
@@ -34,6 +35,7 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
+import { registryRowsOrNone } from "../../domains/schema/pipeline/recorded-fields";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -168,6 +170,16 @@ export async function syncCollections(
   const generateTypes = options.types === true;
   const generateZodSchemas = options.schemas === true;
 
+  // What each collection's registry row records before the sync below replaces it, for the apply
+  // that follows: on SQLite a relationship switched between one related entry and many is told by
+  // nothing else.
+  const recordedCollections = await registryRowsOrNone(() =>
+    new CollectionRegistryService(
+      adapter as unknown as DrizzleAdapter,
+      serviceLogger
+    ).getAllCollections()
+  );
+
   let result: CollectionSyncResultWithValidation;
   try {
     result = await syncService.syncWithValidation(config, {
@@ -191,7 +203,14 @@ export async function syncCollections(
   // Step 5: Auto-sync schema to database (development mode only)
   const autoSyncEnabled = options.autoSync !== false;
   if (autoSyncEnabled) {
-    await performAutoSync(config, adapter, result, options, context);
+    await performAutoSync(
+      config,
+      adapter,
+      result,
+      options,
+      context,
+      recordedCollections
+    );
   }
 
   // Seeding moved out of syncCollections to the orchestrator (runDbSync).

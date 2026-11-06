@@ -397,22 +397,9 @@ const ACCEPTED = byAspect([
     "type",
     "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON"
   ),
-  // SQLite is absent from the two below on purpose: it stores JSON as text, so the two sides land
-  // on the same column there and there is nothing to accept.
-  ...everywhere(
-    ["upload"],
-    ["hasMany"],
-    "type",
-    "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-  ...everywhere(
-    ["relationship"],
-    ["hasMany", "polymorphic"],
-    "type",
-    "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
+  // A hasMany upload and a multi-reference relationship are not recorded: the collection
+  // generator takes the descriptor's JSON list for them, and moves the index, foreign key, CHECK
+  // and backfill with it, so both sides name the same column.
   // --- 🔴 A select that holds several choices -------------------------------
   // The field-group generator switches a hasMany select to a JSON column; the descriptor does not
   // look at `hasMany` for a select at all and keeps describing a single string. Recorded against the

@@ -191,18 +191,24 @@ export function diffSnapshots(
   // new constraint. Creating the replacement first fails safe: the old index is
   // still there. The two indexes differ in name (idx_ vs uq_), so both can
   // exist for the moment between the statements.
-  const droppedColumnKeys = new Set(
+  const columnsAnIndexBlocks = new Set(
     columnOps
       .filter(op => op.type === "drop_column")
       .map(op => `${op.tableName}\u0000${op.columnName}`)
   );
+  // A column a reference conversion retypes counts too: MySQL refuses to retype an indexed column
+  // to text or JSON, and a generated migration runs its operations in this order. (A live apply's
+  // pre-resolution pass already drops indexes ahead of its conversions.)
+  for (const op of columnOps.filter(retypesForAReferenceConversion)) {
+    columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+  }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
   for (const op of dropIndexOps) {
-    const coversDroppedColumn =
+    const coversBlockedColumn =
       op.type === "drop_index" &&
       op.index.columns.some(column =>
-        droppedColumnKeys.has(`${op.tableName}\u0000${column}`)
+        columnsAnIndexBlocks.has(`${op.tableName}\u0000${column}`)
       );
     // A check or foreign key goes ahead of every column change as well: while
     // it exists it blocks dropping — on MySQL even retyping — a column it
@@ -211,7 +217,7 @@ export function diffSnapshots(
     // drop-then-add and the inverse still re-adds after re-creating columns.
     const isConstraintDrop =
       op.type === "drop_check" || op.type === "drop_foreign_key";
-    if (coversDroppedColumn || isConstraintDrop)
+    if (coversBlockedColumn || isConstraintDrop)
       dropIndexBeforeColumns.push(op);
     else dropIndexAfterAdds.push(op);
   }
@@ -242,13 +248,85 @@ export function diffSnapshots(
   );
 
   return [
-    ...constraintDrops,
+    ...keysDroppedBeforeConversions(constraintDrops, columnOps, prevByName),
     ...tableOps,
     ...indexDropsBeforeColumns,
     ...columnOps,
     ...addIndexOps,
     ...dropIndexAfterAdds,
   ];
+}
+
+/**
+ * Whether `op` retypes a column to convert it between one reference and a list. A conversion that
+ * keeps the type (SQLite's text) rewrites values only, and blocks on no key or index.
+ */
+function retypesForAReferenceConversion(
+  op: Operation
+): op is ChangeColumnTypeOp {
+  return (
+    op.type === "change_column_type" &&
+    op.conversion !== undefined &&
+    op.fromType !== op.toType
+  );
+}
+
+/**
+ * `drops` with each foreign key on a column `columnOps` converts between one reference and a list
+ * marked to run ahead of that conversion: the conversion runs before either apply route, and no
+ * database retypes a column a key would then break. A conversion that keeps the column's type
+ * (SQLite's text) rewrites values only, so its key is left to the apply route, which on SQLite
+ * drops one only by rebuilding the table.
+ *
+ * A key over a column becoming a list is dropped even where the desired side tracks no keys, as a
+ * table built from config does: no key to one row can hold a list, so the key cannot survive the
+ * conversion, and left in place it refuses the retype (PostgreSQL) or is put back over the list
+ * (MySQL's lift around a type change). Read from the previous side, which is where it exists.
+ */
+function keysDroppedBeforeConversions(
+  drops: readonly Operation[],
+  columnOps: readonly Operation[],
+  prevByName: ReadonlyMap<string, TableSpec>
+): Operation[] {
+  const retyped = columnOps.filter(retypesForAReferenceConversion);
+  const converted = new Set(
+    retyped.map(op => `${op.tableName}.${op.columnName}`)
+  );
+  const marked = drops.map(op =>
+    op.type === "drop_foreign_key" &&
+    op.foreignKey.columns.some(column =>
+      converted.has(`${op.tableName}.${column}`)
+    )
+      ? { ...op, beforeConversion: true as const }
+      : op
+  );
+  const alreadyDropped = new Set(
+    drops.flatMap(op =>
+      op.type === "drop_foreign_key"
+        ? [`${op.tableName}.${op.foreignKey.name}`]
+        : []
+    )
+  );
+  const toList = new Set(
+    retyped
+      .filter(op => op.conversion === "referenceList")
+      .map(op => `${op.tableName}.${op.columnName}`)
+  );
+  const keysOverLists: Operation[] = [...prevByName.values()].flatMap(table =>
+    (table.foreignKeys ?? [])
+      .filter(
+        fk =>
+          !alreadyDropped.has(`${table.name}.${fk.name}`) &&
+          fk.columns.some(column => toList.has(`${table.name}.${column}`))
+      )
+      .map(fk => ({
+        type: "drop_foreign_key" as const,
+        tableName: table.name,
+        foreignKey: fk,
+        beforeConversion: true as const,
+      }))
+  );
+  return [...marked, ...keysOverLists];
 }
 
 /**
@@ -428,7 +506,9 @@ function columnTypeChange(
   // ALONE went the other way and let a narrowing through unseen, because
   // `numeric(10,2)` and `numeric(5,1)` reduce to one token. See
   // ./declared-size.ts.
-  if (!typesDiffer(prevC, curC)) return undefined;
+  if (!typesDiffer(prevC, curC)) {
+    return referenceSwitchInPlace(tableName, columnName, prevC, curC);
+  }
 
   return {
     type: "change_column_type",
@@ -455,8 +535,45 @@ function columnTypeChange(
     // previous snapshot can carry the same flag, and what matters is what the column is becoming.
     ...(curC.holdsReferenceList === true
       ? { conversion: "referenceList" as const }
-      : {}),
+      : curC.holdsSingleReference === true && isJsonColumnType(prevC.type)
+        ? // A relation switched from many related entries to one: the list's one id is kept.
+          { conversion: "referenceScalar" as const }
+        : {}),
   };
+}
+
+/**
+ * A relation switched between one related entry and many on a column whose type stays the same
+ * (SQLite's text): no type changes, but the stored values must, from a bare id to a one-item list
+ * or back. Planned as the type change's own conversion, so it is ordered, refused and run exactly as
+ * the dialects that retype the column run theirs.
+ */
+function referenceSwitchInPlace(
+  tableName: string,
+  columnName: string,
+  prevC: ColumnSpec,
+  curC: ColumnSpec
+): ChangeColumnTypeOp | undefined {
+  if (curC.switchesReferenceStorage === undefined) return undefined;
+  return {
+    type: "change_column_type",
+    tableName,
+    columnName,
+    fromType: renderedType(prevC),
+    toType: renderedType(curC),
+    nullable: curC.nullable,
+    fromNullable: prevC.nullable,
+    conversion:
+      curC.switchesReferenceStorage === "toList"
+        ? "referenceList"
+        : "referenceScalar",
+  };
+}
+
+/** Whether a column type holds JSON: what a relation's list of references is stored as. */
+function isJsonColumnType(type: string): boolean {
+  const t = type.trim().toLowerCase();
+  return t === "json" || t === "jsonb";
 }
 
 function diffColumns(

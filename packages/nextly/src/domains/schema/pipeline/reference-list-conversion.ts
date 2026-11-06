@@ -20,7 +20,9 @@
  * On PostgreSQL it is one statement, so the column converts whole or not at all. On MySQL it is
  * three (widen, wrap each bare value in a list, retype), and MySQL commits each DDL statement as it
  * runs. Each step can run again over its own result, so a run stopped part-way finishes on the next
- * one; and a column left as `text` holding JSON lists is already read correctly.
+ * one; and a column left as `text` holding JSON lists is already read correctly. On SQLite the
+ * column is text either way, so a relation switched between one entry and many has only its values
+ * rewritten, by one statement that can also run again over its own result.
  *
  * @module domains/schema/pipeline/reference-list-conversion
  */
@@ -148,11 +150,66 @@ export function referenceConversionStatements(
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
     ];
   }
-  // SQLite stores a JSON list as text, the type such a column already has, so the diff never plans
-  // a type change for it; reaching here means a caller built the operation by hand.
-  throw NextlyError.internal({
+  if (dialect === "sqlite") {
+    return [sqliteReferenceListRewrite(op.tableName, op.columnName)];
+  }
+  throw unsupportedDialect(op);
+}
+
+/**
+ * SQLite's list conversion: the column is text before and after, so only the values change. A JSON
+ * list stays as it is and anything else becomes a one-item list, which makes the statement safe to
+ * run again over its own result. Nested so `json_type` only reads a value `json_valid` accepted. A
+ * JSON string (an id the serializer quoted) is wrapped without its quotes; any other value is
+ * wrapped as the text it is, so an id that reads as a number stays a string, as PostgreSQL keeps it.
+ */
+function sqliteReferenceListRewrite(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "sqlite");
+  const c = quoteIdent(columnName, "sqlite");
+  return (
+    `UPDATE ${table} SET ${c} = CASE ` +
+    `WHEN trim(${c}) = '' THEN json_array() ` +
+    `WHEN json_valid(${c}) THEN CASE WHEN json_type(${c}) = 'array' THEN ${c} ` +
+    `WHEN json_type(${c}) = 'text' THEN json_array(json(${c})) ELSE json_array(${c}) END ` +
+    `ELSE json_array(${c}) END ` +
+    `WHERE ${c} IS NOT NULL`
+  );
+}
+
+/**
+ * SQLite's way back to one reference: a one-item list becomes its id, an empty list no reference,
+ * and a JSON string (an id the serializer quoted) the id without its quotes, as PostgreSQL and MySQL
+ * unquote it. Only lists of at most one id are rewritten, so a longer list is never cut down to its
+ * first id; an apply refuses before anything runs while a row holds one. What the statement leaves
+ * is neither a JSON list nor a JSON string, so it is safe to run again.
+ */
+function sqliteReferenceScalarRewrite(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "sqlite");
+  const c = quoteIdent(columnName, "sqlite");
+  return (
+    `UPDATE ${table} SET ${c} = CASE ` +
+    `WHEN json_type(${c}) = 'text' THEN json_extract(${c}, '$') ` +
+    `WHEN json_array_length(${c}) = 0 THEN NULL ` +
+    `ELSE json_extract(${c}, '$[0]') END ` +
+    // A CASE rather than AND: SQLite does not promise to skip `json_type` when `json_valid` is
+    // false, and `json_type` raises on text that is not JSON, such as a bare id.
+    `WHERE ${c} IS NOT NULL AND CASE WHEN json_valid(${c}) ` +
+    `THEN json_type(${c}) = 'text' OR (json_type(${c}) = 'array' AND json_array_length(${c}) <= 1) ` +
+    `ELSE 0 END`
+  );
+}
+
+/** A conversion asked of a dialect this module has no statements for. */
+function unsupportedDialect(op: ChangeColumnTypeOp): NextlyError {
+  return NextlyError.internal({
     logContext: {
-      reason: "a reference-list conversion has no SQLite form",
+      reason: "a reference-list conversion has no form on this dialect",
       table: op.tableName,
       column: op.columnName,
     },
@@ -201,11 +258,8 @@ function referenceScalarStatements(
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
     ];
   }
-  throw NextlyError.internal({
-    logContext: {
-      reason: "a reference-list conversion has no SQLite form",
-      table: op.tableName,
-      column: op.columnName,
-    },
-  });
+  if (dialect === "sqlite") {
+    return [sqliteReferenceScalarRewrite(op.tableName, op.columnName)];
+  }
+  throw unsupportedDialect(op);
 }

@@ -10,7 +10,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types";
+import type { ChangeColumnTypeOp, Operation } from "../diff/types";
 import type {
   Classifier,
   ClassificationLevel,
@@ -45,6 +45,16 @@ export function nonEmptyValuesOf(event: ClassifierEvent): number | undefined {
   return "nonEmptyValues" in event && typeof event.nonEmptyValues === "number"
     ? event.nonEmptyValues
     : undefined;
+}
+
+/**
+ * Whether a column-type change asks to be confirmed. A widening is provably safe. A column
+ * becoming a relation's list of references keeps every value, each id as a one-item list
+ * (`referenceList`), so there is nothing to confirm either. The way back to one reference still
+ * asks: a row holding several is refused, and the switch is the author's to confirm.
+ */
+function typeChangeAsks(op: ChangeColumnTypeOp, widening: boolean): boolean {
+  return !widening && op.conversion !== "referenceList";
 }
 
 export class RealClassifier implements Classifier {
@@ -134,7 +144,7 @@ export class RealClassifier implements Classifier {
             longer,
           });
         }
-        if (!widening) {
+        if (typeChangeAsks(op, widening)) {
           events.push({
             id: formatEventId("type_change", op.tableName, op.columnName),
             kind: "type_change",

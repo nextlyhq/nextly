@@ -342,3 +342,53 @@ describe("DynamicCollectionSchemaService.generateMigrationSQL — empty fields",
     }
   );
 });
+
+describe("DynamicCollectionSchemaService — a relationship holding a list gets no key", () => {
+  // The create gives a relationship holding a list (hasMany, or several targets) a JSON column and
+  // no foreign key. Adding one to an existing table, and predicting what a create installed, must
+  // answer the same: a key from a JSON column to one row is refused by the database, and a
+  // predicted key a later edit drops was never there.
+  const single = {
+    name: "author",
+    type: "relationship",
+    options: { target: "authors", relationType: "manyToOne" },
+  } as FieldDefinition;
+  const many = {
+    name: "writers",
+    type: "relationship",
+    hasMany: true,
+    options: { target: "authors", relationType: "manyToOne" },
+  } as FieldDefinition;
+  const several = {
+    name: "subject",
+    type: "relationship",
+    relationTo: ["authors", "tags"],
+    options: { target: "authors", relationType: "manyToOne" },
+  } as FieldDefinition;
+  const title = { name: "title", type: "text" } as FieldDefinition;
+
+  for (const dialect of ["postgresql", "mysql"] as const) {
+    it(`adds the column without a key on ${dialect}, and keys a single relationship`, () => {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateAlterTableMigration(
+        "dc_posts",
+        [title],
+        [title, single, many, several]
+      );
+      expect(sql).toMatch(/FOREIGN KEY \([`"]author[`"]\)/);
+      expect(sql).not.toMatch(/FOREIGN KEY \([`"]writers[`"]\)/);
+      expect(sql).not.toMatch(/FOREIGN KEY \([`"]subject[`"]\)/);
+    });
+
+    it(`predicts a key only for the single relationship on ${dialect}`, () => {
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const { foreignKeysByColumn } = service.plannedAttachments("dc_posts", [
+        title,
+        single,
+        many,
+        several,
+      ]);
+      expect([...foreignKeysByColumn.keys()]).toEqual(["author"]);
+    });
+  }
+});

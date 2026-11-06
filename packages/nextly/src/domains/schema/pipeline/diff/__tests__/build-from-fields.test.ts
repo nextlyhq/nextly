@@ -863,8 +863,8 @@ describe("buildDesiredTableFromComponentFields - which columns hold a reference 
   });
 
   it("does not mark a column on SQLite, which converts no type into it", () => {
-    // SQLite keeps the list as text and has no form of the conversion, so a type change into the
-    // column there (an integer field becoming a many-to-many) stays with SQLite's own route.
+    // SQLite keeps the list as text, so no type changes into the column there (an integer field
+    // becoming a many-to-many stays with SQLite's own route).
     expect(
       buildDesiredTableFromComponentFields(
         "comp_hero",
@@ -886,5 +886,57 @@ describe("buildDesiredTableFromComponentFields - which columns hold a reference 
       hint({ type: "relationship", relationTo: ["tags", "posts"] })
     ).toBeUndefined();
     expect(hint({ type: "relationship", relationTo: "tags" })).toBeUndefined();
+  });
+});
+
+describe("buildDesiredTableFromFields - which collection columns a one-or-many switch converts", () => {
+  // The flags mark a type change into the column as a conversion between one reference and a list
+  // of them. A relation naming several targets holds `{ relationTo, value }` references, which
+  // neither conversion makes, so it is marked as neither.
+  const column = (
+    field: Record<string, unknown>,
+    dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
+  ): ColumnSpec | undefined =>
+    buildDesiredTableFromFields(
+      "dc_posts",
+      [{ name: "ref", ...field }] as never,
+      dialect,
+      { builtBy: "collection" }
+    ).columns.find(c => c.name === "ref");
+
+  it("marks a single-target hasMany as a list and a single relationship as one reference", () => {
+    for (const dialect of ["postgresql", "mysql"] as const) {
+      expect(
+        column(
+          { type: "relationship", relationTo: "tags", hasMany: true },
+          dialect
+        )?.holdsReferenceList
+      ).toBe(true);
+      expect(
+        column({ type: "relationship", relationTo: "tags" }, dialect)
+          ?.holdsSingleReference
+      ).toBe(true);
+    }
+  });
+
+  it("marks no relation naming several targets, one entry or many", () => {
+    for (const hasMany of [false, true]) {
+      const ref = column({
+        type: "relationship",
+        relationTo: ["tags", "posts"],
+        hasMany,
+      });
+      expect(ref?.holdsReferenceList).toBeUndefined();
+      expect(ref?.holdsSingleReference).toBeUndefined();
+    }
+  });
+
+  it("marks nothing on SQLite, where the column is text either way", () => {
+    const ref = column(
+      { type: "relationship", relationTo: "tags", hasMany: true },
+      "sqlite"
+    );
+    expect(ref?.holdsReferenceList).toBeUndefined();
+    expect(ref?.holdsSingleReference).toBeUndefined();
   });
 });

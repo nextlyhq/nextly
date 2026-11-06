@@ -59,8 +59,11 @@ export function kitRouteConstraintStatements(
   for (const op of ops) {
     switch (op.type) {
       case "drop_check":
-      case "drop_foreign_key":
         before.push(op);
+        break;
+      case "drop_foreign_key":
+        // A key ahead of a conversion is the pre-resolution pass's to drop, before the conversion.
+        if (op.beforeConversion !== true) before.push(op);
         break;
       case "add_check":
       case "add_foreign_key":

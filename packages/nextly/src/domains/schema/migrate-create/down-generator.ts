@@ -87,10 +87,14 @@ function invertOne(op: Operation, prev: NextlySchemaSnapshot): Operation {
         fromColumnDefault: op.columnDefault,
         // A list of references cannot be cast back to the scalar type it came from (PostgreSQL has
         // no cast from jsonb to uuid at all), so the DOWN of that conversion reads each list back as
-        // the id it holds, and refuses a row holding more than one.
+        // the id it holds, and refuses a row holding more than one. The other way too: the DOWN of
+        // a relation switched from many related entries to one makes each id a one-item list
+        // again, which no cast from the scalar type does.
         ...(op.conversion === "referenceList"
           ? { conversion: "referenceScalar" as const }
-          : {}),
+          : op.conversion === "referenceScalar"
+            ? { conversion: "referenceList" as const }
+            : {}),
       };
     case "change_column_nullable":
       return {

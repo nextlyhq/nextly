@@ -41,6 +41,7 @@ import { stringNarrowingLimit } from "../classifier/type-widening";
 import { introspectLiveColumns } from "../diff/introspect-live";
 import {
   isPreResolutionOp,
+  isReferenceConversion,
   isReferenceListConversion,
   type ChangeColumnTypeOp,
   type Operation,
@@ -362,17 +363,21 @@ function orderForExecution(ops: Operation[]): Operation[] {
   const dropColumns: Operation[] = [];
   const dropTables: Operation[] = [];
   const referenceListConversions: Operation[] = [];
+  const keyDrops: Operation[] = [];
   for (const op of ops) {
-    if (op.type === "rename_table") renameTables.push(op);
+    if (op.type === "drop_foreign_key") keyDrops.push(op);
+    else if (op.type === "rename_table") renameTables.push(op);
     else if (op.type === "rename_column") renameColumns.push(op);
     else if (op.type === "drop_index") dropIndexes.push(op);
     else if (op.type === "drop_column") dropColumns.push(op);
     else if (op.type === "drop_table") dropTables.push(op);
-    else if (isReferenceListConversion(op)) referenceListConversions.push(op);
+    else if (isReferenceConversion(op)) referenceListConversions.push(op);
   }
   // Conversions last: they name a column by the name it has once every rename has run, on a table
   // no drop removes, and they must run before the route's own DDL, which this whole pass precedes.
   return [
+    // A key on a column converted below, first: dropping a constraint changes no name or row.
+    ...keyDrops,
     ...renameTables,
     ...renameColumns,
     ...dropIndexes,
@@ -382,7 +387,7 @@ function orderForExecution(ops: Operation[]): Operation[] {
     // Last, like the conversions and for the same reason: a MySQL string narrowing
     // (`isMysqlStringNarrowing`) names its column as every rename has left it.
     ...ops.filter(
-      op => op.type === "change_column_type" && !isReferenceListConversion(op)
+      op => op.type === "change_column_type" && !isReferenceConversion(op)
     ),
   ];
 }
@@ -544,7 +549,7 @@ async function runInStrictMysqlSession(
 // A reference-list conversion is asked for its statement LIST: on MySQL it is three statements, and
 // the driver runs one per call, so the joined form a migration file carries would be refused.
 function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
-  if (isReferenceListConversion(op)) {
+  if (isReferenceConversion(op)) {
     return referenceConversionStatements(op, dialect);
   }
   return [generateSQL(op, dialect)];
