@@ -122,6 +122,47 @@ describe("plugin services inside a named query's frame", () => {
     expect(evaluated).toBe(1);
   });
 
+  it("guard a handle a service method hands out, kept outside the frame and used in it", async () => {
+    class Repository {
+      readonly #rows = ["SENTINEL"];
+      read(): string[] {
+        return this.#rows;
+      }
+    }
+    registerPluginService(PLUGIN, "factory", () => ({
+      repository: () => new Repository(),
+      reader: () => () => ["SENTINEL"],
+      later: () => Promise.resolve(new Repository()),
+      data: () => ({ rows: ["plain"] }),
+    }));
+    const service = services().factory as unknown as {
+      repository: () => Repository;
+      reader: () => () => string[];
+      later: () => Promise<Repository>;
+      data: () => { rows: string[] };
+    };
+    // Taken outside the frame, as a query's module might keep them.
+    const repository = service.repository();
+    const reader = service.reader();
+    const later = await service.later();
+    const frame = openNamedQueryFrame("notes.all");
+    for (const call of [
+      () => repository.read(),
+      () => reader(),
+      () => later.read(),
+    ]) {
+      expect(outcome(() => frame.run(call))).toBe("named-query-trusted-read");
+    }
+    // Outside the frame each works as it always did, a class's private
+    // state included, and plain data passes through as it is.
+    expect(repository.read()).toEqual(["SENTINEL"]);
+    expect(reader()).toEqual(["SENTINEL"]);
+    expect(later.read()).toEqual(["SENTINEL"]);
+    const data = service.data();
+    expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+    expect(data).toEqual({ rows: ["plain"] });
+  });
+
   it("answer through the frame's own door", () => {
     const frame = openNamedQueryFrame("notes.all");
     expect(frame.run(() => frame.read(() => services().store?.read()))).toEqual(

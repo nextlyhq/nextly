@@ -95,6 +95,23 @@ describe.each(getConfiguredTestDialects())(
       expect(await inside(() => t.nextly.users.find({}))).toBe(
         "named-query-trusted-read"
       );
+      // The instance's own services, reached through its getters: refused
+      // before the getter hands the service out, so a trusted list read
+      // made through one by mistake never starts.
+      expect(
+        await inside(async () =>
+          t.nextly.collectionsHandler.listEntries({
+            collectionName: SLUG,
+            overrideAccess: true,
+          } as never)
+        )
+      ).toBe("named-query-trusted-read");
+      expect(
+        await inside(async () => {
+          void t.nextly.userService;
+          await Promise.resolve();
+        })
+      ).toBe("named-query-trusted-read");
       // The public reader called by code inside the frame, not through the
       // frame's door, is refused too.
       const reader = createPublicReader(t.nextly);
