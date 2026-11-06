@@ -12,6 +12,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { isWriteIntegrityFailure } from "../../shared/write-integrity";
 import { HookRegistry } from "../hook-registry";
 import {
+  detachedContext,
   MAX_IN_TRANSACTION_DEPTH,
   runInTransactionPhase,
 } from "../in-transaction-phase";
@@ -45,7 +46,11 @@ describe("the in-transaction store", () => {
     registry.registerInTransaction("orders", recorder("own-2", seen));
     registry.registerInTransaction("notes", recorder("other", seen));
 
-    await runInTransactionPhase(registry, tx, write);
+    await runInTransactionPhase(
+      registry.inTransactionEntries("orders"),
+      tx,
+      write
+    );
 
     expect(seen).toEqual(["all:orders", "own-1:orders", "own-2:orders"]);
     expect(registry.hasInTransaction("orders")).toBe(true);
@@ -130,12 +135,53 @@ describe("runInTransactionPhase", () => {
     });
     const shared: Record<string, unknown> = { shared: 1 };
 
-    await runInTransactionPhase(registry, tx, { ...write, context: shared });
+    await runInTransactionPhase(registry.inTransactionEntries("orders"), tx, {
+      ...write,
+      context: shared,
+    });
 
     expect(handed[0].context).toBe(handed[1].context);
     expect(handed[0].context).not.toBe(shared);
     expect(Object.isFrozen(handed[0].context)).toBe(true);
     expect(handed[0].context).toEqual({ shared: 1 });
+  });
+
+  it("hands a detached, deeply frozen copy of plain data, leaving out the rest", () => {
+    class Marker {
+      label = "instance";
+    }
+    const loop: Record<string, unknown> = { name: "loop" };
+    loop.self = loop;
+    const shared: Record<string, unknown> = {
+      nested: { count: 1, tags: ["a", { deep: true }] },
+      bare: Object.assign(Object.create(null) as object, { kept: 1 }),
+      when: new Date(0),
+      lookup: new Map([["k", 1]]),
+      instance: new Marker(),
+      callback: () => undefined,
+      mixed: [1, new Date(0), "x"],
+      loop,
+    };
+
+    const copy = detachedContext(shared);
+
+    expect(copy).toEqual({
+      nested: { count: 1, tags: ["a", { deep: true }] },
+      bare: { kept: 1 },
+      mixed: [1, undefined, "x"],
+      loop: { name: "loop" },
+    });
+    const nested = copy.nested as { count: number; tags: unknown[] };
+    expect(nested).not.toBe(shared.nested);
+    expect(Object.isFrozen(nested)).toBe(true);
+    expect(Object.isFrozen(nested.tags)).toBe(true);
+    expect(Object.isFrozen(nested.tags[1])).toBe(true);
+    expect(() => {
+      nested.count = 2;
+    }).toThrow(TypeError);
+    expect(shared.nested).toEqual({ count: 1, tags: ["a", { deep: true }] });
+    // An empty context costs nothing: one shared frozen object.
+    expect(detachedContext({})).toBe(detachedContext({}));
   });
 
   it("throws a handler's typed error as it was, marked to abort a batch", async () => {
@@ -145,9 +191,11 @@ describe("runInTransactionPhase", () => {
     registry.registerInTransaction("orders", () => Promise.reject(refusal));
     registry.registerInTransaction("orders", recorder("later", later));
 
-    const caught = await runInTransactionPhase(registry, tx, write).catch(
-      (error: unknown) => error
-    );
+    const caught = await runInTransactionPhase(
+      registry.inTransactionEntries("orders"),
+      tx,
+      write
+    ).catch((error: unknown) => error);
 
     expect(caught).toBe(refusal);
     expect(isWriteIntegrityFailure(caught)).toBe(true);
@@ -160,9 +208,11 @@ describe("runInTransactionPhase", () => {
     const broken = new Error("broken");
     registry.registerInTransaction("orders", () => Promise.reject(broken));
 
-    const caught = await runInTransactionPhase(registry, tx, write).catch(
-      (error: unknown) => error
-    );
+    const caught = await runInTransactionPhase(
+      registry.inTransactionEntries("orders"),
+      tx,
+      write
+    ).catch((error: unknown) => error);
 
     expect(NextlyError.is(caught)).toBe(true);
     expect(caught).toMatchObject({ statusCode: 500, cause: broken });
@@ -176,12 +226,18 @@ describe("runInTransactionPhase", () => {
     let depth = 0;
     registry.registerInTransaction("orders", async () => {
       depth += 1;
-      await runInTransactionPhase(registry, tx, write);
+      await runInTransactionPhase(
+        registry.inTransactionEntries("orders"),
+        tx,
+        write
+      );
     });
 
-    const caught = await runInTransactionPhase(registry, tx, write).catch(
-      (error: unknown) => error
-    );
+    const caught = await runInTransactionPhase(
+      registry.inTransactionEntries("orders"),
+      tx,
+      write
+    ).catch((error: unknown) => error);
 
     expect(depth).toBe(MAX_IN_TRANSACTION_DEPTH);
     expect(caught).toMatchObject({

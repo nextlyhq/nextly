@@ -307,6 +307,11 @@ export interface PluginHookRegistry {
    * sharing one transaction, a handler that throws aborts the whole batch,
    * whatever `stopOnError` says.
    *
+   * A write takes its set of handlers once, so one registered while a write is
+   * under way first runs on the next write. The shared hook `context` it is
+   * handed is a deeply frozen copy of plain data only (see
+   * `InTransactionWrite.context`).
+   *
    * In development, a handler that makes an outbound HTTP call is warned
    * about once: the call is not undone with a discarded attempt.
    *

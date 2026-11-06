@@ -36,7 +36,10 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { runInTransactionPhaseFor } from "../../../hooks/in-transaction-call";
+import {
+  inTransactionHandlersFor,
+  runInTransactionPhaseFor,
+} from "../../../hooks/in-transaction-call";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -2442,9 +2445,11 @@ export class SinglePublishAllService extends BaseService {
 
   /**
    * The in-transaction phase for this publish, as operation `update` under
-   * the Single's hook namespace. The documents are read only once a handler
-   * is known to be registered, so a publish nobody handles reads nothing more.
-   * No hook context is shared on this path, so the handler's is empty.
+   * the Single's hook namespace. The handlers are asked for once, and the
+   * documents read only when that set is not empty, so a publish nobody
+   * handles reads nothing more, and the set that decided the read is the one
+   * that runs. No hook context is shared on this path, so the handler's is
+   * empty.
    */
   private async runInTransactionPhase(
     tx: TransactionContext,
@@ -2452,10 +2457,12 @@ export class SinglePublishAllService extends BaseService {
     user: PublishAllSingleLocalesOptions["user"]
   ): Promise<void> {
     const registry = this.hookRegistry;
+    if (!registry) return;
     const collection = getSingleHookCollection(args.plan.slug);
-    if (!registry?.hasInTransaction(collection)) return;
+    const handlers = inTransactionHandlersFor(registry, collection);
+    if (handlers.length === 0) return;
     const { data, previous } = await this.publishDocuments(tx, args);
-    await runInTransactionPhaseFor(registry, tx, {
+    await runInTransactionPhaseFor(handlers, tx, {
       collection,
       operation: "update",
       id: String(args.plan.existingDoc.id),

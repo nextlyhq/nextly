@@ -87,10 +87,12 @@ import { getEventBus } from "../../../events/event-bus";
 // same way.
 import {
   type InTransactionCall,
+  inTransactionHandlersFor,
   markedDraft,
   runInTransactionPhaseFor,
   writtenByUpdate,
 } from "../../../hooks/in-transaction-call";
+import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
 import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
@@ -2512,6 +2514,8 @@ export class CollectionMutationService extends BaseService {
       actor?: RequestActor;
       /** The locale this create's translatable values were written in, if any. */
       localeTag?: string;
+      /** The in-transaction handlers this write took, which will be run. */
+      inTransactionHandlers: InTransactionHandlerSet;
     }
   ): Promise<{
     eventRecorded: boolean;
@@ -2555,7 +2559,7 @@ export class CollectionMutationService extends BaseService {
       getWebhookEmitSpec("collection", args.collectionName) !== undefined ||
       // An in-transaction handler is handed the whole document, as on the
       // create that opens its own transaction.
-      this.hookService.hookRegistry.hasInTransaction(args.collectionName);
+      args.inTransactionHandlers.length > 0;
     const { documentParts: createdParts, document: createdDocument } =
       await this.readTxDocumentParts(tx, {
         collectionName: args.collectionName,
@@ -7532,6 +7536,10 @@ export class CollectionMutationService extends BaseService {
         data: componentFieldData,
         locale: params.locale,
       });
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
@@ -7857,7 +7865,7 @@ export class CollectionMutationService extends BaseService {
         // Last in the transaction: the entry, its field groups, version,
         // history and outbox event are all written, so a handler sees them
         // and what it writes commits or rolls back with them.
-        await this.runInTransactionPhase(tx, {
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
           collection: params.collectionName,
           operation: "create",
           id: entry.id as string,
@@ -9096,6 +9104,11 @@ export class CollectionMutationService extends BaseService {
       // for its event payload rather than falling back to the stale pre-read.
       const needsFreshParent = !!versionsConfig?.enabled || hasMainStatus;
 
+      // The in-transaction handlers, asked once for this write: a retried
+      // attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       // Retry the whole publish+capture transaction on a version_no allocation
       // race, mirroring updateEntry.
       await this.adapter.transaction(async tx => {
@@ -10042,7 +10055,7 @@ export class CollectionMutationService extends BaseService {
         // every language is an update of the entry, and is retried as one.
         // The documents are the ones the outbox event above carries. No hook
         // context is shared on this path, so the handler's is empty.
-        await this.runInTransactionPhase(tx, {
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
           collection: params.collectionName,
           operation: "update",
           id: params.entryId,
@@ -14016,6 +14029,11 @@ export class CollectionMutationService extends BaseService {
       // with the merged draft's. Never written in place, only rebound, so the
       // reference is the caller's split for every attempt.
       const baseLocalizedUpdate = localizedUpdate;
+      // The in-transaction handlers, asked once for this write: a
+      // retried attempt runs the same set.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         recorded = false;
         // Reset the payloads the promote fold rebinds, so a retried attempt
@@ -15497,7 +15515,7 @@ export class CollectionMutationService extends BaseService {
         // Last in the transaction, and so again on each retried attempt,
         // which is why every handler's writes go through this `tx`: a
         // discarded attempt's roll back with it.
-        await this.runInTransactionPhase(tx, {
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
           collection: params.collectionName,
           operation: "update",
           id: params.entryId,
@@ -17515,6 +17533,10 @@ export class CollectionMutationService extends BaseService {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
         mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
+      // The in-transaction handlers, asked once for this write.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -17651,7 +17673,7 @@ export class CollectionMutationService extends BaseService {
 
         // Last in the transaction, with the removed document: a handler that
         // throws keeps the entry, and what it writes goes with the delete.
-        await this.runInTransactionPhase(tx, {
+        await this.runInTransactionPhase(tx, inTransactionHandlers, {
           collection: params.collectionName,
           operation: "delete",
           id: params.entryId,
@@ -18278,10 +18300,16 @@ export class CollectionMutationService extends BaseService {
         return entry;
       });
 
+      // The in-transaction handlers, asked once for this write: the same set
+      // decides how much of the document is assembled and which handlers run.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
       // Junction rows, the version snapshot, the outbox event and the
       // revalidation intent, all on the caller's transaction.
       const createEffects = await this.recordCreateSideEffects(tx, {
         collectionName: params.collectionName,
+        inTransactionHandlers,
         tableName,
         entry: entry as Record<string, unknown>,
         collection,
@@ -18301,7 +18329,7 @@ export class CollectionMutationService extends BaseService {
       // after-hooks this path runs inside it. Run whether or not hooks are:
       // see `runInTransactionPhase`. A handler's failure is thrown, not
       // softened, so the caller's transaction keeps nothing of this entry.
-      await this.runInTransactionPhase(tx, {
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
         collection: params.collectionName,
         operation: "create",
         id: (entry as { id: string }).id,
@@ -18431,20 +18459,35 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The in-transaction handlers a write runs, asked of the registry once per
+   * write. The write keeps the set and uses it both to decide how much of the
+   * document to assemble and to run the phase, so a handler registered in
+   * between waits for the next write instead of being handed a document
+   * assembled for none.
+   */
+  private inTransactionHandlersFor(
+    collection: string
+  ): InTransactionHandlerSet {
+    return inTransactionHandlersFor(this.hookService.hookRegistry, collection);
+  }
+
+  /**
    * The in-transaction phase for one write, run last on the write's own
-   * transaction (see `hooks/in-transaction-phase`).
+   * transaction (see `hooks/in-transaction-phase`), with the handlers the
+   * write took ({@link inTransactionHandlersFor}).
    *
-   * Asked of the registry first, so a write no handler is registered for
-   * loads nothing and does exactly what it did before the phase existed. It
-   * runs whether or not the write runs its hooks: what a handler writes keeps
-   * a plugin's rows in step with the entry, as the version and the outbox
-   * event do, and those are recorded under `skipHooks` too.
+   * A write no handler was registered for loads nothing and does exactly
+   * what it did before the phase existed. It runs whether or not the write
+   * runs its hooks: what a handler writes keeps a plugin's rows in step with
+   * the entry, as the version and the outbox event do, and those are recorded
+   * under `skipHooks` too.
    */
   private runInTransactionPhase(
     tx: TransactionContext,
+    handlers: InTransactionHandlerSet,
     call: InTransactionCall
   ): Promise<void> {
-    return runInTransactionPhaseFor(this.hookService.hookRegistry, tx, call);
+    return runInTransactionPhaseFor(handlers, tx, call);
   }
 
   /**
@@ -19419,10 +19462,12 @@ export class CollectionMutationService extends BaseService {
         actorForWrite(params.actor, params.user)
       );
       // An in-transaction handler is handed the whole document and the one
-      // before it, as on the update that opens its own transaction.
-      const handsInTransaction = this.hookService.hookRegistry.hasInTransaction(
+      // before it, as on the update that opens its own transaction. Asked
+      // once: the same set decides the assembly here and runs below.
+      const inTransactionHandlers = this.inTransactionHandlersFor(
         params.collectionName
       );
+      const handsInTransaction = inTransactionHandlers.length > 0;
       const needsRelations =
         !!versionsConfig?.enabled ||
         recordsActivity ||
@@ -19809,7 +19854,7 @@ export class CollectionMutationService extends BaseService {
 
       // Last of the write itself, on the caller's transaction, handed the
       // documents the outbox event carries; see the create path.
-      await this.runInTransactionPhase(tx, {
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
         collection: params.collectionName,
         operation: "update",
         id: entryId,
@@ -20339,7 +20384,10 @@ export class CollectionMutationService extends BaseService {
       });
       // Last of the write itself, still inside the window whose failure is
       // thrown: a handler that refuses the delete keeps the entry.
-      await this.runInTransactionPhase(tx, {
+      const inTransactionHandlers = this.inTransactionHandlersFor(
+        params.collectionName
+      );
+      await this.runInTransactionPhase(tx, inTransactionHandlers, {
         collection: params.collectionName,
         operation: "delete",
         id: entryId,

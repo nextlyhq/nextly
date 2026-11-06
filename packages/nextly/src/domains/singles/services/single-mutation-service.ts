@@ -39,6 +39,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import {
+  inTransactionHandlersFor,
   runInTransactionPhaseFor,
   writtenByUpdate,
 } from "../../../hooks/in-transaction-call";
@@ -2951,6 +2952,13 @@ export class SingleMutationService extends BaseService {
         locale: options.locale,
       });
 
+      // The in-transaction handlers, asked once for this save: the same set
+      // decides whether the documents are assembled and which handlers run,
+      // on every attempt.
+      const inTransactionHandlers = inTransactionHandlersFor(
+        this.hookRegistry,
+        hookCollection
+      );
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -4004,7 +4012,7 @@ export class SingleMutationService extends BaseService {
           const assembleDocuments = this.assemblesSaveDocuments(
             recordingEnabled,
             actorForWrite(options.actor ?? null, options.user),
-            hookCollection
+            inTransactionHandlers.length > 0
           );
 
           const previousDoc =
@@ -5312,7 +5320,7 @@ export class SingleMutationService extends BaseService {
           // the documents the outbox event carries, or for a held edit the
           // pending draft, marked. A Single is only ever updated, and its
           // handlers are registered under its hook namespace (`single:<slug>`).
-          await runInTransactionPhaseFor(this.hookRegistry, tx, {
+          await runInTransactionPhaseFor(inTransactionHandlers, tx, {
             collection: hookCollection,
             operation: "update",
             id: String(existingDoc.id),
@@ -5601,18 +5609,17 @@ export class SingleMutationService extends BaseService {
    * Whether a save assembles its documents in read shape: for the outbox
    * event, for the activity trail whenever it will record the save (it names
    * the fields a save changed by comparing them), and for an in-transaction
-   * handler, which is handed both. Otherwise the raw row stands in, and the
-   * per-component reads are skipped.
+   * handler, which is handed both (`handsInTransaction`: the save took at
+   * least one). Otherwise the raw row stands in, and the per-component reads
+   * are skipped.
    */
   private assemblesSaveDocuments(
     recordingEnabled: boolean,
     actor: ReturnType<typeof actorForWrite>,
-    hookCollection: string
+    handsInTransaction: boolean
   ): boolean {
     return (
-      recordingEnabled ||
-      willRecordSingleActivity(actor) ||
-      this.hookRegistry.hasInTransaction(hookCollection)
+      recordingEnabled || willRecordSingleActivity(actor) || handsInTransaction
     );
   }
 
