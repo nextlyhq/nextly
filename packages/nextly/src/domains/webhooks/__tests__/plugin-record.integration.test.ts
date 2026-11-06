@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   definePlugin,
@@ -28,10 +29,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { WebhookEndpointRegistry } from "../endpoint-registry";
-import { fanOutDueEvents } from "../fan-out";
-import type { WebhookDeliveryQueryService } from "../services/webhook-delivery-query-service";
-import type { WebhookEndpointService } from "../services/webhook-endpoint-service";
+import {
+  WebhookEndpointRegistry,
+  type WebhookEndpointReader,
+} from "../endpoint-registry";
+import { fanOutDueEvents, type FanOutDatabase } from "../fan-out";
 import type { FilterSpec, WebhookEventSubscription } from "../types";
 
 const PAID = "shop.order.paid";
@@ -95,9 +97,7 @@ async function endpoint(
   t: TestNextly,
   eventTypes: WebhookEventSubscription[]
 ): Promise<string> {
-  const service = t.getService<WebhookEndpointService>(
-    "webhookEndpointService"
-  );
+  const service = t.getService("webhookEndpointService");
   const { endpoint: created } = await service.createEndpoint(
     { name: eventTypes.join(","), url: PUBLIC_URL, eventTypes },
     null
@@ -122,11 +122,17 @@ async function scopeTo(
   );
 }
 
-/** One fan-out pass, through a registry built fresh so it reads every endpoint as stored. */
-function fanOut(t: TestNextly) {
-  const registry = new WebhookEndpointRegistry(t.adapter);
+/**
+ * One fan-out pass, as the drain makes it, through a registry built fresh so
+ * it reads every endpoint as stored. The adapter is read from the container
+ * under the surfaces the drain types it as, as its registration does.
+ */
+function fanOut() {
+  const registry = new WebhookEndpointRegistry(
+    container.get<WebhookEndpointReader>("adapter")
+  );
   return fanOutDueEvents({
-    db: t.adapter,
+    db: container.get<FanOutDatabase>("adapter"),
     loadEndpoints: () => registry.getEnabledEndpoints(),
   });
 }
@@ -198,7 +204,7 @@ describe.each(getConfiguredTestDialects())(
         id: "ord_1",
         data: { total: 42 },
       });
-      await fanOut(t);
+      await fanOut();
 
       const delivered = await deliveredIds(t);
       expect(delivered.get(paid)).toEqual(["ord_1"]);
@@ -238,7 +244,7 @@ describe.each(getConfiguredTestDialects())(
           tx,
         });
       });
-      await fanOut(t);
+      await fanOut();
 
       expect((await deliveredIds(t)).get(paid)).toEqual(["ord_committed"]);
       expect((await events(t)).map(row => row.type)).toEqual([PAID]);
@@ -256,10 +262,10 @@ describe.each(getConfiguredTestDialects())(
         collection: "shop",
         data: { title: "A shop entry" },
       });
-      await fanOut(t);
+      await fanOut();
 
       expect((await deliveredIds(t)).get(scoped)).toEqual([
-        String((entry as { id: unknown }).id),
+        String(entry.item.id),
       ]);
     });
 
@@ -330,10 +336,10 @@ describe.each(getConfiguredTestDialects())(
         id: "sub_1",
         data: { plan: "yearly" },
       });
-      await fanOut(t);
+      await fanOut();
 
       const { items } = await t
-        .getService<WebhookDeliveryQueryService>("webhookDeliveryQueryService")
+        .getService("webhookDeliveryQueryService")
         .listDeliveries(subscribed, { page: 1, limit: 10 });
       expect(items.map(item => [item.eventType, item.resource])).toEqual([
         [

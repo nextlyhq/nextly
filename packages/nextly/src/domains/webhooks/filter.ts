@@ -59,7 +59,7 @@ export function matchesFilter(
   if (
     eventTypes != null &&
     eventTypes.length > 0 &&
-    !eventTypes.includes(envelope.type)
+    !eventTypes.some(type => type === envelope.type)
   ) {
     return false;
   }

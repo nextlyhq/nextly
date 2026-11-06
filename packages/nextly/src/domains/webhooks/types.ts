@@ -138,13 +138,16 @@ export type WebhookResource =
        * An event a plugin recorded, of a type it declares. `plugin` is its
        * admin slug. Never a `collection`, so a collection-scoped endpoint
        * never receives one, even from a plugin slugged as a collection is.
+       * `locale` is optional as on every other kind, so code that adds a
+       * language to any resource still types; `ctx.webhooks.record` sets
+       * none.
        */
       kind: "plugin";
       plugin: string;
       collection?: never;
       slug?: never;
       id?: string;
-      locale?: never;
+      locale?: string;
     };
 
 /** Who triggered the event. */

@@ -174,11 +174,12 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
  * save can append several Single events (an update, a publish, one per
  * language swept) and the trail records the save, not the events.
  */
-const ACTIVITY_ACTIONS: Partial<Record<WebhookEventType, ActivityLogAction>> = {
-  "entry.created": "create",
-  "entry.updated": "update",
-  "entry.deleted": "delete",
-};
+const ACTIVITY_ACTIONS: ReadonlyMap<RecordedEventType, ActivityLogAction> =
+  new Map<WebhookEventType, ActivityLogAction>([
+    ["entry.created", "create"],
+    ["entry.updated", "update"],
+    ["entry.deleted", "delete"],
+  ]);
 
 /**
  * Record the mutation's activity entry, ahead of the outbox gates.
@@ -193,7 +194,7 @@ async function recordActivity(
   db: () => ActivityWriteDb,
   args: RecordMutationEventArgs
 ): Promise<void> {
-  const action = ACTIVITY_ACTIONS[args.type];
+  const action = ACTIVITY_ACTIONS.get(args.type);
   // Held in a const so the narrowing to an entry reaches the callback below.
   const resource = args.resource;
   if (!action || resource.kind !== "entry") return;
