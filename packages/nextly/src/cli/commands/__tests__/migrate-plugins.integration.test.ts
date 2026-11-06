@@ -43,6 +43,7 @@ import {
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
 import {
@@ -892,6 +893,8 @@ describe("ownership within and after one migrate run (sqlite)", () => {
           },
         ],
         pluginsWithMigrations: new Set(["dropper"]),
+        // Consent given, so the ownership guard is what refuses the drop.
+        consent: resolveDataLossConsent({ flag: true, env: {} }),
       } as never)
     ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
     expect(await adapter.listTables()).toContain("app_ledger");

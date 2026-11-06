@@ -1,4 +1,6 @@
 {
-  "sqlStatements": ["DROP TABLE `vg_orphan`;"],
+  "sqlStatements": [
+    "DROP TABLE `vg_orphan`;"
+  ],
   "hints": []
 }
