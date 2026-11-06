@@ -859,3 +859,17 @@ export function prepareDocumentAsDrawn(
 ): BlockDocument | null {
   return prepareDocumentReadStages(document, args)?.bound ?? null;
 }
+
+/**
+ * Whether a preparation held a conditioned block back, so a route has
+ * conditions to decide once it reads the entry. Read off the gating pass:
+ * it returns its input unchanged when it removed nothing.
+ *
+ * @internal Shared by this package's route and renderer.
+ */
+export function holdsBackConditions(
+  prepared: PreparedDocument | null
+): boolean {
+  const record = prepared === null ? undefined : PREPARED.get(prepared);
+  return record !== undefined && record.stages.gated !== record.stages.migrated;
+}

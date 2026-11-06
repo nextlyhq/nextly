@@ -457,10 +457,10 @@ describe("a routed page's bindings", () => {
     expect(html).toContain("Public");
   });
 
-  it("a binding on a node the page withholds or de-duplicates claims no read", async () => {
-    // A condition-gated heading and a later node reusing the list's address:
-    // neither reaches the page, so neither may spend the one claim the list
-    // needs.
+  it("a binding on a node the page de-duplicates claims no read", async () => {
+    // A later node reusing the list's address never reaches the page, so it
+    // may not spend the one claim the list needs. (A conditioned block may
+    // show once its entry is read, so its bindings do read: covered below.)
     const entryBound = (id: string, extra: Record<string, unknown> = {}) => ({
       id,
       type: "core/heading",
@@ -474,11 +474,6 @@ describe("a routed page's bindings", () => {
         formatVersion: DOCUMENT_FORMAT_VERSION,
         kind: "page",
         nodes: [
-          entryBound("gated", {
-            visibility: {
-              conditions: [[{ field: "tier", op: "eq", value: "vip" }]],
-            },
-          }),
           {
             id: "loop",
             type: "core/collection-loop",
@@ -965,5 +960,132 @@ describe("a routed page's bindings", () => {
     expectTypeOf<NextlyBindingFieldShape>().toExtend<BindingFieldShape>();
     expectTypeOf<BindingSourceRef>().toExtend<BlocksFieldShapeRef>();
     expectTypeOf<BlocksFieldShapeRef>().toExtend<BindingSourceRef>();
+  });
+});
+
+describe("a page's blocks shown by their visibility conditions", () => {
+  /** A heading shown only when `conditions` hold for the page's entry. */
+  const shownWhen = (id: string, text: string, conditions: unknown) => ({
+    id,
+    type: "core/heading",
+    version: 1,
+    props: { text, level: "h2" },
+    visibility: { conditions },
+  });
+  const page = (...nodes: Record<string, unknown>[]): BlockDocument =>
+    JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes,
+      })
+    ) as BlockDocument;
+  const base = { collections: ["pages"], field: "content", blocks };
+
+  beforeEach(() => {
+    runtime.shapes.set("collection:pages", [{ name: "title", type: "text" }]);
+  });
+
+  it("draws a block whose conditions hold for the public entry and leaves the other out", async () => {
+    const nextly = instance(
+      page(
+        shownWhen("yes", "Shown to everyone", [
+          [{ field: "title", op: "equals", value: "Public" }],
+        ]),
+        shownWhen("no", "Never shown", [
+          [{ field: "title", op: "equals", value: "Elsewhere" }],
+        ])
+      )
+    );
+    const { html } = await renderedPage(createBlocksPage, base, nextly);
+    expect(html).toContain("Shown to everyone");
+    expect(html).not.toContain("Never shown");
+  });
+
+  it("decides by the entry as the public reads it, never the route's own read", async () => {
+    // The route's row says "Trusted"; the public's says "Public".
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("trusted", "Only for trusted", [
+            [{ field: "title", op: "equals", value: "Trusted" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Only for trusted");
+  });
+
+  it("reads the entry once, for the fields its conditions check, though nothing binds it", async () => {
+    const nextly = instance(
+      page(shownWhen("yes", "Shown", [[{ field: "title", op: "exists" }]]))
+    );
+    await renderedPage(createBlocksPage, base, nextly);
+    expect(publicReads(nextly)).toEqual([
+      expect.objectContaining({
+        collection: "pages",
+        select: { id: true, title: true },
+      }),
+    ]);
+  });
+
+  it("leaves out, and reports, a block whose condition checks a field the public can't read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { html } = await renderedPage(
+      createBlocksPage,
+      base,
+      instance(
+        page(
+          shownWhen("hidden", "Hidden field", [
+            [{ field: "secret", op: "exists" }],
+          ])
+        )
+      )
+    );
+    expect(html).not.toContain("Hidden field");
+    expect(
+      warn.mock.calls.some(([message]) =>
+        String(message).includes("condition-field-unknown")
+      )
+    ).toBe(true);
+  });
+
+  it("describes the page in its metadata by the blocks it draws", async () => {
+    let title: string | undefined;
+    const route = createBlocksPage({
+      ...base,
+      nextly: instance(
+        page(
+          {
+            id: "h1",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Members area", level: "h1" },
+            visibility: {
+              conditions: [
+                [{ field: "title", op: "equals", value: "Elsewhere" }],
+              ],
+            },
+          },
+          {
+            id: "h2",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Public area", level: "h1" },
+            visibility: {
+              conditions: [[{ field: "title", op: "equals", value: "Public" }]],
+            },
+          }
+        )
+      ) as never,
+      metadata: (_entry, _context, derived) => {
+        title = derived.title;
+        return {};
+      },
+    });
+    await route.generateMetadata({ params: { slug: ["about"] } });
+    expect(title).toBe("Public area");
   });
 });
