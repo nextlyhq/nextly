@@ -164,8 +164,12 @@ export async function assertLiveCounts(args: {
   }
 }
 
-/** Refuses deleting `rows` rows past the threshold that needs explicit confirmation. */
-function assertDeleteWithinThreshold(rows: number): void {
+/**
+ * Refuses deleting `rows` rows past the threshold that needs explicit
+ * confirmation. Shared with the Schema Builder save writer, which keeps the
+ * same threshold.
+ */
+export function assertDeleteWithinThreshold(rows: number): void {
   const threshold = readDeleteThreshold();
   if (rows < threshold) return;
   throw new Error(

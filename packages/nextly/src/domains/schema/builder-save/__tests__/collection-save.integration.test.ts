@@ -35,11 +35,15 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../../shared/lib/env";
-import { runFileMigrations } from "../../../../cli/commands/migrate";
+import {
+  migrateCore,
+  runFileMigrations,
+} from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { DynamicCollectionService } from "../../../dynamic-collections/services/dynamic-collection-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { checksumOf } from "../../migrate/applied-checksums";
+import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { splitSqlStatements } from "../../migrate/split-sql";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -431,6 +435,136 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await fresh.tableExists("dc_posts")).toBe(false);
       expect(await fresh.tableExists(junction)).toBe(false);
+    });
+
+    /** Insert a post with `body`, or none where it is null. */
+    async function post(id: string, body: string | null): Promise<void> {
+      await adapter.executeQuery(
+        body === null
+          ? `INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('${id}', 'T', '${id}', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+          : `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('${id}', 'T', '${body}', '${id}', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+    }
+    async function nullable(column: string): Promise<boolean | undefined> {
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        adapter.getCapabilities().dialect,
+        ["dc_posts"]
+      );
+      return live.tables[0]?.columns.find(c => c.name === column)?.nullable;
+    }
+    /** A new, empty database for the folder to replay on. */
+    async function freshDatabase(): Promise<void> {
+      await instance?.destroy();
+      instance = await boot(dialect, "replay.db");
+      adapter = instance.adapter as unknown as DrizzleAdapter;
+    }
+    /** `nextly migrate` over the folder, with or without consent, `step` files at most. */
+    function replayed(acceptDataLoss: boolean, step?: number) {
+      return migrateCore({
+        ...(step === undefined ? {} : { step }),
+        extensionSchema: undefined,
+        dialect: adapter.getCapabilities().dialect,
+        db: adapter.getDrizzle(),
+        adapter: adapter as never,
+        migrationsDir: join(dir, "migrations"),
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        consent: acceptDataLoss
+          ? {
+              given: { from: "flag", targets: "all" },
+              earlier: [],
+              ignored: [],
+            }
+          : NO_CONSENT,
+        interactive: false,
+      } as never);
+    }
+
+    it("fills a new required field's rows with the value the person gave, then makes it required, here and on replay", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await post("a", "x");
+      await post("b", "y");
+      const save = {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body"), text("subtitle", { required: true })]),
+        change: "update",
+        resolutions: [
+          { column: "subtitle", kind: "fill" as const, value: "Untitled" },
+        ],
+      };
+
+      expect((await previewCollectionSave(deps(), save)).notices).toEqual([
+        "This save fills 2 rows with 'Untitled' in subtitle.",
+      ]);
+      await writeCollectionSave(deps(), save);
+
+      const rows = (await adapter.executeQuery(
+        "SELECT subtitle FROM dc_posts ORDER BY id"
+      )) as unknown as { subtitle: string }[];
+      expect(rows.map(r => r.subtitle)).toEqual(["Untitled", "Untitled"]);
+      expect(await nullable("subtitle")).toBe(false);
+
+      // On MySQL the NOT NULL is a prepared statement restating the column,
+      // which `nextly migrate` cannot read and so asks consent for, as it does
+      // for every MySQL file that makes a column required.
+      await freshDatabase();
+      await replayed(dialect === "mysql");
+      expect(await nullable("subtitle")).toBe(false);
+    });
+
+    it("deletes the rows that do not fit a field made required, here, and asks consent on replay", async () => {
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await post("a", "kept");
+      await post("b", null);
+      const save = {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("body", { required: true })]),
+        change: "update",
+        resolutions: [
+          { column: "body", kind: "delete_nonconforming" as const },
+        ],
+      };
+
+      expect((await previewCollectionSave(deps(), save)).notices).toEqual([
+        "This save also deletes 1 row here, and the rows that don't fit on every database the migration reaches.",
+      ]);
+      await writeCollectionSave(deps(), save);
+
+      const rows = (await adapter.executeQuery(
+        "SELECT id FROM dc_posts"
+      )) as unknown as { id: string }[];
+      expect(rows.map(r => r.id)).toEqual(["a"]);
+      expect(await nullable("body")).toBe(false);
+
+      // A deploy whose rows do not fit either: its `nextly migrate` runs the
+      // file's DELETE only with consent, and names the file it refuses.
+      await freshDatabase();
+      await replayed(false, 1);
+      await post("c", null);
+      const update = migrationFiles().find(f =>
+        f.endsWith("_posts_update.sql")
+      );
+      await expect(replayed(false)).rejects.toMatchObject({
+        publicMessage: expect.stringContaining(update!.replace(/\.sql$/, "")),
+      });
+      await replayed(true);
+      expect(await nullable("body")).toBe(false);
+      expect(
+        (await adapter.executeQuery("SELECT id FROM dc_posts")) as unknown[]
+      ).toEqual([]);
     });
 
     /** A table an earlier version's Builder made, as it made it: in the database, in no snapshot. */

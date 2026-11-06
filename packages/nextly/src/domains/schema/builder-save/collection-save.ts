@@ -71,6 +71,7 @@ import {
   type AddedStatements,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type {
@@ -79,8 +80,11 @@ import type {
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
+import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
+import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import { toSnakeCase } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
@@ -149,6 +153,17 @@ export interface CollectionSave {
     before: readonly ForeignKeySpec[];
     after: readonly ForeignKeySpec[];
   };
+  /**
+   * The person's answer, field by field, to rows that do not fit a field this
+   * save makes required: fill them with a value, or delete them. Written into
+   * the change's file between the column's creation and its NOT NULL, and
+   * named in the review (`previewCollectionSave`). Making the field optional
+   * instead is the definition's own business, and needs nothing here.
+   */
+  resolutions?: ReadonlyArray<
+    | { column: string; kind: "fill"; value: unknown }
+    | { column: string; kind: "delete_nonconforming" }
+  >;
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
@@ -187,6 +202,7 @@ export async function writeCollectionSave(
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
   refuseUnconfirmedConversions(plan, save);
+  await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
@@ -238,7 +254,10 @@ export async function previewCollectionSave(
     return {
       adopts: plan.adoption !== null,
       conversions,
-      notices: conversions.map(conversionNotice),
+      notices: [
+        ...conversions.map(conversionNotice),
+        ...(await settledRows(deps, save, plan.table)).map(resolutionNotice),
+      ],
       files: await Promise.all(
         names.map(async name => ({
           name,
@@ -375,6 +394,99 @@ function conversionOf(table: string, op: Operation): ColumnConversion {
   }
 }
 
+/** A resolution with the rows it settles here. */
+interface SettledRows {
+  column: string;
+  rows: number;
+  resolution: NonNullable<CollectionSave["resolutions"]>[number];
+}
+
+/**
+ * Each resolution checked and counted against the rows as they stand: a fill
+ * value the field's type takes, on a field that is not unique (one value
+ * cannot fill a unique column's rows), and a delete within the threshold the
+ * Builder's push path keeps. A field the table does not have yet counts every
+ * row. Refused before anything is written.
+ */
+async function settledRows(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<SettledRows[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const db = deps.adapter.getDrizzle();
+  const exists = await deps.adapter.tableExists(table);
+  const live = exists
+    ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
+    : undefined;
+  const settled: SettledRows[] = [];
+  for (const resolution of save.resolutions ?? []) {
+    const field = save.entity?.fields.find(f => f.name === resolution.column);
+    if (field === undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: resolution.column,
+            code: "RESOLUTION_FIELD_UNKNOWN",
+            message: `${resolution.column} is not a field of the saved collection.`,
+          },
+        ],
+      });
+    }
+    if (resolution.kind === "fill") {
+      if (field.unique === true) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: resolution.column,
+              code: "FILL_ON_UNIQUE_FIELD",
+              message: `${resolution.column} is unique, so one value cannot fill its rows. Make it optional, or delete the rows that do not fit.`,
+            },
+          ],
+        });
+      }
+      const valid = validateDefaultValue(
+        { name: resolution.column, type: field.type },
+        resolution.value,
+        dialect
+      );
+      if (!valid.success) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: resolution.column,
+              code: "INVALID_DEFAULT_FOR_TYPE",
+              message: valid.error ?? "The fill value does not fit the field.",
+            },
+          ],
+        });
+      }
+    }
+    const column = toSnakeCase(resolution.column);
+    const rows = exists
+      ? (
+          await countRowsBreakingNotNull(db, dialect, {
+            table,
+            column: live?.columns.some(c => c.name === column) ? column : null,
+          })
+        ).total
+      : 0;
+    if (resolution.kind === "delete_nonconforming") {
+      assertDeleteWithinThreshold(rows);
+    }
+    settled.push({ column: resolution.column, rows, resolution });
+  }
+  return settled;
+}
+
+/** The line the review shows for a resolution. */
+function resolutionNotice({ column, rows, resolution }: SettledRows): string {
+  const counted = `${rows} ${rows === 1 ? "row" : "rows"}`;
+  return resolution.kind === "fill"
+    ? `This save fills ${counted} with '${String(resolution.value)}' in ${column}.`
+    : `This save also deletes ${counted} here, and the rows that don't fit on every database the migration reaches.`;
+}
+
 /** The line the review shows for a conversion. */
 function conversionNotice(conversion: ColumnConversion): string {
   return `This save also converts ${conversion.column} from ${conversion.from} to ${conversion.to}, from an earlier Nextly version.`;
@@ -470,6 +582,15 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     appended: addedStatements(deps, save, plan.table),
+    ...(save.resolutions === undefined
+      ? {}
+      : {
+          resolutions: save.resolutions.map(r => ({
+            ...r,
+            tableName: plan.table,
+            columnName: toSnakeCase(r.column),
+          })),
+        }),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
@@ -635,6 +756,7 @@ async function generateFor(
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
+    resolutions?: readonly ColumnResolution[];
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -669,6 +791,9 @@ async function generateFor(
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
+    ...(args.resolutions === undefined
+      ? {}
+      : { resolutions: args.resolutions }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,

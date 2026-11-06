@@ -89,6 +89,10 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import {
+  resolutionStatement,
+  type ColumnResolution,
+} from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 
 import {
@@ -290,6 +294,13 @@ export interface GenerateArgs {
    * keys stay untracked. A table that already exists is left alone.
    */
   foreignKeysOfNewTables?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
+  /**
+   * The person's answer to rows that do not fit a column this migration makes
+   * required: fill them, or delete them (`resolution-statements`). The column
+   * is created or kept nullable, the statement runs, then it is made NOT NULL,
+   * all in this file, so every database it reaches is settled the same way.
+   */
+  resolutions?: readonly ColumnResolution[];
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -407,6 +418,72 @@ function settingsInScope(
     settingsRecord: scopedSettingsRecord(args.scope, latest?.entities, desired),
     changedSettings: scopedSettingsChanges(args.scope, changes),
   };
+}
+
+/** A column as `table.column`, for matching operations against resolutions. */
+const columnKey = (table: string, column: string) => `${table}\u0000${column}`;
+
+/**
+ * `operations` with each settled column left nullable — its creation made
+ * nullable, its change to NOT NULL taken out — and the changes that make each
+ * NOT NULL once its rows are settled.
+ */
+function settledColumns(
+  operations: readonly Operation[],
+  resolutions: readonly ColumnResolution[]
+): {
+  operations: Operation[];
+  tighten: Operation[];
+  columns: ReadonlySet<string>;
+} {
+  const columns = new Set(
+    resolutions.map(r => columnKey(r.tableName, r.columnName))
+  );
+  if (columns.size === 0) {
+    return { operations: [...operations], tighten: [], columns };
+  }
+  const kept = operations.flatMap((op): Operation[] => {
+    if (
+      op.type === "add_column" &&
+      columns.has(columnKey(op.tableName, op.column.name))
+    ) {
+      return [{ ...op, column: { ...op.column, nullable: true } }];
+    }
+    if (
+      op.type === "change_column_nullable" &&
+      !op.toNullable &&
+      columns.has(columnKey(op.tableName, op.columnName))
+    ) {
+      return [];
+    }
+    return [op];
+  });
+  const tighten = resolutions.map(
+    (r): Operation => ({
+      type: "change_column_nullable",
+      tableName: r.tableName,
+      columnName: r.columnName,
+      fromNullable: true,
+      toNullable: false,
+    })
+  );
+  return { operations: kept, tighten, columns };
+}
+
+/** `tables` with each settled column nullable, as the file leaves it before tightening. */
+function withSettledColumnsNullable(
+  tables: readonly TableSpec[],
+  columns: ReadonlySet<string>
+): TableSpec[] {
+  if (columns.size === 0) return [...tables];
+  return tables.map(table => ({
+    ...table,
+    columns: table.columns.map(column =>
+      columns.has(columnKey(table.name, column.name))
+        ? { ...column, nullable: true }
+        : column
+    ),
+  }));
 }
 
 /**
@@ -708,12 +785,26 @@ export async function generateMigration(
   // Rendered as a list, not one statement per operation: on SQLite a check
   // or foreign-key change is a rebuild of its table to the schema the list
   // leads to — the desired side for the UP, the previous side for the DOWN.
-  const sqlStatements = generateStatements(
-    operations,
-    args.dialect,
-    // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
-    tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
-  );
+  // A column whose rows the person settled (`resolutions`) is created, or
+  // kept, nullable; the fill or delete runs; then it is made NOT NULL.
+  const settled = settledColumns(operations, args.resolutions ?? []);
+  const sqlStatements = [
+    ...generateStatements(
+      settled.operations,
+      args.dialect,
+      // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
+      tablesWithSettingsHeldBack(
+        withSettledColumnsNullable(desiredSnapshot.tables, settled.columns),
+        heldSettings
+      )
+    ),
+    ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
+    ...generateStatements(
+      settled.tighten,
+      args.dialect,
+      tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
+    ),
+  ];
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
