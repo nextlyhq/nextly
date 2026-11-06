@@ -13,7 +13,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const AUTHORS = "/admin/api/collections/authors/entries";
 const OFFER = /You have unsaved changes from/;
@@ -60,7 +60,10 @@ test.describe("restoring unsaved changes", () => {
     // English: nothing of the Spanish work is offered.
     await gotoAdmin(page, `/collections/authors/${id}`);
     await expect(page.getByLabel("Role / Title")).toHaveValue("Mathematician");
-    await expect(page.getByText(OFFER)).toHaveCount(0);
+    // Absence is asserted on the whole document, hidden copies included: a
+    // page kept mounted but hidden could hold the offer while the visible one
+    // does not.
+    await expect(includingHidden(page).getByText(OFFER)).toHaveCount(0);
 
     // Spanish again: its own unsaved work is offered, and restores there.
     await gotoAdmin(page, `/collections/authors/${id}?locale=es`);
