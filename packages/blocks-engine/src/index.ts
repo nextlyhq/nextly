@@ -1295,3 +1295,43 @@ export type {
   NodeBindingResult,
   SourceDemand,
 } from "./resolve-bindings";
+
+// A collection list's stored query: the one reading of it, shared by the
+// validator, the renderer and the editor, and its save-time judgement.
+export {
+  COLLECTION_LIST_TYPE,
+  isListDay,
+  isListFilterOp,
+  LIST_FIELD_CODES,
+  LIST_FILTER_OPS,
+  LIST_ISSUE_CODES,
+  LIST_LIMIT_MAX,
+  LIST_LIMIT_MIN,
+  LIST_FIELD_KINDS,
+  LIST_KIND_OPS,
+  LIST_MAX_FILTERS,
+  LIST_MAX_VALUES,
+  isListFieldKind,
+  listFieldKind,
+  listKindSortable,
+  listQueryIssues,
+  listRelationTarget,
+  listSortText,
+  readListQuery,
+} from "./list-query";
+export type {
+  ListFieldCode,
+  ListFieldKind,
+  ListFields,
+  ListFieldSource,
+  ListFilter,
+  ListFilterOp,
+  ListFilterScalar,
+  ListQuery,
+  ListQueryJudgement,
+  ListQueryProblem,
+  ListQueryProp,
+  ListRelation,
+  ListShapeCode,
+  ListSortKey,
+} from "./list-query";
