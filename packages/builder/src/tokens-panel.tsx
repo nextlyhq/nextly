@@ -79,6 +79,7 @@ import {
 import { VariableEditor } from "./variable-editor";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 import {
+  combinedReach,
   variableCount,
   type VariableReach,
   type VariablesAccess,
@@ -288,7 +289,7 @@ function VariablesView({
   );
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
-  const usageOf = useUsageOfRows(hosted, groups);
+  const usage = useUsageOfRows(hosted, groups);
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -333,7 +334,7 @@ function VariablesView({
             suppliedOf: identity => suppliedFor(supplied, identity),
             toggle,
             commitFrom,
-            usageOf,
+            usage,
             onRemoved: key => {
               forget(key);
               search.current?.focus();
@@ -355,7 +356,8 @@ interface RowsHost {
   readonly suppliedOf: (identity: string) => SiteToken | undefined;
   readonly toggle: (key: string, open: boolean) => void;
   readonly commitFrom: (key: string) => (next: SiteTokenSet) => void;
-  readonly usageOf: (entry: VariableEntry) => VariableUsageHere | undefined;
+  /** Usage, where the host reads it. */
+  readonly usage: VariableUsageHere | undefined;
   /** The variable whose row this is was removed. */
   readonly onRemoved: (key: string) => void;
 }
@@ -410,7 +412,7 @@ function VariableGroups({
                 open={rows.openKey === entry.row.key}
                 onOpenChange={open => rows.toggle(entry.row.key, open)}
                 onChange={rows.commitFrom(entry.row.key)}
-                usage={rows.usageOf(entry)}
+                usage={rows.usage}
                 onRemoved={() => rows.onRemoved(entry.row.key)}
               />
             )}
@@ -460,10 +462,10 @@ function useCommitsSettled(
 }
 
 /**
- * How widely every variable listed is used, read once for all the groups,
- * each row's own identity (a type size counts its size, not its line
- * height); and what one row and its editor are handed of it. Nothing
- * without the host's access.
+ * How widely every variable listed is used, read once for all the groups:
+ * each row's variable and, for a type size, its line height, which has no
+ * row of its own and is removed from here or nowhere; and what the rows and
+ * their editors are handed of it. Nothing without the host's access.
  */
 function useUsageOfRows(
   {
@@ -474,21 +476,36 @@ function useUsageOfRows(
     readonly classes?: readonly NamedClass[] | undefined;
   },
   groups: readonly { readonly entries: readonly VariableEntry[] }[]
-): (entry: VariableEntry) => VariableUsageHere | undefined {
+): VariableUsageHere | undefined {
   const identities = React.useMemo(
-    () => groups.flatMap(group => group.entries.map(e => e.row.identity)),
+    () => groups.flatMap(group => group.entries.flatMap(rowIdentities)),
     [groups]
   );
   const reads = useVariableUsage(access, identities);
-  return entry =>
-    access === undefined
-      ? undefined
-      : {
-          reach: reads.values.get(entry.row.identity),
-          access,
-          counter: reads.counter,
-          classes,
-        };
+  const { values, counter } = reads;
+  return React.useMemo(
+    () =>
+      access === undefined
+        ? undefined
+        : { reachOf: id => values.get(id), access, counter, classes },
+    [access, values, counter, classes]
+  );
+}
+
+/** The variables a row stands for: its own, and a type size's line height. */
+function rowIdentities(entry: VariableEntry): string[] {
+  return entry.lineHeight === undefined
+    ? [entry.row.identity]
+    : [entry.row.identity, entry.lineHeight.identity];
+}
+
+/** A row's count: every variable it stands for, together. */
+function rowReach(
+  entry: VariableEntry,
+  usage: VariableUsageHere | undefined
+): VariableReach | undefined {
+  if (usage === undefined) return undefined;
+  return combinedReach(rowIdentities(entry).map(usage.reachOf));
 }
 
 /**
@@ -958,7 +975,7 @@ function VariableRow({
   usage: VariableUsageHere | undefined;
 }): React.JSX.Element {
   const token = tokens.tokens[entry.row.at];
-  const reach = usage?.reach;
+  const reach = rowReach(entry, usage);
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>

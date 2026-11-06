@@ -98,7 +98,12 @@ function reach(
 interface Host extends VariablesAccess {
   readonly asked: string[][];
   readonly counted: { count: number };
+  /** Each where-used read, by variable and page. */
+  readonly pages: { identity: string; page: number }[];
 }
+
+/** Twenty places to a where-used page, as the route lists them. */
+const PAGE = 20;
 
 function host({
   reaches,
@@ -107,20 +112,32 @@ function host({
   mayCount = false,
   count,
   openSharedStyle,
+  openLook,
+  hold,
 }: {
   reaches: () => Record<string, VariableReach>;
-  uses?: readonly VariableUse[];
+  /** The places using every variable, or each variable's by identity. */
+  uses?: readonly VariableUse[] | Record<string, readonly VariableUse[]>;
   hidden?: number;
   mayCount?: boolean;
   count?: () => Promise<SharedStylesCount>;
   openSharedStyle?: (classId: string) => void;
+  openLook?: VariablesAccess["openLook"];
+  /** A page answered only once this settles, so a read in flight is seen. */
+  hold?: { page: number; until: Promise<void> };
 }): Host {
   const asked: string[][] = [];
   const counted = { count: 0 };
+  const pages: { identity: string; page: number }[] = [];
   const now = reaches;
+  const usesOf = (identity: string): readonly VariableUse[] =>
+    Array.isArray(uses)
+      ? uses
+      : ((uses as Record<string, readonly VariableUse[]>)[identity] ?? []);
   return {
     asked,
     counted,
+    pages,
     usage: async ids => {
       asked.push([...ids]);
       const all = now();
@@ -133,13 +150,18 @@ function host({
       const whole = [...variables.values()].every(entry => entry.complete);
       return { whole, counting: !whole, mayCount, variables };
     },
-    uses: async (): Promise<VariableUsesPage> => ({
-      items: uses.slice(0, 20),
-      total: uses.length,
-      hidden,
-      hasNext: uses.length > 20,
-      complete: true,
-    }),
+    uses: async (identity, page): Promise<VariableUsesPage> => {
+      pages.push({ identity, page });
+      if (hold !== undefined && hold.page === page) await hold.until;
+      const listed = usesOf(identity);
+      return {
+        items: listed.slice((page - 1) * PAGE, page * PAGE),
+        total: listed.length,
+        hidden,
+        hasNext: listed.length > page * PAGE,
+        complete: true,
+      };
+    },
     ...(count === undefined
       ? {}
       : {
@@ -149,6 +171,7 @@ function host({
           },
         }),
     ...(openSharedStyle === undefined ? {} : { openSharedStyle }),
+    ...(openLook === undefined ? {} : { openLook }),
   };
 }
 
@@ -244,16 +267,34 @@ describe("the count at the end of each row", () => {
     expect(floor?.hasAttribute("data-floor")).toBe(true);
   });
 
-  it("asks for each row's own variable, a type size's size and not its line height", async () => {
+  it("asks for each row's variable, and for a type size its line height too", async () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(1) }) });
     render(<Hosted usage={usage} />);
     await screen.findByRole("button", { name: /^Brand.*Used in 1 place$/ });
+    // The line height has no row of its own, and Remove takes it away with
+    // its type size, so its usage is read beside the size's.
     expect(usage.asked.flat().sort()).toEqual([
       "color.brand",
       "color.text",
       "font-size.body",
+      "line-height.body",
       "space.4",
     ]);
+  });
+
+  it("counts a type size's row by its size and its line height together", async () => {
+    const usage = host({
+      reaches: () => ({
+        "font-size.body": reach(1),
+        "line-height.body": reach(2, ["c-card"]),
+      }),
+    });
+    render(<Hosted usage={usage} />);
+    // 1 for the size, 3 for the line height: neither alone.
+    const body = await screen.findByRole("button", {
+      name: /^Body.*\. Used in 4 places$/,
+    });
+    expect(body.querySelector(".nx-vars__count")?.textContent).toBe("4");
   });
 
   it("shows nothing for a row not read yet, and no counts without the host's reads", async () => {
@@ -534,5 +575,185 @@ describe("a variable the site's code supplies", () => {
     expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
     expect(within(editor).queryByText("Used in 4 places")).toBeNull();
+  });
+});
+
+describe("removing a type size", () => {
+  const sizeUse: VariableUse = {
+    id: "p1",
+    title: "Homepage",
+    collection: "pages",
+    kind: "pages",
+  };
+  const lineUse: VariableUse = {
+    id: "p2",
+    title: "Pricing",
+    collection: "pages",
+    kind: "pages",
+  };
+
+  it("refuses while only its line height is used, and lists the line height's places", async () => {
+    const onChange = vi.fn();
+    const usage = host({
+      reaches: () => ({
+        "font-size.body": reach(0),
+        "line-height.body": reach(1),
+      }),
+      uses: { "line-height.body": [lineUse] },
+    });
+    render(<Hosted usage={usage} onChange={onChange} />);
+    const editor = await openEditor(/^Body.*Used in 1 place$/);
+    // Remove takes both away, so the line height's use is what it says.
+    expect(within(editor).getByText("Used in 1 place")).toBeDefined();
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByRole("heading", {
+        name: "Body can't be removed while it's in use.",
+      })
+    ).toBeDefined();
+    expect(within(editor).queryByText(/Any block using it/)).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    const pricing = await within(editor).findByText("Pricing");
+    expect(pricing.closest("li")?.textContent).toBe("Pricing · page");
+    // Only the part in use is listed, and alone it needs no name.
+    expect(usage.pages.map(read => read.identity)).toEqual([
+      "line-height.body",
+    ]);
+    expect(within(editor).queryByText("Line height")).toBeNull();
+  });
+
+  it("lists each part's places under its name when both are used", async () => {
+    const usage = host({
+      reaches: () => ({
+        "font-size.body": reach(1),
+        "line-height.body": reach(1),
+      }),
+      uses: { "font-size.body": [sizeUse], "line-height.body": [lineUse] },
+    });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Body.*Used in 2 places$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(await within(editor).findByText("Homepage")).toBeDefined();
+    expect(await within(editor).findByText("Pricing")).toBeDefined();
+    expect(within(editor).getByText("Size")).toBeDefined();
+    expect(within(editor).getByText("Line height")).toBeDefined();
+  });
+
+  it("confirms as before once neither part is used", async () => {
+    const usage = host({
+      reaches: () => ({
+        "font-size.body": reach(0),
+        "line-height.body": reach(0),
+      }),
+    });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Body.*Not used anywhere$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByText(/Any block using it loses that style/)
+    ).toBeDefined();
+  });
+});
+
+describe("a block look using a variable", () => {
+  const PRIMARY: NamedClass = {
+    id: "look-primary",
+    slug: "primary",
+    label: "Primary",
+    orderIndex: 1,
+    blockType: "core/button",
+    styles: {
+      base: { [BASE_BREAKPOINT]: { color: { $token: "color.brand" } } },
+    },
+  };
+  const look: VariableUse = {
+    id: "look-primary",
+    title: "Primary",
+    collection: "site-style",
+    kind: "shared-style",
+  };
+
+  it("names its block type and opens in the look editor, not Shared styles", async () => {
+    const openLook = vi.fn();
+    const openSharedStyle = vi.fn();
+    const usage = host({
+      reaches: () => ({ "color.brand": reach(0, ["look-primary"]) }),
+      uses: [look],
+      openLook,
+      openSharedStyle,
+    });
+    render(<Hosted usage={usage} classes={[PRIMARY]} />);
+    const editor = await openEditor(/^Brand.*Used in 1 place$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    const primary = await within(editor).findByRole("button", {
+      name: "Primary",
+    });
+    const line = primary.closest("li")?.textContent ?? "";
+    expect(line).toMatch(/^Primary · .+ look · sets text colour$/);
+    expect(line).toContain("Button look");
+    fireEvent.click(primary);
+    expect(openLook).toHaveBeenCalledWith({
+      id: "look-primary",
+      blockType: "core/button",
+    });
+    // Shared styles lists no looks, so it is never sent there.
+    expect(openSharedStyle).not.toHaveBeenCalled();
+  });
+
+  it("is plain text where the host cannot edit a look", async () => {
+    const usage = host({
+      reaches: () => ({ "color.brand": reach(0, ["look-primary"]) }),
+      uses: [look],
+      openSharedStyle: vi.fn(),
+    });
+    render(<Hosted usage={usage} classes={[PRIMARY]} />);
+    const editor = await openEditor(/^Brand.*Used in 1 place$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    const name = await within(editor).findByText("Primary");
+    expect(name.tagName).toBe("SPAN");
+    expect(
+      within(editor).queryByRole("button", { name: "Primary" })
+    ).toBeNull();
+  });
+});
+
+describe("Show all", () => {
+  const many = (count: number): VariableUse[] =>
+    Array.from({ length: count }, (_, at) => ({
+      id: `p${String(at)}`,
+      title: `Page ${String(at)}`,
+      collection: "pages",
+      kind: "pages",
+    }));
+
+  it("reads every page that follows, saying how far it has got, until all are shown", async () => {
+    let release = (): void => {};
+    const until = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const usage = host({
+      reaches: () => ({ "color.brand": reach(45) }),
+      uses: many(45),
+      hold: { page: 2, until },
+    });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Brand.*Used in 45 places$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    await within(editor).findByText("Page 0");
+    const places = () =>
+      editor.querySelectorAll(".nx-vars-refusal__uses li").length;
+    expect(places()).toBe(5);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Show all 45" })
+    );
+    // The first page at once, and the second on its way, said as it reads.
+    expect(places()).toBe(20);
+    expect(await within(editor).findByText("Reading 20 of 45…")).toBeDefined();
+    release();
+    await waitFor(() => expect(places()).toBe(45));
+    expect(usage.pages.map(read => read.page)).toEqual([1, 2, 3]);
+    expect(within(editor).queryByText(/^Reading/)).toBeNull();
+    // No more to ask for: every place is listed.
+    expect(within(editor).queryByRole("button", { name: /more/ })).toBeNull();
   });
 });

@@ -26,7 +26,10 @@ import {
   type VariableUseItem,
 } from "../library-contract";
 
-import { documentBuilderPath } from "./editor/builder-address";
+import {
+  documentBuilderPath,
+  singleBuilderPath,
+} from "./editor/builder-address";
 import {
   countSiteUsage,
   usesPageFrom,
@@ -52,12 +55,19 @@ function usageFromResponse(
 }
 
 /**
- * Whether a place is a document, with a Page Builder view of its own: not a
- * shared style, which opens in the Design panel, nor a block type's default
- * style, which has nowhere to open.
+ * Where a place's Page Builder view opens: a collection's document by its
+ * collection and id; a Single's one document, which the route names by the
+ * Single's slug with no id, by its slug. Nothing for a shared style, which
+ * opens in the Design panel, nor a block type's default style, which has
+ * nowhere to open.
  */
-function opensAsDocument(kind: VariableUseItem["kind"]): boolean {
-  return kind !== "shared-style" && kind !== "block-default";
+function placeAddress(item: VariableUseItem): string | undefined {
+  if (item.kind === "shared-style" || item.kind === "block-default") {
+    return undefined;
+  }
+  return item.id === ""
+    ? singleBuilderPath(item.collection)
+    : documentBuilderPath(item.collection, item.id);
 }
 
 /**
@@ -66,26 +76,30 @@ function opensAsDocument(kind: VariableUseItem["kind"]): boolean {
  * none.
  */
 function usesFromResponse(
-  body: UsesList<VariableUseItem> | undefined
+  body: UsesList<VariableUseItem> | undefined,
+  page: number
 ): VariableUsesPage {
-  return usesPageFrom(body, item => ({
-    id: item.id,
-    title: item.title,
-    // Kept: an id is unique only within its collection.
-    collection: item.collection,
-    kind: item.kind,
-    ...(opensAsDocument(item.kind)
-      ? { href: documentBuilderPath(item.collection, item.id) }
-      : {}),
-  }));
+  return usesPageFrom(body, page, item => {
+    const href = placeAddress(item);
+    return {
+      id: item.id,
+      title: item.title,
+      // Kept: an id is unique only within its collection.
+      collection: item.collection,
+      kind: item.kind,
+      ...(href === undefined ? {} : { href }),
+    };
+  });
 }
 
 /**
- * The variable routes, bound for the tab, with the way to a shared style
- * that uses one: `openSharedStyle`, when the host can open Shared styles.
+ * The variable routes, bound for the tab, with the ways to a shared style
+ * or a block look that uses one: `openSharedStyle`, when the host can open
+ * Shared styles, and `openLook`, when it can edit a look in the inspector.
  */
 export function useVariablesClient(
-  openSharedStyle?: (classId: string) => void
+  openSharedStyle?: (classId: string) => void,
+  openLook?: VariablesAccess["openLook"]
 ): VariablesAccess {
   const usage = useCallback(
     async (ids: readonly string[], signal: AbortSignal) =>
@@ -106,7 +120,8 @@ export function useVariablesClient(
           plugin: PAGE_BUILDER_PLUGIN_NAME,
           path: variableWhereUsedPath(id, page),
           signal,
-        })
+        }),
+        page
       ),
     []
   );
@@ -118,7 +133,8 @@ export function useVariablesClient(
       // The shared styles' count: one count fills every usage index.
       count: countSiteUsage,
       ...(openSharedStyle === undefined ? {} : { openSharedStyle }),
+      ...(openLook === undefined ? {} : { openLook }),
     }),
-    [usage, uses, openSharedStyle]
+    [usage, uses, openSharedStyle, openLook]
   );
 }

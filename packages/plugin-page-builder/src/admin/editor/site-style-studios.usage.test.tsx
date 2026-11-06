@@ -52,7 +52,10 @@ const NONE = { pages: 0, components: 0, patterns: 0, layouts: 0 };
 vi.mock("../variables-client", async () => {
   const { useMemo } = await import("react");
   return {
-    useVariablesClient: (openSharedStyle?: (classId: string) => void) =>
+    useVariablesClient: (
+      openSharedStyle?: (classId: string) => void,
+      openLook?: (look: { id: string; blockType: string }) => void
+    ) =>
       // One access per way to Shared styles, as the real client keeps one.
       useMemo(
         () => ({
@@ -81,15 +84,23 @@ vi.mock("../variables-client", async () => {
                 collection: "site-style",
                 kind: "shared-style" as const,
               },
+              // A block look: a shared style bound to the Button.
+              {
+                id: "look-primary",
+                title: "Primary",
+                collection: "site-style",
+                kind: "shared-style" as const,
+              },
             ],
-            total: 1,
+            total: 2,
             hidden: 0,
             hasNext: false,
             complete: true,
           }),
           ...(openSharedStyle === undefined ? {} : { openSharedStyle }),
+          ...(openLook === undefined ? {} : { openLook }),
         }),
-        [openSharedStyle]
+        [openSharedStyle, openLook]
       ),
   };
 });
@@ -160,6 +171,15 @@ const CARD: NamedClass = {
   styles: { base: { [BASE_BREAKPOINT]: { color: { $token: "color.brand" } } } },
 };
 
+const PRIMARY: NamedClass = {
+  id: "look-primary",
+  slug: "primary",
+  label: "Primary",
+  orderIndex: 1,
+  blockType: "core/button",
+  styles: { base: { [BASE_BREAKPOINT]: { color: { $token: "color.brand" } } } },
+};
+
 const SURFACE: ClassSurface = {
   library: [CARD],
   absence: "pending",
@@ -175,7 +195,12 @@ const SURFACE: ClassSurface = {
  * Variables tab reading from it, and the Shared styles tab with the site's
  * styles. The tab is the panel's own state, as the shell keeps it.
  */
-function Studio(): React.JSX.Element {
+function Studio({
+  look,
+}: {
+  /** The editor's way to edit a look in the inspector. */
+  look?: (look: { id: string; blockType: string }) => void;
+} = {}): React.JSX.Element {
   const [current, choose] = React.useState<string | null>("variables");
   return (
     <DesignPanel
@@ -185,8 +210,11 @@ function Studio(): React.JSX.Element {
           merged={TOKENS}
           supplied={undefined}
           pending={false}
-          classes={[CARD]}
-          onShowSharedStyles={() => choose("classes")}
+          classes={[CARD, PRIMARY]}
+          opens={{
+            sharedStyles: () => choose("classes"),
+            ...(look === undefined ? {} : { look }),
+          }}
         >
           {tabs}
         </TokensStudio>
@@ -265,5 +293,28 @@ describe("the Variables studio's usage", () => {
     // The style was taken once; the tab chosen again opens on its rows.
     await screen.findByRole("button", { name: /Card/ });
     expect(screen.queryByRole("dialog", { name: "Card" })).toBeNull();
+  });
+
+  it("opens a block look using a variable in the editor's look editor", async () => {
+    const look = vi.fn();
+    render(<Studio look={look} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Brand.*Used in 2 places$/ })
+    );
+    const editor = await screen.findByRole("dialog", { name: "Edit Brand" });
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      await within(editor).findByRole("button", { name: "Primary" })
+    );
+    expect(look).toHaveBeenCalledWith({
+      id: "look-primary",
+      blockType: "core/button",
+    });
+    // The Variables tab stays: a look does not open in Shared styles.
+    expect(
+      screen
+        .getByRole("tab", { name: "Variables" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
   });
 });

@@ -633,8 +633,14 @@ export function editorPanelRenderer({
               {...(classes.library === undefined
                 ? {}
                 : { classes: classes.library })}
-              // A shared style using a variable opens in its own tab.
-              onShowSharedStyles={() => view.choose("classes")}
+              // A shared style using a variable opens in its own tab; a
+              // block look, which that tab does not list, in the inspector.
+              opens={{
+                sharedStyles: () => view.choose("classes"),
+                ...(lookEditing === undefined
+                  ? {}
+                  : { look: lookEditing.edit }),
+              }}
               // Offered once the stored style is read, so the choice shows
               // the model the canvas is compiled under and nothing earlier.
               {...(siteStylePending || siteStyleError !== null

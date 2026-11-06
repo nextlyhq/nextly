@@ -180,7 +180,7 @@ export function TokensStudio({
   pending,
   spacingMode,
   classes,
-  onShowSharedStyles,
+  opens,
   children,
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
@@ -199,15 +199,12 @@ export function TokensStudio({
    * it. Absent while they are being read.
    */
   classes?: readonly NamedClass[];
-  /**
-   * Show the Design panel's Shared styles tab. Given, a shared style using a
-   * variable opens there, with its details open.
-   */
-  onShowSharedStyles?: () => void;
+  /** Where a shared style or a block look using a variable opens. */
+  opens?: StyleOpeners;
   /** The Design panel's tabs. */
   children: React.ReactNode;
 }): React.JSX.Element {
-  const usage = useStudioUsage(classes, onShowSharedStyles);
+  const usage = useStudioUsage(classes, opens);
   const held = useReleasedOnLeave(useHeldSiteStyle());
   // The server refuses a change to the site style without this grant; the
   // panel shows the variables read-only rather than offering edits it would
@@ -336,13 +333,13 @@ function useTokenCommits(baseline: SiteTokenSet): {
  */
 function useStudioUsage(
   classes: readonly NamedClass[] | undefined,
-  onShowSharedStyles: (() => void) | undefined
+  opens: StyleOpeners | undefined
 ): {
   props: Pick<TokensPanelProps, "usage" | "classes">;
   toOpen: StyleToOpen;
 } {
-  const opening = useSharedStyleOpening(onShowSharedStyles);
-  const usage = useVariablesClient(opening.open);
+  const opening = useSharedStyleOpening(opens?.sharedStyles);
+  const usage = useVariablesClient(opening.open, useSteady(opens?.look));
   return {
     props: { usage, ...(classes === undefined ? {} : { classes }) },
     toOpen: opening.toOpen,
@@ -369,6 +366,35 @@ const NO_STYLE_TO_OPEN: StyleToOpen = { id: undefined, taken: () => {} };
 const SharedStyleToOpen = createContext<StyleToOpen>(NO_STYLE_TO_OPEN);
 
 /**
+ * Where the Variables tab sends an author to a style using a variable: the
+ * Shared styles tab for a shared style, and the inspector's look editor for
+ * a block look, which the Shared styles tab does not list.
+ */
+export interface StyleOpeners {
+  /** Show the Design panel's Shared styles tab. */
+  readonly sharedStyles?: () => void;
+  /** Edit a block look in the inspector. */
+  readonly look?: (look: { id: string; blockType: string }) => void;
+}
+
+/**
+ * The latest of a host's callbacks behind one identity, so a host handing a
+ * new function each render does not change the Variables tab's access, by
+ * which its reads are keyed; nothing when the host hands none.
+ */
+function useSteady<A>(
+  callback: ((arg: A) => void) | undefined
+): ((arg: A) => void) | undefined {
+  const latest = useRef(callback);
+  latest.current = callback;
+  const given = callback !== undefined;
+  return useMemo(
+    () => (given ? (arg: A) => latest.current?.(arg) : undefined),
+    [given]
+  );
+}
+
+/**
  * Opening a shared style from the Variables tab: the style held, then the
  * Shared styles tab shown. Nothing to open without a way to show that tab.
  */
@@ -377,21 +403,14 @@ function useSharedStyleOpening(onShowSharedStyles: (() => void) | undefined): {
   toOpen: StyleToOpen;
 } {
   const [id, setId] = useState<string | undefined>(undefined);
-  // The latest way to the tab, read when a style is opened, so the opening
-  // keeps one identity while a host hands a new function each render: the
-  // Variables tab's reads are keyed by the access it is part of.
-  const show = useRef(onShowSharedStyles);
-  show.current = onShowSharedStyles;
-  const showable = onShowSharedStyles !== undefined;
-  const open = useMemo(
-    () =>
-      showable
-        ? (classId: string) => {
-            setId(classId);
-            show.current?.();
-          }
-        : undefined,
-    [showable]
+  // The style held, then the tab shown, through the latest way to the tab.
+  const open = useSteady(
+    onShowSharedStyles === undefined
+      ? undefined
+      : (classId: string) => {
+          setId(classId);
+          onShowSharedStyles();
+        }
   );
   const taken = useCallback(() => setId(undefined), []);
   const toOpen = useMemo(() => ({ id, taken }), [id, taken]);

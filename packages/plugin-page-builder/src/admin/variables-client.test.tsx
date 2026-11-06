@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILDER_VIEW_PATH } from "../builder-view";
 import {
   SHARED_STYLE_COUNT_ROUTE_PATH,
+  SHARED_STYLE_WHERE_USED_PAGES_MAX,
   variableUsagePath,
   variableWhereUsedPath,
 } from "../library-contract";
@@ -192,6 +193,47 @@ describe("reading where a variable is used", () => {
     });
   });
 
+  it("links a Single's document by the Single's own route, and a collection's by its collection and id", async () => {
+    // The route names a Single's one document by the Single's slug, with no
+    // id: a collection address would read /collections/homepage//builder.
+    readAnswer = {
+      items: [
+        { id: "", title: "Homepage", collection: "homepage", kind: "pages" },
+        { id: "p1", title: "Pricing", collection: "pages", kind: "pages" },
+      ],
+      meta: { total: 2, hasNext: false },
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    const page = await result.current.uses("color.brand", 1, signal);
+    expect(page.items.map(item => item.href)).toEqual([
+      `/admin/singles/homepage/${BUILDER_VIEW_PATH}`,
+      `/admin/collections/pages/p1/${BUILDER_VIEW_PATH}`,
+    ]);
+  });
+
+  it("offers no page past the last the route may be asked for", async () => {
+    // The route refuses a page past its cap, so the list stops there; the
+    // places beyond stay counted in the total.
+    readAnswer = {
+      items: [],
+      meta: { total: 6000, hasNext: true },
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    const before = await result.current.uses(
+      "color.brand",
+      SHARED_STYLE_WHERE_USED_PAGES_MAX - 1,
+      signal
+    );
+    expect(before.hasNext).toBe(true);
+    const last = await result.current.uses(
+      "color.brand",
+      SHARED_STYLE_WHERE_USED_PAGES_MAX,
+      signal
+    );
+    expect(last.hasNext).toBe(false);
+    expect(last.total).toBe(6000);
+  });
+
   it("reads a whole list with nothing hidden", async () => {
     readAnswer = {
       items: [],
@@ -232,6 +274,23 @@ describe("opening a shared style", () => {
 
     const without = renderHook(() => useVariablesClient());
     expect(without.result.current.openSharedStyle).toBeUndefined();
+  });
+
+  it("hands on the host's way to edit a block look, and offers none without one", () => {
+    const openLook = vi.fn();
+    const withWay = renderHook(() => useVariablesClient(undefined, openLook));
+    withWay.result.current.openLook?.({
+      id: "look-primary",
+      blockType: "core/button",
+    });
+    expect(openLook).toHaveBeenCalledWith({
+      id: "look-primary",
+      blockType: "core/button",
+    });
+    expect(withWay.result.current.openSharedStyle).toBeUndefined();
+
+    const without = renderHook(() => useVariablesClient(vi.fn()));
+    expect(without.result.current.openLook).toBeUndefined();
   });
 
   it("keeps one access across renders, so the tab's reads are not asked again", () => {

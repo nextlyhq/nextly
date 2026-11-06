@@ -81,10 +81,9 @@ export function builderAddress(
     };
   }
   const query = `?field=${encodeURIComponent(fieldName)}`;
-  const slug = encodeURIComponent(identity.slug);
   if (identity.kind === "single") {
     return {
-      href: `/admin/singles/${slug}/${BUILDER_VIEW_PATH}${query}`,
+      href: `${singleBuilderPath(identity.slug)}${query}`,
       ...elsewhere,
     };
   }
@@ -95,6 +94,15 @@ export function builderAddress(
     href: `${documentBuilderPath(identity.slug, identity.documentId)}${query}`,
     ...elsewhere,
   };
+}
+
+/**
+ * The Page Builder view of a Single, naming no field, as
+ * {@link documentBuilderPath} is for a collection's document: a Single is
+ * addressed by its slug alone, having one document.
+ */
+export function singleBuilderPath(slug: string): string {
+  return `/admin/singles/${encodeURIComponent(slug)}/${BUILDER_VIEW_PATH}`;
 }
 
 /**

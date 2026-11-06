@@ -18,6 +18,7 @@
  * @module variable-usage
  */
 import {
+  isLook,
   isPlainRecord,
   isTokenRef,
   type NamedClass,
@@ -140,6 +141,60 @@ export interface VariablesAccess {
    * without it a shared style using a variable is named, not opened.
    */
   readonly openSharedStyle?: (classId: string) => void;
+  /**
+   * Edit a block look in the inspector: a look is a shared style bound to
+   * one block type, which the Shared styles tab does not list. Optional:
+   * without it a look using a variable is named, not opened.
+   */
+  readonly openLook?: (look: {
+    readonly id: string;
+    readonly blockType: string;
+  }) => void;
+}
+
+/**
+ * One reach for the variables a row stands for, or a removal takes away
+ * together: a type size and its line height. Each variable's places are
+ * counted, so a block naming both counts once for each; shared styles and
+ * block types are named by id, so each counts once. A floor when any part
+ * is; nothing until every part is read.
+ */
+export function combinedReach(
+  reaches: readonly (VariableReach | undefined)[]
+): VariableReach | undefined {
+  const read = reaches.filter(
+    (reach): reach is VariableReach => reach !== undefined
+  );
+  if (read.length === 0 || read.length !== reaches.length) return undefined;
+  const [only] = read;
+  if (read.length === 1) return only;
+  const sum = (count: (reach: VariableReach) => number): number =>
+    read.reduce((total, reach) => total + count(reach), 0);
+  return {
+    documents: sum(reach => reach.documents),
+    byKind: {
+      pages: sum(reach => reach.byKind.pages),
+      components: sum(reach => reach.byKind.components),
+      patterns: sum(reach => reach.byKind.patterns),
+      layouts: sum(reach => reach.byKind.layouts),
+    },
+    sharedStyles: [...new Set(read.flatMap(reach => reach.sharedStyles))],
+    blockDefaults: [...new Set(read.flatMap(reach => reach.blockDefaults))],
+    complete: read.every(reach => reach.complete),
+  };
+}
+
+/**
+ * The block type a shared style in the library is a look of, or nothing for
+ * a shared style any block may wear, or one not in the library.
+ */
+export function lookBlockType(
+  classes: readonly NamedClass[] | undefined,
+  classId: string
+): string | undefined {
+  const style = classes?.find(entry => entry.id === classId);
+  if (style === undefined || !isLook(style)) return undefined;
+  return typeof style.blockType === "string" ? style.blockType : undefined;
 }
 
 /**

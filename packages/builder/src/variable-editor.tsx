@@ -39,8 +39,10 @@ import {
 } from "./tokens-studio";
 import { swatchStyle } from "./variable-swatch";
 import {
+  combinedReach,
   variableRemoval,
   variableStatus,
+  type VariableReach,
   type VariableRemoval,
 } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
@@ -826,12 +828,15 @@ function Actions({
         onReset={() => onChange(resetParts(tokens, plan.changed))}
         onRemove={() => setStep(refuses(plan.removal) ? "refused" : "confirm")}
       />
-      {shown === "refused" && plan.gate?.reach !== undefined ? (
+      {shown === "refused" &&
+      plan.gate !== undefined &&
+      plan.reach !== undefined ? (
         <VariableRefusal
           name={entry.label}
           kind={entry.row.kind}
-          identity={entry.row.identity}
-          usage={{ ...plan.gate, reach: plan.gate.reach }}
+          parts={plan.removable}
+          reach={plan.reach}
+          usage={plan.gate}
         />
       ) : null}
     </>
@@ -848,11 +853,13 @@ interface RemovalPlan {
   readonly what: string;
   /** Remove's own words: "Remove", or "Remove line height". */
   readonly label: string;
-  /**
-   * The usage that gates Remove: the row's own variable's, when that is
-   * among what Remove takes away.
-   */
+  /** The usage that gates Remove, where the host reads it. */
   readonly gate: VariableUsageHere | undefined;
+  /**
+   * How widely what Remove takes away is used, together: a type size and
+   * its line height when both go, so either one in use refuses.
+   */
+  readonly reach: VariableReach | undefined;
   readonly removal: VariableRemoval;
 }
 
@@ -868,9 +875,11 @@ function removalPlan(
       (part.held === undefined || !sameSiteToken(part.held, part.from))
   );
   const removable = parts.filter(part => part.from === undefined);
-  const gate = removable.some(part => part.at === entry.row.at)
-    ? usage
-    : undefined;
+  const gate = removable.length === 0 ? undefined : usage;
+  const reach =
+    gate === undefined
+      ? undefined
+      : combinedReach(removable.map(part => gate.reachOf(part.identity)));
   // The whole variable when every half is the site's own; otherwise only the
   // half that is, named, since the other stays.
   const halves = removable.map(part => part.name).join(" and ");
@@ -881,7 +890,8 @@ function removalPlan(
     what: whole ? entry.label : `${halves} of ${entry.label}`,
     label: whole ? "Remove" : `Remove ${halves}`,
     gate,
-    removal: variableRemoval(gate?.reach),
+    reach,
+    removal: variableRemoval(reach),
   };
 }
 
@@ -911,7 +921,7 @@ function ActionRow({
     <div className="nx-vars-editor__actions">
       {plan.gate === undefined ? null : (
         <span className="nx-vars-editor__status">
-          {variableStatus(plan.gate.reach)}
+          {variableStatus(plan.reach)}
         </span>
       )}
       {plan.changed.length === 0 ? null : (
@@ -1004,6 +1014,8 @@ function ConfirmRemove({
 /** One stored variable behind an entry, with what the site's code supplies. */
 interface Part {
   name: string;
+  /** The variable's identity, which its usage is read by. */
+  identity: string;
   at: number;
   held: SiteToken | undefined;
   from: SiteToken | undefined;
@@ -1021,6 +1033,7 @@ function partsOf(
 ): Part[] {
   const own: Part = {
     name: "size",
+    identity: entry.row.identity,
     at: entry.row.at,
     held: token,
     from: suppliedOf(entry.row.identity),
@@ -1030,6 +1043,7 @@ function partsOf(
     own,
     {
       name: "line height",
+      identity: entry.lineHeight.identity,
       at: entry.lineHeight.at,
       held: tokens.tokens[entry.lineHeight.at],
       from: suppliedOf(entry.lineHeight.identity),

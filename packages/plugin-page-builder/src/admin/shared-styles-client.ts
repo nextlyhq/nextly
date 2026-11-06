@@ -30,6 +30,7 @@ import {
   SHARED_STYLE_IN_USE_CODE,
   SHARED_STYLE_LOCK_ROUTE_PATH,
   SHARED_STYLE_REMOVE_ROUTE_PATH,
+  SHARED_STYLE_WHERE_USED_PAGES_MAX,
   sharedStyleUsagePath,
   sharedStyleWhereUsedPath,
   type SharedStyleLockRequest,
@@ -77,6 +78,8 @@ export interface UsesList<I> {
  */
 export function usesPageFrom<I, O>(
   body: UsesList<I> | undefined,
+  /** The page read, from 1: none follows the last a route may be asked for. */
+  page: number,
   item: (item: I) => O
 ): {
   readonly items: readonly O[];
@@ -91,7 +94,9 @@ export function usesPageFrom<I, O>(
     items: body.items.map(item),
     total: body.meta.total,
     hidden: body.meta.hiddenCount ?? 0,
-    hasNext: body.meta.hasNext,
+    // The route refuses a page past its last, so none is offered past it;
+    // the places beyond are counted in `total` and not named.
+    hasNext: body.meta.hasNext && page < SHARED_STYLE_WHERE_USED_PAGES_MAX,
     // The route names the documents it could not count while some pages are
     // still being counted, so the list may be short.
     complete: body.meta.notConsulted === undefined,
@@ -100,9 +105,10 @@ export function usesPageFrom<I, O>(
 
 /** One where-used page as the tab reads it. */
 function usesFromResponse(
-  body: UsesList<SharedStyleUseItem> | undefined
+  body: UsesList<SharedStyleUseItem> | undefined,
+  page: number
 ): SharedStyleUsesPage {
-  return usesPageFrom(body, item => ({
+  return usesPageFrom(body, page, item => ({
     id: item.id,
     title: item.title,
     // Kept: an id is unique only within its collection.
@@ -167,7 +173,8 @@ export function useSharedStylesClient(): SharedStylesAccess {
           plugin: PAGE_BUILDER_PLUGIN_NAME,
           path: sharedStyleWhereUsedPath(id, page),
           signal,
-        })
+        }),
+        page
       ),
     []
   );
