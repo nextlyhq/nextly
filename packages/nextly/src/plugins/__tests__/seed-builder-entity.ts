@@ -66,6 +66,12 @@ export interface SeedBuilderCollectionOptions {
    * language. Collections only.
    */
   localized?: boolean;
+  /**
+   * Lays the collection out per language without marking it translatable, as a site with
+   * `experimental.perLanguageStorage` keeps every collection: its translatable fields live in the
+   * companion, which has no `_status` since the collection publishes as a document.
+   */
+  storedPerLanguage?: boolean;
 }
 
 /**
@@ -121,16 +127,19 @@ export async function seedBuilderCollection(
     adapter.getCapabilities().dialect
   );
   const localized = opts.localized === true;
+  // Where the translatable values live, which a site keeping them per language decides for an
+  // untranslated collection too.
+  const perLanguage = localized || opts.storedPerLanguage === true;
   const migrationSQL = schemaService.generateMigrationSQL(
     tableName,
     userFields,
     {
       hasStatus: opts.status === true,
-      localized,
+      localized: perLanguage,
     }
   );
   await executeStatements(adapter, migrationSQL);
-  if (localized) {
+  if (perLanguage) {
     await executeStatements(
       adapter,
       companionCreateSql(adapter, { slug, tableName, fields: userFields, opts })
@@ -161,7 +170,7 @@ export async function seedBuilderCollection(
     tableName,
     userFields,
     adapter.getCapabilities().dialect,
-    { status: opts.status === true, localized }
+    { status: opts.status === true, localized: perLanguage }
   );
   registerRuntimeTable(adapter, tableName, table);
 
@@ -192,7 +201,8 @@ function companionCreateSql(
     // Read only to seed existing rows, and a seeded table has none.
     defaultLocale: "en",
     collectionLocalized: true,
-    status: args.opts.status === true,
+    // Only a translated collection publishes each language on its own.
+    status: args.opts.localized === true && args.opts.status === true,
   });
   return spec ? buildCompanionCreateOnlySql(spec) : "";
 }

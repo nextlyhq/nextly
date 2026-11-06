@@ -78,6 +78,7 @@ import {
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
+  mainTableFields,
   publishesPerLanguage,
   setPerLanguageStorage,
   storesPerLanguage,
@@ -1954,6 +1955,7 @@ interface MaterializeContext {
   adapter: DrizzleAdapter;
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
+  dialect: SupportedDialect;
   addMissingColumnsForFields: (
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -1977,10 +1979,12 @@ interface MaterializeKindArgs {
   // while the collection and single ones are synchronous. Typed as
   // `unknown` because a `unknown | Promise<unknown>` union collapses to
   // `unknown` anyway; the call site awaits, which is correct for both.
+  // `localized` says whether the main table leaves its translatable columns to the companion.
   makeRuntime: (
     tableName: string,
     fields: FieldConfig[],
-    status: boolean
+    status: boolean,
+    localized: boolean
   ) => unknown;
 }
 
@@ -1998,20 +2002,60 @@ async function materializeBuilderKind(
     const before = args.loaded.find(c => c.slug === ent.slug);
     if (!before) continue;
     const fields = ent.fields ?? [];
+    // Where the entity's translatable values live. Kept per language, a translatable field a plugin
+    // added belongs in the companion, so the main table gets only the shared fields and the
+    // companion is brought up to the rest; added to the main table, it would leave the companion a
+    // column short while every write splits the value into it.
+    const perLanguage = storesPerLanguage(before);
+    const companionStatus = publishesPerLanguage(before);
     try {
       await ctx.addMissingColumnsForFields(
         ctx.adapter,
         ctx.logger,
         before.tableName,
-        fields,
+        mainTableFields(before, fields),
         { timestamps: true, builtBy: args.builtBy }
       );
+      if (perLanguage) {
+        await addMissingCompanionColumns(ctx, {
+          builtBy: args.builtBy,
+          slug: ent.slug,
+          tableName: before.tableName,
+          fields,
+          status: companionStatus,
+        });
+      }
       await args.persist(ent.slug, fields);
       if (ctx.schemaRegistry) {
         ctx.schemaRegistry.registerDynamicSchema(
           before.tableName,
-          await args.makeRuntime(before.tableName, fields, before.status)
+          await args.makeRuntime(
+            before.tableName,
+            fields,
+            before.status,
+            perLanguage
+          )
         );
+        if (perLanguage) {
+          const { buildCompanionRuntimeTable } = await import(
+            "../domains/i18n/runtime/companion-registration"
+          );
+          const companion = buildCompanionRuntimeTable({
+            slug: ent.slug,
+            tableName: before.tableName,
+            fields: fields as { name: string; type: string }[],
+            dialect: ctx.dialect,
+            builtBy: args.builtBy,
+            localized: true,
+            status: companionStatus,
+          });
+          if (companion) {
+            ctx.schemaRegistry.registerDynamicSchema(
+              companion.companionTableName,
+              companion.table
+            );
+          }
+        }
       }
     } catch (err) {
       ctx.logger.warn?.(
@@ -2021,6 +2065,49 @@ async function materializeBuilderKind(
       );
     }
   }
+}
+
+/**
+ * Bring an existing companion up to the translatable fields of a Builder entity, additively.
+ * Throws what the reconcile reported, so the entity is skipped (and retried next boot) rather than
+ * persisted with a field its companion cannot hold.
+ */
+async function addMissingCompanionColumns(
+  ctx: MaterializeContext,
+  entity: {
+    builtBy: ColumnOrigin;
+    slug: string;
+    tableName: string;
+    fields: FieldConfig[];
+    status: boolean;
+  }
+): Promise<void> {
+  const { reconcileCompanionColumns } = await import(
+    "../domains/i18n/runtime/companion-io"
+  );
+  let failure: unknown;
+  const inStep = await reconcileCompanionColumns(
+    ctx.adapter,
+    {
+      builtBy: entity.builtBy,
+      slug: entity.slug,
+      tableName: entity.tableName,
+      fields: entity.fields as { name: string; type: string }[],
+      dialect: ctx.dialect,
+      status: entity.status,
+    },
+    error => {
+      failure = error;
+    }
+  );
+  if (inStep) return;
+  throw NextlyError.internal({
+    ...(failure instanceof Error ? { cause: failure } : {}),
+    logContext: {
+      reason: "builder-companion-columns-failed",
+      slug: entity.slug,
+    },
+  });
 }
 
 /** Add, persist and register the plugin fields merged onto Builder entities. */
@@ -2037,6 +2124,7 @@ async function materializeBuilderChanges(
     adapter: args.adapter,
     logger: args.logger,
     schemaRegistry: args.schemaRegistry,
+    dialect: args.dialect,
     addMissingColumnsForFields,
   };
 
@@ -2044,13 +2132,14 @@ async function materializeBuilderChanges(
   const runtimeTable = (
     tableName: string,
     fields: FieldConfig[],
-    status: boolean
+    status: boolean,
+    localized: boolean
   ) =>
     generateRuntimeSchema(
       tableName,
       fields as unknown as FieldDefinition[],
       args.dialect,
-      { status }
+      { status, localized }
     ).table;
 
   if (args.changed.collections.length > 0) {
@@ -2151,8 +2240,9 @@ async function materializeBuilderComponents(
         loaded: args.builderEntities.components,
         persist: (slug, fields) =>
           reg.updateComponent(slug, { fields: fields }),
-        makeRuntime: async (tableName, fields) =>
+        makeRuntime: async (tableName, fields, _status, localized) =>
           compSchema.generateRuntimeSchema(tableName, fields, {
+            localized,
             typeColumn:
               (await resolveTypeColumns(adapter, [tableName])).get(tableName) ??
               STORAGE_FORMAT.columns.type,

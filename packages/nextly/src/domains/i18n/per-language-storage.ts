@@ -11,6 +11,8 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
+import { resolveLocalizedFieldNames } from "./classify-fields";
+
 // Stored on `globalThis`, as the webhook audit gate is: Next.js and Turbopack can evaluate this
 // module in more than one server module graph, and HMR evaluates it again, so a module-local value
 // lets the boot publish to one copy while a read or a reload asks another.
@@ -79,6 +81,25 @@ export function storesPerLanguage(
   entity: { localized?: unknown } | null | undefined
 ): boolean {
   return state.enabled || entity?.localized === true;
+}
+
+/**
+ * The fields whose columns belong on an entity's main table: every one, or for an entity whose
+ * translatable values live in its companion (`storesPerLanguage`), its shared ones only, so a
+ * column top-up never puts a translatable column back on the main table.
+ */
+export function mainTableFields<F extends { name?: string; type: string }>(
+  entity: { localized?: unknown },
+  fields: F[]
+): F[] {
+  if (!storesPerLanguage(entity)) return fields;
+  const translatable = new Set(
+    resolveLocalizedFieldNames(
+      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
+      true
+    )
+  );
+  return fields.filter(field => !field.name || !translatable.has(field.name));
 }
 
 /**
