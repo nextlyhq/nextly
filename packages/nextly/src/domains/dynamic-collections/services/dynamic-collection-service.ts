@@ -102,6 +102,12 @@ export interface CollectionArtifacts {
   localMigrationSQL?: string;
   migrationFileName: string;
   tableName: string;
+  /**
+   * The collection as the Schema Builder's definition file records it, the
+   * entry its registry upsert is built from. Set by a create, which a Builder
+   * save writes into the definition and generates its migration from.
+   */
+  manifestEntity?: UiSchemaEntity;
   metadata: {
     id: string;
     slug: string;
@@ -626,9 +632,14 @@ export class DynamicCollectionService extends BaseService {
     //
     // The update path already draws this distinction and names it the same way;
     // the create path simply never needed it before.
+    const manifestEntity = this.manifestEntityFor(
+      normalizedName,
+      data,
+      userDefinedFields
+    );
     const fullMigrationSQL = this.appendMetadataUpsertSQL(
       withCompanion,
-      this.manifestEntityFor(normalizedName, data, userDefinedFields)
+      manifestEntity
     );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
@@ -686,6 +697,7 @@ export class DynamicCollectionService extends BaseService {
       migrationFileName: `${Date.now()}_create_${normalizedName}.sql`,
       tableName,
       metadata,
+      manifestEntity,
     };
   }
 

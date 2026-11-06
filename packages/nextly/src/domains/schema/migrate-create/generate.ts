@@ -261,6 +261,14 @@ export interface GenerateArgs {
    * the latest snapshot differ on, as `migrate:create` writes it.
    */
   scope?: GenerateScope;
+  /**
+   * Tables to describe as the database has them rather than as their entity's
+   * declaration maps them: a Schema Builder save adopting a table an earlier
+   * version made writes a file that describes it exactly, so recording it
+   * applied claims nothing the database does not hold. Each replaces the
+   * declared table of its name.
+   */
+  tablesAsTheyStand?: readonly TableSpec[];
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -380,6 +388,19 @@ function settingsInScope(
   };
 }
 
+/** `snapshot` with each of `tables` in place of the table of its name. */
+function withTablesAsTheyStand(
+  snapshot: NextlySchemaSnapshot,
+  tables: readonly TableSpec[] | undefined
+): NextlySchemaSnapshot {
+  if (tables === undefined || tables.length === 0) return snapshot;
+  const byName = new Map(tables.map(t => [t.name, t]));
+  return {
+    ...snapshot,
+    tables: snapshot.tables.map(t => byName.get(t.name) ?? t),
+  };
+}
+
 /** A rename candidate's identity: its table and the two columns it pairs. */
 const renameKey = (c: RenameCandidate) =>
   `${c.tableName}\u0000${c.fromColumn}\u0000${c.toColumn}`;
@@ -439,11 +460,14 @@ export async function generateMigration(
   const unscoped = appStreamSnapshots({
     previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
     previousContributions: previous?.data.contributions ?? {},
-    desired: buildDesiredSnapshotFromConfig(
-      args.collections,
-      args.singles,
-      args.components,
-      args.dialect
+    desired: withTablesAsTheyStand(
+      buildDesiredSnapshotFromConfig(
+        args.collections,
+        args.singles,
+        args.components,
+        args.dialect
+      ),
+      args.tablesAsTheyStand
     ),
     tables: args.appStream ?? NO_APP_STREAM_TABLES,
   });

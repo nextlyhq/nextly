@@ -26,14 +26,18 @@
  * @module domains/schema/builder-save/collection-save
  */
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
+  cp,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -46,7 +50,12 @@ import type {
 } from "../../../schemas/_zod/ui-schema";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
-import { reconcileFile, runRecordedAttempt } from "../migrate/drift-reconcile";
+import {
+  reconcileFile,
+  recordAlreadyApplied,
+  runRecordedAttempt,
+  snapshotsEquivalent,
+} from "../migrate/drift-reconcile";
 import { runMigrationStatements } from "../migrate/migration-transaction";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -55,10 +64,18 @@ import {
   appMigrationInputs,
   type AppMigrationInputsArgs,
 } from "../migrate-create/app-migration-inputs";
-import { generateMigration } from "../migrate-create/generate";
+import {
+  buildDesiredSnapshotFromConfig,
+  generateMigration,
+} from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+import type {
+  NextlySchemaSnapshot,
+  Operation,
+  TableSpec,
+} from "../pipeline/diff/types";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { toSnakeCase } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
@@ -93,6 +110,11 @@ export interface CollectionSave {
   entity: UiSchemaEntity | null;
   /** The change in a word or two, for the file name: `create`, `update`, `delete`. */
   change: string;
+  /**
+   * The columns whose conversion the person confirmed in the save's review
+   * (`previewCollectionSave`): a save converts no column it was not shown to.
+   */
+  acknowledgedConversions?: readonly string[];
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
   /** Override the clock for tests. */
@@ -116,48 +138,283 @@ export async function writeCollectionSave(
   save: CollectionSave
 ): Promise<CollectionSaveResult> {
   await refuseUnsettledHistory(deps);
+  const plan = await planSave(deps, save);
+  refuseUnconfirmedConversions(plan, save);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
-  const current = await loadUiSchema({
-    projectRoot: deps.projectRoot,
-    uiSchemaFile: deps.config.db.uiSchemaFile,
-  });
-  const next = withCollection(current, save.slug, save.entity);
-  await writeAtomically(definitionPath, serializeUiSchema(next));
+  await writeAtomically(definitionPath, serializeUiSchema(plan.next));
 
   const written: string[] = [];
   try {
-    const now = save.now ?? new Date();
-    const table = resolveCollectionTableName(save.slug);
-    const adopting =
-      save.previous !== null && (await needsAdopting(deps, table));
-    if (adopting && save.previous !== null) {
-      written.push(
-        ...(await generateFor(deps, {
-          manifest: withCollection(current, save.slug, save.previous),
-          save,
-          name: `${migrationSlug(save.slug)}_adopt`,
-          table,
-          now,
-        }))
-      );
-    }
-    written.push(
-      ...(await generateFor(deps, {
-        manifest: next,
-        save,
-        name: `${migrationSlug(save.slug)}_${save.change}`,
-        table,
-        now: adopting ? new Date(now.getTime() + 1) : now,
-      }))
+    const files = await writeFiles(deps, save, plan, names =>
+      written.push(...names)
     );
-    if (deps.applies) await runWritten(deps, written, table);
-    return { files: written, applied: deps.applies };
+    if (deps.applies) await runWritten(deps, files, plan.table);
+    return { files: [...written], applied: deps.applies };
   } catch (error) {
     await undoUnapplied(deps, written, before, definitionPath, error);
     throw error;
   }
+}
+
+/**
+ * What the save would write, generated as the save generates it into a
+ * scratch folder holding the latest snapshots, with nothing written where the
+ * app reads: the files, and each column the save also brings to the one
+ * field-to-column mapping, as a line the person reads before confirming.
+ */
+export async function previewCollectionSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave
+): Promise<CollectionSavePreview> {
+  const plan = await planSave(deps, save);
+  const scratch = await mkdtemp(join(tmpdir(), "nextly-save-preview-"));
+  try {
+    const meta = join(deps.migrationsDir, "meta");
+    if (existsSync(meta)) {
+      await cp(meta, join(scratch, "meta"), { recursive: true });
+    }
+    const files = await writeFiles(
+      { ...deps, migrationsDir: scratch },
+      save,
+      plan,
+      () => {}
+    );
+    const names = [
+      ...(files.adopt === undefined ? [] : [files.adopt]),
+      ...files.change,
+    ];
+    const conversions = plan.adoption?.conversions ?? [];
+    return {
+      adopts: plan.adoption !== null,
+      conversions,
+      notices: conversions.map(conversionNotice),
+      files: await Promise.all(
+        names.map(async name => ({
+          name,
+          sql: await readFile(join(scratch, name), "utf-8"),
+        }))
+      ),
+    };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/** A column a save brings from how an earlier version made it to the one mapping. */
+export interface ColumnConversion {
+  table: string;
+  column: string;
+  from: string;
+  to: string;
+}
+
+/** What a save would do, for the person to review before confirming it. */
+export interface CollectionSavePreview {
+  /** Whether the save first adopts a table no snapshot records. */
+  adopts: boolean;
+  /** Each column the save also converts, beyond the person's change. */
+  conversions: ColumnConversion[];
+  /** One line per conversion, as the review shows it. */
+  notices: string[];
+  /** The files the save would write, in run order. */
+  files: { name: string; sql: string }[];
+}
+
+/** How the definition stands, what it becomes, and any adoption the save makes first. */
+interface SavePlan {
+  current: UiSchemaManifest;
+  next: UiSchemaManifest;
+  table: string;
+  adoption: Adoption | null;
+}
+
+/** A table to adopt as the database has it, and what bringing it to the mapping converts. */
+interface Adoption {
+  table: TableSpec;
+  conversions: ColumnConversion[];
+}
+
+async function planSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave
+): Promise<SavePlan> {
+  const current = await loadUiSchema({
+    projectRoot: deps.projectRoot,
+    uiSchemaFile: deps.config.db.uiSchemaFile,
+  });
+  const table = resolveCollectionTableName(save.slug);
+  return {
+    current,
+    next: withCollection(current, save.slug, save.entity),
+    table,
+    adoption: await adoptionFor(deps, save, current, table),
+  };
+}
+
+/**
+ * The adoption a save of an existing collection makes first, where its table
+ * is in the database and in no snapshot: the table as the database has it,
+ * and every difference between that and how the one field-to-column mapping
+ * declares the collection as it stood, which the change then converts.
+ */
+async function adoptionFor(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  current: UiSchemaManifest,
+  table: string
+): Promise<Adoption | null> {
+  if (save.previous === null || !(await needsAdopting(deps, table))) {
+    return null;
+  }
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const live = (
+    await introspectLiveSnapshot(deps.adapter.getDrizzle(), dialect, [table])
+  ).tables.find(t => t.name === table);
+  if (live === undefined) return null;
+  const inputs = await appMigrationInputs({
+    ...inputsArgs(deps),
+    manifest: withCollection(current, save.slug, save.previous),
+  });
+  const declared = inputs.collections.find(c => c.slug === save.slug);
+  const mapped =
+    declared === undefined
+      ? undefined
+      : buildDesiredSnapshotFromConfig([declared], [], [], dialect).tables.find(
+          t => t.name === table
+        );
+  return {
+    table: live,
+    conversions:
+      mapped === undefined
+        ? []
+        : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op =>
+            conversionOf(table, op)
+          ),
+  };
+}
+
+/** One difference between an adopted table and the mapping, as a conversion. */
+function conversionOf(table: string, op: Operation): ColumnConversion {
+  switch (op.type) {
+    case "change_column_type":
+      return { table, column: op.columnName, from: op.fromType, to: op.toType };
+    case "change_column_nullable":
+      return {
+        table,
+        column: op.columnName,
+        from: op.fromNullable ? "nullable" : "not null",
+        to: op.toNullable ? "nullable" : "not null",
+      };
+    case "change_column_default":
+      return {
+        table,
+        column: op.columnName,
+        from: op.fromDefault ?? "no default",
+        to: op.toDefault ?? "no default",
+      };
+    default:
+      return {
+        table,
+        column: "columnName" in op ? String(op.columnName) : table,
+        from: "as an earlier version made it",
+        to: `as Nextly declares it (${op.type.replace(/_/g, " ")})`,
+      };
+  }
+}
+
+/** The line the review shows for a conversion. */
+function conversionNotice(conversion: ColumnConversion): string {
+  return `This save also converts ${conversion.column} from ${conversion.from} to ${conversion.to}, from an earlier Nextly version.`;
+}
+
+/**
+ * Refuses a save that would convert a column the caller did not acknowledge:
+ * the Builder changes only what it said it would, so each conversion is named
+ * in the review (`previewCollectionSave`) and confirmed before it is written.
+ */
+function refuseUnconfirmedConversions(
+  plan: SavePlan,
+  save: CollectionSave
+): void {
+  const acknowledged = new Set(save.acknowledgedConversions ?? []);
+  const unconfirmed = (plan.adoption?.conversions ?? []).filter(
+    c => !acknowledged.has(c.column)
+  );
+  if (unconfirmed.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
+    publicMessage: `${unconfirmed.map(conversionNotice).join(" ")} Review the save and confirm the conversion to write it.`,
+    logContext: { columns: unconfirmed.map(c => c.column) },
+  });
+}
+
+/** The files a save writes, adopt first. */
+interface SaveFiles {
+  adopt: string | undefined;
+  change: string[];
+}
+
+/**
+ * Generate the save's files into `deps.migrationsDir`: the adoption, where
+ * there is one, then the change, a millisecond later so it runs after.
+ */
+async function writeFiles(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  plan: SavePlan,
+  onWritten: (names: string[]) => void
+): Promise<SaveFiles> {
+  const now = save.now ?? new Date();
+  let adopt: string | undefined;
+  if (plan.adoption !== null && save.previous !== null) {
+    const adopted = await generateFor(deps, {
+      manifest: withCollection(plan.current, save.slug, save.previous),
+      save,
+      name: `${migrationSlug(save.slug)}_adopt`,
+      table: plan.table,
+      now,
+      tablesAsTheyStand: [plan.adoption.table],
+    });
+    onWritten(adopted);
+    if (adopted.length > 1) {
+      // A translated collection's companion table is written as files of its
+      // own, with no snapshot to adopt it against.
+      throw new NextlyError({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+        publicMessage: `${save.slug} is translated, and its table was made by an earlier Nextly version with no migration recording it. Record it first: run \`nextly migrate:create\`, then \`nextly migrate:resolve --applied <file>\` for each file it writes, and save again.`,
+      });
+    }
+    adopt = adopted[0];
+  }
+  // Each conversion to the one mapping in a file of its own, run before the
+  // change: a stored value one cannot take stops it at its first statement,
+  // before the person's change has touched the table.
+  let offset = adopt === undefined ? 0 : 1;
+  const convert: string[] = [];
+  if ((plan.adoption?.conversions.length ?? 0) > 0 && save.previous !== null) {
+    convert.push(
+      ...(await generateFor(deps, {
+        manifest: withCollection(plan.current, save.slug, save.previous),
+        save,
+        name: `${migrationSlug(save.slug)}_convert`,
+        table: plan.table,
+        now: new Date(now.getTime() + offset),
+      }))
+    );
+    onWritten(convert);
+    offset += 1;
+  }
+  const change = await generateFor(deps, {
+    manifest: plan.next,
+    save,
+    name: `${migrationSlug(save.slug)}_${save.change}`,
+    table: plan.table,
+    now: new Date(now.getTime() + offset),
+  });
+  onWritten(change);
+  return { adopt, change: [...convert, ...change] };
 }
 
 /**
@@ -299,19 +556,13 @@ async function generateFor(
     name: string;
     table: string;
     now: Date;
+    tablesAsTheyStand?: TableSpec[];
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const inputs = await appMigrationInputs({
-    config: deps.config,
-    ...(deps.deferredExtends === undefined
-      ? {}
-      : { deferredExtends: deps.deferredExtends }),
+    ...inputsArgs(deps),
     manifest: args.manifest,
-    projectRoot: deps.projectRoot,
-    migrationsDir: deps.migrationsDir,
-    dialect,
-    logger: deps.logger,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
   const result = await generateMigration({
@@ -331,12 +582,29 @@ async function generateFor(
       slug: args.save.slug,
       tables: new Set([args.table]),
     },
+    ...(args.tablesAsTheyStand === undefined
+      ? {}
+      : { tablesAsTheyStand: args.tablesAsTheyStand }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,
   });
   if (result === null) return [];
   return (await sqlFiles(deps.migrationsDir)).filter(f => !before.has(f));
+}
+
+/** What `appMigrationInputs` is asked with for this app, its definition aside. */
+function inputsArgs(deps: CollectionSaveDeps): AppMigrationInputsArgs {
+  return {
+    config: deps.config,
+    ...(deps.deferredExtends === undefined
+      ? {}
+      : { deferredExtends: deps.deferredExtends }),
+    projectRoot: deps.projectRoot,
+    migrationsDir: deps.migrationsDir,
+    dialect: deps.adapter.getCapabilities().dialect,
+    logger: deps.logger,
+  };
 }
 
 /** Each candidate accepted exactly where the person renamed that field. */
@@ -366,11 +634,14 @@ async function sqlFiles(dir: string): Promise<string[]> {
 /**
  * Run each written file as `nextly migrate` runs it, recorded in the ledger:
  * one with a snapshot through the reconcile, judged on the collection's table
- * alone; a companion with none, as written.
+ * alone; a companion with none, as written. An adoption is recorded applied
+ * with the change's first file, through the handle that file's row is written
+ * on, so a change that fails leaves the adoption unrecorded too; with no
+ * change, it is reconciled alone, against the table it describes.
  */
 async function runWritten(
   deps: CollectionSaveDeps,
-  files: readonly string[],
+  files: SaveFiles,
   table: string
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
@@ -387,39 +658,103 @@ async function runWritten(
       unit,
       after
     );
-  let before = await scopedSnapshotBefore(deps, files[0], table);
-  for (const filename of files) {
-    const path = join(deps.migrationsDir, filename);
-    const content = await readFile(path, "utf-8");
-    const file = {
-      filename,
-      sql: parseSqlSections(content).upSql,
-      path,
-      sha256: checksumOf(content),
-      transaction: !marksNoTransaction(content),
-    };
+  const ordered =
+    files.change.length === 0 && files.adopt !== undefined
+      ? [files.adopt]
+      : files.change;
+  let pendingAdoption =
+    files.change.length === 0 || files.adopt === undefined
+      ? undefined
+      : await unitOf(deps, files.adopt);
+  let before = await scopedSnapshotBefore(deps, ordered[0], table);
+  for (const filename of ordered) {
+    await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
+  }
+
+  async function runOne(filename: string): Promise<void> {
+    const file = await unitOf(deps, filename);
     const target = await snapshotOf(deps, filename);
     if (target === null) {
       await runRecordedAttempt({ file, dialect, repo, executeSql });
-      continue;
+      return;
     }
     const scopedTarget = onlyTable(target, table);
-    const live = await introspectLiveSnapshot(
-      db,
-      dialect,
-      (await deps.adapter.tableExists(table)) ? [table] : []
-    );
+    const adoption = pendingAdoption;
     await reconcileFile({
       file,
       before,
       target: scopedTarget,
-      live: onlyTable(live, table),
+      live: await liveTable(deps, table),
       dialect,
       repo,
       executeSql,
+      ...(adoption === undefined
+        ? {}
+        : {
+            recordApplied: (handle: unknown) =>
+              recordAlreadyApplied(adoption, repo.boundTo(handle)),
+          }),
     });
+    pendingAdoption = undefined;
     before = scopedTarget;
   }
+}
+
+/**
+ * Run one file, and where it fails, say whether any of it stayed: the
+ * collection's table as it stood before the file, compared with how it stands
+ * after the failure. MySQL commits each schema statement as it runs, so a file
+ * that failed at a later statement keeps the earlier ones whatever the error
+ * says; such a failure is thrown as part-way, so its files are kept for
+ * `nextly migrate:resolve`. One that changed nothing is thrown as it was.
+ */
+async function runJudgingWhatStayed(
+  deps: CollectionSaveDeps,
+  table: string,
+  filename: string,
+  run: () => Promise<void>
+): Promise<void> {
+  const before = await liveTable(deps, table);
+  try {
+    await run();
+  } catch (error) {
+    if (snapshotsEquivalent(before, await liveTable(deps, table))) throw error;
+    throw new NextlyError({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      publicMessage: `${filename} failed part-way, and the statements before the failure stayed applied: ${NextlyError.is(error) ? error.publicMessage : String(error)} Settle it with \`nextly migrate:resolve\` before saving again.`,
+      logContext: { reason: "partially-applied", file: filename },
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
+}
+
+/** The collection's table as the database has it now, alone. */
+async function liveTable(
+  deps: CollectionSaveDeps,
+  table: string
+): Promise<NextlySchemaSnapshot> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  return onlyTable(
+    await introspectLiveSnapshot(
+      deps.adapter.getDrizzle(),
+      dialect,
+      (await deps.adapter.tableExists(table)) ? [table] : []
+    ),
+    table
+  );
+}
+
+/** A written file as the runner takes it. */
+async function unitOf(deps: CollectionSaveDeps, filename: string) {
+  const path = join(deps.migrationsDir, filename);
+  const content = await readFile(path, "utf-8");
+  return {
+    filename,
+    sql: parseSqlSections(content).upSql,
+    path,
+    sha256: checksumOf(content),
+    transaction: !marksNoTransaction(content),
+  };
 }
 
 /** The snapshot beside `filename`, or null where it has none. */

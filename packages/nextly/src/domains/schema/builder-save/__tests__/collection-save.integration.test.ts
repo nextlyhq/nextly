@@ -41,6 +41,7 @@ import { checksumOf } from "../../migrate/applied-checksums";
 import { splitSqlStatements } from "../../migrate/split-sql";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
+  previewCollectionSave,
   writeCollectionSave,
   type CollectionSaveDeps,
 } from "../collection-save";
@@ -358,8 +359,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await columns()).toContain("subtitle");
     });
 
-    it("adopts a collection whose table no snapshot records, then writes the change", async () => {
-      // A table an earlier version's Builder made, as it made it: in the database, in no snapshot.
+    /** A table an earlier version's Builder made, as it made it: in the database, in no snapshot. */
+    async function earlierBuilderTable(): Promise<void> {
       const artifacts = (await new DynamicCollectionService(
         adapter,
         quiet as never
@@ -377,25 +378,150 @@ describe.each(getConfiguredTestDialects())(
       )) {
         await adapter.executeQuery(statement);
       }
-      expect(await columns()).toContain("body");
+    }
 
-      const result = await writeCollectionSave(deps(), {
-        slug: "posts",
-        previous: posts([text("body")]),
-        entity: posts([text("body"), text("subtitle")]),
-        change: "update",
-      });
+    /** The save adding `subtitle` to the earlier Builder's posts. */
+    const addSubtitle = (acknowledged?: string[]) => ({
+      slug: "posts",
+      previous: posts([text("body")]),
+      entity: posts([text("body"), text("subtitle")]),
+      change: "update",
+      ...(acknowledged === undefined
+        ? {}
+        : { acknowledgedConversions: acknowledged }),
+    });
+
+    // An earlier Builder made a MySQL text field TEXT; the one mapping says varchar(255).
+    const converts = dialect === "mysql";
+
+    it("previews the save, naming each column it brings to the one mapping, and writes nothing", async () => {
+      await earlierBuilderTable();
+      const before = {
+        files: migrationFiles(),
+        definition: definition(),
+        applied: await appliedRows(),
+      };
+
+      const preview = await previewCollectionSave(deps(), addSubtitle());
+
+      expect(preview.adopts).toBe(true);
+      expect(preview.conversions).toEqual(
+        converts
+          ? [
+              {
+                table: "dc_posts",
+                column: "body",
+                from: "text",
+                to: "varchar(255)",
+              },
+            ]
+          : []
+      );
+      expect(preview.notices).toEqual(
+        converts
+          ? [
+              "This save also converts body from text to varchar(255), from an earlier Nextly version.",
+            ]
+          : []
+      );
+      expect({
+        files: migrationFiles(),
+        definition: definition(),
+        applied: await appliedRows(),
+      }).toEqual(before);
+    });
+
+    it("adopts the table as it stands, converts it to the one mapping, then writes the change", async () => {
+      await earlierBuilderTable();
+
+      const result = await writeCollectionSave(deps(), addSubtitle(["body"]));
 
       const files = migrationFiles();
-      expect(files).toHaveLength(2);
-      expect(files[0]).toMatch(/_posts_adopt\.sql$/);
-      expect(files[1]).toMatch(/_posts_update\.sql$/);
-      expect(result.files).toEqual(files);
-      expect(readFileSync(join(dir, "migrations", files[0]!), "utf-8")).toMatch(
-        /CREATE TABLE/
+      // The conversion runs alone before the change, so a value it cannot take stops it at its
+      // first statement, with nothing applied.
+      expect(files.map(f => f.replace(/^\d{8}_\d{6}_\d{3}_/, ""))).toEqual(
+        converts
+          ? ["posts_adopt.sql", "posts_convert.sql", "posts_update.sql"]
+          : ["posts_adopt.sql", "posts_update.sql"]
       );
+      expect(result.files).toEqual(files);
+      const read = (f: string) =>
+        readFileSync(join(dir, "migrations", f), "utf-8");
+      expect(read(files[0]!)).toMatch(/CREATE TABLE/);
+      if (converts) {
+        // As the database has it, then brought to the mapping, then changed.
+        expect(read(files[0]!)).toMatch(/`body` text/);
+        expect(read(files[1]!)).toMatch(/`body`[^;]*varchar\(255\)/);
+        expect(read(files[1]!)).not.toMatch(/subtitle/);
+        expect(read(files[2]!)).not.toMatch(
+          /varchar\(255\)[^;]*`body`|`body`[^;]*varchar/
+        );
+      }
       expect(await columns()).toContain("subtitle");
       expect((await appliedRows()).map(r => r.filename)).toEqual(files);
     });
+
+    it.runIf(converts)(
+      "refuses a conversion the save was not shown to, and writes nothing",
+      async () => {
+        await earlierBuilderTable();
+        const before = {
+          files: migrationFiles(),
+          definition: definition(),
+          columns: await columns(),
+          applied: await appliedRows(),
+        };
+
+        await expect(
+          writeCollectionSave(deps(), addSubtitle())
+        ).rejects.toMatchObject({
+          code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
+          statusCode: 409,
+          publicMessage: expect.stringContaining(
+            "converts body from text to varchar(255)"
+          ),
+        });
+
+        expect({
+          files: migrationFiles(),
+          definition: definition(),
+          columns: await columns(),
+          applied: await appliedRows(),
+        }).toEqual(before);
+      }
+    );
+
+    it.runIf(converts)(
+      "refuses the save with MySQL's reason where a stored value is too long, and leaves no file",
+      async () => {
+        await earlierBuilderTable();
+        await adapter.executeQuery(
+          `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', '${"x".repeat(300)}', 'long', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+        );
+        const before = {
+          files: migrationFiles(),
+          definition: definition(),
+          columns: await columns(),
+          applied: await appliedRows(),
+        };
+
+        await expect(
+          writeCollectionSave(deps(), addSubtitle(["body"]))
+        ).rejects.toMatchObject({
+          publicMessage: expect.stringMatching(/too long|Data truncated/i),
+        });
+
+        expect({
+          files: migrationFiles(),
+          definition: definition(),
+          columns: await columns(),
+          applied: await appliedRows(),
+        }).toEqual(before);
+        // Nothing is left to settle: the next save, with the value shortened, goes through.
+        await adapter.executeQuery(`UPDATE dc_posts SET body = 'short'`);
+        await writeCollectionSave(deps(), addSubtitle(["body"]));
+        expect(await columns()).toContain("subtitle");
+      }
+    );
   }
 );
