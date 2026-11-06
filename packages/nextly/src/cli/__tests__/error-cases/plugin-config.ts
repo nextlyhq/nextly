@@ -36,6 +36,7 @@ import {
   slugCollisionError,
 } from "../../../plugins/schema-error";
 import { topoSortPlugins } from "../../../plugins/topo-sort";
+import { assertDocumentSurfaces } from "../../../plugins/document-surfaces";
 import { assertDocumentViews } from "../../../plugins/validate-document-views";
 import { validatePluginMenus } from "../../../plugins/validate-menus";
 import { validatePluginSlugs } from "../../../plugins/validate-slugs";
@@ -254,6 +255,44 @@ export const PLUGIN_CONFIG_CASES = {
                 posts: {
                   documentViews: [{ path: "Insights", component: "seo#Panel" }],
                 },
+              },
+            },
+          },
+        }),
+      ])
+    ),
+  // `plugins/document-surfaces.ts`.
+  PLUGIN_DOCUMENT_SURFACE_COLLISION: () =>
+    thrown(() =>
+      assertDocumentSurfaces([
+        plugin("layouts", {
+          contributes: {
+            admin: {
+              views: { pages: { documentActions: { delete: "hidden" } } },
+            },
+          },
+        }),
+        plugin("archive", {
+          contributes: {
+            admin: {
+              views: {
+                pages: {
+                  documentActions: { delete: { component: "archive#Remove" } },
+                },
+              },
+            },
+          },
+        }),
+      ])
+    ),
+  PLUGIN_DOCUMENT_SURFACE_INVALID: () =>
+    thrown(() =>
+      assertDocumentSurfaces([
+        plugin("layouts", {
+          contributes: {
+            admin: {
+              views: {
+                pages: { documentActions: { delete: { component: "" } } },
               },
             },
           },

@@ -185,14 +185,35 @@ export function useCanvasBindings(
     readonly userId: string;
     readonly bindings: PageBindings;
   } | null>(null);
+  // Bumped once an answer has been kept its while, so the same ask is made
+  // again: a source can change while what the page asks stays the same (a
+  // saved title, an updated Single).
+  const [round, setRound] = useState(0);
   useEffect(() => {
     // The route answers whoever the session cookie names, so an answer is
     // only asked for, and kept, under a person known by id.
     if (key === "" || userId === null) return;
     let current = true;
+    let stale: ReturnType<typeof setTimeout> | undefined;
+    // Asked again when the editor is back in sight, never while it is not.
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") return;
+      document.removeEventListener("visibilitychange", onVisible);
+      setRound(value => value + 1);
+    };
+    const askAgain = () => {
+      if (!current) return;
+      if (document.visibilityState === "hidden") {
+        document.addEventListener("visibilitychange", onVisible);
+        return;
+      }
+      setRound(value => value + 1);
+    };
     canvasBindingsFor(JSON.parse(key) as CanvasBindingsRequest, userId).then(
       bindings => {
-        if (current) setAnswer({ key, userId, bindings });
+        if (!current) return;
+        setAnswer({ key, userId, bindings });
+        stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
       () => {
         // The sources could not be read: bound props keep their own values
@@ -204,8 +225,10 @@ export function useCanvasBindings(
     );
     return () => {
       current = false;
+      if (stale !== undefined) clearTimeout(stale);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [key, userId]);
+  }, [key, userId, round]);
   // Never another person's answer, none for an unknown person, and nothing
   // for a page with no binding.
   if (key === "" || answer === null || answer.userId !== userId) return NONE;

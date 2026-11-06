@@ -444,6 +444,12 @@ function AddressLine({
           This is the saved address. It changes when you save the page.
         </p>
       ) : null}
+      {/* Only the plugin's own Pages have this line, and their addresses
+          may sit beneath another page's, which nothing else says. */}
+      <p>
+        To put this page beneath another, use / in its address, as in{" "}
+        <span className="font-mono">docs/getting-started</span>.
+      </p>
     </section>
   );
 }

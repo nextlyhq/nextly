@@ -10,6 +10,8 @@
  */
 import {
   readListQuery,
+  resolveNodeBindings,
+  type BindingRun,
   type BlockDocument,
   type BlockNode,
   type ListQuery,
@@ -24,14 +26,15 @@ import { collectionLoop } from "./blocks/collection-loop";
  */
 export function listCollectionsWhere(
   documents: readonly BlockDocument[],
-  wanted: (query: ListQuery) => boolean
+  wanted: (query: ListQuery, list: BlockNode) => boolean,
+  run?: BindingRun
 ): Set<string> {
   const found = new Set<string>();
   const stack: BlockNode[] = documents.flatMap(document => [...document.nodes]);
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     if (node.type === collectionLoop.name) {
-      const { query } = readListQuery(node.props);
-      if (query.collection !== undefined && wanted(query)) {
+      const { query } = readListQuery(listPropsAsBound(node, run));
+      if (query.collection !== undefined && wanted(query, node)) {
         found.add(query.collection);
       }
     }
@@ -40,6 +43,21 @@ export function listCollectionsWhere(
     }
   }
   return found;
+}
+
+/**
+ * A list's props as the page's binding pass fills them, so a list whose
+ * collection an entry binding names is asked about that collection, the one
+ * it draws, rather than the fallback stored beside the binding. A binding to
+ * a list item is filled only as an item is drawn, so it leaves its prop as
+ * stored here.
+ */
+function listPropsAsBound(
+  list: BlockNode,
+  run: BindingRun | undefined
+): Record<string, unknown> {
+  if (run === undefined || list.bindings === undefined) return list.props;
+  return resolveNodeBindings(list, run, { phase: "page" }).props;
 }
 
 /**
