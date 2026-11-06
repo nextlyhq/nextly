@@ -165,6 +165,7 @@ describe("what the places would lose", () => {
       shadow: "shadow",
       duration: "value",
       custom: "value",
+      lineHeight: "line height",
     });
   });
 });
@@ -196,6 +197,28 @@ describe("what a shared style sets with a variable", () => {
     expect(sharedStyleSets([CARD], "c-card", "color.surface")).toBe(
       "sets background colour"
     );
+  });
+
+  it("finds a look by its id and block type, apart from another type's look of that id", () => {
+    const look = (blockType: string, property: string): NamedClass => ({
+      id: "look-default",
+      slug: "default",
+      orderIndex: 0,
+      blockType,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { [property]: { $token: "color.brand" } } },
+      },
+    });
+    const looks = [
+      look("core/heading", "color"),
+      look("core/button", "backgroundColor"),
+    ];
+    expect(
+      sharedStyleSets(looks, "look-default", "color.brand", "core/button")
+    ).toBe("sets background colour");
+    expect(
+      sharedStyleSets(looks, "look-default", "color.brand", "core/heading")
+    ).toBe("sets text colour");
   });
 
   it("reads every state and a structured value's parts", () => {

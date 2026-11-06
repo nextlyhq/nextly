@@ -90,6 +90,8 @@ function usesFromResponse(
       // Kept: an id is unique only within its collection.
       collection: item.collection,
       kind: item.kind,
+      // A look's block type, which names it with its id.
+      ...(item.blockType === undefined ? {} : { blockType: item.blockType }),
       ...(href === undefined ? {} : { href }),
     };
   });

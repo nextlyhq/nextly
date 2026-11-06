@@ -350,7 +350,7 @@ describe("removing a variable in use", () => {
     expect(remove.hasAttribute("disabled")).toBe(false);
     fireEvent.click(remove);
 
-    const heading = within(editor).getByRole("heading", {
+    const heading = await within(editor).findByRole("heading", {
       name: "Brand can't be removed while it's in use.",
     });
     await waitFor(() => expect(document.activeElement).toBe(heading));
@@ -428,7 +428,7 @@ describe("removing a variable in use", () => {
     expect(within(editor).getByText("Used in 6 places")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
-      within(editor).getByRole("heading", {
+      await within(editor).findByRole("heading", {
         name: "Brand can't be removed while it's in use.",
       })
     ).toBeDefined();
@@ -519,7 +519,7 @@ describe("removing a variable not counted yet", () => {
     const editor = await openEditor(/^Text.*No uses counted yet/);
     expect(within(editor).getByText("Counting where it's used…")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    const heading = within(editor).getByRole("heading", {
+    const heading = await within(editor).findByRole("heading", {
       name: "Text can't be removed yet.",
     });
     await waitFor(() => expect(document.activeElement).toBe(heading));
@@ -607,7 +607,7 @@ describe("removing a type size", () => {
     expect(within(editor).getByText("Used in 1 place")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
-      within(editor).getByRole("heading", {
+      await within(editor).findByRole("heading", {
         name: "Body can't be removed while it's in use.",
       })
     ).toBeDefined();
@@ -671,6 +671,7 @@ describe("a block look using a variable", () => {
     title: "Primary",
     collection: "site-style",
     kind: "shared-style",
+    blockType: "core/button",
   };
 
   it("names its block type and opens in the look editor, not Shared styles", async () => {
@@ -698,6 +699,55 @@ describe("a block look using a variable", () => {
     });
     // Shared styles lists no looks, so it is never sent there.
     expect(openSharedStyle).not.toHaveBeenCalled();
+  });
+
+  it("opens the look the route names by id and block type, when two types' own looks share an id", async () => {
+    const own = (blockType: string): NamedClass => ({
+      id: "look-default",
+      slug: "default",
+      label: "Default",
+      orderIndex: 0,
+      blockType,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { color: { $token: "color.brand" } } },
+      },
+    });
+    const place = (blockType: string): VariableUse => ({
+      id: "look-default",
+      title: "Default",
+      collection: "site-style",
+      kind: "shared-style",
+      blockType,
+    });
+    const openLook = vi.fn();
+    const usage = host({
+      reaches: () => ({
+        "color.brand": reach(0, ["look-default", "look-default"]),
+      }),
+      uses: [place("core/heading"), place("core/button")],
+      openLook,
+    });
+    render(
+      <Hosted
+        usage={usage}
+        classes={[own("core/heading"), own("core/button")]}
+      />
+    );
+    const editor = await openEditor(/^Brand.*Used in/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    await within(editor).findByRole("heading", { name: /in use/ });
+    const looks = await within(editor).findAllByRole("button", {
+      name: "Default",
+    });
+    expect(looks).toHaveLength(2);
+    const second = looks[1];
+    expect(second?.closest("li")?.textContent).toContain("Button look");
+    if (second !== undefined) fireEvent.click(second);
+    // The second one, not the first of that id the library holds.
+    expect(openLook).toHaveBeenCalledWith({
+      id: "look-default",
+      blockType: "core/button",
+    });
   });
 
   it("is plain text where the host cannot edit a look", async () => {
@@ -816,10 +866,87 @@ describe("a removal the save refuses", () => {
     editor = await openEditor(/^Text.*Used in 1 place$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
-      within(editor).getByRole("heading", {
+      await within(editor).findByRole("heading", {
         name: "Text can't be removed while it's in use.",
       })
     ).toBeDefined();
     expect(within(editor).queryByText(/Any block using it/)).toBeNull();
+  });
+});
+
+describe("Remove on counts read earlier", () => {
+  it("reads the variable again before refusing, and confirms when it is now unused", async () => {
+    let fresh = false;
+    const usage = host({
+      // In use when first read; unused by the time Remove is pressed.
+      reaches: () => ({ "color.text": fresh ? reach(0) : reach(2) }),
+    });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Text.*Used in 2 places$/);
+    fresh = true;
+    const readsBefore = usage.asked.length;
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    // Reading again, said; no refusal from the counts read earlier.
+    expect(within(editor).getByText("Checking where it's used…")).toBeDefined();
+    expect(
+      within(editor).queryByRole("heading", { name: /can't be removed/ })
+    ).toBeNull();
+    expect(
+      await within(editor).findByText(/Any block using it loses that style/)
+    ).toBeDefined();
+    expect(usage.asked.slice(readsBefore).flat()).toEqual(["color.text"]);
+    expect(
+      within(editor).queryByRole("heading", { name: /can't be removed/ })
+    ).toBeNull();
+  });
+
+  it("refuses on the fresh answer when it is still used", async () => {
+    const usage = host({ reaches: () => ({ "color.text": reach(2) }) });
+    render(<Hosted usage={usage} />);
+    const editor = await openEditor(/^Text.*Used in 2 places$/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      await within(editor).findByRole("heading", {
+        name: "Text can't be removed while it's in use.",
+      })
+    ).toBeDefined();
+    expect(within(editor).queryByText(/Any block using it/)).toBeNull();
+  });
+});
+
+describe("removing one half of a type size", () => {
+  it("names the half that goes and what the places would lose with it", async () => {
+    // The site's code supplies the size, unchanged; the line height is the
+    // site's own, so Remove takes that half alone.
+    const supplied: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px" },
+        },
+      ],
+    };
+    const usage = host({
+      reaches: () => ({
+        "font-size.body": reach(0),
+        "line-height.body": reach(1),
+      }),
+    });
+    render(<Hosted usage={usage} supplied={supplied} />);
+    const editor = await openEditor(/^Body.*Used in 1 place$/);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove line height" })
+    );
+    expect(
+      await within(editor).findByRole("heading", {
+        name: "Body's line height can't be removed while it's in use.",
+      })
+    ).toBeDefined();
+    expect(
+      within(editor).getByText(
+        "It's used in 1 place, and they would lose this line height:"
+      )
+    ).toBeDefined();
   });
 });

@@ -410,6 +410,12 @@ export interface UsageReads<R, Read> {
   /** Ask about these ids again, as after a write the server refused. */
   readonly reread: (ids: readonly string[]) => void;
   /**
+   * Ask about these ids again and settle once every answer is kept, for a
+   * caller that acts on the fresh answer: a removal judged on counts read
+   * earlier. Rejects when a read fails, the counts kept as they were.
+   */
+  readonly readAgain: (ids: readonly string[]) => Promise<void>;
+  /**
    * Counting the pages now, when this author may and the host can; its
    * answer reads the rows on screen again.
    */
@@ -542,6 +548,16 @@ export function useUsageReads<R, Read extends UsageRead<R>>(
     if (source === undefined || asked.length === 0) return;
     return readInto(source, asked, setState);
   }, [source, asked]);
+  const readAgain = React.useCallback(
+    async (ids: readonly string[]): Promise<void> => {
+      if (source === undefined) return;
+      // Not dropped with the view: what it settles is the caller's to use.
+      await readUsage(source, ids, new AbortController().signal, read =>
+        setState(current => mergedReads(current, read))
+      );
+    },
+    [source]
+  );
   const counter = useCountNow(source?.count, state.mayCount, recountNow, {
     answered: state.answered,
     counting,
@@ -554,6 +570,7 @@ export function useUsageReads<R, Read extends UsageRead<R>>(
     mayCount: state.mayCount,
     failed: state.failed,
     reread,
+    readAgain,
     counter,
   };
 }

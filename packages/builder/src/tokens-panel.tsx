@@ -489,7 +489,7 @@ function useUsageOfRows(
     [groups]
   );
   const reads = useVariableUsage(access, identities);
-  const { values, counter, reread } = reads;
+  const { values, counter, reread, readAgain } = reads;
   // The identities as of the latest render, read when a refusal arrives
   // rather than closed over, so the effect follows the issue alone.
   const listed = React.useRef(identities);
@@ -503,8 +503,14 @@ function useUsageOfRows(
     () =>
       access === undefined
         ? undefined
-        : { reachOf: id => values.get(id), access, counter, classes },
-    [access, values, counter, classes]
+        : {
+            reachOf: id => values.get(id),
+            readAgain,
+            access,
+            counter,
+            classes,
+          },
+    [access, values, readAgain, counter, classes]
   );
 }
 

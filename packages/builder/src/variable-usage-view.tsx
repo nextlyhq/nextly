@@ -9,12 +9,11 @@
  *
  * @module variable-usage-view
  */
-import type { NamedClass, TokenKind } from "@nextlyhq/blocks-engine";
+import type { NamedClass } from "@nextlyhq/blocks-engine";
 import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
-import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { blockLabel } from "./inserter";
 import { UsesTail, UsesUnread } from "./shared-style-details";
 import { sharedStyleKindName } from "./shared-style-library";
@@ -29,7 +28,6 @@ import {
 } from "./usage-reads";
 import { useUses, type UsesRead } from "./uses-read";
 import {
-  lookBlockType,
   sharedStyleSets,
   variableCount,
   variableLossSentence,
@@ -76,6 +74,8 @@ export function useVariableUsage(
 export interface VariableUsageHere {
   /** A variable's usage by identity, once read. */
   readonly reachOf: (identity: string) => VariableReach | undefined;
+  /** Read these variables' usage again, settling once it is kept. */
+  readonly readAgain: (identities: readonly string[]) => Promise<void>;
   readonly access: VariablesAccess;
   /** Counting the pages now, when this author may and the host can. */
   readonly counter: CountNow | undefined;
@@ -153,14 +153,18 @@ export interface RemovedPart {
  */
 export function VariableRefusal({
   name,
-  kind,
+  loss,
   parts,
   reach,
   usage,
 }: {
-  /** The variable's name, as its editor shows it. */
+  /**
+   * What Remove takes away, named: the variable, or the half of a type size
+   * that goes ("Body's line height").
+   */
   name: string;
-  kind: TokenKind;
+  /** What the places would lose, in words: "colour", "line height". */
+  loss: string;
   /** What Remove takes away: the variable, or a type size and its line height. */
   parts: readonly RemovedPart[];
   /** Their usage together. */
@@ -190,7 +194,7 @@ export function VariableRefusal({
       {inUse ? (
         <InUse
           name={name}
-          loss={VARIABLE_LOSS_WORDS[kind]}
+          loss={loss}
           parts={parts}
           reach={reach}
           usage={usage}
@@ -439,8 +443,10 @@ function StyleRow({
   identity: string;
   usage: VariableUsageHere;
 }): React.JSX.Element {
-  const sets = sharedStyleSets(usage.classes, use.id, identity);
-  const blockType = lookBlockType(usage.classes, use.id);
+  // A look is named by its id and its block type together, as the route
+  // names it: two types' own looks may share an id.
+  const { blockType } = use;
+  const sets = sharedStyleSets(usage.classes, use.id, identity, blockType);
   if (blockType !== undefined) {
     const { openLook } = usage.access;
     return (

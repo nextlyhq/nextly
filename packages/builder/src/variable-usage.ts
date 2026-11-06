@@ -96,6 +96,11 @@ export interface VariableUse {
   readonly collection: string;
   readonly kind: VariableUseKind;
   /**
+   * For a shared style that is a block look, the block type it is bound to:
+   * two types' own looks may share an id, so a look is named by the pair.
+   */
+  readonly blockType?: string;
+  /**
    * Where a document opens, when the host can say. A shared style and a
    * block type's default style have none.
    */
@@ -182,19 +187,6 @@ export function combinedReach(
     blockDefaults: [...new Set(read.flatMap(reach => reach.blockDefaults))],
     complete: read.every(reach => reach.complete),
   };
-}
-
-/**
- * The block type a shared style in the library is a look of, or nothing for
- * a shared style any block may wear, or one not in the library.
- */
-export function lookBlockType(
-  classes: readonly NamedClass[] | undefined,
-  classId: string
-): string | undefined {
-  const style = classes?.find(entry => entry.id === classId);
-  if (style === undefined || !isLook(style)) return undefined;
-  return typeof style.blockType === "string" ? style.blockType : undefined;
 }
 
 /**
@@ -352,6 +344,13 @@ function propertiesNaming(style: NamedClass, identity: string): string[] {
   return [...found];
 }
 
+/** The block type a class is a look of, or nothing for a shared style. */
+function lookTypeOf(entry: NamedClass): string | undefined {
+  return isLook(entry) && typeof entry.blockType === "string"
+    ? entry.blockType
+    : undefined;
+}
+
 /**
  * What a shared style does with a variable, said in a list of places:
  * "sets text colour", "sets padding and margin", or "uses it" when the style
@@ -360,9 +359,13 @@ function propertiesNaming(style: NamedClass, identity: string): string[] {
 export function sharedStyleSets(
   classes: readonly NamedClass[] | undefined,
   classId: string,
-  identity: string
+  identity: string,
+  /** A look's block type: two types' own looks may share an id. */
+  blockType?: string
 ): string {
-  const style = classes?.find(entry => entry.id === classId);
+  const style = classes?.find(
+    entry => entry.id === classId && lookTypeOf(entry) === blockType
+  );
   if (style === undefined) return "uses it";
   const words = [
     ...new Set(

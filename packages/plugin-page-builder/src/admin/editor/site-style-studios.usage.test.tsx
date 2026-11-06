@@ -90,6 +90,7 @@ vi.mock("../variables-client", async () => {
                 title: "Primary",
                 collection: "site-style",
                 kind: "shared-style" as const,
+                blockType: "core/button",
               },
             ],
             total: 2,

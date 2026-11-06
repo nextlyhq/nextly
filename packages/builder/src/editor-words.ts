@@ -42,7 +42,9 @@ export type EditorWord = keyof typeof EDITOR_WORDS;
  * engine's, so a dimension is a size and anything without a plainer word is
  * a value.
  */
-export const VARIABLE_LOSS_WORDS: Readonly<Record<TokenKind, string>> = {
+export const VARIABLE_LOSS_WORDS: Readonly<
+  Record<TokenKind | "lineHeight", string>
+> = {
   color: "colour",
   dimension: "size",
   fontFamily: "font",
@@ -51,4 +53,7 @@ export const VARIABLE_LOSS_WORDS: Readonly<Record<TokenKind, string>> = {
   shadow: "shadow",
   duration: "value",
   custom: "value",
+  // A type size's line height, removed on its own beside a size the site's
+  // code supplies: a dimension, but what the places lose is its line height.
+  lineHeight: "line height",
 };

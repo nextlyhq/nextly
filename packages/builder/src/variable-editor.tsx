@@ -27,6 +27,7 @@ import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
+import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
@@ -801,12 +802,12 @@ function Actions({
   onRemoved: () => void;
   usage: VariableUsageHere | undefined;
 }): React.JSX.Element | null {
-  const [step, setStep] = React.useState<RemoveStep>("idle");
   const plan = removalPlan(
     entry,
     partsOf(entry, token, tokens, suppliedOf),
     usage
   );
+  const { step, setStep, remove } = useRemoveStep(plan);
   const shown = shownStep(step, plan.removal);
   if (shown === "confirm" && plan.removable.length > 0) {
     return (
@@ -825,15 +826,16 @@ function Actions({
     <>
       <ActionRow
         plan={plan}
+        checking={shown === "checking"}
         onReset={() => onChange(resetParts(tokens, plan.changed))}
-        onRemove={() => setStep(refuses(plan.removal) ? "refused" : "confirm")}
+        onRemove={remove}
       />
       {shown === "refused" &&
       plan.gate !== undefined &&
       plan.reach !== undefined ? (
         <VariableRefusal
-          name={entry.label}
-          kind={entry.row.kind}
+          name={plan.named}
+          loss={plan.loss}
           parts={plan.removable}
           reach={plan.reach}
           usage={plan.gate}
@@ -851,6 +853,13 @@ interface RemovalPlan {
   readonly removable: readonly Part[];
   /** What the confirm names: the variable, or the half that goes. */
   readonly what: string;
+  /**
+   * What the refusal names: the variable, or the half that goes, as its
+   * heading says it ("Body's line height").
+   */
+  readonly named: string;
+  /** What the places would lose, by what goes: "colour", "line height". */
+  readonly loss: string;
   /** Remove's own words: "Remove", or "Remove line height". */
   readonly label: string;
   /** The usage that gates Remove, where the host reads it. */
@@ -884,10 +893,18 @@ function removalPlan(
   // half that is, named, since the other stays.
   const halves = removable.map(part => part.name).join(" and ");
   const whole = removable.length === parts.length;
+  const [alone] = removable;
   return {
     changed,
     removable,
     what: whole ? entry.label : `${halves} of ${entry.label}`,
+    named: whole ? entry.label : `${entry.label}'s ${halves}`,
+    // A half going on its own loses what that half is; the whole, what the
+    // variable's kind is.
+    loss:
+      !whole && removable.length === 1 && alone !== undefined
+        ? alone.loss
+        : VARIABLE_LOSS_WORDS[entry.row.kind],
     label: whole ? "Remove" : `Remove ${halves}`,
     gate,
     reach,
@@ -910,18 +927,21 @@ function resetParts(
 /** How widely it is used, then Reset and Remove, as the plan offers them. */
 function ActionRow({
   plan,
+  checking,
   onReset,
   onRemove,
 }: {
   plan: RemovalPlan;
+  /** Whether Remove is reading where it is used again before it answers. */
+  checking: boolean;
   onReset: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
   return (
     <div className="nx-vars-editor__actions">
       {plan.gate === undefined ? null : (
-        <span className="nx-vars-editor__status">
-          {variableStatus(plan.reach)}
+        <span className="nx-vars-editor__status" role="status">
+          {checking ? "Checking where it's used…" : variableStatus(plan.reach)}
         </span>
       )}
       {plan.changed.length === 0 ? null : (
@@ -951,8 +971,38 @@ function ActionRow({
   );
 }
 
-/** Where Remove has got to: nothing yet, its confirm, or why it cannot. */
-type RemoveStep = "idle" | "confirm" | "refused";
+/**
+ * Where Remove has got to: nothing yet, reading where it is used again, its
+ * confirm, or why it cannot.
+ */
+type RemoveStep = "idle" | "checking" | "confirm" | "refused";
+
+/**
+ * Remove's steps. Counts read earlier may say a variable is used when it no
+ * longer is, so a Remove they would refuse first reads what it takes away
+ * again, saying so, and answers on the fresh counts: the refusal, or the
+ * confirm once nothing uses it. Nothing stale is shown while it reads; a
+ * read that fails answers on the counts already kept.
+ */
+function useRemoveStep(plan: RemovalPlan): {
+  step: RemoveStep;
+  setStep: (step: RemoveStep) => void;
+  remove: () => void;
+} {
+  const [step, setStep] = React.useState<RemoveStep>("idle");
+  const { gate, removal, removable } = plan;
+  const remove = (): void => {
+    if (!refuses(removal) || gate === undefined) {
+      setStep("confirm");
+      return;
+    }
+    setStep("checking");
+    const answer = (): void =>
+      setStep(current => (current === "checking" ? "refused" : current));
+    gate.readAgain(removable.map(part => part.identity)).then(answer, answer);
+  };
+  return { step, setStep, remove };
+}
 
 /** Whether Remove opens why it cannot go ahead rather than the confirm. */
 function refuses(removal: VariableRemoval): boolean {
@@ -1016,6 +1066,8 @@ interface Part {
   name: string;
   /** The variable's identity, which its usage is read by. */
   identity: string;
+  /** What a place would lose with this part alone. */
+  loss: string;
   at: number;
   held: SiteToken | undefined;
   from: SiteToken | undefined;
@@ -1034,6 +1086,7 @@ function partsOf(
   const own: Part = {
     name: "size",
     identity: entry.row.identity,
+    loss: VARIABLE_LOSS_WORDS[entry.row.kind],
     at: entry.row.at,
     held: token,
     from: suppliedOf(entry.row.identity),
@@ -1044,6 +1097,7 @@ function partsOf(
     {
       name: "line height",
       identity: entry.lineHeight.identity,
+      loss: VARIABLE_LOSS_WORDS.lineHeight,
       at: entry.lineHeight.at,
       held: tokens.tokens[entry.lineHeight.at],
       from: suppliedOf(entry.lineHeight.identity),
